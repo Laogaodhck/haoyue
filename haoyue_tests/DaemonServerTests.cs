@@ -849,6 +849,28 @@ public sealed class DaemonServerTests : IAsyncDisposable
         await observedGlobalContext.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    [Fact]
+    public async Task OfficialSkills_ListBundledCatalog_AndRejectUnknownSlug()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "skill.official.list");
+        var catalog = JsonNode.Parse((await connection.ReadAsync())["data"]!.GetValue<string>())!.AsArray();
+        Assert.NotEmpty(catalog);
+        Assert.All(catalog, item =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(item!["slug"]!.GetValue<string>()));
+            Assert.False(string.IsNullOrWhiteSpace(item["name"]!.GetValue<string>()));
+            Assert.False(string.IsNullOrWhiteSpace(item["description"]!.GetValue<string>()));
+            Assert.NotNull(item["installed"]);
+            Assert.NotNull(item["enabled"]);
+        });
+
+        await connection.SendAsync(2, "skill.official.install", new JsonObject { ["slug"] = "definitely-missing" });
+        Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+    }
+
     private async Task<TestConnection> StartServerAsync(
         Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>> runTurn,
         string? workspace = null)

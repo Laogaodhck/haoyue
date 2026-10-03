@@ -99,6 +99,7 @@ The Desktop settings workbench uses structured methods to manage the same config
 | `provider.list/upsert/use/remove/test` | Manages and probes providers |
 | `mcp.list/upsert/remove/reload` | Manages and reconnects MCP servers and tool registrations |
 | `skill.list/toggle` | Lists and enables or disables skills |
+| `skill.official.list/install` | Returns the bundled official skill catalog with install/enable state; `install` takes `{ "slug" }`, writes the skill into `~/.haoyue/skills`, and enables it |
 | `usage.get` | Returns model-level calls, tokens, cost, and latency aggregates |
 
 `project.upsert` rejects registering the user profile or the Haoyue global state directory (`~/.haoyue`) as a project; `project.remove` accepts `keepSessions: true` so invalid project rows can be cleaned up without deleting the sessions stored in the database.

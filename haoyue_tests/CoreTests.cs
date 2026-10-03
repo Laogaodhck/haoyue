@@ -401,6 +401,51 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void SkillManager_InstallsOfficialCatalogSkill_AndEnablesIt()
+    {
+        var workspace = NewWorkspace("official-skill-workspace");
+        var globalSkills = Path.Combine(_dir, "official-skills");
+        var configStore = new ConfigStore(
+            Path.Combine(_dir, "official-config.json"),
+            Path.Combine(_dir, "official-state.json"));
+        var manager = new SkillManager(configStore, new PromptRegistry(), globalSkills);
+
+        var entry = OfficialSkillCatalog.Entries[0];
+        var installed = Assert.Single(manager.InstallOfficial(workspace, entry), skill => skill.Name == entry.Name);
+        Assert.True(installed.Enabled);
+        Assert.Equal(Path.Combine(globalSkills, entry.Slug), installed.Directory);
+        Assert.Equal(entry.Version, installed.Manifest.Version);
+        Assert.Equal(entry.Description, installed.Manifest.Description);
+        Assert.Contains(entry.Prompt, File.ReadAllText(installed.PromptFile));
+
+        // Reinstalling keeps the existing files but re-enables a disabled skill.
+        manager.SetEnabled(entry.Name, false);
+        Assert.False(Assert.Single(manager.Discover(workspace), skill => skill.Name == entry.Name).Enabled);
+        var reinstalled = Assert.Single(manager.InstallOfficial(workspace, entry), skill => skill.Name == entry.Name);
+        Assert.True(reinstalled.Enabled);
+        Assert.Equal(installed.Directory, reinstalled.Directory);
+    }
+
+    [Fact]
+    public void OfficialSkillCatalog_Entries_AreUniqueAndComplete()
+    {
+        Assert.NotEmpty(OfficialSkillCatalog.Entries);
+        Assert.Equal(
+            OfficialSkillCatalog.Entries.Count,
+            OfficialSkillCatalog.Entries.Select(entry => entry.Slug).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(
+            OfficialSkillCatalog.Entries.Count,
+            OfficialSkillCatalog.Entries.Select(entry => entry.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(OfficialSkillCatalog.Entries, entry =>
+        {
+            Assert.Matches("^[a-z0-9-]+$", entry.Slug);
+            Assert.False(string.IsNullOrWhiteSpace(entry.Description));
+            Assert.False(string.IsNullOrWhiteSpace(entry.Prompt));
+            Assert.NotEmpty(entry.Tags);
+        });
+    }
+
+    [Fact]
     public void ToolContext_GlobalTask_ResolvesRelativePathFromProcessCwd()
     {
         var workspace = new WorkspaceInfo

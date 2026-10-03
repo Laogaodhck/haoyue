@@ -138,6 +138,33 @@ public sealed class SkillManager : ISkillManager
         return Discover(workspace);
     }
 
+    /// <summary>
+    /// Installs an official catalog skill into the global skills directory and enables it.
+    /// An existing skill directory is kept untouched so local edits survive reinstalls.
+    /// </summary>
+    public IReadOnlyList<SkillInfo> InstallOfficial(WorkspaceInfo workspace, OfficialSkillCatalog.OfficialSkill entry)
+    {
+        var directory = Path.Combine(_globalSkillsDir, entry.Slug);
+        if (Directory.Exists(directory))
+        {
+            if (!LooksLikeSkillDirectory(directory))
+                throw new InvalidDataException($"A directory already occupies the skill path: {directory}");
+        }
+        else
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(
+                Path.Combine(directory, "skill.yaml"),
+                $"name: \"{EscapeYaml(entry.Name)}\"\n"
+                + $"description: \"{EscapeYaml(entry.Description)}\"\n"
+                + $"version: \"{EscapeYaml(entry.Version)}\"\n");
+            File.WriteAllText(Path.Combine(directory, "prompt.txt"), entry.Prompt);
+        }
+
+        SetEnabled(entry.Name, true);
+        return Discover(workspace);
+    }
+
     private void ImportMarkdown(string markdownFile)
     {
         var name = Path.GetFileNameWithoutExtension(markdownFile);

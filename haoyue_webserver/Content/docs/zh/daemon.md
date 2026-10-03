@@ -109,6 +109,7 @@ Desktop 设置中心通过结构化方法管理与 CLI 相同的配置，不直�
 | `provider.list/upsert/use/remove/test` | 管理和测试 Provider |
 | `mcp.list/upsert/remove/reload` | 管理、重连 MCP Server 并刷新工具注册 |
 | `skill.list/toggle` | 查询和启用/禁用 Skill |
+| `skill.official.list/install` | 返回内置官方技能目录（含安装与启用状态）；`install` 传 `{ "slug" }`，把技能写入 `~/.haoyue/skills` 并启用 |
 | `usage.get` | 返回按模型聚合的调用、Token、成本和延迟 |
 
 `project.upsert` 拒绝把用户主目录或 Haoyue 全局状态目录（`~/.haoyue`）注册为项目；`project.remove` 支持 `keepSessions: true`，清理无效项目行时保留数据库中的会话。

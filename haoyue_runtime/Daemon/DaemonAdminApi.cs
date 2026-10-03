@@ -8,6 +8,7 @@ using Haoyue.Runtime.Coordination;
 using Haoyue.Runtime.Mcp;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
+using Haoyue.Runtime.Skills;
 using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Runtime.Daemon;
@@ -744,6 +745,48 @@ internal sealed class DaemonAdminApi(
             throw new DaemonRequestException($"Skill not found: {name}");
         runtime.Skills.SetEnabled(name, enabled);
         return ListSkills();
+    }
+
+    /// <summary>Catalog of skills bundled with the runtime, annotated with local install state.</summary>
+    public string ListOfficialSkills()
+    {
+        var discovered = runtime.Skills.Discover(runtime.Workspace);
+        var catalog = new JsonArray();
+        foreach (var entry in OfficialSkillCatalog.Entries)
+        {
+            var installed = discovered.FirstOrDefault(skill =>
+                Path.GetFileName(skill.Directory).Equals(entry.Slug, StringComparison.OrdinalIgnoreCase));
+            catalog.Add((JsonNode)new JsonObject
+            {
+                ["slug"] = entry.Slug,
+                ["name"] = entry.Name,
+                ["description"] = entry.Description,
+                ["version"] = entry.Version,
+                ["tags"] = new JsonArray(entry.Tags.Select(tag => (JsonNode)tag).ToArray()),
+                ["installed"] = installed is not null,
+                ["enabled"] = installed?.Enabled ?? false,
+            });
+        }
+
+        return catalog.ToJsonString();
+    }
+
+    public string InstallOfficialSkill(JsonObject parameters)
+    {
+        var slug = RequiredString(parameters, "slug");
+        var entry = OfficialSkillCatalog.Entries.FirstOrDefault(candidate =>
+            candidate.Slug.Equals(slug, StringComparison.OrdinalIgnoreCase))
+            ?? throw new DaemonRequestException($"Unknown official skill: {slug}");
+
+        try
+        {
+            runtime.Skills.InstallOfficial(runtime.Workspace, entry);
+            return ListOfficialSkills();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            throw new DaemonRequestException($"Skill install failed: {ex.Message}");
+        }
     }
 
     public string Usage(JsonObject parameters)

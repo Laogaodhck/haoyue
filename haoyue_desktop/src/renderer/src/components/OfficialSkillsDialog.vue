@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, PackageOpen, RefreshCw, Search, Store } from '@lucide/vue'
+import { ArrowLeft, LoaderCircle, PackageOpen, RefreshCw, Search } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{
@@ -10,21 +10,23 @@ const emit = defineEmits<{
   close: []
 }>()
 
-/** 技能市场条目。后续由 daemon 的技能市场目录接口返回。 */
+/** 技能市场条目，由 daemon 的 skill.official.list 接口返回。 */
 interface OfficialSkill {
-  id: string
+  slug: string
   name: string
   description: string
   version?: string
   tags?: string[]
+  installed: boolean
   enabled: boolean
 }
 
-// TODO(技能市场): 上线时改为从 daemon 加载目录（例如 skill.official.list）。
-// 当前阶段列表为空，用于验证市场入口与 UI/UX。
 const catalog = ref<OfficialSkill[]>([])
 const loading = ref(false)
+const error = ref('')
 const query = ref('')
+/** 正在安装或启停中的技能 slug，行内开关显示进度。 */
+const pending = ref<string[]>([])
 
 const filtered = computed(() => {
   const normalized = query.value.trim().toLocaleLowerCase()
@@ -34,13 +36,46 @@ const filtered = computed(() => {
     skill.description.toLocaleLowerCase().includes(normalized))
 })
 
+function isPending(skill: OfficialSkill): boolean {
+  return pending.value.includes(skill.slug)
+}
+
+async function requestJson<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  const response = await window.haoyue.daemon.request(method, params)
+  return JSON.parse(response.data) as T
+}
+
 async function loadCatalog(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
-    // const response = await window.haoyue.daemon.request('skill.official.list')
-    // catalog.value = JSON.parse(response.data) as OfficialSkill[]
+    catalog.value = await requestJson<OfficialSkill[]>('skill.official.list')
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 开启 = 安装并启用（接口幂等，已安装时仅重新启用）；关闭 = 仅禁用，
+ * 本地技能文件保留，可随时再次开启。
+ */
+async function toggleSkill(skill: OfficialSkill): Promise<void> {
+  if (isPending(skill)) return
+  pending.value = [...pending.value, skill.slug]
+  error.value = ''
+  try {
+    if (skill.enabled) {
+      await requestJson('skill.toggle', { name: skill.name, enabled: false })
+      await loadCatalog()
+    } else {
+      catalog.value = await requestJson<OfficialSkill[]>('skill.official.install', { slug: skill.slug })
+    }
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    pending.value = pending.value.filter((slug) => slug !== skill.slug)
   }
 }
 
@@ -69,10 +104,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
           <span>返回应用</span>
         </button>
         <div class="official-skills-title-copy">
-          <h2 id="official-skills-title">
-            技能市场
-            <span class="official-skills-chip">建设中</span>
-          </h2>
+          <h2 id="official-skills-title">技能市场</h2>
         </div>
       </div>
     </header>
@@ -87,13 +119,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
       </button>
     </div>
 
+    <p v-if="error && catalog.length > 0" class="official-skills-error">{{ error }}</p>
+
     <div class="official-skills-list">
-      <div v-if="catalog.length === 0" class="official-skills-empty">
+      <div v-if="loading && catalog.length === 0" class="official-skills-empty">
+        <RefreshCw :size="30" class="spinning" />
+        <strong>正在加载技能目录…</strong>
+      </div>
+      <div v-else-if="catalog.length === 0" class="official-skills-empty">
         <PackageOpen :size="34" />
-        <strong>{{ query.trim() ? '没有匹配的技能' : '技能列表为空' }}</strong>
-        <span>
-          {{ query.trim() ? '试试其他搜索词。' : '技能市场正在建设中，更多可选的技能即将上线。' }}
-        </span>
+        <strong>{{ error ? '技能目录加载失败' : '暂无可用技能' }}</strong>
+        <span>{{ error || '请点击右上角刷新重试。' }}</span>
       </div>
       <div v-else-if="filtered.length === 0" class="official-skills-empty">
         <Search :size="30" />
@@ -101,7 +137,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
         <span>试试其他搜索词。</span>
       </div>
       <div v-else class="official-skills-items">
-        <div v-for="skill in filtered" :key="skill.id" class="official-skill-row">
+        <div v-for="skill in filtered" :key="skill.slug" class="official-skill-row">
           <div class="official-skill-icon">
             <PackageOpen :size="18" />
           </div>
@@ -109,11 +145,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
             <div>
               <strong>{{ skill.name }}</strong>
               <span v-if="skill.version" class="version-text">v{{ skill.version }}</span>
+              <span v-if="!skill.installed" class="inline-badge">未安装</span>
               <span v-for="tag in skill.tags" :key="tag" class="inline-badge">{{ tag }}</span>
             </div>
             <small>{{ skill.description }}</small>
           </div>
-          <button class="switch-control" :class="{ active: skill.enabled }" aria-label="启用/禁用"><span /></button>
+          <button class="switch-control" :class="{ active: skill.enabled, pending: isPending(skill) }"
+            :disabled="isPending(skill)"
+            :aria-label="isPending(skill) ? '处理中' : (skill.enabled ? '禁用' : (skill.installed ? '启用' : '安装并启用'))"
+            @click="toggleSkill(skill)">
+            <LoaderCircle v-if="isPending(skill)" class="spin" :size="12" /><span v-else />
+          </button>
         </div>
       </div>
     </div>
@@ -252,6 +294,16 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 
 .official-skills-search input::placeholder {
   color: var(--text-muted);
+}
+
+.official-skills-error {
+  margin: 0 22px 12px;
+  padding: 9px 12px;
+  color: var(--danger);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+  border-radius: 8px;
 }
 
 .official-skills-list {

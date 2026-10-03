@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_website/public/logo.png" alt="Haoyue Logo" width="60">
+  <img src="haoyue_website/public/logo.png" alt="Haoyue Logo" width="60">
 </p>
 
 <h1 align="center">Haoyue</h1>
@@ -28,7 +28,7 @@ Haoyue is a high-performance AI agent runtime built on .NET 10.0, featuring clea
 </div>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/31b58c99-85ba-425a-a674-a7f95607ff34.png" alt="Haoyue Interactive Terminal UI" width="880">
+  <img src="haoyue_screenshot/31b58c99-85ba-425a-a674-a7f95607ff34.png" alt="Haoyue Interactive Terminal UI" width="880">
 </p>
 
 ## 📸 Screenshots
@@ -37,21 +37,21 @@ Haoyue is a high-performance AI agent runtime built on .NET 10.0, featuring clea
 
 | AI Chat & Project Management | Model & Provider Management |
 | :---: | :---: |
-| <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/6bb61c71bc5a008a72dc4d798d03cba3.png" alt="Haoyue Desktop AI chat and project management" width="440"> | <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/bf1ddfedd6ef3955d292d0f145ad27c1.png" alt="Haoyue Desktop model and provider management" width="440"> |
+| <img src="haoyue_screenshot/6bb61c71bc5a008a72dc4d798d03cba3.png" alt="Haoyue Desktop AI chat and project management" width="440"> | <img src="haoyue_screenshot/bf1ddfedd6ef3955d292d0f145ad27c1.png" alt="Haoyue Desktop model and provider management" width="440"> |
 
 | Runtime Diagnostics & Usage | MCP Server Configuration |
 | :---: | :---: |
-| <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/00a820aabf3676b56b7bf71fde9d50ce.png" alt="Haoyue Desktop runtime diagnostics and usage" width="440"> | <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/d28a035e0e7c50dcc75b6ef6ca7e3072.png" alt="Haoyue Desktop MCP server configuration" width="440"> |
+| <img src="haoyue_screenshot/00a820aabf3676b56b7bf71fde9d50ce.png" alt="Haoyue Desktop runtime diagnostics and usage" width="440"> | <img src="haoyue_screenshot/d28a035e0e7c50dcc75b6ef6ca7e3072.png" alt="Haoyue Desktop MCP server configuration" width="440"> |
 
 ### Terminal
 
 | Streaming Output & Reasoning | Code Generation & Documentation |
 | :---: | :---: |
-| <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/streaming_reasoning.png" width="440"> | <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/code.png" width="440"> |
+| <img src="haoyue_screenshot/streaming_reasoning.png" width="440"> | <img src="haoyue_screenshot/code.png" width="440"> |
 
 | Tool Execution & Web Search | Provider & Model Management |
 | :---: | :---: |
-| <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/tool_execution_verifier_internetSearch.png" width="440"> | <img src="https://raw.githubusercontent.com/Laogaodhck/haoyue/main/haoyue_screenshot/provider_model_management.png" width="440"> |
+| <img src="haoyue_screenshot/tool_execution_verifier_internetSearch.png" width="440"> | <img src="haoyue_screenshot/provider_model_management.png" width="440"> |
 
 ## ✨ Features
 

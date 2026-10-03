@@ -16,7 +16,7 @@
 
 **现代化、高性能的 AI Agent 运行时**
 
-Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent 运行时，采用清洁架构和事件驱动设计。它为构建 AI 驱动的编码助手提供了完整平台，支持多 LLM 提供商、工具执行、会话管理和流畅的终端交互体验。
+Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent ，采用清洁架构和事件驱动设计。它为构建 AI 驱动的编码助手提供了完整平台，支持多 LLM 提供商、工具执行、会话管理和流畅的终端交互体验。
 
 [🌐 官方网站与文档](https://github.com/Laogaodhck/haoyue) •
 [English](README_EN.md) •

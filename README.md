@@ -20,37 +20,10 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent 运行时，采用清洁�
 
 [🌐 官方网站与文档](https://github.com/Laogaodhck/haoyue) •
 [English](README_EN.md) •
-[界面预览](#-界面预览) •
 [快速开始](#-安装) •
 [功能特性](#-功能特性)
 
 </div>
-
-<p align="center">
-  <img src="haoyue_screenshot/31b58c99-85ba-425a-a674-a7f95607ff34.png" alt="Haoyue 交互模式界面" width="880">
-</p>
-
-## 📸 界面预览
-
-### 桌面端
-
-| AI 对话与项目管理 | 模型与 Provider 管理 |
-| :---: | :---: |
-| <img src="haoyue_screenshot/6bb61c71bc5a008a72dc4d798d03cba3.png" alt="Haoyue Desktop AI 对话与项目管理" width="440"> | <img src="haoyue_screenshot/bf1ddfedd6ef3955d292d0f145ad27c1.png" alt="Haoyue Desktop 模型与 Provider 管理" width="440"> |
-
-| Runtime 诊断与用量 | MCP Server 配置 |
-| :---: | :---: |
-| <img src="haoyue_screenshot/00a820aabf3676b56b7bf71fde9d50ce.png" alt="Haoyue Desktop Runtime 诊断与用量" width="440"> | <img src="haoyue_screenshot/d28a035e0e7c50dcc75b6ef6ca7e3072.png" alt="Haoyue Desktop MCP Server 配置" width="440"> |
-
-### 终端
-
-| 终端流式输出与思考推理 | 代码生成与文档编写 |
-| :---: | :---: |
-| <img src="haoyue_screenshot/streaming_reasoning.png" width="440"> | <img src="haoyue_screenshot/code.png" width="440"> |
-
-| 工具调用与网络搜索验证 | 提供商与模型路由管理 |
-| :---: | :---: |
-| <img src="haoyue_screenshot/tool_execution_verifier_internetSearch.png" width="440"> | <img src="haoyue_screenshot/provider_model_management.png" width="440"> |
 
 ## ✨ 功能特性
 
@@ -413,6 +386,10 @@ Haoyue 包含内置监控：
 - 使用 Spectre.Console 进行终端渲染
 - 遵循清洁架构和垂直切片模式
 - 采用 Native AOT 友好的设计理念
+
+## 👤 作者
+
+**老高** · QQ：846193
 
 ---
 

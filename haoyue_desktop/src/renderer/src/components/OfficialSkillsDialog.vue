@@ -10,7 +10,7 @@ const emit = defineEmits<{
   close: []
 }>()
 
-/** 官方技能市场条目。后续由 daemon 的官方技能目录接口返回。 */
+/** 技能市场条目。后续由 daemon 的技能市场目录接口返回。 */
 interface OfficialSkill {
   id: string
   name: string
@@ -20,7 +20,7 @@ interface OfficialSkill {
   enabled: boolean
 }
 
-// TODO(官方技能): 上线时改为从 daemon 加载目录（例如 skill.official.list）。
+// TODO(技能市场): 上线时改为从 daemon 加载目录（例如 skill.official.list）。
 // 当前阶段列表为空，用于验证市场入口与 UI/UX。
 const catalog = ref<OfficialSkill[]>([])
 const loading = ref(false)
@@ -70,7 +70,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
         </button>
         <div class="official-skills-title-copy">
           <h2 id="official-skills-title">
-            官方技能
+            技能市场
             <span class="official-skills-chip">建设中</span>
           </h2>
         </div>
@@ -80,7 +80,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
     <div class="official-skills-toolbar">
       <label class="official-skills-search">
         <Search :size="17" />
-        <input v-model="query" autofocus placeholder="搜索官方技能" aria-label="搜索官方技能" />
+        <input v-model="query" autofocus placeholder="搜索技能" aria-label="搜索技能" />
       </label>
       <button class="icon-button" title="刷新" :disabled="loading" @click="loadCatalog">
         <RefreshCw :size="17" :class="{ spinning: loading }" />
@@ -90,14 +90,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
     <div class="official-skills-list">
       <div v-if="catalog.length === 0" class="official-skills-empty">
         <PackageOpen :size="34" />
-        <strong>{{ query.trim() ? '没有匹配的官方技能' : '官方技能列表为空' }}</strong>
+        <strong>{{ query.trim() ? '没有匹配的技能' : '技能列表为空' }}</strong>
         <span>
-          {{ query.trim() ? '试试其他搜索词。' : '官方技能市场正在建设中，更多可选的官方能力即将上线。' }}
+          {{ query.trim() ? '试试其他搜索词。' : '技能市场正在建设中，更多可选的技能即将上线。' }}
         </span>
       </div>
       <div v-else-if="filtered.length === 0" class="official-skills-empty">
         <Search :size="30" />
-        <strong>没有匹配的官方技能</strong>
+        <strong>没有匹配的技能</strong>
         <span>试试其他搜索词。</span>
       </div>
       <div v-else class="official-skills-items">
@@ -119,7 +119,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
     </div>
 
     <footer class="official-skills-footer">
-      官方技能由 Haoyue 团队维护 · 本地技能请前往「设置 → 技能」管理
+      技能市场由 Haoyue 团队维护 · 本地技能请前往「设置 → 技能」管理
     </footer>
   </section>
 </template>

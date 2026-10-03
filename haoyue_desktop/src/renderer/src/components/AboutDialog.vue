@@ -51,6 +51,10 @@ function platformLabel(): string {
             <dt>平台</dt>
             <dd>{{ platformLabel() }}</dd>
           </div>
+          <div class="about-row">
+            <dt>作者</dt>
+            <dd>老高（QQ：846193）</dd>
+          </div>
         </dl>
 
         <p class="about-description">

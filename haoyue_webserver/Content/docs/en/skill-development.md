@@ -82,7 +82,7 @@ haoyue doctor
 
 ---
 
-## 4. Publishing to the Official Marketplace
+## 4. Publishing to the Skill Marketplace
 
 ### Method 1: Web Portal Submission (Recommended)
 1. Go to the marketplace publishing page: [/skills/submit](/en/skills/submit).

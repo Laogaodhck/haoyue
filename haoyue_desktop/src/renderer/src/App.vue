@@ -82,6 +82,10 @@ const IMPLICIT_DOCUMENTS_MIGRATION_KEY = 'haoyue-projects-remove-implicit-docume
 // the task loading forever; once the first event arrives the turn is confirmed
 // running and may legitimately take minutes.
 const CHAT_FIRST_EVENT_TIMEOUT_MS = 30_000
+// prompt.optimize is model-backed and non-streaming: no daemon event arrives
+// until the model answers, so allow a full provider round trip (up to 300s)
+// instead of the generic 60s daemon-client default.
+const PROMPT_OPTIMIZE_TIMEOUT_MS = 300_000
 const starterPrompts = [
   { label: '探索并理解代码', icon: Telescope, tone: 'blue' },
   { label: '构建新功能、应用或工具', icon: Hammer, tone: 'purple' },
@@ -1383,7 +1387,9 @@ async function optimizePrompt(text: string): Promise<string> {
   if (!activeModel.value) throw new Error('尚未配置模型，请先在设置中新建 Provider 和模型。')
   const params: Record<string, unknown> = { text }
   params.model = activeModel.value
-  const response = await window.haoyue.daemon.request('prompt.optimize', params)
+  const response = await window.haoyue.daemon.request('prompt.optimize', params, {
+    timeoutMs: PROMPT_OPTIMIZE_TIMEOUT_MS
+  })
   return response.data
 }
 

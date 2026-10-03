@@ -82,7 +82,7 @@ haoyue doctor
 
 ---
 
-## 4. 打包与发布到官方技能市场
+## 4. 打包与发布到技能市场
 
 ### 方式一：通过 Web 平台可视化发布（推荐）
 1. 访问 Haoyue 技能市场发布页：[/skills/submit](/skills/submit)。

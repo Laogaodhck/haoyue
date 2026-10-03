@@ -208,7 +208,7 @@ onBeforeUnmount(() => {
       </button>
       <button class="nav-item" @click="emit('openOfficialSkills')">
         <Store :size="18" />
-        <span>官方技能</span>
+        <span>技能市场</span>
       </button>
     </nav>
 

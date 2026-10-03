@@ -83,9 +83,11 @@ const IMPLICIT_DOCUMENTS_MIGRATION_KEY = 'haoyue-projects-remove-implicit-docume
 // running and may legitimately take minutes.
 const CHAT_FIRST_EVENT_TIMEOUT_MS = 30_000
 // prompt.optimize is model-backed and non-streaming: no daemon event arrives
-// until the model answers, so allow a full provider round trip (up to 300s)
-// instead of the generic 60s daemon-client default.
-const PROMPT_OPTIMIZE_TIMEOUT_MS = 300_000
+// until the model answers, so allow the runtime's full retry chain instead of
+// the generic 60s daemon-client default. Worst case before the daemon reports
+// its own error: 3 retryable attempts x provider timeout (120s) + backoff
+// ~= 364s, so 420s guarantees the descriptive daemon error wins the race.
+const PROMPT_OPTIMIZE_TIMEOUT_MS = 420_000
 const starterPrompts = [
   { label: '探索并理解代码', icon: Telescope, tone: 'blue' },
   { label: '构建新功能、应用或工具', icon: Hammer, tone: 'purple' },

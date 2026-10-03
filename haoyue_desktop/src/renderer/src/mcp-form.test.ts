@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  GITHUB_TOKEN_ENV_KEY,
+  MCP_PRESETS,
   MCP_TRANSPORT_OPTIONS,
   buildMcpServerPayload,
   buildMcpTogglePayload,
   createMcpFormValue,
+  envNeedsGithubToken,
+  githubTokenCreateUrl,
   mcpFormError,
   mcpFormFromServer,
   mcpStatusText,
@@ -180,5 +184,55 @@ describe('parseEnvText', () => {
     // spaces can be meaningful in tokens.
     expect(parseEnvText('A=1\nB\n C = 2 ')).toEqual({ A: '1', B: '', C: ' 2' })
     expect(parseEnvText('   ')).toBeUndefined()
+  })
+})
+
+describe('GitHub token guidance', () => {
+  it('links to the GitHub token form with the scopes the MCP server needs', () => {
+    const url = new URL(githubTokenCreateUrl())
+    expect(url.origin + url.pathname).toBe('https://github.com/settings/tokens/new')
+    expect(url.searchParams.get('description')).toBe('Haoyue MCP GitHub Server')
+    expect(url.searchParams.get('scopes')).toBe('repo,read:org,read:repo_hook,read:user,user:email')
+  })
+
+  it('detects a GitHub token key that still needs a value', () => {
+    expect(envNeedsGithubToken(`${GITHUB_TOKEN_ENV_KEY}=`)).toBe(true)
+    expect(envNeedsGithubToken(`github_personal_access_token = `)).toBe(true)
+    expect(envNeedsGithubToken(GITHUB_TOKEN_ENV_KEY)).toBe(true)
+    expect(envNeedsGithubToken(`TOKEN=\n${GITHUB_TOKEN_ENV_KEY} = `)).toBe(true)
+    expect(envNeedsGithubToken(`${GITHUB_TOKEN_ENV_KEY}=ghp_abc`)).toBe(false)
+    expect(envNeedsGithubToken('TOKEN=\nEMPTY=')).toBe(false)
+    expect(envNeedsGithubToken('')).toBe(false)
+  })
+})
+
+describe('MCP_PRESETS', () => {
+  it('ships a GitHub preset that compiles into a valid stdio payload', () => {
+    const preset = MCP_PRESETS.find((item) => item.id === 'github')
+    expect(preset).toBeDefined()
+
+    const form = preset!.createForm()
+    expect(mcpFormError(form)).toBeNull()
+    expect(buildMcpServerPayload(form)).toEqual({
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-github'],
+      url: '',
+      enabled: true,
+      env: { GITHUB_PERSONAL_ACCESS_TOKEN: '' }
+    })
+  })
+
+  it('never prefills credentials and returns independent form values', () => {
+    const preset = MCP_PRESETS.find((item) => item.id === 'github')!
+    const first = preset.createForm()
+    const second = preset.createForm()
+
+    expect(parseEnvText(first.env)).toEqual({ GITHUB_PERSONAL_ACCESS_TOKEN: '' })
+
+    first.name = 'mutated'
+    first.args = ''
+    expect(second.name).toBe('github')
+    expect(second.args).toContain('@modelcontextprotocol/server-github')
   })
 })

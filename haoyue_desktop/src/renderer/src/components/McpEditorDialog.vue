@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { Save, X } from '@lucide/vue'
+import { ExternalLink, KeyRound, Save, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import {
   MCP_SCOPE_OPTIONS,
   MCP_TRANSPORT_OPTIONS,
   buildMcpServerPayload,
   createMcpFormValue,
+  envNeedsGithubToken,
+  githubTokenCreateUrl,
   isRemoteTransport,
   mcpFormError,
   mcpFormFromServer,
@@ -20,6 +22,8 @@ const props = defineProps<{
   open: boolean
   /** null opens an empty form; a server opens the editor for that entry. */
   server: McpServerSummary | null
+  /** Prefilled values for a new server, supplied by one-click presets. */
+  preset?: McpFormValue | null
   saving?: boolean
   /** Error reported by the runtime for the last save attempt. */
   error?: string
@@ -37,6 +41,8 @@ const firstInput = ref<HTMLInputElement | null>(null)
 const editing = computed(() => props.server !== null)
 const remote = computed(() => isRemoteTransport(form.transport))
 const message = computed(() => validationError.value || props.error || '')
+const githubTokenUrl = githubTokenCreateUrl()
+const showGithubHint = computed(() => !remote.value && envNeedsGithubToken(form.env))
 
 function close(): void {
   if (!props.saving) emit('close')
@@ -69,7 +75,10 @@ function handleKeydown(event: KeyboardEvent): void {
 
 watch(() => props.open, (open) => {
   if (!open) return
-  Object.assign(form, props.server ? mcpFormFromServer(props.server) : createMcpFormValue())
+  Object.assign(
+    form,
+    props.server ? mcpFormFromServer(props.server) : (props.preset ?? createMcpFormValue())
+  )
   validationError.value = ''
   document.addEventListener('keydown', handleKeydown)
   void nextTick(() => firstInput.value?.focus())
@@ -146,6 +155,20 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                     <span>环境变量</span>
                     <textarea v-model="form.env" class="form-input" rows="2" placeholder="TOKEN=..."></textarea>
                   </label>
+
+                  <div v-if="showGithubHint" class="mcp-token-hint">
+                    <div class="mcp-token-hint-copy">
+                      <strong><KeyRound :size="13" /> 获取 GitHub 令牌</strong>
+                      <ol>
+                        <li>点「去 GitHub 生成」打开令牌页，所需权限已预选（repo、read:org 等）</li>
+                        <li>在页面底部点 Generate token，复制 ghp_ 开头的令牌</li>
+                        <li>把令牌粘贴到上方环境变量 GITHUB_PERSONAL_ACCESS_TOKEN 的等号后面</li>
+                      </ol>
+                    </div>
+                    <a class="secondary-button" :href="githubTokenUrl" target="_blank" rel="noreferrer">
+                      <ExternalLink :size="14" /> 去 GitHub 生成
+                    </a>
+                  </div>
                 </template>
 
                 <label v-else class="form-field full-width">
@@ -379,6 +402,50 @@ textarea.form-input {
   background: color-mix(in srgb, var(--danger) 9%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
   border-radius: 8px;
+}
+
+.mcp-token-hint {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: 9px;
+}
+
+.mcp-token-hint-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcp-token-hint-copy strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.mcp-token-hint-copy ol {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding-left: 17px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.mcp-token-hint a.secondary-button {
+  align-self: center;
+  color: var(--text-secondary);
+  text-decoration: none;
 }
 
 .mcp-editor-footer {

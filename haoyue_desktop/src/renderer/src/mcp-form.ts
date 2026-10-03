@@ -90,6 +90,49 @@ export function createMcpFormValue(): McpFormValue {
   }
 }
 
+export interface McpPreset {
+  id: string
+  label: string
+  description: string
+  /** Returns a fresh form value on every call so entry points never share mutable state. */
+  createForm: () => McpFormValue
+}
+
+/** Environment key the GitHub MCP server reads its personal access token from. */
+export const GITHUB_TOKEN_ENV_KEY = 'GITHUB_PERSONAL_ACCESS_TOKEN'
+
+/**
+ * GitHub's classic-token form with the scopes the GitHub MCP server needs
+ * prefilled, so users can generate and copy a token in one pass.
+ */
+export function githubTokenCreateUrl(): string {
+  const params = new URLSearchParams({
+    description: 'Haoyue MCP GitHub Server',
+    scopes: 'repo,read:org,read:repo_hook,read:user,user:email'
+  })
+  return `https://github.com/settings/tokens/new?${params.toString()}`
+}
+
+/**
+ * One-click templates for well-known MCP servers. Presets only fill in the
+ * connection skeleton; credentials are never prefilled and stay user-provided.
+ */
+export const MCP_PRESETS: McpPreset[] = [
+  {
+    id: 'github',
+    label: 'GitHub',
+    description: '接入 GitHub MCP Server：浏览仓库、Issue、PR 与代码搜索；需自行填写个人访问令牌',
+    createForm: () => ({
+      ...createMcpFormValue(),
+      name: 'github',
+      transport: 'stdio',
+      command: 'npx',
+      args: '-y\n@modelcontextprotocol/server-github',
+      env: `${GITHUB_TOKEN_ENV_KEY}=`
+    })
+  }
+]
+
 /** Builds editor state from a runtime server entry. Environment values are never sent back to the UI. */
 export function mcpFormFromServer(server: McpServerSummary): McpFormValue {
   return {
@@ -112,6 +155,19 @@ export function parseEnvText(value: string): Record<string, string> | undefined 
     const index = line.indexOf('=')
     return index < 0 ? [line, ''] : [line.slice(0, index).trim(), line.slice(index + 1)]
   }))
+}
+
+/** True when the env textarea declares the GitHub token key but still has no value. */
+export function envNeedsGithubToken(value: string): boolean {
+  const target = GITHUB_TOKEN_ENV_KEY.toUpperCase()
+  return value.split(/\r?\n/).some((rawLine) => {
+    const line = rawLine.trim()
+    if (!line) return false
+    const index = line.indexOf('=')
+    const name = (index < 0 ? line : line.slice(0, index)).trim().toUpperCase()
+    const filled = index >= 0 && line.slice(index + 1).trim() !== ''
+    return name === target && !filled
+  })
 }
 
 /** Returns a user-facing validation message, or null when the form can be saved. */

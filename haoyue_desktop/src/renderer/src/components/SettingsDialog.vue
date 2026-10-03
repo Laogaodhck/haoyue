@@ -14,6 +14,7 @@ import {
   LoaderCircle,
   Moon,
   Monitor,
+  Plug,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -31,9 +32,12 @@ import {
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { confirmAction } from '../confirmation'
 import {
+  MCP_PRESETS,
   buildMcpTogglePayload,
   mcpStatusText,
   transportLabel,
+  type McpFormValue,
+  type McpPreset,
   type McpScope,
   type McpServerSummary
 } from '../mcp-form'
@@ -167,6 +171,7 @@ const selectedModel = ref('')
 const providerEditorOpen = ref(false)
 const mcpEditorOpen = ref(false)
 const editingMcpServer = ref<McpServerSummary | null>(null)
+const mcpPreset = ref<McpFormValue | null>(null)
 const mcpDialogError = ref('')
 const editingProviderId = ref<string | null>(null)
 
@@ -623,6 +628,15 @@ function mcpServerPending(server: { scope: string; name: string; connecting?: bo
 
 function newMcpServer(): void {
   editingMcpServer.value = null
+  mcpPreset.value = null
+  mcpDialogError.value = ''
+  mcpEditorOpen.value = true
+}
+
+/** Opens the editor prefilled from a one-click preset; credentials stay user-provided. */
+function newPresetMcpServer(preset: McpPreset): void {
+  editingMcpServer.value = null
+  mcpPreset.value = preset.createForm()
   mcpDialogError.value = ''
   mcpEditorOpen.value = true
 }
@@ -636,6 +650,7 @@ function editMcpServer(server: McpServerInfo): void {
 function closeMcpEditor(): void {
   mcpEditorOpen.value = false
   editingMcpServer.value = null
+  mcpPreset.value = null
   mcpDialogError.value = ''
 }
 
@@ -952,6 +967,10 @@ onBeforeUnmount(() => {
               <button class="icon-button" title="重新加载" :disabled="action === 'mcp.reload'" @click="reloadMcp">
                 <RefreshCw :class="{ spin: action === 'mcp.reload' }" :size="17" />
               </button>
+              <button v-for="preset in MCP_PRESETS" :key="preset.id" class="secondary-button"
+                :title="preset.description" @click="newPresetMcpServer(preset)">
+                <Plug :size="15" /> {{ preset.label }}
+              </button>
               <button class="secondary-button" @click="newMcpServer">
                 <Plus :size="15" /> 服务器
               </button>
@@ -983,8 +1002,8 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <McpEditorDialog :open="mcpEditorOpen" :server="editingMcpServer" :saving="action === 'mcp.save'"
-            :error="mcpDialogError" @close="closeMcpEditor" @save="saveMcpServer" />
+          <McpEditorDialog :open="mcpEditorOpen" :server="editingMcpServer" :preset="mcpPreset"
+            :saving="action === 'mcp.save'" :error="mcpDialogError" @close="closeMcpEditor" @save="saveMcpServer" />
         </template>
 
         <template v-else-if="section === 'skills'">

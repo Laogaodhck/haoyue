@@ -1,0 +1,98 @@
+{
+  "name": "haoyue-desktop",
+  "version": "1.2.4",
+  "private": true,
+  "description": "Haoyue desktop client",
+  "main": "./out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "preview": "electron-vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "build": "pnpm typecheck && electron-vite build",
+    "package": "pnpm build && electron-builder --dir",
+    "dist": "pnpm build && electron-builder"
+  },
+  "author": {
+    "name": "Haoyue",
+    "email": "xiaomai@hoilai.com"
+  },
+  "homepage": "https://github.com/Laogaodhck/haoyue",
+  "dependencies": {
+    "@electron-toolkit/utils": "^4.0.0",
+    "@lucide/vue": "^1.27.0",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.18.1",
+    "markdown-it": "^14.3.0",
+    "mermaid": "^11.16.0",
+    "vue": "^3.5.40"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.15.47",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^26.1.2",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^3.3.8"
+  },
+  "build": {
+    "appId": "com.hoilai.haoyue",
+    "productName": "Haoyue",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "resources/favicon.ico",
+      "target": "nsis",
+      "extraResources": [
+        {
+          "from": "runtime/win-x64",
+          "to": "runtime",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "icon": "resources/logo.png",
+      "target": [
+        "dir"
+      ],
+      "maintainer": "Haoyue <support@haoyue.local>",
+      "category": "Development",
+      "extraResources": [
+        {
+          "from": "runtime/linux-x64",
+          "to": "runtime",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
+    }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@swc/core",
+      "electron",
+      "esbuild"
+    ]
+  },
+  "packageManager": "pnpm@10.33.2"
+}

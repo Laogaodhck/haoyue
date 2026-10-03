@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="haoyue_runtime/haoyue_runtime.csproj" />
+  <Project Path="haoyue_cli/haoyue_cli.csproj" />
+  <Project Path="haoyue_cli_tests/haoyue_cli_tests.csproj" />
+  <Project Path="haoyue_tests/haoyue_tests.csproj" />
+  <Project Path="haoyue_webserver/haoyue_webserver.csproj" />
+</Solution>
+

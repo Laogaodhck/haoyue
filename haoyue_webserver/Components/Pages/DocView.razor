@@ -1,0 +1,9 @@
+@page "/doc/{Slug}"
+@page "/docs/{Slug}"
+
+<MarkdownDocument Language="zh" Slug="@Slug" />
+
+@code {
+    [Parameter]
+    public string? Slug { get; set; }
+}

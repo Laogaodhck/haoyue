@@ -1,0 +1,190 @@
+using Haoyue.Runtime.Providers;
+
+namespace Haoyue.Runtime.Configuration;
+
+/// <summary>Root of ~/.haoyue/config.json. All model/provider data is user data — never hard-coded.</summary>
+public sealed class HaoyueConfig
+{
+    public string? Provider { get; set; }
+    public string? Model { get; set; }
+    public double? Temperature { get; set; }
+
+    public List<ProviderConfig> Providers { get; set; } = [];
+    public RoutingConfig Routing { get; set; } = new();
+    public AgentConfig Agent { get; set; } = new();
+    public McpConfig Mcp { get; set; } = new();
+    public Haoyue.Runtime.ComputerUse.ComputerUseConfig ComputerUse { get; set; } = new();
+
+
+    public ProviderConfig? FindProvider(string id) =>
+        Providers.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+}
+
+public sealed class ProviderConfig
+{
+    public string Id { get; set; } = "";
+    public string? Name { get; set; }
+    /// <summary>Wire protocol: openai | anthropic. Every OpenAI-compatible service (Ollama, LM Studio, OpenRouter, Azure…) uses "openai".</summary>
+    public string Kind { get; set; } = "openai";
+    public string BaseUrl { get; set; } = "";
+    public string? ApiKey { get; set; }
+    public string? Organization { get; set; }
+    public string? Proxy { get; set; }
+    public int TimeoutSeconds { get; set; } = 120;
+    /// <summary>Optional URL used by the Desktop "fetch models" action; defaults to the provider /models endpoint.</summary>
+    public string? ModelListUrl { get; set; }
+    public Dictionary<string, string>? Headers { get; set; }
+    /// <summary>Optional neutral-level to provider wire-value overrides.</summary>
+    public Dictionary<string, string>? ReasoningEffortMap { get; set; }
+    /// <summary>
+    /// Enables provider-native prompt caching hints. OpenAI-compatible providers keep using
+    /// their automatic prefix cache; Anthropic requests add explicit cache checkpoints.
+    /// Disable this for an Anthropic-compatible endpoint that does not accept cache_control.
+    /// </summary>
+    public bool PromptCaching { get; set; } = true;
+    public bool Enabled { get; set; } = true;
+    public int Priority { get; set; }
+    public List<ModelConfig> Models { get; set; } = [];
+
+    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? Id : Name;
+
+    /// <summary>Returns the API key explicitly stored in the configuration file.</summary>
+    public string? ResolveApiKey() => ApiKey;
+}
+
+public sealed class ModelConfig
+{
+    public string Id { get; set; } = "";
+    public string? Alias { get; set; }
+    public int ContextWindow { get; set; } = 128_000;
+    public int MaxOutput { get; set; } = 8_192;
+    public ModelCapabilities Capabilities { get; set; } = new();
+    /// <summary>USD per 1M tokens.</summary>
+    public decimal InputPricePerMTok { get; set; }
+    public decimal OutputPricePerMTok { get; set; }
+    /// <summary>Free-form routing tags: fast, quality, cheap, offline…</summary>
+    public List<string>? Tags { get; set; }
+}
+
+/// <summary>
+/// Unified capability model. Business code must branch on these flags,
+/// never on provider or model names.
+/// </summary>
+public sealed class ModelCapabilities
+{
+    public bool Streaming { get; set; } = true;
+    public bool Thinking { get; set; }
+    public bool Vision { get; set; }
+    public bool Image { get; set; }
+    public bool ToolCalling { get; set; } = true;
+    public bool JsonMode { get; set; }
+    public bool Reasoning { get; set; }
+    /// <summary>Highest neutral reasoning level accepted by this model.</summary>
+    public ReasoningLevel MaxReasoningLevel { get; set; } = ReasoningLevel.Max;
+    public bool Embedding { get; set; }
+    public bool Mcp { get; set; } = true;
+}
+
+public sealed class RoutingConfig
+{
+    /// <summary>
+    /// When true, a failed model request automatically fails over to the next candidate in
+    /// the routing chain. When false, only the active model is tried and the turn stops with
+    /// the real error instead of silently switching to another provider/model.
+    /// </summary>
+    public bool FailoverEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Opt-in DeepSeek-specific request optimizations. The policy is intentionally separate from
+    /// model selection so it can evolve independently as DeepSeek models/API surface change.
+    /// </summary>
+    public bool DeepSeekOptimizationEnabled { get; set; }
+
+    /// <summary>Global failover chain, tried in order after the active model fails.</summary>
+    public List<string> Fallback { get; set; } = [];
+
+    /// <summary>priority | roundRobin | leastUsed | lowestCost | fastest | sticky</summary>
+    public string LoadBalance { get; set; } = "priority";
+
+    public RetryConfig Retry { get; set; } = new();
+}
+
+public sealed class RetryConfig
+{
+    public int MaxAttempts { get; set; } = 3;
+    public double BaseDelaySeconds { get; set; } = 1.0;
+    public double MaxDelaySeconds { get; set; } = 20.0;
+    /// <summary>Consecutive failures before a model's circuit opens.</summary>
+    public int CircuitBreakThreshold { get; set; } = 4;
+    public double CircuitCooldownSeconds { get; set; } = 60.0;
+}
+
+public sealed class AgentConfig
+{
+    public int MaxSteps { get; set; } = 40;
+    public bool AutoVerify { get; set; } = true;
+    public int MaxRepairAttempts { get; set; } = 3;
+    /// <summary>Personality prompt key: pragmatic | friendly. Defaults to the pragmatic engineering voice.</summary>
+    public string Personality { get; set; } = "pragmatic";
+    /// <summary>Summarizes older history when the context window would overflow, so a single turn can keep going.</summary>
+    public bool EnableContextCompaction { get; set; } = true;
+    /// <summary>Consecutive output-cap truncations allowed before a turn gives up instead of ending silently.</summary>
+    public int MaxOutputContinuations { get; set; } = 6;
+    /// <summary>Agent mode: edit | plan | readonly | auto.</summary>
+    public string Mode { get; set; } = "edit";
+    /// <summary>Prompt key of the main system prompt (relative to prompts/, no extension).</summary>
+    public string SystemPrompt { get; set; } = "system/default";
+    public int ThinkingBudgetTokens { get; set; } = 16_384;
+    public ReasoningLevel ReasoningLevel { get; set; } = ReasoningLevel.High;
+    /// <summary>Hard cap safeguard; effective tool output budget adapts to the model context window.</summary>
+    public int MaxToolOutputChars { get; set; } = 60_000;
+    public int BashTimeoutSeconds { get; set; } = 180;
+    /// <summary>Wall-clock budget for one scheduled-task turn; exceeded runs are cancelled and recorded.</summary>
+    public int ScheduledTurnTimeoutSeconds { get; set; } = 1_800;
+    /// <summary>
+    /// Global network access switch. When false, network tools (web_search, web_fetch) are stripped
+    /// and the agent prompt enforces offline operation across all workspaces.
+    /// </summary>
+    public bool NetworkEnabled { get; set; } = true;
+}
+
+public sealed class McpConfig
+{
+    public Dictionary<string, McpServerConfig> Servers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class McpServerConfig
+{
+    /// <summary>stdio | sse | http | streamable-http (websocket reserved).</summary>
+    public string Transport { get; set; } = "stdio";
+    public string? Command { get; set; }
+    public List<string>? Args { get; set; }
+    public Dictionary<string, string>? Env { get; set; }
+    public string? Url { get; set; }
+    public bool Enabled { get; set; } = true;
+}
+
+/// <summary>Per-workspace overrides stored in &lt;workspace&gt;/.haoyue/config.json.</summary>
+public sealed class WorkspaceConfig
+{
+    public string? Provider { get; set; }
+    public string? Model { get; set; }
+    public double? Temperature { get; set; }
+    public string? Mode { get; set; }
+    public string? SystemPrompt { get; set; }
+    public string? Personality { get; set; }
+    public List<string>? DisabledSkills { get; set; }
+    public List<string>? DisabledTools { get; set; }
+    public McpConfig? Mcp { get; set; }
+    public bool? AutoVerify { get; set; }
+    /// <summary>Overrides the auto-detected build/check command used by the verify loop.</summary>
+    public string? VerifyCommand { get; set; }
+}
+
+/// <summary>Small mutable runtime state persisted in ~/.haoyue/state.json (round-robin cursors, last session…).</summary>
+public sealed class RuntimeState
+{
+    public Dictionary<string, int> RoundRobinCursors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public string? LastSessionId { get; set; }
+    public Dictionary<string, string> DisabledSkills { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}

@@ -1,0 +1,13 @@
+@page "/en/skills/{Slug}"
+@page "/en/skills/{Id:int}"
+@page "/en/skill/{Slug}"
+
+<SkillDetailView Id="@Id" Slug="@Slug" Language="en" />
+
+@code {
+    [Parameter]
+    public int? Id { get; set; }
+
+    [Parameter]
+    public string? Slug { get; set; }
+}

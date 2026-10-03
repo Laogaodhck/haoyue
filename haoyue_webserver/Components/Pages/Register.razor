@@ -1,0 +1,96 @@
+@page "/register"
+@rendermode InteractiveServer
+@inject AuthService Auth
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>注册 — Haoyue</PageTitle>
+
+<section class="auth-page">
+    <form class="auth-card" @onsubmit="SubmitAsync" @onsubmit:preventDefault>
+        <h1>账号注册</h1>
+        <p class="subtitle">@(_registrationEnabled ? "创建 Haoyue 平台用户账号。" : "当前注册已关闭，请联系超级管理员在后台分配。")</p>
+
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <div class="alert alert-danger mb-3"><i class="bi bi-exclamation-circle me-1"></i> @_error</div>
+        }
+
+        <div class="mb-3">
+            <label class="form-label">电子邮箱 *</label>
+            <input type="email" class="form-control" @bind="_model.Email" autocomplete="email" placeholder="name@example.com" required disabled="@(!_registrationEnabled)" />
+        </div>
+        <div class="mb-4">
+            <label class="form-label">设置密码 *</label>
+            <input type="password" class="form-control" @bind="_model.Password" autocomplete="new-password" placeholder="至少6位字符" required disabled="@(!_registrationEnabled)" />
+        </div>
+
+        <button class="vp-btn-primary w-100 justify-content-center" type="submit" disabled="@(_busy || !_registrationEnabled)">
+            <i class="bi bi-person-plus"></i> @(_busy ? "正在注册…" : "立即注册")
+        </button>
+
+        <div class="text-center mt-4 small text-muted">
+            已有账号？<a href="/login" class="fw-semibold">直接登录</a>
+        </div>
+    </form>
+</section>
+
+@code {
+    private RegisterRequest _model = new();
+    private string? _error;
+    private bool _busy;
+    private bool _registrationEnabled = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _registrationEnabled = await Auth.IsRegistrationAllowedAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (!_registrationEnabled)
+        {
+            _error = "当前站点已关闭公开注册。";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var returnUrl = ReadReturnUrl();
+            var result = await JS.InvokeAsync<AuthResult>("Haoyue.register", _model.Email, _model.Password);
+            if (result != null && !result.Success)
+            {
+                _error = result.Error ?? "注册失败，请稍后重试。";
+            }
+            else if (result?.Success == true)
+            {
+                Navigation.NavigateTo(returnUrl, forceLoad: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = "注册请求发生异常：" + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string ReadReturnUrl()
+    {
+        var query = new Uri(Navigation.Uri).Query.TrimStart('?');
+        var returnUrl = query
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(pair => pair.Split('=', 2))
+            .FirstOrDefault(pair => pair.Length == 2 && pair[0] == "returnUrl")?[1];
+
+        returnUrl = returnUrl is null ? null : Uri.UnescapeDataString(returnUrl);
+        return string.IsNullOrWhiteSpace(returnUrl) || !returnUrl.StartsWith('/')
+            ? "/"
+            : returnUrl;
+    }
+}
+

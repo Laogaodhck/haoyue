@@ -1,0 +1,25 @@
+{
+  "name": "haoyue-cli-win-x64",
+  "version": "1.3.0",
+  "description": "Haoyue CLI binary package for win32/x64 (win-x64).",
+  "license": "SEE LICENSE IN LICENSE",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/**/*",
+    "prompts/**/*",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "haoyue",
+    "cli",
+    "ai",
+    "coding-agent",
+    "dotnet"
+  ]
+}

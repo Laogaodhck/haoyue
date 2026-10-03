@@ -1,0 +1,86 @@
+@page "/search"
+@page "/en/search"
+@rendermode InteractiveServer
+@inject DocService Docs
+@inject NavigationManager Navigation
+
+<PageTitle>@(string.IsNullOrWhiteSpace(_query) ? (IsEnglish ? "Search Documentation — Haoyue Docs" : "文档搜索 — Haoyue 官方文档") : $"{_query} — {(IsEnglish ? "Search Documentation — Haoyue Docs" : "文档搜索 — Haoyue 官方文档")}")</PageTitle>
+<HeadContent>
+    <meta name="description" content="@(IsEnglish ? "Search Haoyue technical documentation, architecture specs, and core mechanisms." : "支持按关键词检索 Haoyue 中英文技术文档、架构设计与核心机制。")" />
+</HeadContent>
+
+<section class="skills-shell" style="max-width: 860px;">
+    <header class="skills-header mb-4">
+        <p class="doc-kicker">Documentation Search</p>
+        <h1>@(IsEnglish ? "Full-Text Documentation Search" : "全文文档检索")</h1>
+        <p>@(IsEnglish ? "Search Haoyue technical documentation, architecture specs, and core mechanisms." : "支持按关键词检索 Haoyue 中英文技术文档、架构设计与核心机制。")</p>
+    </header>
+
+    <form class="skills-search-bar mb-4" @onsubmit="SubmitSearch" @onsubmit:preventDefault>
+        <input class="form-control" @bind="_query" placeholder="输入关键词，例如：MCP、Provider、Daemon、Docker…" />
+        <button class="vp-btn-primary" type="submit"><i class="bi bi-search"></i> 搜索</button>
+    </form>
+
+    @if (_hasSearched && !string.IsNullOrWhiteSpace(_query))
+    {
+        <div class="text-muted small mb-3">
+            @if (_results.Count == 0)
+            {
+                <span>没有找到与“<strong>@_query</strong>”相关的文档。</span>
+            }
+            else
+            {
+                <span>检索到 <strong>@_results.Count</strong> 篇匹配文档：</span>
+            }
+        </div>
+    }
+
+    <div class="d-flex flex-column gap-3">
+        @foreach (var result in _results)
+        {
+            <a class="skill-card text-decoration-none" href="@ResultUrl(result)" style="padding: 1.25rem;">
+                <div class="d-flex align-items-center justify-content-between mb-1">
+                    <h3 class="h5 fw-bold text-dark-emphasis m-0">@result.Title</h3>
+                    <span class="badge text-bg-light border">@(result.Language == "en" ? "EN" : "中") · @result.Slug</span>
+                </div>
+                <p class="text-secondary small m-0 line-clamp-2">@result.Snippet</p>
+            </a>
+        }
+    </div>
+</section>
+
+@code {
+    [SupplyParameterFromQuery(Name = "q")]
+    public string? Query { get; set; }
+
+    private string _query = string.Empty;
+    private IReadOnlyList<DocSearchResult> _results = Array.Empty<DocSearchResult>();
+    private bool _hasSearched;
+
+    private bool IsEnglish => new Uri(Navigation.Uri).AbsolutePath.StartsWith("/en", StringComparison.OrdinalIgnoreCase);
+
+    protected override void OnParametersSet()
+    {
+        _query = Query ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(_query))
+        {
+            _results = Docs.Search(_query);
+            _hasSearched = true;
+        }
+        else
+        {
+            _results = Array.Empty<DocSearchResult>();
+            _hasSearched = false;
+        }
+    }
+
+    private void SubmitSearch()
+    {
+        var prefix = IsEnglish ? "/en" : "";
+        Navigation.NavigateTo($"{prefix}/search?q={Uri.EscapeDataString(_query)}");
+    }
+
+    private static string ResultUrl(DocSearchResult result) =>
+        result.Language == "en" ? $"/en/doc/{result.Slug}" : $"/doc/{result.Slug}";
+}
+

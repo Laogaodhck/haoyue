@@ -1,0 +1,189 @@
+@rendermode InteractiveServer
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@implements IDisposable
+
+<nav class="site-nav">
+    <div class="nav-inner">
+        <!-- Brand / Logo -->
+        <a class="brand" href="@(_isEnglish ? "/en" : "/")">
+            <img src="/logo.png" alt="Haoyue" />
+            <span>Haoyue</span>
+        </a>
+
+        <!-- Right-aligned Navigation Bar -->
+        <div class="nav-content-right">
+            <!-- Nav links (Original site structure) -->
+            <div class="nav-links">
+                <NavLink class="vp-nav-link" href="@(_isEnglish ? "/en" : "")" Match="NavLinkMatch.All">
+                    <i class="bi bi-house-door me-1"></i><span>@(_isEnglish ? "Home" : "首页")</span>
+                </NavLink>
+                <NavLink class="vp-nav-link" href="@(_isEnglish ? "/en/doc" : "/doc")">
+                    <i class="bi bi-journal-text me-1"></i><span>@(_isEnglish ? "Docs" : "文档中心")</span>
+                </NavLink>
+                <NavLink class="vp-nav-link" href="@(_isEnglish ? "/en/doc/desktop" : "/doc/desktop")">
+                    <i class="bi bi-display me-1"></i><span>Desktop</span>
+                </NavLink>
+                <NavLink class="vp-nav-link" href="@(_isEnglish ? "/en/skills" : "/skills")">
+                    <i class="bi bi-stars me-1"></i><span>@(_isEnglish ? "Skills" : "技能市场")</span>
+                </NavLink>
+                <NavLink class="vp-nav-link" href="@(_isEnglish ? "/en/search" : "/search")">
+                    <i class="bi bi-search me-1"></i><span>@(_isEnglish ? "Search" : "搜索")</span>
+                </NavLink>
+
+                <AuthorizeView Roles="SuperAdmin">
+                    <Authorized>
+                        <NavLink class="vp-nav-link text-success fw-bold" href="/admin">
+                            <i class="bi bi-speedometer2 me-1"></i><span>@(_isEnglish ? "Admin" : "管理后台")</span>
+                        </NavLink>
+                    </Authorized>
+                </AuthorizeView>
+            </div>
+
+            <!-- Divider -->
+            <div class="vp-nav-divider"></div>
+
+            <!-- Language Flyout -->
+            <div class="vp-nav-item">
+                <button class="vp-nav-link vp-nav-dropdown-btn" type="button" title="@(_isEnglish ? "Select Language" : "选择语言")">
+                    <i class="bi bi-translate"></i>
+                    <i class="bi bi-chevron-down" style="font-size: 0.7em;"></i>
+                </button>
+                <div class="vp-nav-dropdown" style="min-width: 140px;">
+                    <a class="vp-dropdown-item d-flex align-items-center justify-content-between @(!_isEnglish ? "text-success fw-bold" : "")" href="@GetTargetLanguageUrl("zh")">
+                        <span>简体中文</span>
+                        @if (!_isEnglish)
+                        {
+                            <i class="bi bi-check2"></i>
+                        }
+                    </a>
+                    <a class="vp-dropdown-item d-flex align-items-center justify-content-between @(_isEnglish ? "text-success fw-bold" : "")" href="@GetTargetLanguageUrl("en")">
+                        <span>English</span>
+                        @if (_isEnglish)
+                        {
+                            <i class="bi bi-check2"></i>
+                        }
+                    </a>
+                </div>
+            </div>
+
+            <!-- Divider -->
+            <div class="vp-nav-divider"></div>
+
+            <!-- VitePress Pill Theme Switch -->
+            <button class="vp-switch-appearance" type="button" role="switch" aria-checked="@(_theme == "dark")" @onclick="ToggleThemeAsync" title="@(_theme == "light" ? "切换至深色模式" : "切换至浅色模式")">
+                <span class="vp-switch-check">
+                    <i class="bi @(_theme == "dark" ? "bi-moon-stars" : "bi-sun")"></i>
+                </span>
+            </button>
+
+            <!-- Divider -->
+            <div class="vp-nav-divider"></div>
+
+            <!-- GitHub Social Link -->
+            <a class="vp-icon-btn" href="https://github.com/Laogaodhck/haoyue" target="_blank" rel="noopener noreferrer" title="GitHub Repository">
+                <i class="bi bi-github" style="font-size: 1.15rem;"></i>
+            </a>
+
+            <!-- User Auth Profile -->
+            <AuthorizeView>
+                <Authorized>
+                    <div class="vp-nav-divider"></div>
+                    <span class="auth-badge"><i class="bi bi-person-circle"></i> @context.User.Identity?.Name</span>
+                    <button class="btn-signout" @onclick="LogoutAsync" title="退出登录"><i class="bi bi-box-arrow-right"></i></button>
+                </Authorized>
+                <NotAuthorized>
+                    <div class="vp-nav-divider"></div>
+                    <a class="vp-nav-link" href="/login">
+                        <span>@(_isEnglish ? "Sign In" : "登录")</span>
+                    </a>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
+    </div>
+</nav>
+
+@code {
+    private string _currentPath = "/";
+    private string _theme = "light";
+
+    private bool _isEnglish =>
+        _currentPath.StartsWith("/en", StringComparison.OrdinalIgnoreCase);
+
+    protected override void OnInitialized()
+    {
+        _currentPath = new Uri(Navigation.Uri).AbsolutePath;
+        Navigation.LocationChanged += OnLocationChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var theme = await JS.InvokeAsync<string>("Haoyue.getTheme");
+            if (_theme != theme)
+            {
+                _theme = theme;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        _currentPath = new Uri(e.Location).AbsolutePath;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Navigation.LocationChanged -= OnLocationChanged;
+    }
+
+    private string GetTargetLanguageUrl(string lang)
+    {
+        var uri = new Uri(Navigation.Uri);
+        var path = uri.AbsolutePath;
+        var query = uri.Query;
+
+        if (lang == "zh")
+        {
+            if (path.Equals("/en", StringComparison.OrdinalIgnoreCase) || path.Equals("/en/", StringComparison.OrdinalIgnoreCase))
+            {
+                return "/" + query;
+            }
+
+            if (path.StartsWith("/en/", StringComparison.OrdinalIgnoreCase))
+            {
+                var rest = path["/en".Length..];
+                return (string.IsNullOrEmpty(rest) ? "/" : rest) + query;
+            }
+
+            return path + query;
+        }
+        else // en
+        {
+            if (path.StartsWith("/en", StringComparison.OrdinalIgnoreCase))
+            {
+                return path + query;
+            }
+
+            if (path == "/" || string.IsNullOrEmpty(path))
+            {
+                return "/en" + query;
+            }
+
+            return "/en" + path + query;
+        }
+    }
+
+    private async Task ToggleThemeAsync()
+    {
+        _theme = await JS.InvokeAsync<string>("Haoyue.toggleTheme");
+    }
+
+    private async Task LogoutAsync()
+    {
+        await JS.InvokeVoidAsync("Haoyue.logout");
+    }
+}

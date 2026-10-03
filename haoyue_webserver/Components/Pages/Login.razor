@@ -1,0 +1,83 @@
+@page "/login"
+@rendermode InteractiveServer
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>登录 — Haoyue</PageTitle>
+
+<section class="auth-page">
+    <form class="auth-card" @onsubmit="SubmitAsync" @onsubmit:preventDefault>
+        <h1>账号登录</h1>
+        <p class="subtitle">登录 Haoyue 平台以访问后台管理或发布技能。</p>
+
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <div class="alert alert-danger mb-3"><i class="bi bi-exclamation-circle me-1"></i> @_error</div>
+        }
+
+        <div class="mb-3">
+            <label class="form-label">电子邮箱 *</label>
+            <input type="email" class="form-control" @bind="_model.Email" autocomplete="email" placeholder="name@example.com" required />
+        </div>
+        <div class="mb-4">
+            <label class="form-label">登录密码 *</label>
+            <input type="password" class="form-control" @bind="_model.Password" autocomplete="current-password" placeholder="请输入密码" required />
+        </div>
+
+        <button class="vp-btn-primary w-100 justify-content-center" type="submit" disabled="@_busy">
+            <i class="bi bi-box-arrow-in-right"></i> @(_busy ? "正在登录…" : "立即登录")
+        </button>
+
+        <div class="text-center mt-4 small text-muted">
+            还没有账号？<a href="/register" class="fw-semibold">注册新账号</a>
+        </div>
+    </form>
+</section>
+
+@code {
+    private LoginRequest _model = new();
+    private string? _error;
+    private bool _busy;
+
+    private async Task SubmitAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var returnUrl = ReadReturnUrl();
+            var result = await JS.InvokeAsync<AuthResult>("Haoyue.login", _model.Email, _model.Password);
+            if (result != null && !result.Success)
+            {
+                _error = result.Error ?? "登录失败，请检查用户名和密码。";
+            }
+            else if (result?.Success == true)
+            {
+                Navigation.NavigateTo(returnUrl, forceLoad: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = "登录请求发生异常：" + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string ReadReturnUrl()
+    {
+        var query = new Uri(Navigation.Uri).Query.TrimStart('?');
+        var returnUrl = query
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(pair => pair.Split('=', 2))
+            .FirstOrDefault(pair => pair.Length == 2 && pair[0] == "returnUrl")?[1];
+
+        returnUrl = returnUrl is null ? null : Uri.UnescapeDataString(returnUrl);
+        return string.IsNullOrWhiteSpace(returnUrl) || !returnUrl.StartsWith('/')
+            ? "/"
+            : returnUrl;
+    }
+}
+

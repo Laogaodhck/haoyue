@@ -1,0 +1,35 @@
+@page "/Error"
+@using System.Diagnostics
+
+<PageTitle>系统错误 — Haoyue</PageTitle>
+
+<h1 class="text-danger">出错了。</h1>
+<h2 class="text-danger">处理请求时发生错误。</h2>
+
+@if (ShowRequestId)
+{
+    <p>
+        <strong>请求 ID：</strong> <code>@RequestId</code>
+    </p>
+}
+
+<h3>开发模式</h3>
+<p>
+    切换到 <strong>Development</strong> 环境会显示更详细的错误信息。
+</p>
+<p>
+    <strong>生产环境不应启用 Development 模式。</strong>
+    它可能向最终用户暴露异常中的敏感信息。
+    本地调试时，请将 <strong>ASPNETCORE_ENVIRONMENT</strong> 环境变量设置为 <strong>Development</strong> 并重启应用。
+</p>
+
+@code{
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    protected override void OnInitialized() =>
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

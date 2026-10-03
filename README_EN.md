@@ -14,9 +14,9 @@
 [![GitHub Issues](https://img.shields.io/github/issues/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/issues)
 [![GitHub Pull Requests](https://img.shields.io/github/issues-pr/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/pulls)
 
-**Modern, High-Performance AI Agent Runtime**
+**Modern, High-Performance AI Agent**
 
-Haoyue is a high-performance AI agent runtime built on .NET 10.0, featuring clean architecture and event-driven design. It provides a complete platform for building AI-powered coding assistants with support for multiple LLM providers, tool execution, session management, and a smooth terminal interaction experience.
+Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean architecture and event-driven design. It provides a complete platform for building AI-powered coding assistants with support for multiple LLM providers, tool execution, session management, and a smooth terminal interaction experience.
 
 [🌐 Official Website & Docs](https://github.com/Laogaodhck/haoyue) •
 [中文](README.md) •
@@ -38,7 +38,7 @@ Haoyue is a high-performance AI agent runtime built on .NET 10.0, featuring clea
 - **OpenAI Compatible**: GPT-5.5, GPT-5.5-mini, and all OpenAI-compatible APIs
 - **Anthropic**: Claude Opus, Claude Sonnet, Claude Haiku
 - **Google**: Gemini Pro, Gemini Flash
-- **Local Models**: Ollama, LM Studio
+- **Local Models**: Ollama, LM Studio, or run GGUF models directly in-process (no server required)
 - **Routing**: Fast, Balanced, Quality, Cheap, Offline strategies
 - **Failover**: Automatic retry with exponential backoff and circuit breaker
 
@@ -281,6 +281,16 @@ haoyue provider test openai
 haoyue provider use anthropic
 ```
 
+### Local Models (GGUF)
+
+Drop GGUF files into `~/.haoyue/models` (or the `models/` folder of a repository checkout) to run them in-process with no network and no server:
+
+```bash
+haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf
+```
+
+Use `--models-directory` to point at a different folder. Local models support streaming and thinking output; tool calling is not supported yet.
+
 ### Model Management
 
 ```bash
@@ -393,4 +403,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Haoyue** - A modern, high-performance AI agent runtime built on .NET.
+**Haoyue** - A modern, high-performance AI agent built on .NET.

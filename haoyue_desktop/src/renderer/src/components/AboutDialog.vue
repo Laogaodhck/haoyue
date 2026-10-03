@@ -36,7 +36,7 @@ function platformLabel(): string {
             <img :src="logoUrl" alt="" />
             <div>
               <h2 id="about-title">Haoyue</h2>
-              <p>AI Agent 运行时</p>
+              <p>AI Agent</p>
             </div>
           </div>
           <button class="icon-button" title="关闭" @click="emit('close')"><X :size="18" /></button>
@@ -58,7 +58,7 @@ function platformLabel(): string {
         </dl>
 
         <p class="about-description">
-          基于 .NET 构建的现代化、高性能 AI Agent 运行时，为 AI 驱动的编码助手提供完整平台。
+          基于 .NET 构建的现代化、高性能 AI Agent，为 AI 驱动的编码助手提供完整平台。
         </p>
 
         <nav class="about-links" aria-label="Haoyue 相关链接">

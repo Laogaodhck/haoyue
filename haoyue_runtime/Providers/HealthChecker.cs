@@ -49,6 +49,9 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
 
     public async Task<HealthReport> CheckAsync(ProviderConfig provider, CancellationToken ct = default)
     {
+        if (provider.Kind.Equals("local", StringComparison.OrdinalIgnoreCase))
+            return CheckLocal(provider);
+
         var isAnthropic = provider.Kind.Equals("anthropic", StringComparison.OrdinalIgnoreCase);
         var url = isAnthropic
             ? LlmUrl.JoinV1(provider.BaseUrl, "messages")
@@ -144,5 +147,31 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
         {
             return new HealthReport(provider.Id, false, stopwatch.Elapsed.TotalMilliseconds, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Local models have no endpoint to probe: availability is whether the GGUF files the
+    /// registered models point at exist on disk.
+    /// </summary>
+    private static HealthReport CheckLocal(ProviderConfig provider)
+    {
+        var present = provider.Models
+            .Select(model => LocalModels.ResolveModelPath(provider, model))
+            .Where(File.Exists)
+            .ToList();
+
+        if (present.Count == 0)
+        {
+            var directory = LocalModels.ResolveDirectory(provider.ModelsDirectory);
+            return new HealthReport(provider.Id, false, 0, provider.Models.Count == 0
+                ? $"No models registered. Put *.gguf files into {directory} and add them."
+                : $"No model file found. Checked {directory} and the paths saved on the models.");
+        }
+
+        var first = new FileInfo(present[0]);
+        var gigabytes = first.Length >= 1L << 30;
+        var size = $"{first.Length / (double)(gigabytes ? 1L << 30 : 1L << 20):F1} {(gigabytes ? "GB" : "MB")}";
+        return new HealthReport(provider.Id, true, 0,
+            $"{present.Count}/{provider.Models.Count} model file(s) ready, e.g. {first.Name} ({size})");
     }
 }

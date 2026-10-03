@@ -5612,6 +5612,58 @@ select:focus-visible {
   border-radius: 6px;
 }
 
+.directory-control {
+  display: flex;
+  gap: 8px;
+}
+
+.directory-control input {
+  flex: 1;
+}
+
+.directory-control button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.scan-error {
+  color: var(--danger, #e5484d);
+  font-size: 11px;
+}
+
+.scan-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.local-scan-block {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 8px;
+}
+
+.local-scan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.local-scan-header small {
+  color: var(--text-muted);
+}
+
+.local-scan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
 .provider-models-table {
   display: flex;
   flex-direction: column;

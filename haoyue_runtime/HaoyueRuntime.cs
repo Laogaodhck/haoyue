@@ -261,8 +261,10 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<PromptComposer>();
 
         services.AddSingleton<ILlmHttpFactory, LlmHttpFactory>();
+        services.AddSingleton<LocalModelCache>();
         services.AddSingleton<ILlmClient, OpenAiCompatibleClient>();
         services.AddSingleton<ILlmClient, AnthropicClient>();
+        services.AddSingleton<ILlmClient, LocalLlmClient>();
         services.AddSingleton<ILlmClientFactory, LlmClientFactory>();
         services.AddSingleton<IModelRegistry, ModelRegistry>();
         services.AddSingleton<IUsageTracker>(sp => new UsageTracker(sp.GetRequiredService<IEventBus>()));

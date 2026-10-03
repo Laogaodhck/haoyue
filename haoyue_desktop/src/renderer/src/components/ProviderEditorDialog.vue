@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Eye, EyeOff, Plus, Save, Settings2, Trash2, X } from '@lucide/vue'
+import { Eye, EyeOff, Plus, RefreshCw, Save, Settings2, Trash2, X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import FieldLabel from './FieldLabel.vue'
 import SelectMenu from './SelectMenu.vue'
@@ -9,11 +9,12 @@ import { formatTokenCount } from '../app-helpers'
 export interface ProviderFormValue {
   id: string
   name: string
-  kind: 'openai' | 'anthropic'
+  kind: 'openai' | 'anthropic' | 'local'
   baseUrl: string
   modelListUrl: string
   apiKey: string
   models: string
+  modelsDirectory: string
   modelDetails?: ModelDetailConfig[]
   enabled: boolean
   priority: number
@@ -22,12 +23,24 @@ export interface ProviderFormValue {
   promptCaching: boolean
 }
 
+export interface ScannedLocalModel {
+  id: string
+  path: string
+  sizeBytes: number
+  displayName: string
+  architecture?: string | null
+  trainedContext?: number | null
+  contextWindow: number
+  maxOutput: number
+}
+
 const props = defineProps<{
   open: boolean
   editingId: string | null
   value: ProviderFormValue
   saving?: boolean
   error?: string
+  defaultModelsDirectory?: string
 }>()
 
 const emit = defineEmits<{
@@ -36,7 +49,7 @@ const emit = defineEmits<{
 }>()
 
 const form = reactive<ProviderFormValue>({
-  id: '', name: '', kind: 'openai', baseUrl: '', modelListUrl: '', apiKey: '', models: '',
+  id: '', name: '', kind: 'openai', baseUrl: '', modelListUrl: '', apiKey: '', models: '', modelsDirectory: '',
   enabled: true, priority: 0, timeoutSeconds: 120, proxy: '', promptCaching: true
 })
 const modelList = ref<ModelDetailConfig[]>([])
@@ -47,10 +60,16 @@ const firstInput = ref<HTMLInputElement | null>(null)
 const revealKey = ref(false)
 const protocolOptions = [
   { value: 'openai', label: 'OpenAI 兼容', description: '兼容 OpenAI Chat Completions 接口' },
-  { value: 'anthropic', label: 'Anthropic', description: '使用 Anthropic Messages API' }
+  { value: 'anthropic', label: 'Anthropic', description: '使用 Anthropic Messages API' },
+  { value: 'local', label: '本地 GGUF', description: '模型在本进程内直接运行，无需网络与 API Key' }
 ]
 
 const showAdvanced = ref(false)
+
+const scannedModels = ref<ScannedLocalModel[]>([])
+const scanningModels = ref(false)
+const scanError = ref('')
+const scanDirectory = ref('')
 
 function hasCustomAdvancedSettings(val: ProviderFormValue): boolean {
   return (
@@ -114,6 +133,58 @@ function addModel(): void {
   newModelInput.value = ''
 }
 
+function isLocalKind(): boolean {
+  return form.kind === 'local'
+}
+
+function isRegistered(model: ScannedLocalModel): boolean {
+  return modelList.value.some((m) => m.id.toLowerCase() === model.id.toLowerCase())
+}
+
+async function scanLocalModels(): Promise<void> {
+  scanningModels.value = true
+  scanError.value = ''
+  try {
+    const params: Record<string, unknown> = {}
+    const directory = scanDirectory.value.trim()
+    if (directory) params.directory = directory
+    const response = await window.haoyue.daemon.request('local.models', params)
+    const result = JSON.parse(response.data) as {
+      directory: string
+      exists: boolean
+      models: ScannedLocalModel[]
+    }
+    scannedModels.value = result.models
+    scanDirectory.value = result.directory
+    if (!result.exists) scanError.value = `模型目录不存在：${result.directory}`
+  } catch (reason) {
+    scanError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    scanningModels.value = false
+  }
+}
+
+function registerScanned(model: ScannedLocalModel): void {
+  if (isRegistered(model)) return
+  modelList.value.push({
+    id: model.id,
+    alias: model.displayName,
+    contextWindow: model.contextWindow,
+    maxOutput: model.maxOutput,
+    vision: false,
+    localPath: model.path
+  })
+}
+
+function registerAllScanned(): void {
+  for (const model of scannedModels.value) registerScanned(model)
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  return `${Math.round(bytes / 1024 ** 2)} MB`
+}
+
 function removeModel(index: number): void {
   modelList.value.splice(index, 1)
 }
@@ -148,6 +219,7 @@ function save(): void {
     name: form.name.trim(),
     baseUrl: form.baseUrl.trim(),
     models: currentModels.join('\n'),
+    modelsDirectory: form.modelsDirectory.trim(),
     modelDetails: modelList.value.map((m) => ({ ...m })),
     timeoutSeconds: showAdvanced.value
       ? (Number.isFinite(form.timeoutSeconds) && form.timeoutSeconds >= 5 ? form.timeoutSeconds : 120)
@@ -179,9 +251,23 @@ watch(() => props.open, (open) => {
     resetAdvancedToDefaults()
   }
   revealKey.value = true
+  scannedModels.value = []
+  scanError.value = ''
+  scanDirectory.value = isLocalKind()
+    ? (form.modelsDirectory.trim() || props.defaultModelsDirectory || '')
+    : ''
+  if (isLocalKind()) void scanLocalModels()
   document.addEventListener('keydown', handleKeydown)
   void nextTick(() => firstInput.value?.focus())
 }, { immediate: true })
+
+watch(() => form.kind, (kind) => {
+  if (kind !== 'local') return
+  scannedModels.value = []
+  scanError.value = ''
+  scanDirectory.value = form.modelsDirectory.trim() || props.defaultModelsDirectory || ''
+  void scanLocalModels()
+})
 
 watch(() => props.open, (open, previous) => {
   if (!open && previous) document.removeEventListener('keydown', handleKeydown)
@@ -224,23 +310,34 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                   <FieldLabel en="Protocol" zh="接口协议" help="选择服务端实际兼容的请求格式；协议与 API 地址必须匹配。" required />
                   <SelectMenu v-model="form.kind" label="接口协议" :options="protocolOptions" :menu-min-width="300" />
                 </label>
-                <label>
+                <label v-if="form.kind !== 'local'">
                   <FieldLabel en="Base URL" zh="API 地址" help="模型服务的 API 根地址。OpenAI 兼容服务通常以 /v1 结尾。" required />
                   <input v-model="form.baseUrl" placeholder="https://api.openai.com/v1" spellcheck="false" />
                 </label>
-                <label class="span-2">
+                <label v-if="form.kind !== 'local'" class="span-2">
                   <FieldLabel en="Model List URL" zh="模型列表 URL" help="获取模型目录的地址；留空时自动使用 API 地址下的 /models 接口。" />
                   <input v-model="form.modelListUrl" placeholder="留空自动推断 /models" spellcheck="false" />
+                </label>
+                <label v-if="form.kind === 'local'" class="span-2">
+                  <FieldLabel en="Models Directory" zh="模型目录" help="存放 GGUF 模型文件的目录；留空时使用运行时默认目录（仓库 models 目录或 ~/.haoyue/models）。" required />
+                  <span class="directory-control">
+                    <input v-model="form.modelsDirectory" placeholder="例如 E:\GitHub\haoyue\models" spellcheck="false" @keydown.enter.prevent="scanLocalModels" />
+                    <button type="button" class="secondary-button compact-button" :disabled="scanningModels" @click="scanLocalModels">
+                      <RefreshCw :size="14" :class="{ spin: scanningModels }" /> {{ scanningModels ? '扫描中…' : '扫描模型' }}
+                    </button>
+                  </span>
+                  <small v-if="scanError" class="scan-error">{{ scanError }}</small>
+                  <small v-else-if="scanDirectory" class="scan-hint">扫描目录：{{ scanDirectory }}</small>
                 </label>
               </div>
             </section>
 
             <section class="provider-form-section">
               <div class="provider-section-heading">
-                <strong>鉴权与模型</strong>
+                <strong>{{ form.kind === 'local' ? '模型' : '鉴权与模型' }}</strong>
               </div>
               <div class="provider-form-grid">
-                <label class="span-2">
+                <label v-if="form.kind !== 'local'" class="span-2">
                   <FieldLabel en="API Key" zh="API 密钥" help="直接查看和修改此模型提供商保存的访问密钥；清空后保存会删除密钥。" />
                   <span class="password-control">
                     <input v-model="form.apiKey" :type="revealKey ? 'text' : 'password'" placeholder="sk-…"
@@ -259,7 +356,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                   </div>
 
                   <div class="model-add-bar">
-                    <input v-model="newModelInput" class="model-add-input" placeholder="输入模型 ID，如 gpt-5，支持逗号或换行粘贴批量输入"
+                    <input v-model="newModelInput" class="model-add-input"
+                      :placeholder="form.kind === 'local' ? '也可手动输入 GGUF 文件名，如 DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf' : '输入模型 ID，如 gpt-5，支持逗号或换行粘贴批量输入'"
                       @keydown.enter.prevent="addModel" />
                     <button type="button" class="secondary-button compact-button add-model-btn"
                       :disabled="!newModelInput.trim()" @click="addModel">
@@ -267,8 +365,35 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                     </button>
                   </div>
 
+                  <div v-if="form.kind === 'local' && scannedModels.length > 0" class="local-scan-block">
+                    <div class="local-scan-header">
+                      <small>模型目录中的 GGUF 文件（{{ scannedModels.length }}）</small>
+                      <button type="button" class="secondary-button compact-button" @click="registerAllScanned">
+                        <Plus :size="13" /> 注册全部
+                      </button>
+                    </div>
+                    <div class="local-scan-list">
+                      <div v-for="model in scannedModels" :key="model.id" class="model-table-row">
+                        <div class="model-row-left">
+                          <span class="model-row-id" :title="model.path">{{ model.displayName }}</span>
+                          <span v-if="model.architecture" class="model-badge" :title="`架构：${model.architecture}`">{{ model.architecture }}</span>
+                          <span class="model-badge context-badge">{{ formatSize(model.sizeBytes) }}</span>
+                          <span class="model-badge context-badge" :title="`训练上下文：${model.trainedContext ?? '未知'} Tokens`">
+                            {{ formatTokenCount(model.contextWindow) }}
+                          </span>
+                        </div>
+                        <div class="model-row-actions">
+                          <button type="button" class="secondary-button compact-button" :disabled="isRegistered(model)"
+                            @click="registerScanned(model)">
+                            {{ isRegistered(model) ? '已注册' : '注册' }}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   <div v-if="modelList.length === 0" class="models-empty-tip">
-                    暂未添加模型，请在上方输入框添加模型 ID
+                    {{ form.kind === 'local' ? '暂未注册模型；填写模型目录后点击「扫描模型」一键注册' : '暂未添加模型，请在上方输入框添加模型 ID' }}
                   </div>
 
                   <div v-else class="provider-models-table">

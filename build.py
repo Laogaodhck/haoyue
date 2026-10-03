@@ -108,7 +108,17 @@ except ImportError:  # pragma: no cover - 标准库降级，保证构建脚本�
 REPO_ROOT = Path(__file__).resolve().parent
 DESKTOP_DIR = REPO_ROOT / "haoyue_desktop"
 DESKTOP_PACKAGE_FILE = DESKTOP_DIR / "package.json"
-BUILDER_OUTPUT = DESKTOP_DIR / "release"
+# HAOYUE_BUILDER_OUTPUT 可把 electron-builder 输出重定向到仓库外目录：
+# IDE（如 Qoder）的文件监视器会对工作区内新建的打包产物持句柄，导致 electron-builder
+# 的清理/改名 EBUSY；输出到监视范围外即可绕开。
+_BUILDER_OUTPUT_ENV = os.environ.get("HAOYUE_BUILDER_OUTPUT")
+BUILDER_OUTPUT = Path(_BUILDER_OUTPUT_ENV or DESKTOP_DIR / "release")
+_BUILDER_OUTPUT_RESOLVED = BUILDER_OUTPUT.resolve()
+_BUILDER_OUTPUT_EXTERNAL = (
+    _BUILDER_OUTPUT_ENV is not None
+    and _BUILDER_OUTPUT_RESOLVED != Path(_BUILDER_OUTPUT_RESOLVED.anchor)
+    and not REPO_ROOT.is_relative_to(_BUILDER_OUTPUT_RESOLVED)
+)
 PUBLISH_DIR = REPO_ROOT / "publish"
 ICON_PNG_PATH = DESKTOP_DIR / "resources" / "logo.png"
 
@@ -786,13 +796,14 @@ def sync_all_versions(version: str) -> None:
 
 def workspace_path(path: Path) -> Path:
     resolved = path.resolve()
-    try:
-        resolved.relative_to(REPO_ROOT)
-    except ValueError as error:
-        raise BuildError(f"Refusing to modify a path outside the repository: {resolved}") from error
     if resolved == REPO_ROOT:
         raise BuildError("Refusing to modify the repository root.")
-    return resolved
+    if resolved.is_relative_to(REPO_ROOT):
+        return resolved
+    # 显式配置的 electron-builder 输出目录（及其子树）允许在仓库外。
+    if _BUILDER_OUTPUT_EXTERNAL and resolved.is_relative_to(_BUILDER_OUTPUT_RESOLVED):
+        return resolved
+    raise BuildError(f"Refusing to modify a path outside the repository: {resolved}") from None
 
 
 def remove_directory(path: Path) -> None:
@@ -880,7 +891,14 @@ def package_desktop_windows(
     else:
         raise BuildError(f"Unknown Windows Desktop build target: {build_target}")
 
-    arguments = ["exec", "electron-builder", "--win", electron_target, "--x64"]
+    arguments = [
+        "exec",
+        "electron-builder",
+        "--win",
+        electron_target,
+        "--x64",
+        f"-c.directories.output={BUILDER_OUTPUT}",
+    ]
     for attempt in range(1, attempts + 1):
         try:
             run(pnpm, arguments, DESKTOP_DIR, env, verbose=verbose)
@@ -903,7 +921,14 @@ def package_desktop_windows(
 def package_desktop_linux(
     pnpm: str, env: dict[str, str], attempts: int = 3, verbose: bool = False
 ) -> None:
-    arguments = ["exec", "electron-builder", "--linux", "dir", "--x64"]
+    arguments = [
+        "exec",
+        "electron-builder",
+        "--linux",
+        "dir",
+        "--x64",
+        f"-c.directories.output={BUILDER_OUTPUT}",
+    ]
     for attempt in range(1, attempts + 1):
         try:
             run(pnpm, arguments, DESKTOP_DIR, env, verbose=verbose)
@@ -1537,7 +1562,6 @@ def main() -> int:
                         "--self-contained",
                         "true",
                         "-p:PublishSingleFile=true",
-                        "-p:IncludeNativeLibrariesForSelfExtract=true",
                         "-p:DebugType=None",
                         "-p:DebugSymbols=false",
                         "-o",
@@ -1547,6 +1571,14 @@ def main() -> int:
                     build_env,
                     verbose=args.verbose,
                 )
+                # LLamaSharp 的自定义加载器只探测 exe 同级的 runtimes/<rid>/native/，
+                # 打进单文件自解压目录反而找不到；原生库保持散落布局。清理其它 RID
+                # 的残留，避免把无关平台的 .so/.dylib 塞进安装包。
+                runtimes_dir = runtime_stage / "runtimes"
+                if runtimes_dir.is_dir():
+                    for entry in runtimes_dir.iterdir():
+                        if entry.name != rid:
+                            remove_directory(entry)
             console.print(f"[bold green]✓[/bold green] .NET 自包含 Runtime ({cur_platform} {rid}) 编译完成")
 
         # 5. 构建前端并逐个平台打包 Electron

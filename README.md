@@ -14,9 +14,9 @@
 [![GitHub Issues](https://img.shields.io/github/issues/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/issues)
 [![GitHub Pull Requests](https://img.shields.io/github/issues-pr/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/pulls)
 
-**现代化、高性能的 AI Agent **
+**现代化、高性能的 AI Agent**
 
-Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent ，采用清洁架构和事件驱动设计。它为构建 AI 驱动的编码助手提供了完整平台，支持多 LLM 提供商、工具执行、会话管理和流畅的终端交互体验。
+Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和事件驱动设计。它为构建 AI 驱动的编码助手提供了完整平台，支持多 LLM 提供商、工具执行、会话管理和流畅的终端交互体验。
 
 [🌐 官方网站与文档](https://github.com/Laogaodhck/haoyue) •
 [English](README_EN.md) •
@@ -38,7 +38,7 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent ，采用清洁架构和�
 - **OpenAI 兼容**：GPT-5.5、GPT-5.5-mini 及所有 OpenAI 兼容 API
 - **Anthropic**：Claude Opus、Claude Sonnet、Claude Haiku
 - **Google**：Gemini Pro、Gemini Flash
-- **本地模型**：Ollama、LM Studio
+- **本地模型**：Ollama、LM Studio，或直接在进程内运行 GGUF 模型（无需任何服务器）
 - **智能路由**：快速、均衡、质量、经济、离线等多种策略
 - **故障转移**：自动重试、指数退避和熔断器机制
 
@@ -281,6 +281,16 @@ haoyue provider test openai
 haoyue provider use anthropic
 ```
 
+### 本地模型（GGUF）
+
+把 GGUF 文件放入 `~/.haoyue/models`（仓库开发环境为 `models/` 目录），即可在无网络、无任何服务器的情况下进程内运行：
+
+```bash
+haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf
+```
+
+也可用 `--models-directory` 指定其它模型目录。本地模型支持流式输出与思考过程展示，暂不支持工具调用。
+
 ### 模型管理
 
 ```bash
@@ -393,4 +403,4 @@ Haoyue 包含内置监控：
 
 ---
 
-**Haoyue** - 基于现代化 .NET 的高性能 AI Agent 运行时。
+**Haoyue** - 基于现代化 .NET 的高性能 AI Agent。

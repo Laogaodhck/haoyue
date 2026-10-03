@@ -20,6 +20,7 @@ export interface ModelDetailConfig {
   contextWindow: number
   maxOutput: number
   vision: boolean
+  localPath?: string
 }
 
 const props = defineProps<{

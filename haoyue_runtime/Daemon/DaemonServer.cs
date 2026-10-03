@@ -45,10 +45,11 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly IFileLockCoordinator _fileLocks = new FileLockCoordinator();
 
     // Process-wide infrastructure shared by every isolated turn runtime so the
-    // HttpClient connection pool and circuit-breaker state survive across turns
-    // instead of being rebuilt (and reset) for every single agent task.
+    // HttpClient connection pool, circuit-breaker state and the loaded GGUF model
+    // survive across turns instead of being rebuilt (and reset) for every agent task.
     private readonly LlmHttpFactory _sharedHttp = new();
     private readonly CircuitBreaker _sharedBreaker;
+    private readonly LocalModelCache _sharedLocalModels = new();
     private readonly ScheduleService _scheduler;
     private readonly IEventSubscription _runtimeEvents;
     private readonly Task _scheduleEventsTask;
@@ -121,7 +122,8 @@ public sealed class DaemonServer : IAsyncDisposable
         // daemon harness stays deterministic. Production keeps the isolated runtime path.
         _scheduler = new ScheduleService(
             runtime.Schedules, runtime, _fileLocks, _sharedHttp, _sharedBreaker,
-            runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct));
+            runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct),
+            sharedLocalModels: _sharedLocalModels);
         _runtimeEvents = _runtime.Events.Subscribe();
         _scheduleEventsTask = BroadcastScheduleEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
         _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token);
@@ -142,6 +144,7 @@ public sealed class DaemonServer : IAsyncDisposable
         _runtimeEvents.Dispose();
         await _scheduler.DisposeAsync().ConfigureAwait(false);
         _sharedHttp.Dispose();
+        _sharedLocalModels.Dispose();
         _shutdown.Dispose();
 
         if (!OperatingSystem.IsWindows() && File.Exists(SocketPath))
@@ -675,6 +678,11 @@ public sealed class DaemonServer : IAsyncDisposable
                             token => _admin.FetchProviderModelsAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "local.models":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ScanLocalModels(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "model.catalog":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.ModelCatalog()), context.ConnectionCt).ConfigureAwait(false);
@@ -1038,6 +1046,7 @@ public sealed class DaemonServer : IAsyncDisposable
                   // registrations so DI resolves these for every turn.
                   services.AddSingleton<ILlmHttpFactory>(_sharedHttp);
                   services.AddSingleton(_sharedBreaker);
+                  services.AddSingleton(_sharedLocalModels);
               })
             : null;
         var runtime = turnRuntime ?? _runtime;
@@ -1402,6 +1411,7 @@ public sealed class DaemonServer : IAsyncDisposable
             "prompt.optimize",
             "schedule.list", "schedule.create", "schedule.update", "schedule.toggle", "schedule.delete", "schedule.run",
             "provider.list", "provider.upsert", "provider.use", "provider.remove", "provider.test", "provider.models.fetch",
+            "local.models",
             "model.list", "model.catalog", "model.switch", "model.test", "model.update",
             "mcp.list", "mcp.upsert", "mcp.remove", "mcp.reload",
             "skill.list", "skill.import", "skill.toggle",

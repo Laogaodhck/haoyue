@@ -24,13 +24,15 @@ public sealed class ProviderConfig
 {
     public string Id { get; set; } = "";
     public string? Name { get; set; }
-    /// <summary>Wire protocol: openai | anthropic. Every OpenAI-compatible service (Ollama, LM Studio, OpenRouter, Azure…) uses "openai".</summary>
+    /// <summary>Wire protocol: openai | anthropic | local. Every OpenAI-compatible service (Ollama, LM Studio, OpenRouter, Azure…) uses "openai"; "local" runs GGUF models in-process without any server.</summary>
     public string Kind { get; set; } = "openai";
     public string BaseUrl { get; set; } = "";
     public string? ApiKey { get; set; }
     public string? Organization { get; set; }
     public string? Proxy { get; set; }
     public int TimeoutSeconds { get; set; } = 120;
+    /// <summary>For kind "local": directory containing the GGUF files. Empty = auto-detected default (repository "models" folder or ~/.haoyue/models).</summary>
+    public string? ModelsDirectory { get; set; }
     /// <summary>Optional URL used by the Desktop "fetch models" action; defaults to the provider /models endpoint.</summary>
     public string? ModelListUrl { get; set; }
     public Dictionary<string, string>? Headers { get; set; }
@@ -48,6 +50,9 @@ public sealed class ProviderConfig
 
     public string DisplayName => string.IsNullOrWhiteSpace(Name) ? Id : Name;
 
+    /// <summary>True when this provider's models run in-process from GGUF files instead of over HTTP.</summary>
+    public bool IsLocal => Kind.Equals("local", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Returns the API key explicitly stored in the configuration file.</summary>
     public string? ResolveApiKey() => ApiKey;
 }
@@ -59,6 +64,8 @@ public sealed class ModelConfig
     public int ContextWindow { get; set; } = 128_000;
     public int MaxOutput { get; set; } = 8_192;
     public ModelCapabilities Capabilities { get; set; } = new();
+    /// <summary>For kind "local": absolute path of the GGUF file. Empty = the provider's models directory plus the model id.</summary>
+    public string? LocalPath { get; set; }
     /// <summary>USD per 1M tokens.</summary>
     public decimal InputPricePerMTok { get; set; }
     public decimal OutputPricePerMTok { get; set; }

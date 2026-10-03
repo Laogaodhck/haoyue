@@ -1,6 +1,7 @@
 using System.CommandLine;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Providers;
 using Spectre.Console;
 
 namespace Haoyue.Cli.Commands;
@@ -39,8 +40,10 @@ public static class ProviderCommands
                     active ? "[green]●[/]" : "",
                     Markup.Escape(provider.Id),
                     Markup.Escape(provider.Kind),
-                    Markup.Escape(provider.BaseUrl),
-                    hasKey ? "[green]set[/]" : "[yellow]missing[/]",
+                    Markup.Escape(provider.IsLocal
+                        ? LocalModels.ResolveDirectory(provider.ModelsDirectory)
+                        : provider.BaseUrl),
+                    provider.IsLocal ? "-" : hasKey ? "[green]set[/]" : "[yellow]missing[/]",
                     provider.Models.Count.ToString(),
                     provider.Enabled ? "[green]yes[/]" : "[red]no[/]",
                     provider.Priority.ToString());
@@ -58,14 +61,15 @@ public static class ProviderCommands
     private static Command BuildAdd()
     {
         var idOption = new Option<string?>("--id") { Description = "Provider id (e.g. openai, anthropic, ollama)" };
-        var kindOption = new Option<string?>("--kind") { Description = "Wire protocol: openai | anthropic" };
+        var kindOption = new Option<string?>("--kind") { Description = "Wire protocol: openai | anthropic | local" };
         var baseUrlOption = new Option<string?>("--base-url") { Description = "API base URL" };
         var apiKeyOption = new Option<string?>("--api-key") { Description = "API key (stored in config)" };
+        var directoryOption = new Option<string?>("--models-directory") { Description = "For --kind local: directory holding the GGUF files (default: auto-detected models folder)" };
         var modelOption = new Option<string[]>("--model") { Description = "Model id to register (repeatable)", AllowMultipleArgumentsPerToken = true };
 
         var command = new Command("add", "Add a provider (interactive when no options are given)");
         command.Add(idOption); command.Add(kindOption); command.Add(baseUrlOption);
-        command.Add(apiKeyOption); command.Add(modelOption);
+        command.Add(apiKeyOption); command.Add(directoryOption); command.Add(modelOption);
 
         command.SetAction(parse =>
         {
@@ -73,7 +77,7 @@ public static class ProviderCommands
             var config = rt.ConfigStore.Config;
 
             var id = parse.GetValue(idOption);
-            string kind; string baseUrl; string? apiKey;
+            string kind; string baseUrl; string? apiKey; string? modelsDirectory = null;
             var models = parse.GetValue(modelOption) ?? [];
 
             if (string.IsNullOrWhiteSpace(id))
@@ -81,27 +85,53 @@ public static class ProviderCommands
                 id = AnsiConsole.Prompt(new TextPrompt<string>("Provider id:"));
                 kind = AnsiConsole.Prompt(new SelectionPrompt<string>()
                     .Title("Wire protocol:")
-                    .AddChoices("openai", "anthropic"));
-                baseUrl = AnsiConsole.Prompt(new TextPrompt<string>("Base URL:")
-                    .DefaultValue(kind == "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"));
-                apiKey = AnsiConsole.Prompt(new TextPrompt<string>("API key:")
-                    .AllowEmpty().Secret());
-
-                var modelList = new List<string>();
-                while (true)
+                    .AddChoices("openai", "anthropic", "local"));
+                if (kind == "local")
                 {
-                    var modelId = AnsiConsole.Prompt(new TextPrompt<string>("Add model id (empty to finish):").AllowEmpty());
-                    if (string.IsNullOrWhiteSpace(modelId)) break;
-                    modelList.Add(modelId.Trim());
+                    baseUrl = "";
+                    apiKey = null;
+                    modelsDirectory = AnsiConsole.Prompt(new TextPrompt<string>("Models directory (GGUF files):")
+                        .DefaultValue(LocalModels.ResolveDirectory()));
                 }
-                models = [.. modelList];
+                else
+                {
+                    baseUrl = AnsiConsole.Prompt(new TextPrompt<string>("Base URL:")
+                        .DefaultValue(kind == "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"));
+                    apiKey = AnsiConsole.Prompt(new TextPrompt<string>("API key:")
+                        .AllowEmpty().Secret());
+                }
+
+                var detected = kind == "local"
+                    ? LocalModelProbe.Scan(modelsDirectory).Select(model => model.ModelId).ToList()
+                    : [];
+                if (detected.Count > 0)
+                {
+                    AnsiConsole.MarkupLine($"[grey]Found in {modelsDirectory}: {string.Join(", ", detected)}[/]");
+                    models = [.. AnsiConsole.Prompt(new MultiSelectionPrompt<string>()
+                        .Title("Models to register:")
+                        .AddChoices(detected)
+                        .Required())];
+                }                else
+                {
+                    if (kind == "local")
+                        AnsiConsole.MarkupLine("[grey]No GGUF files found in that directory yet.[/]");
+                    var modelList = new List<string>();
+                    while (true)
+                    {
+                        var modelId = AnsiConsole.Prompt(new TextPrompt<string>("Add model id (empty to finish):").AllowEmpty());
+                        if (string.IsNullOrWhiteSpace(modelId)) break;
+                        modelList.Add(modelId.Trim());
+                    }
+                    models = [.. modelList];
+                }
             }
             else
             {
                 kind = parse.GetValue(kindOption) ?? "openai";
                 baseUrl = parse.GetValue(baseUrlOption) ?? "";
                 apiKey = parse.GetValue(apiKeyOption);
-                if (string.IsNullOrWhiteSpace(baseUrl))
+                modelsDirectory = parse.GetValue(directoryOption);
+                if (string.IsNullOrWhiteSpace(baseUrl) && !kind.Equals("local", StringComparison.OrdinalIgnoreCase))
                 {
                     AnsiConsole.MarkupLine("[red]--base-url is required.[/]");
                     return 1;
@@ -120,8 +150,11 @@ public static class ProviderCommands
                 Kind = kind.Trim().ToLowerInvariant(),
                 BaseUrl = baseUrl.Trim(),
                 ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey,
-                Models = models.Select(m => new ModelConfig { Id = m }).ToList(),
+                ModelsDirectory = string.IsNullOrWhiteSpace(modelsDirectory) ? null : modelsDirectory.Trim(),
             };
+            provider.Models = [.. provider.IsLocal
+                ? MapLocalModels(LocalModelProbe.Scan(provider.ModelsDirectory), models)
+                : models.Select(modelId => new ModelConfig { Id = modelId })];
             config.Providers.Add(provider);
             rt.ConfigStore.Save();
 
@@ -132,6 +165,22 @@ public static class ProviderCommands
         });
         return command;
     }
+
+    /// <summary>
+    /// Registers local model ids from their GGUF header, so the context window and the
+    /// advertised capabilities describe the file instead of a remote-model default. Ids that
+    /// do not name a file in the directory are kept as plain entries and resolved at run
+    /// time against the models directory.
+    /// </summary>
+    private static IEnumerable<ModelConfig> MapLocalModels(IReadOnlyList<LocalModelInfo> scanned, IEnumerable<string> models) =>
+        models.Select(id =>
+        {
+            var trimmed = id.Trim();
+            var match = scanned.FirstOrDefault(model =>
+                string.Equals(model.ModelId, trimmed, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Path.GetFileNameWithoutExtension(model.ModelId), trimmed, StringComparison.OrdinalIgnoreCase));
+            return match is not null ? LocalModelProbe.ToConfig(match) : new ModelConfig { Id = trimmed };
+        });
 
     private static Command BuildRemove()
     {
@@ -165,10 +214,11 @@ public static class ProviderCommands
         var priorityOption = new Option<int?>("--priority");
         var timeoutOption = new Option<int?>("--timeout") { Description = "Request timeout in seconds" };
         var proxyOption = new Option<string?>("--proxy");
+        var modelsDirectoryOption = new Option<string?>("--models-directory") { Description = "For a local provider: directory holding the GGUF files" };
 
         var command = new Command("edit", "Edit provider fields");
         command.Add(idArg);
-        foreach (var opt in new Option[] { baseUrlOption, apiKeyOption, enabledOption, priorityOption, timeoutOption, proxyOption })
+        foreach (var opt in new Option[] { baseUrlOption, apiKeyOption, enabledOption, priorityOption, timeoutOption, proxyOption, modelsDirectoryOption })
             command.Add(opt);
 
         command.SetAction(parse =>
@@ -187,6 +237,7 @@ public static class ProviderCommands
             if (parse.GetValue(priorityOption) is { } priority) provider.Priority = priority;
             if (parse.GetValue(timeoutOption) is { } timeout) provider.TimeoutSeconds = timeout;
             if (parse.GetValue(proxyOption) is { } proxy) provider.Proxy = proxy;
+            if (parse.GetValue(modelsDirectoryOption) is { } modelsDirectory) provider.ModelsDirectory = modelsDirectory;
 
             rt.ConfigStore.Save();
             AnsiConsole.MarkupLine($"[green]Updated '{Markup.Escape(provider.Id)}'.[/]");

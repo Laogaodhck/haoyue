@@ -269,6 +269,10 @@ public sealed class ProviderManager(
         string? url = null,
         CancellationToken ct = default)
     {
+        // A local provider has no model endpoint — the models directory is the catalogue.
+        if (provider.IsLocal)
+            return LocalModels.ScanIds(provider.ModelsDirectory);
+
         var endpoint = string.IsNullOrWhiteSpace(url)
             ? provider.Kind.Equals("anthropic", StringComparison.OrdinalIgnoreCase)
                 ? LlmUrl.JoinV1(provider.BaseUrl, "models")

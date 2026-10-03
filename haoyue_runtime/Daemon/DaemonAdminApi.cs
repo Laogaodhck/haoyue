@@ -345,8 +345,8 @@ internal sealed class DaemonAdminApi(
         }
 
         var kind = OptionalString(parameters, "kind") ?? provider.Kind;
-        if (kind is not ("openai" or "anthropic"))
-            throw new DaemonRequestException("Provider kind must be openai or anthropic");
+        if (kind is not ("openai" or "anthropic" or "local"))
+            throw new DaemonRequestException("Provider kind must be openai, anthropic or local");
         provider.Kind = kind;
         provider.Name = OptionalString(parameters, "name") ?? provider.Name;
         provider.BaseUrl = OptionalString(parameters, "baseUrl") ?? provider.BaseUrl;
@@ -356,6 +356,8 @@ internal sealed class DaemonAdminApi(
         provider.TimeoutSeconds = parameters["timeoutSeconds"]?.GetValue<int?>() ?? provider.TimeoutSeconds;
         if (parameters.ContainsKey("modelListUrl"))
             provider.ModelListUrl = OptionalString(parameters, "modelListUrl");
+        if (parameters.ContainsKey("modelsDirectory"))
+            provider.ModelsDirectory = OptionalString(parameters, "modelsDirectory");
         provider.PromptCaching = parameters["promptCaching"]?.GetValue<bool?>() ?? provider.PromptCaching;
 
         if (parameters["clearApiKey"]?.GetValue<bool>() == true)
@@ -381,6 +383,10 @@ internal sealed class DaemonAdminApi(
                         model.MaxOutput = mo;
                     if (node["vision"]?.GetValue<bool?>() is { } v)
                         model.Capabilities.Vision = v;
+                    if (node["toolCalling"]?.GetValue<bool?>() is { } tools)
+                        model.Capabilities.ToolCalling = tools;
+                    if (node.ContainsKey("localPath"))
+                        model.LocalPath = OptionalString(node, "localPath");
                     return model;
                 })
                 .ToList();
@@ -398,7 +404,7 @@ internal sealed class DaemonAdminApi(
                 .ToList();
         }
 
-        if (string.IsNullOrWhiteSpace(provider.BaseUrl))
+        if (string.IsNullOrWhiteSpace(provider.BaseUrl) && !provider.IsLocal)
         {
             if (isNew) config.Providers.Remove(provider);
             throw new DaemonRequestException("Provider baseUrl is required");
@@ -408,9 +414,54 @@ internal sealed class DaemonAdminApi(
             if (isNew) config.Providers.Remove(provider);
             throw new DaemonRequestException("At least one model is required");
         }
+        // Local entries are only useful if the GGUF file can actually be found, so reject a
+        // registration that names a missing file instead of failing at chat time.
+        if (provider.IsLocal)
+        {
+            var missing = provider.Models
+                .Select(model => (model.Id, Path: LocalModels.ResolveModelPath(provider, model)))
+                .Where(entry => !File.Exists(entry.Path))
+                .ToList();
+            if (missing.Count > 0)
+            {
+                if (isNew) config.Providers.Remove(provider);
+                throw new DaemonRequestException(
+                    $"Local model file not found: {string.Join(", ", missing.Select(entry => entry.Id))}");
+            }
+        }
 
         runtime.ConfigStore.Save();
         return ProviderJson(provider, provider.Id.Equals(config.Provider, StringComparison.OrdinalIgnoreCase)).ToJsonString();
+    }
+
+    /// <summary>
+    /// Lists the GGUF files of a local models directory so a front end can offer one-click
+    /// registration. Without a directory argument the directory a local provider would use
+    /// is reported, which is the configured value, then HAOYUE_MODELS_DIR, then the
+    /// repository or per-user models folder.
+    /// </summary>
+    public string ScanLocalModels(JsonObject parameters)
+    {
+        var configured = OptionalString(parameters, "directory");
+        var directory = LocalModels.ResolveDirectory(configured);
+        var models = new JsonArray(LocalModelProbe.Scan(configured).Select(model => (JsonNode)new JsonObject
+        {
+            ["id"] = model.ModelId,
+            ["path"] = model.Path,
+            ["sizeBytes"] = model.SizeBytes,
+            ["displayName"] = model.DisplayName,
+            ["architecture"] = model.Architecture,
+            ["trainedContext"] = model.TrainedContext,
+            ["contextWindow"] = model.ContextWindow,
+            ["maxOutput"] = model.MaxOutput,
+        }).ToArray());
+
+        return new JsonObject
+        {
+            ["directory"] = directory,
+            ["exists"] = Directory.Exists(directory),
+            ["models"] = models,
+        }.ToJsonString();
     }
 
     public string UseProvider(JsonObject parameters)
@@ -521,6 +572,12 @@ internal sealed class DaemonAdminApi(
         var id = RequiredString(parameters, "id");
         var provider = runtime.ConfigStore.Config.FindProvider(id)
                        ?? throw new DaemonRequestException($"Provider not found: {id}");
+
+        // Local providers have no /models endpoint: the models directory is scanned and the
+        // entries are registered with the sizes taken from each GGUF header.
+        if (provider.IsLocal)
+            return RegisterScannedModels(provider);
+
         var url = OptionalString(parameters, "url") ?? provider.ModelListUrl;
         var ids = await runtime.Providers.FetchModelsAsync(provider, url, ct).ConfigureAwait(false);
         var existing = provider.Models.ToDictionary(model => model.Id, StringComparer.OrdinalIgnoreCase);
@@ -530,6 +587,24 @@ internal sealed class DaemonAdminApi(
             var model = new ModelConfig { Id = modelId };
             provider.Models.Add(model);
             existing[modelId] = model;
+        }
+        runtime.ConfigStore.Save();
+        return Strings(ids).ToJsonString();
+    }
+
+    /// <summary>
+    /// Registers every GGUF file of a local provider that is not registered yet, using the
+    /// sizes read from each file header, and returns the model ids like the HTTP path does.
+    /// </summary>
+    private string RegisterScannedModels(ProviderConfig provider)
+    {
+        var existing = provider.Models.ToDictionary(model => model.Id, StringComparer.OrdinalIgnoreCase);
+        var ids = new List<string>();
+        foreach (var scanned in LocalModelProbe.Scan(provider.ModelsDirectory))
+        {
+            ids.Add(scanned.ModelId);
+            if (existing.ContainsKey(scanned.ModelId)) continue;
+            provider.Models.Add(LocalModelProbe.ToConfig(scanned));
         }
         runtime.ConfigStore.Save();
         return Strings(ids).ToJsonString();
@@ -1147,11 +1222,15 @@ internal sealed class DaemonAdminApi(
             ["contextWindow"] = m.ContextWindow,
             ["maxOutput"] = m.MaxOutput,
             ["vision"] = m.Capabilities.Vision,
+            ["toolCalling"] = m.Capabilities.ToolCalling,
+            ["localPath"] = m.LocalPath,
         }).ToArray()),
         ["enabled"] = provider.Enabled,
         ["priority"] = provider.Priority,
         ["timeoutSeconds"] = provider.TimeoutSeconds,
         ["modelListUrl"] = provider.ModelListUrl,
+        ["modelsDirectory"] = provider.ModelsDirectory,
+        ["defaultModelsDirectory"] = LocalModels.ResolveDirectory(provider.ModelsDirectory),
         ["promptCaching"] = provider.PromptCaching,
         ["proxy"] = provider.Proxy,
         ["active"] = active,

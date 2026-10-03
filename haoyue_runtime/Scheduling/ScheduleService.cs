@@ -42,6 +42,7 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
     private readonly IFileLockCoordinator _fileLocks;
     private readonly LlmHttpFactory _sharedHttp;
     private readonly CircuitBreaker _sharedBreaker;
+    private readonly LocalModelCache? _sharedLocalModels;
     private readonly ScheduleTurnRunner _turnRunner;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> _running = new();
@@ -57,13 +58,15 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         LlmHttpFactory sharedHttp,
         CircuitBreaker sharedBreaker,
         ScheduleTurnRunner? turnRunner = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        LocalModelCache? sharedLocalModels = null)
     {
         _store = store;
         _runtime = runtime;
         _fileLocks = fileLocks;
         _sharedHttp = sharedHttp;
         _sharedBreaker = sharedBreaker;
+        _sharedLocalModels = sharedLocalModels;
         _turnRunner = turnRunner ?? RunIsolatedTurnAsync;
         if (clock is not null) _clock = clock;
     }
@@ -232,6 +235,7 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         {
             services.AddSingleton<ILlmHttpFactory>(_sharedHttp);
             services.AddSingleton(_sharedBreaker);
+            if (_sharedLocalModels is not null) services.AddSingleton(_sharedLocalModels);
         });
         turnRuntime.Prompts.SetWorkspaceRoot(workspace.IsGlobal ? null : workspace.PromptsDir);
         turnRuntime.Skills.Attach(workspace);

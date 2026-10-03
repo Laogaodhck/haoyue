@@ -53,9 +53,11 @@ type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'diagnostics' |
 interface ProviderInfo {
   id: string
   name: string
-  kind: 'openai' | 'anthropic'
+  kind: 'openai' | 'anthropic' | 'local'
   baseUrl: string
   modelListUrl?: string
+  modelsDirectory?: string
+  defaultModelsDirectory?: string
   apiKey?: string
   apiKeyConfigured: boolean
   models: string[]
@@ -71,11 +73,12 @@ interface ProviderInfo {
 interface ProviderFormValue {
   id: string
   name: string
-  kind: 'openai' | 'anthropic'
+  kind: 'openai' | 'anthropic' | 'local'
   baseUrl: string
   modelListUrl: string
   apiKey: string
   models: string
+  modelsDirectory: string
   modelDetails?: ModelDetailConfig[]
   enabled: boolean
   priority: number
@@ -177,7 +180,7 @@ const editingProviderId = ref<string | null>(null)
 
 const providerForm = reactive<ProviderFormValue>({
   id: '', name: '', kind: 'openai', baseUrl: '',
-  apiKey: '', models: '', modelDetails: [], enabled: true, priority: 0,
+  apiKey: '', models: '', modelsDirectory: '', modelDetails: [], enabled: true, priority: 0,
   modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true
 })
 
@@ -476,7 +479,7 @@ function newProvider(): void {
   editingProviderId.value = null
   Object.assign(providerForm, {
     id: '', name: '', kind: 'openai', baseUrl: '', apiKey: '',
-    models: '', modelDetails: [], enabled: true, priority: 0, modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true
+    models: '', modelsDirectory: '', modelDetails: [], enabled: true, priority: 0, modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true
   })
   providerEditorOpen.value = true
 }
@@ -492,6 +495,7 @@ function editProvider(provider: ProviderInfo): void {
     modelListUrl: provider.modelListUrl ?? '',
     apiKey: provider.apiKey ?? '',
     models: provider.models.join('\n'),
+    modelsDirectory: provider.modelsDirectory ?? '',
     modelDetails: provider.modelDetails ? provider.modelDetails.map((m) => ({ ...m })) : [],
     enabled: provider.enabled,
     priority: provider.priority,
@@ -921,17 +925,21 @@ onBeforeUnmount(() => {
                     <span v-if="!provider.enabled" class="inline-badge disabled-provider-badge">已禁用</span>
                   </div>
                   <div class="provider-card-sub">
-                    <span class="provider-url" :title="provider.baseUrl">{{ provider.baseUrl }}</span>
+                    <span class="provider-url"
+                      :title="provider.kind === 'local' ? provider.defaultModelsDirectory : provider.baseUrl">
+                      {{ provider.kind === 'local' ? (provider.modelsDirectory || provider.defaultModelsDirectory || '默认模型目录') : provider.baseUrl }}
+                    </span>
                     <span class="provider-bullet">·</span>
                     <span class="provider-meta-tag">{{ provider.models.length }} 个模型</span>
                     <span class="provider-bullet">·</span>
-                    <span class="provider-meta-tag">{{ provider.kind === 'anthropic' ? 'Anthropic' : 'OpenAI' }}</span>
+                    <span class="provider-meta-tag">{{ provider.kind === 'local' ? '本地 GGUF' : provider.kind === 'anthropic' ? 'Anthropic' : 'OpenAI' }}</span>
                   </div>
                 </div>
               </div>
 
               <div class="provider-card-actions" @click.stop>
-                <span class="key-indicator" :title="provider.apiKeyConfigured ? '已配置 API Key' : '未配置 API Key'">
+                <span v-if="provider.kind !== 'local'" class="key-indicator"
+                  :title="provider.apiKeyConfigured ? '已配置 API Key' : '未配置 API Key'">
                   <KeyRound :size="15" :class="provider.apiKeyConfigured ? 'key-set' : 'key-missing'" />
                 </span>
                 <button class="secondary-button compact-button" :disabled="action === `provider.test:${provider.id}`"
@@ -941,7 +949,8 @@ onBeforeUnmount(() => {
                 </button>
                 <button class="secondary-button compact-button"
                   :disabled="action === `provider.models.fetch:${provider.id}`" @click="fetchProviderModels(provider)">
-                  <RefreshCw :size="13" :class="{ spin: action === `provider.models.fetch:${provider.id}` }" /> 获取模型
+                  <RefreshCw :size="13" :class="{ spin: action === `provider.models.fetch:${provider.id}` }" />
+                  {{ provider.kind === 'local' ? '扫描注册' : '获取模型' }}
                 </button>
                 <button v-if="!provider.active" class="secondary-button compact-button primary-action"
                   @click="useProvider(provider)">使用</button>
@@ -1274,6 +1283,7 @@ onBeforeUnmount(() => {
     </Transition>
   </Teleport>
   <ProviderEditorDialog :open="providerEditorOpen" :editing-id="editingProviderId" :value="providerForm"
-    :saving="action === 'provider.save'" :error="providerEditorOpen ? error : ''" @close="providerEditorOpen = false"
-    @save="saveProvider" />
+    :saving="action === 'provider.save'" :error="providerEditorOpen ? error : ''"
+    :default-models-directory="providers.find((provider) => provider.kind === 'local')?.defaultModelsDirectory"
+    @close="providerEditorOpen = false" @save="saveProvider" />
 </template>

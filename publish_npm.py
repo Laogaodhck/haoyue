@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and package the Haoyue .NET CLI for npm.
+"""Build and package the Haoyue .NET CLI for npm and GitHub Releases.
 
 This script intentionally targets only `haoyue_cli`. It never builds or
 modifies `haoyue_desktop` or any other runtime/webserver component.
@@ -15,7 +15,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Sequence
 
@@ -442,6 +444,67 @@ def dry_run_packages(npm: str, package_dirs: Sequence[Path], env: dict[str, str]
     console.print("[bold green]✓[/bold green] npm 打包校验通过")
 
 
+def _tar_mode_filter(executable_name: str):
+    """规范化 tar 成员权限：目录 755、可执行文件 755、其余文件 644。"""
+
+    def normalize(member: tarfile.TarInfo) -> tarfile.TarInfo:
+        if member.isdir():
+            member.mode = 0o755
+        elif member.isfile():
+            member.mode = 0o755 if Path(member.name).name == executable_name else 0o644
+        return member
+
+    return normalize
+
+
+def prepare_release_assets_dir(path: Path) -> Path:
+    """清理并准备 GitHub Release 归档输出目录（带危险路径保护，允许 npm 目录之外）。"""
+    resolved = path.resolve()
+    for protected in (REPO_ROOT.resolve(), Path.home().resolve()):
+        if resolved == protected or protected.is_relative_to(resolved):
+            raise BuildError(f"Refusing to clean unsafe release-assets path: {resolved}")
+    if resolved.exists():
+        shutil.rmtree(resolved)
+    resolved.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def make_release_archives(rids: list[str], version: str, output_dir: Path) -> list[Path]:
+    """为 GitHub Release 生成各 RID 的独立分发归档（Windows → .zip，其余 → .tar.gz）。"""
+    assets_dir = prepare_release_assets_dir(output_dir)
+    license_file = REPO_ROOT / "LICENSE"
+    readme_file = REPO_ROOT / "README.md"
+    if not license_file.is_file() or not readme_file.is_file():
+        raise BuildError("LICENSE 或 README.md 缺失，无法生成 Release 归档。")
+
+    outputs: list[Path] = []
+    for rid in rids:
+        source_dir = BUILD_ROOT / rid
+        if not source_dir.is_dir():
+            raise BuildError(f"Release 归档缺少已发布的 CLI 产物: {source_dir}")
+        base_name = f"{MAIN_PACKAGE_NAME}-{version}-{rid}"
+        if RID_INFO[rid]["os"] == "win32":
+            target = assets_dir / f"{base_name}.zip"
+            with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+                for file in sorted(path for path in source_dir.rglob("*") if path.is_file()):
+                    archive.write(file, file.relative_to(source_dir))
+                archive.write(license_file, "LICENSE")
+                archive.write(readme_file, "README.md")
+        else:
+            target = assets_dir / f"{base_name}.tar.gz"
+            # Windows 交叉构建时源文件不携带 POSIX 执行位，这里显式规范化权限，
+            # 保证任何平台上生成的归档在 Linux/macOS 解压后可直接执行。
+            executable_name = RID_INFO[rid]["exe"]
+            with tarfile.open(target, "w:gz") as archive:
+                for child in sorted(source_dir.iterdir()):
+                    archive.add(child, arcname=child.name, filter=_tar_mode_filter(executable_name))
+                archive.add(license_file, arcname="LICENSE", filter=_tar_mode_filter(executable_name))
+                archive.add(readme_file, arcname="README.md", filter=_tar_mode_filter(executable_name))
+        console.print(f"[bold green]✓[/bold green] Release 归档已生成: [cyan]{target.name}[/cyan]")
+        outputs.append(target)
+    return outputs
+
+
 def pack_packages(npm: str, package_dirs: Sequence[Path], env: dict[str, str], verbose: bool) -> list[Path]:
     reset_directory(TARBALL_ROOT)
     outputs: list[Path] = []
@@ -504,6 +567,11 @@ def parse_arguments() -> argparse.Namespace:
         "--publish",
         action="store_true",
         help="Publish platform packages and the main package to npm.",
+    )
+    parser.add_argument(
+        "--release-assets",
+        metavar="DIR",
+        help="额外生成 GitHub Release 分发归档 (Windows → .zip，Linux/macOS → .tar.gz) 到指定目录，例如 dist/cli。",
     )
     parser.add_argument("--registry", help="Override the npm registry used for publishing.")
     parser.add_argument("--otp", help="npm one-time password for publishing.")
@@ -583,6 +651,15 @@ def main() -> int:
         if args.pack or args.publish:
             tarballs = pack_packages(npm, package_dirs, env, args.verbose)
 
+        release_assets: list[Path] = []
+        if args.release_assets:
+            assets_dir = Path(args.release_assets)
+            if not assets_dir.is_absolute():
+                assets_dir = REPO_ROOT / assets_dir
+            with console.status("[bold blue]正在生成 GitHub Release 归档...[/bold blue]", spinner="dots"):
+                release_assets = make_release_archives(rids, version, assets_dir)
+            console.print(f"[bold green]✓[/bold green] Release 归档已生成: [cyan]{assets_dir}[/cyan]")
+
         if args.publish:
             publish_packages(
                 npm,
@@ -605,6 +682,8 @@ def main() -> int:
             summary.add_row("包", package_dir.name)
         for tarball in tarballs:
             summary.add_row("Tarball", str(tarball))
+        for asset in release_assets:
+            summary.add_row("Release 归档", str(asset))
         summary.add_row("总计耗时", f"{elapsed:.1f} 秒")
         console.print()
         console.print(summary)

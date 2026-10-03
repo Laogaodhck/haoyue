@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import version as haoyue_version
 from pathlib import Path
 from typing import Sequence
 
@@ -775,31 +776,12 @@ def next_patch_version(version: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
-def write_desktop_version(version: str, package_file: Path = DESKTOP_PACKAGE_FILE) -> None:
-    if not VERSION_PATTERN.fullmatch(version):
-        raise BuildError(f"Desktop version must use major.minor.patch format, found: {version!r}")
-
+def sync_all_versions(version: str) -> None:
+    """经 version.py 将 Banner.cs / Desktop package.json / npm 快照统一为同一版本。"""
     try:
-        contents = package_file.read_text(encoding="utf-8")
-        package = json.loads(contents)
-    except (OSError, json.JSONDecodeError) as error:
-        raise BuildError(f"Could not read Desktop package metadata: {package_file}") from error
-
-    current_version = package.get("version")
-    if not isinstance(current_version, str):
-        raise BuildError(f"Desktop package metadata has no string version: {package_file}")
-
-    pattern = re.compile(
-        rf'(?m)^(\s*"version"\s*:\s*)"{re.escape(current_version)}"(\s*,\s*)$'
-    )
-    updated, replacements = pattern.subn(rf'\g<1>"{version}"\g<2>', contents, count=1)
-    if replacements != 1:
-        raise BuildError(f"Could not update Desktop version in: {package_file}")
-
-    try:
-        package_file.write_text(updated, encoding="utf-8", newline="\n")
-    except OSError as error:
-        raise BuildError(f"Could not write Desktop package metadata: {package_file}") from error
+        haoyue_version.set_all(version)
+    except haoyue_version.VersionError as error:
+        raise BuildError(f"Could not sync versions to {version}: {error}") from error
 
 
 def workspace_path(path: Path) -> Path:
@@ -909,7 +891,12 @@ def package_desktop_windows(
             console.print(
                 f"[yellow]⚠️ Electron 打包失败 (第 {attempt}/{attempts} 次尝试); 正在清理并准备重试...[/yellow]"
             )
-            remove_directory(BUILDER_OUTPUT)
+            try:
+                remove_directory(BUILDER_OUTPUT)
+            except OSError:
+                console.print(
+                    "[yellow]⚠️ 清理被占用的构建目录失败（可能正在被安全软件扫描），跳过本次清理直接重试。[/yellow]"
+                )
             time.sleep(3 * attempt)
 
 
@@ -927,7 +914,12 @@ def package_desktop_linux(
             console.print(
                 f"[yellow]⚠️ Electron Linux 打包失败 (第 {attempt}/{attempts} 次尝试); 正在清理并准备重试...[/yellow]"
             )
-            remove_directory(BUILDER_OUTPUT)
+            try:
+                remove_directory(BUILDER_OUTPUT)
+            except OSError:
+                console.print(
+                    "[yellow]⚠️ 清理被占用的构建目录失败（可能正在被安全软件扫描），跳过本次清理直接重试。[/yellow]"
+                )
             time.sleep(3 * attempt)
 
 
@@ -1231,6 +1223,11 @@ def parse_arguments() -> argparse.Namespace:
         help="构建目标 (portable/installer/both/deb/rpm/all)；省略时以交互菜单选择。",
     )
     parser.add_argument(
+        "--use-current-version",
+        action="store_true",
+        help="使用当前版本号构建：不自动递增、不改写任何版本文件（供 CI 发布流水线配合 git tag 使用）。",
+    )
+    parser.add_argument(
         "--keep-output",
         action="store_true",
         help="构建结束后保留 staging / electron-builder 输出目录（默认清理）。",
@@ -1474,9 +1471,13 @@ def main() -> int:
         )
 
     previous_version = read_desktop_version()
-    release_version = next_patch_version(previous_version)
+    if args.use_current_version:
+        release_version = previous_version
+    else:
+        release_version = next_patch_version(previous_version)
     version_committed = False
-    write_desktop_version(release_version)
+    if not args.use_current_version:
+        sync_all_versions(release_version)
 
     platform_display = (
         "WINDOWS + LINUX (win-x64 / linux-x64)"
@@ -1484,10 +1485,18 @@ def main() -> int:
         else f"{platform.upper()} (64-bit {'win-x64' if platform == PLATFORM_WINDOWS else 'linux-x64'})"
     )
 
-    console.print(
-        f"\n[bold green]✓[/bold green] 版本号更新: [dim]{previous_version}[/dim] ➔ [bold cyan]{release_version}[/bold cyan]"
-        f"  (目标平台: [bold magenta]{platform_display}[/bold magenta])\n"
-    )
+    if args.use_current_version:
+        console.print(
+            f"\n[bold green]✓[/bold green] 使用当前版本号: [bold cyan]{release_version}[/bold cyan]"
+            f" [dim](--use-current-version，不自动递增)[/dim]"
+            f"  (目标平台: [bold magenta]{platform_display}[/bold magenta])\n"
+        )
+    else:
+        console.print(
+            f"\n[bold green]✓[/bold green] 版本号更新: [dim]{previous_version}[/dim] ➔ [bold cyan]{release_version}[/bold cyan]"
+            f" [dim](Banner.cs / Desktop package.json / npm 快照已同步)[/dim]"
+            f"  (目标平台: [bold magenta]{platform_display}[/bold magenta])\n"
+        )
 
     try:
         # 1. 准备工作目录
@@ -1708,10 +1717,10 @@ def main() -> int:
 
     finally:
         # 回滚机制处理
-        if not version_committed:
-            write_desktop_version(previous_version)
+        if not version_committed and not args.use_current_version:
+            sync_all_versions(previous_version)
             console.print(
-                f"\n[bold yellow]已将 Desktop 版本恢复为 {previous_version}（因为构建未能正常完成）。[/bold yellow]"
+                f"\n[bold yellow]已将全部版本源恢复为 {previous_version}（因为构建未能正常完成）。[/bold yellow]"
             )
         if not args.keep_output:
             remove_directory(DESKTOP_DIR / "runtime")

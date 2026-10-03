@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Check version consistency
+        run: python version.py check
       - name: Build
         run: dotnet build Haoyue.slnx -c Release
       - name: Test

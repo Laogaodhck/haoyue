@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version consistency
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            python3 version.py check --tag "${{ github.ref_name }}"
+          else
+            python3 version.py check
+          fi
+
+  cli:
+    name: CLI packages (6 platforms)
+    needs: validate
+    runs-on: windows-latest
+    env:
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Build and pack CLI packages
+        if: github.ref_type != 'tag' || env.HAS_NPM_TOKEN != 'true'
+        run: python publish_npm.py --rids win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64 --pack --release-assets dist/cli
+      - name: Build, pack and publish CLI packages to npm
+        if: github.ref_type == 'tag' && env.HAS_NPM_TOKEN == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: python publish_npm.py --rids win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64 --pack --publish --release-assets dist/cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli
+          path: dist/cli/*
+          if-no-files-found: error
+
+  desktop-windows:
+    name: Desktop Windows (installer + portable)
+    needs: validate
+    runs-on: windows-latest
+    env:
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: haoyue_desktop/pnpm-lock.yaml
+      - name: Install desktop dependencies
+        working-directory: haoyue_desktop
+        run: pnpm install --frozen-lockfile
+      - name: Build desktop installers
+        run: python build.py --platform windows --target all --use-current-version --skip-install
+      - name: Collect assets
+        shell: bash
+        run: |
+          mkdir -p dist/desktop-win
+          cp publish/Haoyue-Setup-*.exe publish/Haoyue-portable-*.zip dist/desktop-win/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/desktop-win/*
+          if-no-files-found: error
+
+  desktop-linux:
+    name: Desktop Linux (deb + rpm + portable)
+    needs: validate
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: haoyue_desktop/pnpm-lock.yaml
+      - name: Install desktop dependencies
+        working-directory: haoyue_desktop
+        run: pnpm install --frozen-lockfile
+      - name: Build desktop packages
+        run: python3 build.py --platform linux --target all --use-current-version --skip-install --skip-tests
+      - name: Collect assets
+        run: |
+          mkdir -p dist/desktop-linux
+          cp publish/Haoyue-*.tar.gz publish/Haoyue-*.deb publish/Haoyue-*.rpm dist/desktop-linux/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux
+          path: dist/desktop-linux/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: github.ref_type == 'tag'
+    needs: [cli, desktop-windows, desktop-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate SHA256SUMS.txt
+        working-directory: dist
+        run: |
+          sha256sum * > /tmp/SHA256SUMS.txt
+          mv /tmp/SHA256SUMS.txt .
+          cat SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "${{ github.ref_name }}" --title "Haoyue ${{ github.ref_name }}" --generate-notes dist/*

@@ -18,12 +18,11 @@
 
 Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent 运行时，采用清洁架构和事件驱动设计。它为构建 AI 驱动的编码助手提供了完整平台，支持多 LLM 提供商、工具执行、会话管理和流畅的终端交互体验。
 
-[🌐 官方网站与文档](https://haoyue.hoilai.com) •
+[🌐 官方网站与文档](https://github.com/Laogaodhck/haoyue) •
 [English](README_EN.md) •
 [界面预览](#-界面预览) •
 [快速开始](#-安装) •
-[功能特性](#-功能特性) •
-[贡献指南](#-贡献指南)
+[功能特性](#-功能特性)
 
 </div>
 
@@ -403,22 +402,6 @@ Haoyue 包含内置监控：
 - **健康检查**：提供商可用性和延迟
 - **熔断器**：自动故障检测和恢复
 - **会话分析**：对话历史和模式
-
-## 🤝 贡献指南
-
-1. Fork 本仓库
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m '添加令人惊叹的功能'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
-
-### 开发规范
-
-- 遵循 SOLID 原则
-- 保持清洁架构
-- 为新功能编写单元测试
-- 将提示存储在外部文件中（禁止硬编码字符串）
-- 使用事件驱动模式进行 UI 更新
 
 ## 📄 许可证
 

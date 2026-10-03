@@ -18,12 +18,11 @@
 
 Haoyue is a high-performance AI agent runtime built on .NET 10.0, featuring clean architecture and event-driven design. It provides a complete platform for building AI-powered coding assistants with support for multiple LLM providers, tool execution, session management, and a smooth terminal interaction experience.
 
-[🌐 Official Website & Docs](https://haoyue.hoilai.com) •
+[🌐 Official Website & Docs](https://github.com/Laogaodhck/haoyue) •
 [中文](README.md) •
 [Screenshots](#-screenshots) •
 [Getting Started](#-installation) •
-[Features](#-features) •
-[Contributing](#-contributing)
+[Features](#-features)
 
 </div>
 
@@ -403,22 +402,6 @@ Haoyue includes built-in monitoring:
 - **Health Checks**: Provider availability and latency
 - **Circuit Breaker**: Automatic failure detection and recovery
 - **Session Analytics**: Conversation history and patterns
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Guidelines
-
-- Follow SOLID principles
-- Maintain clean architecture
-- Write unit tests for new features
-- Keep prompts in external files (no hardcoded strings)
-- Use event-driven patterns for UI updates
 
 ## 📄 License
 

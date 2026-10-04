@@ -115,7 +115,7 @@ const gitPanelTab = ref<'diff' | 'history'>('diff')
 const gitPanelWidth = ref(560)
 const toolDiff = ref<{ path: string; diff: string } | null>(null)
 
-const settingsSection = ref<'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'advanced'>('general')
+const settingsSection = ref<'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'inference' | 'advanced'>('general')
 const extensionsSection = ref<'mcp' | 'skills'>('mcp')
 const taskSettingsThreadId = ref('')
 const activePropertiesProject = ref<ProjectItem | null>(null)

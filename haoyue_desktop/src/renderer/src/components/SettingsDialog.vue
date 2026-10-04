@@ -54,7 +54,7 @@ import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
 
-type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'advanced'
+type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'inference' | 'advanced'
 
 interface ProviderInfo {
   id: string
@@ -267,6 +267,7 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'skills', label: '技能', icon: Wrench },
   { id: 'rules-memory', label: '规则与记忆', icon: ScrollText },
   { id: 'diagnostics', label: '诊断与用量', icon: Activity },
+  { id: 'inference', label: '推理加速', icon: Gauge },
   { id: 'advanced', label: '高级设置', icon: SlidersHorizontal }
 ]
 
@@ -339,7 +340,7 @@ async function loadCurrentSection(): Promise<void> {
     if (section.value === 'skills') skills.value = await requestJson<SkillInfo[]>('skill.list')
     if (section.value === 'rules-memory') await loadRulesMemory()
     if (section.value === 'diagnostics') await loadDiagnostics()
-    if (section.value === 'advanced') await loadAdvanced()
+    if (section.value === 'inference' || section.value === 'advanced') await loadAdvanced()
   } catch (reason) {
     fail(reason)
   } finally {
@@ -1443,10 +1444,10 @@ onBeforeUnmount(() => {
           </section>
         </template>
 
-        <template v-else-if="section === 'advanced'">
+        <template v-else-if="section === 'inference'">
           <div class="settings-section-heading">
             <div>
-              <h3>高级设置</h3>
+              <h3>推理加速</h3>
             </div>
           </div>
 
@@ -1488,6 +1489,24 @@ onBeforeUnmount(() => {
               {{ action === 'advanced.set:localInference' ? '保存中…' : '保存本地推理设置' }}
             </button>
           </section>
+
+          <section v-else class="settings-group">
+            <label class="provider-enabled-row">
+              <span>
+                <strong>暂无可配置的本地模型提供商</strong>
+                <small>推理加速参数仅对本地 GGUF 模型提供商生效；请先在「模型与提供商」中添加 kind 为
+                  local 的提供商并注册 GGUF 模型，此区域将自动出现。</small>
+              </span>
+            </label>
+          </section>
+        </template>
+
+        <template v-else-if="section === 'advanced'">
+          <div class="settings-section-heading">
+            <div>
+              <h3>高级设置</h3>
+            </div>
+          </div>
 
           <section class="settings-group">
             <label class="provider-enabled-row">

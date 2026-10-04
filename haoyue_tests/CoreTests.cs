@@ -1,14 +1,17 @@
 using System.Text.Json;
 using System.IO.Compression;
+using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Projects;
 using Haoyue.Runtime.Prompts;
+using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
 using Haoyue.Runtime.Sessions;
 using Haoyue.Runtime.Skills;
 using Haoyue.Runtime.Tools;
+using Haoyue.Runtime.Tools.Builtin;
 using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Tests;
@@ -484,6 +487,108 @@ public sealed class CoreTests : IDisposable
 
         // Idempotent: second run creates nothing new.
         Assert.Empty(new WorkspaceManager().Bootstrap(new WorkspaceManager().Detect(workspace.Root)));
+    }
+
+    [Fact]
+    public void HealthChecks_TreatMissingMemoryFileAsReady()
+    {
+        var workspace = NewWorkspace("health-memory");
+        using var httpFactory = new LlmHttpFactory();
+        var configStore = new ConfigStore(
+            Path.Combine(_dir, "health-config.json"),
+            Path.Combine(_dir, "health-state.json"));
+        var checker = new HealthChecker(httpFactory, configStore);
+
+        var missing = Assert.Single(checker.RunChecks(workspace), c => c.Name == "Workspace Memory");
+        Assert.True(missing.Ok);
+        Assert.True(Directory.Exists(workspace.MemoryDir));
+
+        File.WriteAllText(workspace.MemoryFile, "# 项目约定");
+        var present = Assert.Single(checker.RunChecks(workspace), c => c.Name == "Workspace Memory");
+        Assert.True(present.Ok);
+        Assert.Equal(workspace.MemoryFile, present.Detail);
+    }
+
+    [Fact]
+    public void KnowledgeStore_SaveSearchAndScopeIsolation()
+    {
+        var db = new HaoyueDatabase(Path.Combine(_dir, "knowledge.db"));
+        var store = new KnowledgeStore(db);
+        var scopeA = HaoyueDatabase.ScopeKey(NewWorkspace("kb-a"));
+        var scopeB = HaoyueDatabase.ScopeKey(NewWorkspace("kb-b"));
+
+        var created = store.Save(scopeA, "构建命令", "运行 python build.py --platform windows 打包", "build");
+        Assert.True(created.Created);
+
+        var updated = store.Save(scopeA, "构建命令", "运行 python build.py --platform windows --skip-tests 打包", "build");
+        Assert.False(updated.Created);
+        Assert.Equal(created.Entry.Id, updated.Entry.Id);
+        Assert.Contains("--skip-tests", updated.Entry.Content);
+        Assert.Equal(1, store.Count(scopeA));
+
+        var chinese = store.Search(scopeA, "构建", 8);
+        Assert.Single(chinese);
+        Assert.Contains("--skip-tests", chinese[0].Content);
+
+        var english = store.Search(scopeA, "python", 8);
+        Assert.Single(english);
+
+        Assert.Empty(store.Search(scopeB, "构建", 8));
+        Assert.Equal(0, store.Count(scopeB));
+
+        Assert.True(store.Delete(scopeA, updated.Entry.Id));
+        Assert.Empty(store.Search(scopeA, "构建", 8));
+        Assert.False(store.Delete(scopeA, updated.Entry.Id));
+    }
+
+    [Fact]
+    public async Task KnowledgeTools_SaveSearchForgetRoundTrip()
+    {
+        var db = new HaoyueDatabase(Path.Combine(_dir, "kb-tools.db"));
+        var store = new KnowledgeStore(db);
+        var prompts = new FilePromptProvider();
+        var context = new ToolContext
+        {
+            Workspace = NewWorkspace("kb-tools-ws"),
+            Events = new EventBus(),
+            Agent = new AgentConfig(),
+        };
+
+        var save = await new KnowledgeSaveTool(store, prompts).ExecuteAsync(
+            new JsonObject
+            {
+                ["title"] = "部署方式",
+                ["content"] = "使用 build.py 打包，输出到 publish/ 目录",
+                ["tags"] = "build,release",
+            },
+            context, CancellationToken.None);
+        Assert.True(save.Success);
+
+        var search = await new KnowledgeSearchTool(store, prompts).ExecuteAsync(
+            new JsonObject { ["query"] = "打包" },
+            context, CancellationToken.None);
+        Assert.True(search.Success);
+        Assert.Contains("build.py", search.Output);
+        Assert.Contains("Tags: build,release", search.Output);
+
+        var miss = await new KnowledgeSearchTool(store, prompts).ExecuteAsync(
+            new JsonObject { ["query"] = "不存在的内容" },
+            context, CancellationToken.None);
+        Assert.True(miss.Success);
+
+        var entries = store.Search(HaoyueDatabase.ScopeKey(context.Workspace), "打包", 8);
+        var entryId = Assert.Single(entries).Id;
+
+        var forget = await new KnowledgeForgetTool(store, prompts).ExecuteAsync(
+            new JsonObject { ["id"] = entryId },
+            context, CancellationToken.None);
+        Assert.True(forget.Success);
+        Assert.Equal(0, store.Count(HaoyueDatabase.ScopeKey(context.Workspace)));
+
+        var forgetAgain = await new KnowledgeForgetTool(store, prompts).ExecuteAsync(
+            new JsonObject { ["id"] = entryId },
+            context, CancellationToken.None);
+        Assert.False(forgetAgain.Success);
     }
 
     private WorkspaceInfo NewWorkspace(string name = "ws")

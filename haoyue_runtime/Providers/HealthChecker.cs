@@ -40,9 +40,25 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
         var hasProvider = providers.Count > 0;
         results.Add(new HealthCheckResult("Provider Config", hasProvider, hasProvider ? $"{providers.Count} provider(s) configured. Active provider: {configStore.Config.Provider ?? "-"}, model: {configStore.Config.Model ?? "-"}" : "No providers configured"));
 
-        // 4. Memory File Check
+        // 4. Memory File Check — MEMORY.md 是可选文件，Agent 首次写入时才生成，
+        // LoadMemory 对缺失已有优雅处理；只有目录都建不出来（权限/只读）才算异常。
         var memoryFile = workspace.MemoryFile;
-        results.Add(new HealthCheckResult("Workspace Memory", File.Exists(memoryFile), File.Exists(memoryFile) ? memoryFile : "Memory file empty/missing"));
+        if (File.Exists(memoryFile))
+        {
+            results.Add(new HealthCheckResult("Workspace Memory", true, memoryFile));
+        }
+        else
+        {
+            try
+            {
+                Directory.CreateDirectory(workspace.MemoryDir);
+                results.Add(new HealthCheckResult("Workspace Memory", true, $"Ready (no memories saved yet): {memoryFile}"));
+            }
+            catch (Exception ex)
+            {
+                results.Add(new HealthCheckResult("Workspace Memory", false, $"Cannot create memory directory {workspace.MemoryDir}: {ex.Message}"));
+            }
+        }
 
         return results;
     }

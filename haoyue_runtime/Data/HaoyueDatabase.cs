@@ -91,6 +91,7 @@ public sealed class HaoyueDatabase
             DROP TABLE IF EXISTS projects;
             DROP TABLE IF EXISTS scheduled_tasks;
             DROP TABLE IF EXISTS migrations;
+            DROP TABLE IF EXISTS knowledge;
             """;
         command.ExecuteNonQuery();
     }
@@ -173,6 +174,21 @@ public sealed class HaoyueDatabase
                 source_dir TEXT NOT NULL,
                 imported_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS knowledge (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tags TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_knowledge_scope_updated
+                ON knowledge(scope, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_knowledge_scope_title
+                ON knowledge(scope, title);
             """;
         command.ExecuteNonQuery();
 

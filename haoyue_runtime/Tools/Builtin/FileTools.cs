@@ -65,8 +65,15 @@ public abstract class BuiltinTool(IPromptProvider prompts) : ITool
     protected static string? GetString(JsonObject args, string name) =>
         args[name] is { } node ? node.GetValue<string>() : null;
 
-    protected static int? GetInt(JsonObject args, string name) =>
-        args[name] is { } node ? (int)node.GetValue<double>() : null;
+    protected static int? GetInt(JsonObject args, string name)
+    {
+        // JSON numbers arrive element-backed (model path) or CLR-backed Int64
+        // (in-memory callers); JsonValue only converts the former to double.
+        if (args[name] is not JsonValue value) return null;
+        if (value.TryGetValue<double>(out var doubleValue)) return (int)doubleValue;
+        if (value.TryGetValue<long>(out var longValue)) return (int)longValue;
+        return null;
+    }
 
     protected static bool GetBool(JsonObject args, string name) =>
         args[name] is { } node && node.GetValue<bool>();

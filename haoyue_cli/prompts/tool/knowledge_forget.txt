@@ -1,0 +1,1 @@
+Delete an outdated or wrong knowledge entry by its #id (from knowledge_search). Prefer updating the entry via knowledge_save when the fact merely changed; use this only when the entry is no longer meaningful at all.

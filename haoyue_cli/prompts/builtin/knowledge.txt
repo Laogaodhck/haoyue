@@ -1,0 +1,6 @@
+Knowledge base (knowledge_search / knowledge_save / knowledge_forget): a persistent store of facts learned across conversations, scoped to this workspace and available in every future session.
+
+- Consult knowledge_search early when a question might already be answered by past sessions: user preferences, project conventions, environment quirks, build/release procedures, previously solved pitfalls.
+- Save durable knowledge with knowledge_save when the user states a preference or correction, teaches a project fact, or when you resolve a tricky problem whose root cause and fix would help later sessions. Titles are stable keys — saving again with the same title updates the entry.
+- Keep entries self-contained and concise; include the concrete commands, paths, and reasons. Never save secrets (API keys, tokens, passwords) or one-off task state that has no future value.
+- When a saved fact turns out wrong or outdated, correct it via knowledge_save or remove it with knowledge_forget instead of relying on stale content.

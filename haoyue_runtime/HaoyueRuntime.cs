@@ -43,6 +43,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     public IProjectStore Projects => _services.GetRequiredService<IProjectStore>();
     public IScheduleStore Schedules => _services.GetRequiredService<IScheduleStore>();
     public HaoyueDatabase Database => _services.GetRequiredService<HaoyueDatabase>();
+    public KnowledgeStore Knowledge => _services.GetRequiredService<KnowledgeStore>();
     public SkillManager Skills => _services.GetRequiredService<SkillManager>();
     public ExtensionManager Extensions { get; } = ExtensionManager.CreateDefault();
     public IMcpManager Mcp => _services.GetRequiredService<IMcpManager>();
@@ -212,6 +213,11 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                 return ValueTask.FromResult<string?>(null);
             return ValueTask.FromResult<string?>(prompts.TryGet("builtin/memory") ?? memory);
         }));
+
+        // Knowledge base contract — the tools are self-describing, but the model also
+        // needs the behavioral rules: when to consult and when to persist.
+        registry.Register(new PromptContribution("knowledge", PromptSlot.Memory, (_, _) =>
+            ValueTask.FromResult<string?>(prompts.TryGet("builtin/knowledge"))));
     }
 
     private void RegisterBuiltinTools()
@@ -230,6 +236,9 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                      new WebSearchTool(prompts),
                      new WebFetchTool(prompts),
                      new CaptureScreenTool(prompts),
+                     new KnowledgeSearchTool(Knowledge, prompts),
+                     new KnowledgeSaveTool(Knowledge, prompts),
+                     new KnowledgeForgetTool(Knowledge, prompts),
                  })
             Tools.Register(tool);
 
@@ -278,6 +287,7 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<IToolRegistry, ToolRegistry>();
         services.AddSingleton<IWorkspaceManager, WorkspaceManager>();
         services.AddSingleton<HaoyueDatabase>();
+        services.AddSingleton<KnowledgeStore>();
         services.AddSingleton<ISessionStore, SessionStore>();
         services.AddSingleton<IProjectStore, ProjectStore>();
         services.AddSingleton<IScheduleStore, ScheduleStore>();

@@ -16,7 +16,7 @@
 
 **现代化、高性能的 AI Agent**
 
-Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和事件驱动设计。它为构建 AI 驱动的编码助手提供了完整平台，支持多 LLM 提供商、工具执行、会话管理和流畅的终端交互体验。
+Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和事件驱动设计。它提供开箱即用的终端 CLI 与桌面应用，为构建 AI 驱动的编码助手提供完整平台，支持多 LLM 提供商、工具执行、知识库、会话管理和流畅的交互体验。
 
 [🌐 官方网站与文档](https://github.com/Laogaodhck/haoyue) •
 [English](README_EN.md) •
@@ -29,8 +29,9 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 
 ### 🚀 Runtime First 架构
 
-- **清洁架构**：以 `haoyue_runtime` 为核心，`haoyue_cli` 作为默认前端，关注点分离
-- **插件系统**：通过 Tools、Skills 和 MCP（Model Context Protocol）实现可扩展性
+- **清洁架构**：以 `haoyue_runtime` 为核心，`haoyue_cli`（终端）与 `haoyue_desktop`（桌面）作为前端，关注点分离
+- **常驻守护进程**：daemon 通过 Named Pipe / Unix Socket 暴露 JSON-RPC，桌面端与 CLI 共享同一运行时
+- **插件系统**：Tools、Skills、Prompts 与 MCP（Model Context Protocol）四层扩展机制
 - **事件驱动**：通过事件总线实现渲染与业务逻辑解耦
 
 ### 🤖 多提供商支持
@@ -44,9 +45,27 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 
 ### 🛠️ 工具生态系统
 
-- **内置工具**：文件操作（读/写/编辑）、搜索（grep/glob）、bash 执行
+- **文件与执行**：文件读/写/编辑（diff 精确应用）、grep/glob 搜索、bash 执行
+- **联网能力**：网页搜索（web_search）与网页抓取（web_fetch）
+- **任务规划**：内置计划工具，维护任务列表并跟踪多步骤执行进度
+- **屏幕捕获**：截屏工具，可将屏幕内容交给模型分析
 - **MCP 支持**：stdio 和 SSE 传输，自动发现工具/提示/资源
-- **技能系统**：基于目录的技能系统，支持提示注入和工作流
+- **技能系统**：基于目录的技能，支持提示注入与工作流
+
+### 🧠 知识库与记忆
+
+- **自动沉淀**：Agent 在对话中自动保存、检索、遗忘知识（knowledge_save / knowledge_search / knowledge_forget）
+- **高容错检索**：同义词扩展、全半角归一化、CJK 二元分词与编辑距离兜底，错别字、中英文混排、全角输入也能准确命中
+- **规则与记忆**：AGENTS.md 工作区规则自动注入（可开关），MEMORY.md 长期记忆支持自动/手动两种管理模式
+- **可视化维护**：桌面端知识库页面支持条目增删改、文档导入与实时搜索
+
+### 🖥️ 桌面应用
+
+- **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown 渲染、图片预览、推理深度调节
+- **专家系统**：内置领域专家库，一键切换角色预设
+- **可视化配置**：Provider、模型、Profile、MCP 服务器全程图形化管理
+- **任务管理**：定时任务调度与归档任务管理
+- **用量统计**：Token 用量趋势与模型分布图表
 
 ### 💻 现代化终端体验
 
@@ -60,6 +79,12 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 - **项目识别**：自动识别 Git、.NET、Node.js、Python、Rust、Go、Unity、Vue 项目
 - **隔离配置**：每个工作区独立的配置、缓存和内存，会话按工作区作用域隔离
 - **自动初始化**：自动创建 `.haoyue/` 目录结构
+
+### 🌐 官网与技能市场
+
+- **双语文档**：中英文在线文档站
+- **技能市场**：在线浏览、搜索与提交技能分享，桌面端可使用官方技能
+- **账号体系**：注册登录与管理后台，Cookie 认证 + 速率限制
 
 ### 🔧 开发者体验
 
@@ -106,7 +131,7 @@ haoyue doctor
 
 ```bash
 git clone https://github.com/Laogaodhck/haoyue.git
-cd Haoyue
+cd haoyue
 dotnet build
 ```
 
@@ -135,7 +160,7 @@ dotnet run --project haoyue_cli -- --model "openai/gpt-5.5"
 flowchart TD
     subgraph Frontends[前端]
         CLI[haoyue_cli<br/>System.CommandLine + 渲染引擎]
-        GUI[GUI / Web / IDE<br/>未来]
+        DESKTOP[haoyue_desktop<br/>Electron + Vue 3]
     end
 
     subgraph Runtime[haoyue_runtime]
@@ -165,7 +190,7 @@ flowchart TD
     end
 
     CLI --> Facade
-    GUI -. daemon 协议 .-> DMN
+    DESKTOP -. daemon 协议 .-> DMN
     DMN --> Agent
     Facade --> Agent
     Agent --> PM
@@ -196,21 +221,28 @@ Haoyue/
 │   └── Program.cs          # 入口点
 ├── haoyue_runtime/       # 核心运行时
 │   ├── Agents/             # Agent 循环和上下文规划
+│   ├── ComputerUse/        # 屏幕捕获
 │   ├── Configuration/      # 配置管理
+│   ├── Daemon/             # 守护进程（Named Pipe / Unix Socket JSON-RPC）
+│   ├── Data/               # 数据层（知识库存储、导入与检索排序）
 │   ├── Events/             # 事件总线系统
+│   ├── Experts/            # 专家系统
 │   ├── Mcp/                # MCP 客户端实现
 │   ├── Prompts/            # 提示加载和组合
 │   ├── Providers/          # LLM 提供商集成
+│   ├── Scheduling/         # 定时任务
 │   ├── Sessions/           # 会话持久化
 │   ├── Skills/             # 技能管理
 │   ├── Tools/              # 工具注册和实现
 │   ├── Verification/       # 构建验证
 │   └── Workspaces/         # 工作区检测和管理
-├── haoyue_tests/         # 单元测试
-├── docs/                   # 文档
-├── prompts/                # 提示模板（未来）
-├── skills/                 # 技能定义（未来）
-└── mcp/                    # MCP 服务器配置（未来）
+├── haoyue_desktop/       # 桌面应用（Electron + Vue 3 + TypeScript）
+├── haoyue_webserver/     # 官网与技能市场（Blazor Server + SQLite）
+├── haoyue_website/       # 文档站源码（VitePress）
+├── haoyue_tests/         # 运行时单元测试
+├── haoyue_cli_tests/     # CLI 测试
+├── models/               # 本地 GGUF 模型（开发环境）
+└── packaging/            # 打包脚本与配置
 ```
 
 ## ⚙️ 配置
@@ -290,6 +322,26 @@ haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4
 ```
 
 也可用 `--models-directory` 指定其它模型目录。本地模型支持流式输出与思考过程展示，暂不支持工具调用。
+
+本地推理性能调优（`~/.haoyue/config.json` 的 provider 配置项）：
+
+```json
+{
+  "providers": {
+    "local": {
+      "kind": "local",
+      "modelsDirectory": "~/.haoyue/models",
+      "gpuLayers": 0,
+      "threads": 8,
+      "localPrefixReuse": true
+    }
+  }
+}
+```
+
+- `gpuLayers`：卸载到 GPU 的层数（llama.cpp `n_gpu_layers`）。默认 `0`（纯 CPU）。需要 GPU 时安装 CUDA 后端（如 `LLamaSharp.Backend.Cuda12`）后设为 `999` 卸载全部层；无 GPU 后端时该值被忽略。
+- `threads`：CPU 推理线程数。默认由 llama.cpp 自动选择（全部逻辑核心）。
+- `localPrefixReuse`：跨请求复用已解码的 KV 前缀。Agent 多步回合中，每步只解码新增的后缀 token，跳过对系统提示与历史记录的重复 prefill 计算，多步任务吞吐显著提升。前缀不匹配或后端不支持内存移动时自动回退为全量重算，结果不变。
 
 ### 模型管理
 

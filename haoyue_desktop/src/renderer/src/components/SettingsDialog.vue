@@ -4,11 +4,15 @@ import {
   ArrowLeft,
   Blocks,
   Bot,
+  Brain,
+  BrainCircuit,
   Check,
   Circle,
   Clock,
   FolderOpen,
   Gauge,
+  GitBranch,
+  Globe,
   GripVertical,
   KeyRound,
   LoaderCircle,
@@ -29,7 +33,7 @@ import {
   X,
   Zap
 } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { confirmAction } from '../confirmation'
 import {
   MCP_PRESETS,
@@ -139,6 +143,8 @@ const props = defineProps<{
   theme: 'system' | 'light' | 'dark'
   daemonConnected: boolean
   daemonEndpoint: string
+  /** Active workspace directory, used to prefill MCP presets that serve a folder. */
+  workspacePath?: string
   initialSection?: SettingsSection
 }>()
 
@@ -241,6 +247,30 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'diagnostics', label: '诊断与用量', icon: Activity },
   { id: 'advanced', label: '高级设置', icon: SlidersHorizontal }
 ]
+
+/** GitHub brand mark; lucide no longer ships brand icons. */
+const GithubMark = defineComponent({
+  props: { size: { type: Number, default: 15 } },
+  setup: (props) => () => h('svg', {
+    viewBox: '0 0 16 16',
+    width: props.size,
+    height: props.size,
+    fill: 'currentColor',
+    'aria-hidden': 'true'
+  }, [h('path', {
+    d: 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z'
+  })])
+})
+
+/** Per-preset icons shown on the MCP one-click template buttons. */
+const mcpPresetIcons: Record<string, unknown> = {
+  github: GithubMark,
+  filesystem: FolderOpen,
+  fetch: Globe,
+  memory: Brain,
+  'sequential-thinking': BrainCircuit,
+  git: GitBranch
+}
 
 const pageTitle = computed(() => props.page === 'extensions' ? 'MCP 与技能' : '设置')
 const visibleSections = computed(() =>
@@ -640,7 +670,7 @@ function newMcpServer(): void {
 /** Opens the editor prefilled from a one-click preset; credentials stay user-provided. */
 function newPresetMcpServer(preset: McpPreset): void {
   editingMcpServer.value = null
-  mcpPreset.value = preset.createForm()
+  mcpPreset.value = preset.createForm({ workspacePath: props.workspacePath })
   mcpDialogError.value = ''
   mcpEditorOpen.value = true
 }
@@ -978,7 +1008,7 @@ onBeforeUnmount(() => {
               </button>
               <button v-for="preset in MCP_PRESETS" :key="preset.id" class="secondary-button"
                 :title="preset.description" @click="newPresetMcpServer(preset)">
-                <Plug :size="15" /> {{ preset.label }}
+                <component :is="mcpPresetIcons[preset.id] ?? Plug" :size="15" /> {{ preset.label }}
               </button>
               <button class="secondary-button" @click="newMcpServer">
                 <Plus :size="15" /> 服务器

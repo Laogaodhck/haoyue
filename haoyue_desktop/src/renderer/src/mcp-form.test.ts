@@ -207,6 +207,12 @@ describe('GitHub token guidance', () => {
 })
 
 describe('MCP_PRESETS', () => {
+  it('covers the commonly used reference servers', () => {
+    expect(MCP_PRESETS.map((item) => item.id)).toEqual([
+      'github', 'filesystem', 'fetch', 'memory', 'sequential-thinking', 'git'
+    ])
+  })
+
   it('ships a GitHub preset that compiles into a valid stdio payload', () => {
     const preset = MCP_PRESETS.find((item) => item.id === 'github')
     expect(preset).toBeDefined()
@@ -223,16 +229,61 @@ describe('MCP_PRESETS', () => {
     })
   })
 
+  it('prefills filesystem with the workspace directory when provided', () => {
+    const preset = MCP_PRESETS.find((item) => item.id === 'filesystem')!
+    const form = preset.createForm({ workspacePath: ' E:\\notes ' })
+
+    expect(mcpFormError(form)).toBeNull()
+    expect(parseEnvText(form.env)).toBeUndefined()
+    expect(form.args.split(/\r?\n/)).toEqual(['-y', '@modelcontextprotocol/server-filesystem', 'E:\\notes'])
+    expect(buildMcpServerPayload(form).args)
+      .toEqual(['-y', '@modelcontextprotocol/server-filesystem', 'E:\\notes'])
+  })
+
+  it('falls back to the current directory when no workspace path is known', () => {
+    const preset = MCP_PRESETS.find((item) => item.id === 'filesystem')!
+    expect(preset.createForm().args.endsWith('\n.')).toBe(true)
+  })
+
+  it('ships zero-configuration presets for fetch, memory, sequential-thinking and git', () => {
+    const shapes: Record<string, { command: string; args: string[] }> = {
+      fetch: { command: 'uvx', args: ['mcp-server-fetch'] },
+      memory: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] },
+      'sequential-thinking': { command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking'] },
+      git: { command: 'uvx', args: ['mcp-server-git'] }
+    }
+
+    for (const [id, shape] of Object.entries(shapes)) {
+      const preset = MCP_PRESETS.find((item) => item.id === id)
+      expect(preset, id).toBeDefined()
+
+      const form = preset!.createForm()
+      expect(mcpFormError(form)).toBeNull()
+      expect(form.command).toBe(shape.command)
+      expect(buildMcpServerPayload(form)).toEqual({
+        transport: 'stdio',
+        command: shape.command,
+        args: shape.args,
+        url: '',
+        enabled: true
+      })
+    }
+  })
+
   it('never prefills credentials and returns independent form values', () => {
-    const preset = MCP_PRESETS.find((item) => item.id === 'github')!
-    const first = preset.createForm()
-    const second = preset.createForm()
+    for (const preset of MCP_PRESETS) {
+      const first = preset.createForm({ workspacePath: 'E:\\w' })
+      const second = preset.createForm({ workspacePath: 'E:\\w' })
 
-    expect(parseEnvText(first.env)).toEqual({ GITHUB_PERSONAL_ACCESS_TOKEN: '' })
+      const env = parseEnvText(first.env)
+      if (env) {
+        for (const value of Object.values(env)) expect(value).toBe('')
+      }
 
-    first.name = 'mutated'
-    first.args = ''
-    expect(second.name).toBe('github')
-    expect(second.args).toContain('@modelcontextprotocol/server-github')
+      first.name = 'mutated'
+      first.args = ''
+      expect(second.name).toBe(preset.id)
+      expect(second.args).not.toBe('')
+    }
   })
 })

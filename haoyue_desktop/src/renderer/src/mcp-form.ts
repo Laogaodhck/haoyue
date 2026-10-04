@@ -90,12 +90,18 @@ export function createMcpFormValue(): McpFormValue {
   }
 }
 
+/** Ambient paths a preset may prefill; callers supply whatever they know. */
+export interface McpPresetContext {
+  /** Active workspace directory, used by presets that serve a folder on disk. */
+  workspacePath?: string
+}
+
 export interface McpPreset {
   id: string
   label: string
   description: string
   /** Returns a fresh form value on every call so entry points never share mutable state. */
-  createForm: () => McpFormValue
+  createForm: (context?: McpPresetContext) => McpFormValue
 }
 
 /** Environment key the GitHub MCP server reads its personal access token from. */
@@ -129,6 +135,66 @@ export const MCP_PRESETS: McpPreset[] = [
       command: 'npx',
       args: '-y\n@modelcontextprotocol/server-github',
       env: `${GITHUB_TOKEN_ENV_KEY}=`
+    })
+  },
+  {
+    id: 'filesystem',
+    label: '文件系统',
+    description: '让 Agent 读写工作区目录中的文件；如需其他目录，保存前修改最后一个参数',
+    createForm: (context) => ({
+      ...createMcpFormValue(),
+      name: 'filesystem',
+      transport: 'stdio',
+      command: 'npx',
+      args: `-y\n@modelcontextprotocol/server-filesystem\n${context?.workspacePath?.trim() || '.'}`
+    })
+  },
+  {
+    id: 'fetch',
+    label: '网页抓取',
+    description: '抓取网页并转为 Markdown 供 Agent 阅读；需要本机安装 uv（Python 工具链）',
+    createForm: () => ({
+      ...createMcpFormValue(),
+      name: 'fetch',
+      transport: 'stdio',
+      command: 'uvx',
+      args: 'mcp-server-fetch'
+    })
+  },
+  {
+    id: 'memory',
+    label: '记忆图谱',
+    description: '基于知识图谱的长期记忆，跨会话记住实体与关系；无需任何配置',
+    createForm: () => ({
+      ...createMcpFormValue(),
+      name: 'memory',
+      transport: 'stdio',
+      command: 'npx',
+      args: '-y\n@modelcontextprotocol/server-memory'
+    })
+  },
+  {
+    id: 'sequential-thinking',
+    label: '顺序思考',
+    description: '提供逐步推理与思路修订工具，适合把复杂问题拆解后再行动；无需任何配置',
+    createForm: () => ({
+      ...createMcpFormValue(),
+      name: 'sequential-thinking',
+      transport: 'stdio',
+      command: 'npx',
+      args: '-y\n@modelcontextprotocol/server-sequential-thinking'
+    })
+  },
+  {
+    id: 'git',
+    label: 'Git',
+    description: '对 Git 仓库做只读分析（历史、分支、状态、差异）；需要本机安装 uv 与 Git',
+    createForm: () => ({
+      ...createMcpFormValue(),
+      name: 'git',
+      transport: 'stdio',
+      command: 'uvx',
+      args: 'mcp-server-git'
     })
   }
 ]

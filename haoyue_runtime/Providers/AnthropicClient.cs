@@ -12,6 +12,11 @@ public sealed class AnthropicClient(ILlmHttpFactory httpFactory) : ILlmClient
 
     public string Kind => "anthropic";
 
+    /// <summary>Anthropic offers no embeddings API; callers degrade to null.</summary>
+    public Task<EmbeddingResult?> EmbedAsync(
+        Configuration.ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default)
+        => Task.FromResult<EmbeddingResult?>(null);
+
     public async IAsyncEnumerable<LlmStreamEvent> StreamAsync(
         LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
     {

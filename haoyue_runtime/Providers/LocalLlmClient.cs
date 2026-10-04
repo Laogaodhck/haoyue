@@ -20,6 +20,15 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 {
     public string Kind => "local";
 
+    /// <summary>
+    /// Local GGUF embeddings need a separate LLamaEmbedder context with its own
+    /// memory cost; kept out of this batch so the client layer stays honest —
+    /// callers degrade to null instead of receiving a half-working path.
+    /// </summary>
+    public Task<EmbeddingResult?> EmbedAsync(
+        Configuration.ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default)
+        => Task.FromResult<EmbeddingResult?>(null);
+
     public async IAsyncEnumerable<LlmStreamEvent> StreamAsync(
         LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
     {

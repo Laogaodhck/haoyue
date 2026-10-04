@@ -1,0 +1,5 @@
+Delegate a self-contained subtask to a fresh sub-agent and return only its final answer.
+
+Use this when a well-scoped piece of work is better handled in isolation — a research sweep, a refactor confined to one module, or a long analysis that would flood the current conversation. The sub-agent starts with a clean context window: it cannot see this conversation, so the task description must carry everything it needs (files to look at, constraints, and the expected output). It has the same tools as you, except delegation itself — a delegated task can never spawn further tasks.
+
+Delegate one task at a time and wait for its result before continuing; delegation runs serially. Prefer doing simple, quick work yourself — each delegation costs a full agent turn. Report the sub-agent's answer to the user in your own words, adding any context from this conversation that helps.

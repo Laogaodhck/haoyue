@@ -255,6 +255,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                      new KnowledgeSearchTool(Knowledge, prompts),
                      new KnowledgeSaveTool(Knowledge, prompts),
                      new KnowledgeForgetTool(Knowledge, prompts),
+                     new DelegateTool(prompts, _services.GetRequiredService<IAgentDelegator>()),
                  })
             Tools.Register(tool);
 
@@ -317,6 +318,7 @@ public static class RuntimeServiceCollectionExtensions
         // daemon; single-turn (CLI) runtimes fall back to the no-op implementation.
         services.AddSingleton<IFileLockCoordinator>(coordinator ?? new NoopFileLockCoordinator());
         services.AddSingleton(new FileLockScope(turnOwner ?? ""));
+        services.AddSingleton<IAgentDelegator, AgentDelegator>();
         services.AddSingleton<Agent>();
         return services;
     }

@@ -212,6 +212,77 @@ public sealed class OpenAiCompatibleClient(ILlmHttpFactory httpFactory) : ILlmCl
             .Select(part => part["text"]?.GetValue<string>() ?? ""));
     }
 
+    /// <summary>OpenAI-compatible /embeddings endpoint shared by OpenAI, Ollama, LM Studio, OpenRouter…</summary>
+    public async Task<EmbeddingResult?> EmbedAsync(
+        Configuration.ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default)
+    {
+        if (inputs.Count == 0) return new EmbeddingResult([], model ?? "");
+        if (string.IsNullOrWhiteSpace(model))
+            throw new LlmException(
+                "Embedding requires an explicit embedding model name (e.g. text-embedding-3-small); " +
+                "the chat model id is not reused automatically.", retryable: false);
+
+        var http = httpFactory.GetClient(provider);
+        var url = LlmUrl.Join(provider.BaseUrl, "embeddings");
+        var body = new JsonObject
+        {
+            ["model"] = model,
+            ["input"] = new JsonArray(inputs.Select(i => JsonValue.Create(i)).ToArray()),
+        };
+
+        using var message = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
+        };
+        ApplyHeaders(message, provider);
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, provider.TimeoutSeconds)));
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new LlmException(
+                $"Embedding request to {provider.Id} timed out after {provider.TimeoutSeconds}s.",
+                statusCode: 408,
+                retryable: true);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new LlmException($"Cannot reach {provider.Id}: {ex.Message}", inner: ex);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+                throw await ApiError(response, provider.Id, timeout.Token).ConfigureAwait(false);
+
+            JsonNode? root;
+            try { root = JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false)); }
+            catch (JsonException ex)
+            {
+                throw new LlmException($"{provider.Id} returned an invalid embedding response.", inner: ex);
+            }
+
+            // Providers return data entries in arbitrary order; "index" restores input order.
+            var vectors = (root?["data"] as JsonArray ?? [])
+                .OfType<JsonObject>()
+                .Where(item => item["embedding"] is JsonArray)
+                .OrderBy(item => item["index"]?.GetValue<int>() ?? 0)
+                .Select(item => item["embedding"]!.AsArray()
+                    .Select(v => v?.Deserialize<float>() ?? 0f)
+                    .ToArray())
+                .ToList();
+            var responseModel = root?["model"]?.GetValue<string>() ?? model;
+            return new EmbeddingResult(vectors, responseModel);
+        }
+    }
+
     private static void ApplyHeaders(HttpRequestMessage message, Configuration.ProviderConfig provider)
     {
         var key = provider.ResolveApiKey();

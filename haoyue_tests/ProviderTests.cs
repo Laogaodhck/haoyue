@@ -1066,6 +1066,10 @@ public sealed class ProviderTests : IDisposable
 
         public string Kind => kind;
 
+        public Task<EmbeddingResult?> EmbedAsync(
+            ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default)
+            => Task.FromResult<EmbeddingResult?>(null);
+
         public async IAsyncEnumerable<LlmStreamEvent> StreamAsync(
             LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
         {

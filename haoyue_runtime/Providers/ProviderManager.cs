@@ -32,6 +32,14 @@ public interface IProviderManager
 
     /// <summary>Fetches model identifiers from a provider's model-list endpoint.</summary>
     Task<IReadOnlyList<string>> FetchModelsAsync(ProviderConfig provider, string? url = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Embeds one input through an embedding-capable model. An explicit
+    /// <paramref name="modelRef"/> wins; otherwise the first enabled model flagged
+    /// <c>capabilities.embedding</c> is used. Returns null when no embedding-capable
+    /// client kind exists or none is configured — callers degrade (e.g. to keyword search).
+    /// </summary>
+    Task<EmbeddingResult?> EmbedAsync(string input, string? modelRef = null, CancellationToken ct = default);
 }
 
 public sealed class ProviderManager(
@@ -338,6 +346,27 @@ public sealed class ProviderManager(
                 throw new LlmException($"Model list response from {provider.Id} contains no model IDs.", retryable: false);
             return ids;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<EmbeddingResult?> EmbedAsync(string input, string? modelRef = null, CancellationToken ct = default)
+    {
+        ModelInfo? target;
+        if (!string.IsNullOrWhiteSpace(modelRef))
+        {
+            target = registry.Resolve(modelRef!)
+                ?? throw new LlmException($"Unknown embedding model '{modelRef}'.", retryable: false);
+        }
+        else
+        {
+            // First enabled model flagged capabilities.embedding wins (priority order from the registry).
+            target = registry.All().FirstOrDefault(m => m.Capabilities.Embedding);
+        }
+
+        if (target is null) return null; // nothing embedding-capable configured — caller degrades
+
+        var client = clientFactory.GetClient(target.Provider.Kind);
+        return await client.EmbedAsync(target.Provider, [input], target.Model.Id, ct).ConfigureAwait(false);
     }
 
     // ---------------------------------------------------------------- helpers

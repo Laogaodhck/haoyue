@@ -129,6 +129,30 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
         }
     }
 
+    /// <summary>
+    /// Reads a resource via resources/read and concatenates its text contents.
+    /// Binary (base64 blob) contents are skipped. Returns null when the server
+    /// errors or the resource has no text content — the same degradation
+    /// semantics as GetPromptAsync.
+    /// </summary>
+    public async Task<string?> GetResourceAsync(string uri, CancellationToken ct)
+    {
+        try
+        {
+            var result = await RequestAsync("resources/read", new JsonObject { ["uri"] = uri }, ct).ConfigureAwait(false);
+            var parts = new List<string>();
+            foreach (var node in result["contents"] as JsonArray ?? [])
+                // TextResourceContents carries a "text" field; blob contents (base64) do not.
+                if (node is JsonObject content && content["text"] is JsonValue)
+                    parts.Add(content["text"]?.GetValue<string>() ?? "");
+            return parts.Count == 0 ? null : string.Join("\n", parts).TrimEnd();
+        }
+        catch (McpException)
+        {
+            return null;
+        }
+    }
+
     private async Task<JsonObject> RequestAsync(string method, JsonObject parameters, CancellationToken ct)
     {
         var id = Interlocked.Increment(ref _nextId);

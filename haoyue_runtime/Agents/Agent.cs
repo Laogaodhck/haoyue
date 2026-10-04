@@ -9,6 +9,7 @@ using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Sessions;
+using Haoyue.Runtime.Skills;
 using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Verification;
 using Haoyue.Runtime.Workspaces;
@@ -33,8 +34,10 @@ public sealed partial class Agent(
     IVerifier verifier,
     IEventBus events,
     IFileLockCoordinator fileLocks,
-    FileLockScope lockScope)
+    FileLockScope lockScope,
+    ISkillManager? skills = null)
 {
+    private readonly ISkillManager? _skills = skills;
     public async Task<AgentTurnResult> RunTurnAsync(
         AgentSession session,
         WorkspaceInfo workspace,
@@ -98,7 +101,7 @@ public sealed partial class Agent(
                     : providerManager.ResolveActive(workspace.Config);
                 var requiresVision = turnHasImages && model.Model.Capabilities.Vision;
                 var effectiveNetworkEnabled = session.Header.NetworkEnabled && agentConfig.NetworkEnabled;
-                var tools = ActiveTools(workspace, model, effectiveNetworkEnabled);
+                var tools = ActiveTools(workspace, model, effectiveNetworkEnabled, userInput);
                 var promptKey = string.Join('|',
                     model.Provider.Id, model.Model.Id, effectiveNetworkEnabled, tools.Count,
                     string.Join(",", tools.Select(t => t.Name)),
@@ -109,7 +112,7 @@ public sealed partial class Agent(
                 if (promptKey != cachedPromptKey)
                 {
                     cachedSystemPrompt = await ComposeSystemPromptAsync(
-                        workspace, model, tools, effectiveNetworkEnabled, ct).ConfigureAwait(false);
+                        workspace, model, tools, effectiveNetworkEnabled, userInput, ct).ConfigureAwait(false);
                     cachedPromptKey = promptKey;
                 }
                 var systemPrompt = cachedSystemPrompt;

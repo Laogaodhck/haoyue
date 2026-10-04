@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Mcp;
 using Haoyue.Runtime.Prompts;
@@ -9,6 +10,178 @@ namespace Haoyue.Tests;
 
 public class McpManagerTests : IDisposable
 {
+    private static readonly JsonObject MethodNotFound = new()
+    {
+        ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "method not found" },
+    };
+
+    private static readonly JsonObject InitializeResult = new()
+    {
+        ["protocolVersion"] = "2024-11-05",
+        ["capabilities"] = new JsonObject(),
+    };
+
+    private static PromptRenderContext RenderContext() => new() { Variables = new Dictionary<string, string>() };
+
+    private (McpManager Manager, PromptRegistry Prompts) CreateManager(FakeMcpTransport transport)
+    {
+        var configStore = new ConfigStore(
+            Path.Combine(_dir, $"{Guid.NewGuid():N}-config.json"),
+            Path.Combine(_dir, $"{Guid.NewGuid():N}-state.json"));
+        configStore.Config.Mcp.Servers["demo"] = new McpServerConfig
+        {
+            Transport = "stdio",
+            Command = "fake-command",
+            Enabled = true,
+        };
+
+        var promptRegistry = new PromptRegistry();
+        var manager = new McpManager(configStore, new ToolRegistry(), promptRegistry,
+            transportFactory: (_, _) => transport);
+        return (manager, promptRegistry);
+    }
+
+    [Fact]
+    public async Task ConnectAllAsync_RegistersPromptAndResourceContributionsWithWorkingResolvers()
+    {
+        var workspace = new WorkspaceInfo { Root = Path.Combine(_dir, "contrib-ws"), ProjectKinds = [] };
+        Directory.CreateDirectory(workspace.Root);
+
+        var transport = new FakeMcpTransport
+        {
+            Responder = message =>
+            {
+                var method = message["method"]?.GetValue<string>();
+                var uri = (message["params"] as JsonObject)?["uri"]?.GetValue<string>();
+                return method switch
+                {
+                    "initialize" => InitializeResult,
+                    "tools/list" => new JsonObject { ["tools"] = new JsonArray() },
+                    "prompts/list" => new JsonObject
+                    {
+                        ["prompts"] = new JsonArray(new JsonObject { ["name"] = "greet" }),
+                    },
+                    "prompts/get" => new JsonObject
+                    {
+                        ["messages"] = new JsonArray(new JsonObject
+                        {
+                            ["content"] = new JsonObject { ["type"] = "text", ["text"] = "hello from mcp" },
+                        }),
+                    },
+                    "resources/list" => new JsonObject
+                    {
+                        ["resources"] = new JsonArray(
+                            new JsonObject { ["uri"] = "demo://docs/a", ["name"] = "Alpha" },
+                            new JsonObject { ["uri"] = "demo://docs/b", ["name"] = "Beta" }),
+                    },
+                    "resources/read" when uri == "demo://docs/a" => new JsonObject
+                    {
+                        ["contents"] = new JsonArray(new JsonObject
+                        {
+                            ["uri"] = "demo://docs/a", ["text"] = "resource alpha body",
+                        }),
+                    },
+                    _ => MethodNotFound,
+                };
+            }
+        };
+
+        var (manager, prompts) = CreateManager(transport);
+        await using var _ = manager;
+
+        var statuses = await manager.ConnectAllAsync(workspace, CancellationToken.None);
+
+        var status = statuses.Single(s => s.Name == "demo");
+        Assert.True(status.Connected, $"error: {status.Error}");
+        Assert.Equal(3, prompts.All.Count);
+        Assert.Contains(prompts.All, c => c.Id == "mcp:demo:greet");
+        Assert.Contains(prompts.All, c => c.Id == "mcp:demo:resource:demo://docs/a");
+        Assert.Contains(prompts.All, c => c.Id == "mcp:demo:resource:demo://docs/b");
+
+        var prompt = prompts.All.Single(c => c.Id == "mcp:demo:greet");
+        Assert.Equal("hello from mcp", await prompt.Resolver(RenderContext(), CancellationToken.None));
+
+        // Alpha resolves through resources/read; Beta falls back to the
+        // method-not-found branch and must degrade to null.
+        var alpha = prompts.All.Single(c => c.Id == "mcp:demo:resource:demo://docs/a");
+        Assert.Equal("resource alpha body", await alpha.Resolver(RenderContext(), CancellationToken.None));
+
+        var beta = prompts.All.Single(c => c.Id == "mcp:demo:resource:demo://docs/b");
+        Assert.Null(await beta.Resolver(RenderContext(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ConnectAllAsync_FitsOversizedResourceContentToTokenBudget()
+    {
+        var workspace = new WorkspaceInfo { Root = Path.Combine(_dir, "huge-ws"), ProjectKinds = [] };
+        Directory.CreateDirectory(workspace.Root);
+
+        var oversized = new string('x', 60_000); // ≫ 10_000-token fragment budget
+        var transport = new FakeMcpTransport
+        {
+            Responder = message => message["method"]?.GetValue<string>() switch
+            {
+                "initialize" => InitializeResult,
+                "tools/list" => new JsonObject { ["tools"] = new JsonArray() },
+                "prompts/list" => new JsonObject { ["prompts"] = new JsonArray() },
+                "resources/list" => new JsonObject
+                {
+                    ["resources"] = new JsonArray(new JsonObject { ["uri"] = "demo://huge", ["name"] = "Huge" }),
+                },
+                "resources/read" => new JsonObject
+                {
+                    ["contents"] = new JsonArray(new JsonObject { ["uri"] = "demo://huge", ["text"] = oversized }),
+                },
+                _ => MethodNotFound,
+            }
+        };
+
+        var (manager, prompts) = CreateManager(transport);
+        await using var _ = manager;
+
+        await manager.ConnectAllAsync(workspace, CancellationToken.None);
+
+        var huge = prompts.All.Single(c => c.Id == "mcp:demo:resource:demo://huge");
+        var text = await huge.Resolver(RenderContext(), CancellationToken.None);
+
+        Assert.NotNull(text);
+        Assert.Contains("middle section trimmed", text);
+        Assert.True(text!.Length < oversized.Length);
+    }
+
+    [Fact]
+    public async Task ConnectAllAsync_CapsResourceContributionsPerServer()
+    {
+        var workspace = new WorkspaceInfo { Root = Path.Combine(_dir, "cap-ws"), ProjectKinds = [] };
+        Directory.CreateDirectory(workspace.Root);
+
+        var resources = new JsonArray();
+        for (var i = 0; i < 20; i++)
+            resources.Add(new JsonObject { ["uri"] = $"demo://file-{i:00}", ["name"] = $"File {i}" });
+
+        var transport = new FakeMcpTransport
+        {
+            Responder = message => message["method"]?.GetValue<string>() switch
+            {
+                "initialize" => InitializeResult,
+                "tools/list" => new JsonObject { ["tools"] = new JsonArray() },
+                "prompts/list" => new JsonObject { ["prompts"] = new JsonArray() },
+                "resources/list" => new JsonObject { ["resources"] = resources },
+                _ => MethodNotFound,
+            }
+        };
+
+        var (manager, prompts) = CreateManager(transport);
+        await using var _ = manager;
+
+        var statuses = await manager.ConnectAllAsync(workspace, CancellationToken.None);
+        var capStatus = statuses.Single(s => s.Name == "demo");
+        Assert.True(capStatus.Connected, $"error: {capStatus.Error}");
+
+        Assert.Equal(16, prompts.All.Count); // MaxResourcesPerServer
+        Assert.All(prompts.All, c => Assert.StartsWith("mcp:demo:resource:", c.Id));
+        Assert.DoesNotContain(prompts.All, c => c.Id.Contains("file-16"));
+    }
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "haoyue-mcp-tests", Guid.NewGuid().ToString("N"));
 
     public McpManagerTests() => Directory.CreateDirectory(_dir);

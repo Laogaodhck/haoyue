@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Haoyue.Runtime.Configuration;
@@ -31,6 +32,14 @@ public interface ISessionStore
     AgentSession? Load(WorkspaceInfo workspace, string sessionId);
     AgentSession? LoadLatest(WorkspaceInfo workspace);
     IReadOnlyList<SessionHeader> List(WorkspaceInfo workspace, bool includeArchived = false);
+    /// <summary>
+    /// Full-text search across session titles and message bodies. Message payloads are
+    /// stored as JSON with non-ASCII characters escaped (\uXXXX), so the query is matched
+    /// in both raw form (titles) and JSON-escaped form (bodies). Results are ranked by
+    /// hit count, then recency.
+    /// </summary>
+    IReadOnlyList<SessionSearchHit> Search(
+        WorkspaceInfo workspace, string query, bool includeArchived = false, int limit = 20);
     void Append(AgentSession session, ChatMessage message);
     /// <summary>Rewrites a session's persisted history (used by context compaction).</summary>
     void ReplaceHistory(AgentSession session, IReadOnlyList<ChatMessage> messages);
@@ -47,6 +56,12 @@ public interface ISessionStore
     void Delete(WorkspaceInfo workspace, string sessionId);
     void DeleteAll(WorkspaceInfo workspace);
 }
+
+/// <summary>
+/// One <see cref="SessionStore.Search"/> result. MatchCount = number of matching
+/// messages (1 if only the title matched), driving the hit-count-first ranking.
+/// </summary>
+public sealed record SessionSearchHit(SessionHeader Header, int MatchCount);
 
 public sealed class SessionStore : ISessionStore
 {
@@ -236,6 +251,86 @@ public sealed class SessionStore : ISessionStore
         var headers = new List<SessionHeader>();
         while (reader.Read()) headers.Add(ReadHeader(reader));
         return headers;
+    }
+
+    public IReadOnlyList<SessionSearchHit> Search(
+        WorkspaceInfo workspace, string query, bool includeArchived = false, int limit = 20)
+    {
+        query = query.Trim();
+        if (query.Length == 0) return [];
+        EnsureLegacyImported(workspace);
+
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var rawPattern = "%" + EscapeLike(query) + "%";
+        var jsonPattern = "%" + EscapeLike(ToJsonEscaped(query)) + "%";
+
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT s.id, s.title, s.workspace, s.archived, s.reasoning_level, s.network_enabled,
+                   s.llm_rounds, s.execution_steps, s.input_tokens, s.total_input_tokens,
+                   s.cached_input_tokens, s.output_tokens, s.output_elapsed_ms,
+                   s.created_at, s.updated_at,
+                   (CASE WHEN s.title LIKE $rawPattern ESCAPE '\' THEN 1 ELSE 0 END) +
+                   (SELECT COUNT(*) FROM messages m
+                    WHERE m.scope = s.scope AND m.session_id = s.id
+                      AND m.payload_json LIKE $jsonPattern ESCAPE '\') AS match_count
+            FROM sessions s
+            WHERE s.scope = $scope {(includeArchived ? "" : "AND s.archived = 0")}
+              AND (s.title LIKE $rawPattern ESCAPE '\'
+                   OR EXISTS (SELECT 1 FROM messages m
+                              WHERE m.scope = s.scope AND m.session_id = s.id
+                                AND m.payload_json LIKE $jsonPattern ESCAPE '\'))
+            ORDER BY match_count DESC, s.updated_at DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$scope", scope);
+        command.Parameters.AddWithValue("$rawPattern", rawPattern);
+        command.Parameters.AddWithValue("$jsonPattern", jsonPattern);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        using var reader = command.ExecuteReader();
+        var hits = new List<SessionSearchHit>();
+        while (reader.Read())
+        {
+            var header = ReadHeader(reader);
+            hits.Add(new SessionSearchHit(header, reader.GetInt32(15)));
+        }
+        return hits;
+    }
+
+    /// <summary>Escapes LIKE wildcards so user queries match literally (pattern uses ESCAPE '\').</summary>
+    private static string EscapeLike(string text) => text
+        .Replace("\\", "\\\\")
+        .Replace("%", "\\%")
+        .Replace("_", "\\_");
+
+    /// <summary>
+    /// Rewrites non-ASCII chars into the \uXXXX form used by the JSON encoder that
+    /// serialized message payloads (System.Text.Json's default encoder escapes
+    /// everything above ASCII). Surrogate pairs become two escapes, matching how
+    /// they are stored. ASCII passes through, mirroring payload layout.
+    /// </summary>
+    private static string ToJsonEscaped(string text)
+    {
+        var asciiOnly = true;
+        foreach (var ch in text)
+        {
+            if (ch >= 128)
+            {
+                asciiOnly = false;
+                break;
+            }
+        }
+        if (asciiOnly) return text;
+
+        var sb = new StringBuilder(text.Length + 8);
+        foreach (var ch in text)
+        {
+            if (ch < 128) sb.Append(ch);
+            else sb.Append("\\u").Append(((int)ch).ToString("x4"));
+        }
+        return sb.ToString();
     }
 
     public void Append(AgentSession session, ChatMessage message)

@@ -1,6 +1,7 @@
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Providers;
+using Haoyue.Runtime.Skills;
 using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Workspaces;
 
@@ -11,7 +12,8 @@ public sealed partial class Agent
     // ---------------------------------------------------------------- prompt composition
 
     private async Task<string> ComposeSystemPromptAsync(
-        WorkspaceInfo workspace, ModelInfo model, IReadOnlyList<ITool> tools, bool networkEnabled, CancellationToken ct)
+        WorkspaceInfo workspace, ModelInfo model, IReadOnlyList<ITool> tools, bool networkEnabled,
+        string? userInput = null, CancellationToken ct = default)
     {
         var memory = workspaceManager.LoadMemory(workspace);
         var agentsMd = workspaceManager.LoadAgentInstructions(workspace);
@@ -38,6 +40,10 @@ public sealed partial class Agent
             personality);
         if (!string.IsNullOrWhiteSpace(agentsMd))
             variables["agents_md"] = ContextPlanner.FitInjectedText(agentsMd);
+        // Skill triggers evaluate against the user message of this turn; the value is
+        // constant within a turn so the composed-prompt cache stays consistent.
+        if (!string.IsNullOrWhiteSpace(userInput))
+            variables["user_message"] = userInput;
         var context = new PromptRenderContext
         {
             Variables = variables,
@@ -49,7 +55,7 @@ public sealed partial class Agent
         return basePrompt;
     }
 
-    private IReadOnlyList<ITool> ActiveTools(WorkspaceInfo workspace, ModelInfo model, bool networkEnabled)
+    private IReadOnlyList<ITool> ActiveTools(WorkspaceInfo workspace, ModelInfo model, bool networkEnabled, string? userInput = null)
     {
         var rawMode = workspace.Config?.Mode ?? configStore.Config.Agent.Mode;
         var mode = AgentModeExtensions.Parse(rawMode);
@@ -58,6 +64,13 @@ public sealed partial class Agent
         var available = disabled is not { Count: > 0 }
             ? toolRegistry.All
             : toolRegistry.All.Where(t => !disabled.Contains(t.Name, StringComparer.OrdinalIgnoreCase)).ToList();
+
+        // Manifest-v2 skills can constrain the toolset: the union of allowed-tools
+        // over the skills injected this turn (triggers honored) becomes a hard
+        // allow-list. No declaring skill → no restriction, unchanged behavior.
+        var skillPolicy = _skills?.ResolveToolPolicy(workspace, userInput);
+        if (skillPolicy?.AllowedTools is { Count: > 0 } allowList)
+            available = available.Where(t => allowList.Contains(t.Name, StringComparer.OrdinalIgnoreCase)).ToList();
 
         // The per-session "联网" toggle controls every network tool together
         // (web_search + web_fetch); when off the model never sees them.

@@ -43,6 +43,15 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
     if (event.event === 'schedule.upcoming') return
     if (event.event === 'schedule.updated') {
       void handleScheduleUpdated()
+      // Outcomes reach the desktop as events, but nobody watches the schedule page
+      // at 3 a.m.: surface failures (and cancellations — a timeout aborts the run)
+      // as a system notification so a dead cron task cannot stay silent.
+      const status = typeof event.details?.status === 'string' ? event.details.status : ''
+      if (status === 'error' || status === 'cancelled') {
+        const name = typeof event.details?.name === 'string' && event.details.name ? event.details.name : '定时任务'
+        const error = typeof event.details?.error === 'string' ? event.details.error.trim() : ''
+        void window.haoyue?.notify?.('定时任务失败', error ? `「${name}」执行失败：${error}` : `「${name}」执行失败`)
+      }
       return
     }
     const isChatRequest = event.requestMethod === 'chat'

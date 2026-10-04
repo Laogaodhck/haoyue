@@ -83,6 +83,21 @@ public sealed class KnowledgeStore(HaoyueDatabase database)
             Created: true);
     }
 
+    public KnowledgeEntry? Get(string scope, long id)
+    {
+        using var connection = database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id, title, content, tags, created_at, updated_at FROM knowledge WHERE scope = $scope AND id = $id;";
+        command.Parameters.AddWithValue("$scope", scope);
+        command.Parameters.AddWithValue("$id", id);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new KnowledgeEntry(
+                reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.GetString(5))
+            : null;
+    }
+
     public bool Delete(string scope, long id)
     {
         using var connection = database.OpenConnection();

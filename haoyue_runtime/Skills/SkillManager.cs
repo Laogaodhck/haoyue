@@ -9,6 +9,15 @@ using YamlDotNet.Serialization.NamingConventions;
 
 namespace Haoyue.Runtime.Skills;
 
+/// <summary>One declared input of a skill (manifest v2). Rendered into the injected prompt appendix.</summary>
+public sealed class SkillParameter
+{
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public bool Required { get; set; }
+    public string? Default { get; set; }
+}
+
 /// <summary>skill.yaml manifest inside a skill directory.</summary>
 public sealed class SkillManifest
 {
@@ -17,6 +26,22 @@ public sealed class SkillManifest
     public string? Version { get; set; }
     /// <summary>Prompt file relative to the skill directory (default prompt.txt).</summary>
     public string Prompt { get; set; } = "prompt.txt";
+    /// <summary>
+    /// Tool-authority boundary (manifest v2): when non-empty, the agent may only use
+    /// these tool names while the skill is injected. Multiple declaring skills union
+    /// their lists; a turn with no triggered declaring skill keeps the full toolset.
+    /// The kebab-case key <c>allowed-tools</c> is normalized to this property before
+    /// deserialization (YamlDotNet applies the naming convention instead of aliases).
+    /// </summary>
+    public List<string>? AllowedTools { get; set; }
+    /// <summary>Declared inputs the model must collect from the conversation before applying the skill.</summary>
+    public List<SkillParameter>? Parameters { get; set; }
+    /// <summary>
+    /// Keyword gate (manifest v2): when non-empty the skill prompt is only injected
+    /// for turns whose user message contains one of these keywords; skills without
+    /// triggers stay always-on like before.
+    /// </summary>
+    public List<string>? Triggers { get; set; }
 }
 
 public sealed record SkillInfo(SkillManifest Manifest, string Directory, bool Enabled)
@@ -25,12 +50,25 @@ public sealed record SkillInfo(SkillManifest Manifest, string Directory, bool En
     public string PromptFile => Path.Combine(Directory, Manifest.Prompt);
 }
 
+/// <summary>
+/// Tool-authority derived from triggered manifest-v2 skills.
+/// <see cref="AllowedTools"/> is null when no triggered skill declares a boundary —
+/// the agent then keeps the unrestricted toolset.
+/// </summary>
+public sealed record SkillToolPolicy(IReadOnlyList<string>? AllowedTools);
+
 public interface ISkillManager
 {
     /// <summary>Rescans ~/.haoyue/skills and &lt;workspace&gt;/skills. Directory changes apply without restart.</summary>
     IReadOnlyList<SkillInfo> Discover(WorkspaceInfo workspace);
 
     void SetEnabled(string skillName, bool enabled);
+
+    /// <summary>
+    /// Tool allow-list derived from the skills injected this turn (triggers honored).
+    /// Null means unrestricted — no triggered skill declared allowed-tools.
+    /// </summary>
+    SkillToolPolicy ResolveToolPolicy(WorkspaceInfo workspace, string? userMessage);
 }
 
 /// <summary>
@@ -48,21 +86,26 @@ public sealed class SkillManager : ISkillManager
 
     private readonly IConfigStore _configStore;
     private readonly string _globalSkillsDir;
+    private readonly IPromptProvider _prompts;
     private WorkspaceInfo? _workspace;
 
-    public SkillManager(IConfigStore configStore, IPromptRegistry promptRegistry, string? globalSkillsDir = null)
+    public SkillManager(IConfigStore configStore, IPromptRegistry promptRegistry, string? globalSkillsDir = null, IPromptProvider? prompts = null)
     {
         _configStore = configStore;
         _globalSkillsDir = globalSkillsDir ?? HaoyuePaths.SkillsDir;
+        _prompts = prompts ?? new FilePromptProvider();
         // One dynamic contribution: enumerates enabled skills at compose time (hot reload for free).
+        // Manifest-v2 triggers gate injection on the turn's user message; parameters
+        // render as a collect-before-use appendix after the skill prompt.
         promptRegistry.Register(new PromptContribution("skills", PromptSlot.Skill, (ctx, _) =>
         {
             if (_workspace is null || !string.Equals(_workspace.Root, ctx.WorkspaceRoot, StringComparison.OrdinalIgnoreCase))
                 return ValueTask.FromResult<string?>(null);
 
-            var parts = Discover(_workspace)
-                .Where(s => s.Enabled && File.Exists(s.PromptFile))
-                .Select(s => ContextPlanner.FitInjectedText(File.ReadAllText(s.PromptFile).Trim()))
+            var userMessage = ctx.Variables.TryGetValue("user_message", out var value) ? value : null;
+            var parts = SelectInjectedSkills(_workspace, userMessage)
+                .Where(s => File.Exists(s.PromptFile))
+                .Select(s => RenderSkillPrompt(s))
                 .Where(text => text.Length > 0)
                 .ToList();
             return ValueTask.FromResult<string?>(parts.Count == 0 ? null : string.Join("\n\n", parts));
@@ -95,9 +138,67 @@ public sealed class SkillManager : ISkillManager
         return skills.Values.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    public void SetEnabled(string skillName, bool enabled)
+    /// <summary>
+    /// Single source of truth for what is injected this turn: enabled skills, gated
+    /// by manifest triggers against the user message (skills without triggers stay
+    /// always-on). Both the prompt contribution and the tool policy derive from this,
+    /// so injection and tool authority can never drift apart.
+    /// </summary>
+    internal IReadOnlyList<SkillInfo> SelectInjectedSkills(WorkspaceInfo workspace, string? userMessage)
     {
-        if (enabled)
+        return Discover(workspace)
+            .Where(s => s.Enabled && Triggered(s.Manifest, userMessage))
+            .ToList();
+    }
+
+    /// <summary>Null triggers are always-on; otherwise any keyword hit in the user message injects.</summary>
+    internal static bool Triggered(SkillManifest manifest, string? userMessage)
+    {
+        var triggers = manifest.Triggers;
+        if (triggers is not { Count: > 0 }) return true;
+        if (string.IsNullOrWhiteSpace(userMessage)) return false;
+        return triggers.Any(keyword =>
+            !string.IsNullOrWhiteSpace(keyword)
+            && userMessage.Contains(keyword.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    public SkillToolPolicy ResolveToolPolicy(WorkspaceInfo workspace, string? userMessage)
+    {
+        var declared = SelectInjectedSkills(workspace, userMessage)
+            .Select(s => s.Manifest.AllowedTools)
+            .FirstOrDefault(list => list is { Count: > 0 });
+        if (declared is null) return new SkillToolPolicy(null);
+
+        var union = SelectInjectedSkills(workspace, userMessage)
+            .SelectMany(s => s.Manifest.AllowedTools ?? [])
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return new SkillToolPolicy(union);
+    }
+
+    /// <summary>Prompt body (size-capped) plus a collect-before-use appendix for declared parameters.</summary>
+    internal string RenderSkillPrompt(SkillInfo skill)
+    {
+        var body = ContextPlanner.FitInjectedText(File.ReadAllText(skill.PromptFile).Trim());
+        var parameters = skill.Manifest.Parameters;
+        if (parameters is not { Count: > 0 }) return body;
+
+        var appendix = _prompts.TryGet("builtin/skill-parameters") ?? "";
+        var lines = parameters
+            .Where(p => !string.IsNullOrWhiteSpace(p.Name))
+            .Select(p =>
+            {
+                var description = string.IsNullOrWhiteSpace(p.Description) ? "" : $" — {p.Description.Trim()}";
+                var defaultValue = string.IsNullOrWhiteSpace(p.Default) ? "" : $"（默认 {p.Default.Trim()}）";
+                var marker = p.Required ? "必填" : "可选";
+                return $"- {{{{{p.Name.Trim()}}}}}（{marker}{defaultValue}）{description}";
+            });
+        return string.Join("\n\n", body, appendix, string.Join("\n", lines)).Trim();
+    }
+
+    public void SetEnabled(string skillName, bool enabled)
+    {        if (enabled)
         {
             _configStore.State.DisabledSkills.Remove(skillName);
             if (_workspace?.Config?.DisabledSkills is { } disabled
@@ -280,7 +381,7 @@ public sealed class SkillManager : ISkillManager
         {
             SkillManifest? manifest = null;
             if (file is not null)
-                manifest = Yaml.Deserialize<SkillManifest>(File.ReadAllText(file));
+                manifest = Yaml.Deserialize<SkillManifest>(NormalizeKebabKeys(File.ReadAllText(file)));
             else if (File.Exists(Path.Combine(dir, "prompt.txt")))
                 manifest = new SkillManifest(); // bare skill: folder with just a prompt
 
@@ -294,4 +395,15 @@ public sealed class SkillManager : ISkillManager
             return null;
         }
     }
+
+    /// <summary>
+    /// YamlDotNet applies the naming convention instead of YamlMember aliases, so the
+    /// common kebab-case key is normalized to its camelCase property before binding.
+    /// Anchored to line starts (indentation allowed) to avoid rewriting text content.
+    /// </summary>
+    private static string NormalizeKebabKeys(string yaml) =>
+        KebabAllowedTools.Replace(yaml, "$1allowedTools:");
+
+    private static readonly System.Text.RegularExpressions.Regex KebabAllowedTools =
+        new(@"^(\s*)allowed-tools\s*:", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
 }

@@ -1209,6 +1209,27 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task SessionSearch_RpcRegistered_AndReturnsEmptyListWithoutMessages()
+    {
+        // Message-append logic itself is covered by SessionStoreTests (the injected
+        // turn handler in daemon tests bypasses Agent.RunTurnAsync, which owns the
+        // user-message persistence). Here we verify the RPC is wired end to end.
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "session.search", new JsonObject { ["query"] = "麒麟踏雪" });
+        var hits = JsonNode.Parse((await connection.ReadUntilAsync(
+                r => r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "result"))["data"]!.GetValue<string>())!.AsArray();
+        Assert.Empty(hits);
+
+        // Missing query must produce a clean protocol error, not a crash.
+        await connection.SendAsync(2, "session.search", new JsonObject());
+        var error = await connection.ReadUntilAsync(
+            r => r["id"]!.GetValue<long>() == 2 && r["event"]!.GetValue<string>() == "error");
+        Assert.Contains("query", error["data"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Provider_Upsert_WithModelDetails_PersistsCorrectly()
     {
         var connection = await StartServerAsync(
@@ -1310,7 +1331,10 @@ public sealed class DaemonServerTests : IAsyncDisposable
 
         public async Task<JsonObject> ReadAsync()
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            // Generous guard only — normal responses arrive in milliseconds, but a
+            // fully parallel test run on a loaded machine occasionally starves the
+            // daemon past 5 s and turned this suite intermittently red.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var line = await _reader.ReadLineAsync(timeout.Token);
             Assert.False(string.IsNullOrWhiteSpace(line));
             return JsonNode.Parse(line)!.AsObject();

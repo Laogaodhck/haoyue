@@ -1002,23 +1002,14 @@ internal sealed class DaemonAdminApi(
     {
         var workspace = SessionWorkspace(parameters);
         var files = new JsonArray();
-        if (!workspace.IsGlobal)
+        foreach (var rule in WorkspaceRules.List(workspace))
         {
-            var rootPath = Path.GetFullPath(workspace.Root);
-            foreach (var candidate in RuleCandidates(rootPath))
+            files.Add((JsonNode)new JsonObject
             {
-                if (!File.Exists(candidate)) continue;
-                try
-                {
-                    files.Add((JsonNode)new JsonObject
-                    {
-                        ["path"] = Path.GetRelativePath(rootPath, candidate).Replace('\\', '/'),
-                        ["isRoot"] = string.Equals(Path.GetDirectoryName(candidate), rootPath, StringComparison.OrdinalIgnoreCase),
-                        ["content"] = File.ReadAllText(candidate),
-                    });
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            }
+                ["path"] = rule.Path,
+                ["isRoot"] = rule.IsRoot,
+                ["content"] = rule.Content,
+            });
         }
         return new JsonObject
         {
@@ -1031,63 +1022,24 @@ internal sealed class DaemonAdminApi(
     public string SaveRules(JsonObject parameters)
     {
         var workspace = SessionWorkspace(parameters);
-        if (workspace.IsGlobal)
-            throw new DaemonRequestException("全局会话不加载规则文件，请选择工作区后保存。");
         var content = RequiredString(parameters, "content");
-        var relative = (OptionalString(parameters, "path") ?? "AGENTS.md").Trim().Replace('\\', '/');
-        if (relative.Length == 0 || !relative.EndsWith("AGENTS.md", StringComparison.OrdinalIgnoreCase))
-            throw new DaemonRequestException("规则文件必须命名为 AGENTS.md");
-
-        var rootPath = Path.GetFullPath(workspace.Root);
-        string fullPath;
-        try { fullPath = Path.GetFullPath(Path.Combine(rootPath, relative)); }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            throw new DaemonRequestException($"Invalid rules path: {ex.Message}");
-        }
-        if (!fullPath.StartsWith(rootPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            throw new DaemonRequestException("规则路径越出了工作区根目录");
+        string savedPath;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-            File.WriteAllText(fullPath, content);
+            savedPath = WorkspaceRules.Save(workspace, OptionalString(parameters, "path"), content);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
-            throw new DaemonRequestException($"无法写入规则文件：{ex.Message}");
+            throw new DaemonRequestException(ex.Message);
+        }
+        catch (IOException ex)
+        {
+            throw new DaemonRequestException(ex.Message);
         }
         return new JsonObject
         {
-            ["path"] = Path.GetRelativePath(rootPath, fullPath).Replace('\\', '/'),
+            ["path"] = savedPath,
         }.ToJsonString();
-    }
-
-    private static IEnumerable<string> RuleCandidates(string rootPath)
-    {
-        yield return Path.Combine(rootPath, "AGENTS.md");
-        var skipped = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "node_modules", ".git", ".haoyue", ".session", ".cache", ".venv", "venv",
-            "bin", "obj", "dist", "build", "out", "logs", "__pycache__", ".next", ".nuxt", "coverage",
-        };
-        foreach (var level1 in SafeDirectories(rootPath, skipped))
-        {
-            yield return Path.Combine(level1, "AGENTS.md");
-            foreach (var level2 in SafeDirectories(level1, skipped))
-                yield return Path.Combine(level2, "AGENTS.md");
-        }
-    }
-
-    private static IEnumerable<string> SafeDirectories(string directory, HashSet<string> skipped)
-    {
-        string[] directories;
-        try { directories = Directory.GetDirectories(directory); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { yield break; }
-        foreach (var dir in directories.OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
-        {
-            if (!skipped.Contains(Path.GetFileName(dir)))
-                yield return dir;
-        }
     }
 
     /// <summary>
@@ -1325,6 +1277,25 @@ internal sealed class DaemonAdminApi(
         return JsonSerializer.Serialize(
             runtime.Sessions.List(workspace, includeArchived).ToList(),
             HaoyueJsonContext.Default.ListSessionHeader);
+    }
+
+    public string SearchSessions(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var query = RequiredString(parameters, "query");
+        var includeArchived = parameters["includeArchived"]?.GetValue<bool?>() ?? false;
+        var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 20, 1, 50);
+
+        var hits = runtime.Sessions.Search(workspace, query, includeArchived, limit);
+        var array = new JsonArray();
+        foreach (var hit in hits)
+        {
+            var node = JsonSerializer.SerializeToNode(hit.Header, HaoyueJsonContext.Default.SessionHeader)
+                       ?? throw new DaemonRequestException("failed to serialize session header");
+            node["matchCount"] = hit.MatchCount;
+            array.Add(node);
+        }
+        return array.ToJsonString();
     }
 
     public string GetSession(JsonObject parameters)

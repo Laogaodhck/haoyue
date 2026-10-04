@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Tools;
@@ -34,8 +35,17 @@ public interface IMcpManager : IAsyncDisposable
 public sealed class McpManager(
     IConfigStore configStore,
     IToolRegistry toolRegistry,
-    IPromptRegistry promptRegistry) : IMcpManager
+    IPromptRegistry promptRegistry,
+    Func<string, McpServerConfig, IMcpTransport>? transportFactory = null) : IMcpManager
 {
+    /// <summary>
+    /// Upper bound of resource contributions registered per server: a file-tree
+    /// server may expose hundreds of resources and each one would fire a
+    /// resources/read round-trip on every prompt composition.
+    /// </summary>
+    private const int MaxResourcesPerServer = 16;
+
+    private readonly Func<string, McpServerConfig, IMcpTransport> _transportFactory = transportFactory ?? CreateTransport;
     private readonly List<McpClient> _clients = [];
     private readonly List<IDisposable> _registrations = [];
     private readonly List<McpServerStatus> _status = [];
@@ -137,16 +147,7 @@ public sealed class McpManager(
 
     private async Task<McpServerStatus> ConnectOneAsync(string name, McpServerConfig server, CancellationToken ct)
     {
-        IMcpTransport transport = server.Transport.ToLowerInvariant() switch
-        {
-            "stdio" when !string.IsNullOrWhiteSpace(server.Command) =>
-                new StdioMcpTransport(server.Command!, server.Args, server.Env),
-            "sse" or "http" or "streamable-http" or "streamable_http" when !string.IsNullOrWhiteSpace(server.Url) =>
-                new HttpMcpTransport(server.Url!),
-            "websocket" =>
-                throw new McpException($"Transport '{server.Transport}' is reserved but not implemented yet."),
-            _ => throw new McpException($"Server '{name}': invalid transport/command/url combination."),
-        };
+        IMcpTransport transport = _transportFactory(name, server);
 
         var client = new McpClient(name, transport);
         using var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -179,18 +180,55 @@ public sealed class McpManager(
             _registrations.Add(toolRegistry.Register(new McpToolAdapter(client, tool, uniqueName)));
         }
 
-        // Auto-discover prompts into the prompt registry.
+        // Auto-discover prompts into the prompt registry. Resolvers degrade to
+        // null when the server is gone or rejects the request, so an offline
+        // server never breaks prompt composition; text is fitted to the
+        // injected-fragment token budget.
         var prompts = await client.ListPromptsAsync(ct).ConfigureAwait(false);
         foreach (var prompt in prompts)
         {
             var promptName = prompt.Name;
             _registrations.Add(promptRegistry.Register(new PromptContribution(
                 $"mcp:{name}:{promptName}", PromptSlot.Tool,
-                async (_, token) => await client.GetPromptAsync(promptName, token).ConfigureAwait(false))));
+                async (_, token) =>
+                {
+                    var text = await client.GetPromptAsync(promptName, token).ConfigureAwait(false);
+                    return text is null ? null : ContextPlanner.FitInjectedText(text);
+                })));
+        }
+
+        // Auto-discover resources and expose their text contents as context
+        // contributions under the same mcp:* id family. Reads fail soft like
+        // prompts; blob-only resources resolve to null and are skipped by the
+        // composer.
+        var resources = await client.ListResourcesAsync(ct).ConfigureAwait(false);
+        foreach (var resource in resources.Take(MaxResourcesPerServer))
+        {
+            if (string.IsNullOrWhiteSpace(resource.Uri)) continue;
+            var uri = resource.Uri;
+            _registrations.Add(promptRegistry.Register(new PromptContribution(
+                $"mcp:{name}:resource:{uri}", PromptSlot.Tool,
+                async (_, token) =>
+                {
+                    var text = await client.GetResourceAsync(uri, token).ConfigureAwait(false);
+                    return text is null ? null : ContextPlanner.FitInjectedText(text);
+                })));
         }
 
         return new McpServerStatus(name, server.Transport, true, tools.Count, null);
     }
+
+    private static IMcpTransport CreateTransport(string name, McpServerConfig server) =>
+        server.Transport.ToLowerInvariant() switch
+        {
+            "stdio" when !string.IsNullOrWhiteSpace(server.Command) =>
+                new StdioMcpTransport(server.Command!, server.Args, server.Env),
+            "sse" or "http" or "streamable-http" or "streamable_http" when !string.IsNullOrWhiteSpace(server.Url) =>
+                new HttpMcpTransport(server.Url!),
+            "websocket" =>
+                throw new McpException($"Transport '{server.Transport}' is reserved but not implemented yet."),
+            _ => throw new McpException($"Server '{name}': invalid transport/command/url combination."),
+        };
 
     private static string DescribeConnectionError(Exception error) => error switch
     {

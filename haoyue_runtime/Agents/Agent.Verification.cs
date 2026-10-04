@@ -15,11 +15,14 @@ public sealed partial class Agent
 
     private async Task<string?> RunVerificationAsync(WorkspaceInfo workspace, int attempt, CancellationToken ct)
     {
-        var command = verifier.ResolveCommand(workspace);
-        if (command is null) return null;
+        var commands = verifier.ResolveCommands(workspace);
+        if (commands.Count == 0) return null;
 
-        events.Publish(new StatusEvent("Verifying", command));
-        events.Publish(new VerificationStartedEvent(command, attempt));
+        // A multi-step chain (build → test …) is displayed as one label; the verify result
+        // reports which concrete step failed via result.Command.
+        var chainLabel = string.Join(" → ", commands);
+        events.Publish(new StatusEvent("Verifying", chainLabel));
+        events.Publish(new VerificationStartedEvent(chainLabel, attempt));
 
         var result = await verifier.VerifyAsync(workspace, ct).ConfigureAwait(false);
         events.Publish(new VerificationCompletedEvent(result.Success, Firstline(result.Output), attempt));

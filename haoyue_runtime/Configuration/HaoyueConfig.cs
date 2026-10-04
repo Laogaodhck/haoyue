@@ -164,6 +164,13 @@ public sealed class AgentConfig
     /// <summary>Wall-clock budget for one scheduled-task turn; exceeded runs are cancelled and recorded.</summary>
     public int ScheduledTurnTimeoutSeconds { get; set; } = 1_800;
     /// <summary>
+    /// Optional webhook endpoint that receives a JSON POST describing every scheduled-task
+    /// outcome (taskId/name/status/error/sessionId/output/timestamp). Keep empty to disable.
+    /// This is the only notify channel that works while no desktop client is connected;
+    /// connected desktops additionally receive <c>schedule.updated</c> events regardless.
+    /// </summary>
+    public string? ScheduleWebhookUrl { get; set; }
+    /// <summary>
     /// Reply language: auto (follow the OS UI language, Chinese systems resolve to Chinese)
     /// | zh (简体中文) | en (English). Injected into the system prompt so the model detects
     /// the source language per message and replies in the resolved target language.
@@ -220,6 +227,14 @@ public sealed class WorkspaceConfig
     public bool? AutoVerify { get; set; }
     /// <summary>Overrides the auto-detected build/check command used by the verify loop.</summary>
     public string? VerifyCommand { get; set; }
+    /// <summary>
+    /// Multi-step verification chain (build → test …) run in order with fail-fast semantics.
+    /// Steps run independently, so shell operators like <c>&amp;&amp;</c> are not required
+    /// (PowerShell 5.1 does not support them). When non-empty this takes precedence over
+    /// <see cref="VerifyCommand"/>; when null the single <see cref="VerifyCommand"/> (or the
+    /// auto-detected command) applies.
+    /// </summary>
+    public List<string>? VerifyCommands { get; set; }
 }
 
 /// <summary>Small mutable runtime state persisted in ~/.haoyue/state.json (round-robin cursors, last session…).</summary>

@@ -49,13 +49,13 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 - **联网能力**：网页搜索（web_search）与网页抓取（web_fetch）
 - **任务规划**：内置计划工具，维护任务列表并跟踪多步骤执行进度
 - **屏幕捕获**：截屏工具，可将屏幕内容交给模型分析
-- **MCP 支持**：stdio 和 SSE 传输，自动发现工具/提示/资源
-- **技能系统**：基于目录的技能，支持提示注入与工作流
+- **MCP 支持**：stdio 和 SSE 传输，自动发现工具/提示/资源，提示与资源内容自动注入上下文（按注入 token 预算截断，读取失败自动降级）
+- **技能系统**：基于目录的技能，支持提示注入与工作流；manifest v2 提供触发关键词（triggers）、工具白名单（allowed-tools）与参数收集（parameters）
 
 ### 🧠 知识库与记忆
 
 - **自动沉淀**：Agent 在对话中自动保存、检索、遗忘知识（knowledge_save / knowledge_search / knowledge_forget）
-- **高容错检索**：同义词扩展、全半角归一化、CJK 二元分词与编辑距离兜底，错别字、中英文混排、全角输入也能准确命中
+- **高容错检索**：同义词扩展、全半角归一化、CJK 二元分词与编辑距离兜底，错别字、中英文混排、全角输入也能准确命中；支持自定义同义词表（`~/.haoyue/knowledge/synonyms.txt`，热重载，适配医疗、法律等垂直领域术语）
 - **规则与记忆**：AGENTS.md 工作区规则自动注入（可开关），MEMORY.md 长期记忆支持自动/手动两种管理模式
 - **可视化维护**：桌面端知识库页面支持条目增删改、文档导入与实时搜索
 
@@ -64,7 +64,7 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 - **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown 渲染、图片预览、推理深度调节
 - **专家系统**：内置领域专家库，一键切换角色预设
 - **可视化配置**：Provider、模型、Profile、MCP 服务器全程图形化管理
-- **任务管理**：定时任务调度与归档任务管理
+- **任务管理**：定时任务调度与归档任务管理，任务失败即时桌面通知，并支持 Webhook 回调（桌面端离线也能收到）
 - **用量统计**：Token 用量趋势与模型分布图表
 
 ### 💻 现代化终端体验
@@ -88,9 +88,9 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 
 ### 🔧 开发者体验
 
-- **会话管理**：基于 SQLite 的会话持久化、恢复与并发访问
+- **会话管理**：基于 SQLite 的会话持久化、恢复与并发访问，支持标题与消息正文全文搜索（按命中数与时间排序）
 - **内存系统**：工作区特定的内存，自动上下文注入
-- **验证机制**：代码修改后自动构建/检查/修复循环
+- **验证机制**：代码修改后自动构建/检查/修复循环，支持多步验证命令链（按序执行、fail-fast，失败步骤的错误行摘要直接进入修复提示）
 - **热重载**：提示文件和配置无需重启即可重载
 
 ## 📦 安装
@@ -362,6 +362,33 @@ haoyue session export <session-id> --format json
 
 会话数据和 Desktop 项目列表统一保存在 `~/.haoyue/haoyue.db`。升级后首次访问工作区时，旧的 `.session/*.jsonl`、`.haoyue/sessions/*.jsonl` 或全局 `~/.haoyue/sessions/*.jsonl` 会自动导入，原文件保留为备份。Provider、模型、Profile、MCP、Skill、工作区配置仍使用原有 JSON/文本文件，用量记录仍为 `~/.haoyue/usage.jsonl`。
 
+### 知识库与数据管理
+
+CLI 内置知识库、工作区规则、记忆、专家与定时任务的管理命令：
+
+```bash
+# 知识库：检索、沉淀与维护（内容可经管道输入）
+haoyue knowledge search "部署流程"
+haoyue knowledge add "发布步骤" --tags 运维,发布
+haoyue knowledge list
+
+# 工作区规则（AGENTS.md 层级发现与编辑）
+haoyue rules list
+haoyue rules set
+
+# 长期记忆（--global 操作全局记忆）
+haoyue memory show
+haoyue memory set "本仓库发布前必须跑全量测试"
+
+# 内置专家目录
+haoyue expert list
+
+# 定时任务（8 位短 id 前缀即可定位任务）
+haoyue schedule add "日报" "0 9 * * *" "汇总昨日提交生成日报"
+haoyue schedule list
+haoyue schedule enable <id>
+```
+
 ### 健康检查
 
 ```bash
@@ -403,6 +430,23 @@ skills/
     tools/              # 可选的工具实现
 ```
 
+`skill.yaml` 支持可选的 v2 字段控制注入行为：
+
+```yaml
+name: my-skill
+description: 一句话描述这个技能什么时候用
+triggers:            # 声明后仅当用户消息命中关键词才注入；不声明则常驻
+  - 部署
+  - 发布
+allowed-tools:       # 注入期间可用的工具白名单；不声明则不限制
+  - bash
+  - read_file
+parameters:          # 注入提示末尾追加参数收集说明
+  - name: env
+    description: 目标部署环境
+    required: true
+```
+
 ### MCP 服务器
 
 在 `mcp/servers.json` 中配置：
@@ -418,6 +462,8 @@ skills/
   }
 }
 ```
+
+服务器暴露的提示（prompts）与文本资源（resources）会自动注册为系统提示的上下文贡献：内容按注入 token 预算截断后进入提示词，每个服务器最多注入 16 个资源，读取失败自动降级，不影响正常会话。
 
 ## 🧪 测试
 

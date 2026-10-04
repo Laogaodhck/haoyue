@@ -47,6 +47,11 @@ root.Add(InitCommand.Build());
 root.Add(SkillCommands.Build());
 root.Add(McpCommands.Build());
 root.Add(SessionCommands.Build());
+root.Add(KnowledgeCommands.Build());
+root.Add(MemoryCommands.Build());
+root.Add(RulesCommands.Build());
+root.Add(ExpertCommands.Build());
+root.Add(ScheduleCommands.Build());
 root.Add(DaemonCommand.Build());
 
 return await root.Parse(args).InvokeAsync();

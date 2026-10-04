@@ -833,6 +833,11 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.ListSessions(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "session.search":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.SearchSessions(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "session.get":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.GetSession(Params(request))), context.ConnectionCt).ConfigureAwait(false);
@@ -1471,7 +1476,7 @@ public sealed class DaemonServer : IAsyncDisposable
             "memory.get", "memory.save", "rules.list", "rules.save",
             "usage.get", "usage.timeline", "doctor", "doctor.run",
             "project.list", "project.upsert", "project.remove",
-            "session.list", "session.get", "session.update", "session.archive", "session.delete",
+            "session.list", "session.search", "session.get", "session.update", "session.archive", "session.delete",
             "session.resume", "session.new",
             "lock.list", "factory.reset", "shutdown"),
     }.ToJsonString();

@@ -262,6 +262,77 @@ public sealed class ScheduleTests : IDisposable
         await service.DisposeAsync();
     }
 
+    [Fact]
+    public async Task Service_RunNow_PostsWebhookOutcomeWithFailureDetails()
+    {
+        var store = NewStore();
+        var runtime = HaoyueRuntime.Create(
+            _dir,
+            new ConfigStore(Path.Combine(_dir, "config-wh.json"), Path.Combine(_dir, "state-wh.json")),
+            Path.Combine(_dir, "runtime-wh.db"));
+        runtime.ConfigStore.Config.Agent.ScheduleWebhookUrl = "http://webhook.test/notify";
+        var handler = new StubHttpHandler();
+        var service = new ScheduleService(
+            store, runtime, new FileLockCoordinator(), new LlmHttpFactory(),
+            new CircuitBreaker(new RetryConfig()), FailingRunner, webhook: new ScheduleWebhookNotifier(handler));
+        var task = store.Upsert(null, "通知任务", null, "跑一遍", "0 9 * * *", false);
+
+        await service.RunNowAsync(task.Id, CancellationToken.None);
+        Assert.Equal(ScheduleRunStatus.Error, store.Get(task.Id)!.LastStatus);
+
+        // The webhook is fire-and-forget; poll until it lands (or time out).
+        StubHttpHandler.Captured? captured = null;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            captured = handler.WaitCapture();
+            if (captured is not null) break;
+            await Task.Delay(20);
+        }
+        Assert.NotNull(captured);
+        Assert.Equal(HttpMethod.Post, captured!.Method);
+        Assert.Contains("\"status\":\"error\"", captured.Body);
+        Assert.Contains("boom", captured.Body);
+        Assert.Contains(task.Id, captured.Body);
+        Assert.Contains("通知任务", captured.Body);
+    }
+
+    [Fact]
+    public async Task Service_RunNow_WithoutWebhookUrl_NeverPosts()
+    {
+        var store = NewStore();
+        var runtime = HaoyueRuntime.Create(
+            _dir,
+            new ConfigStore(Path.Combine(_dir, "config-nowrap.json"), Path.Combine(_dir, "state-nowrap.json")),
+            Path.Combine(_dir, "runtime-nowrap.db"));
+        var handler = new StubHttpHandler();
+        var service = new ScheduleService(
+            store, runtime, new FileLockCoordinator(), new LlmHttpFactory(),
+            new CircuitBreaker(new RetryConfig()), StubRunner, webhook: new ScheduleWebhookNotifier(handler));
+        var task = store.Upsert(null, "静默任务", null, "跑一遍", "0 9 * * *", false);
+
+        await service.RunNowAsync(task.Id, CancellationToken.None);
+        await Task.Delay(150); // give a wrongly-issued fire-and-forget POST time to land
+
+        Assert.Null(handler.WaitCapture());
+    }
+
+    [Fact]
+    public async Task Notifier_SwallowsTransportFailures()
+    {
+        using var notifier = new ScheduleWebhookNotifier(new ThrowingHttpHandler());
+        var task = new ScheduledTask { Id = "t1", Name = "任意", LastStatus = ScheduleRunStatus.Error, LastError = "x" };
+
+        // Must not throw even though the endpoint is unreachable.
+        await notifier.NotifyAsync("http://webhook.test/notify", task, null, CancellationToken.None);
+        // Empty URL is a no-op, not an error either.
+        await notifier.NotifyAsync("", task, null, CancellationToken.None);
+    }
+
+    private static Task<AgentTurnResult> FailingRunner(
+        WorkspaceInfo workspace, AgentSession session, string prompt, CancellationToken ct) =>
+        Task.FromResult(new AgentTurnResult("", false, "boom"));
+
     private static Task<AgentTurnResult> StubRunner(
         WorkspaceInfo workspace, AgentSession session, string prompt, CancellationToken ct) =>
         Task.FromResult(new AgentTurnResult("完成", false, null));
@@ -269,5 +340,35 @@ public sealed class ScheduleTests : IDisposable
     private sealed class StubClock(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private sealed class StubHttpHandler : HttpMessageHandler
+    {
+        public sealed record Captured(HttpMethod Method, string Body);
+
+        private Captured? _capture;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var body = request.Content is null
+                ? ""
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            _capture = new Captured(request.Method, body);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+        }
+
+        public Captured? WaitCapture()
+        {
+            var captured = _capture;
+            return captured;
+        }
+    }
+
+    private sealed class ThrowingHttpHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new HttpRequestException("simulated outage");
     }
 }

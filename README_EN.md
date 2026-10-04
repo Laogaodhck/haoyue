@@ -16,7 +16,7 @@
 
 **Modern, High-Performance AI Agent**
 
-Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean architecture and event-driven design. It provides a complete platform for building AI-powered coding assistants with support for multiple LLM providers, tool execution, session management, and a smooth terminal interaction experience.
+Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean architecture and event-driven design. It ships with an out-of-the-box terminal CLI and desktop app, providing a complete platform for building AI-powered coding assistants with support for multiple LLM providers, tool execution, a knowledge base, session management, and a smooth interaction experience.
 
 [🌐 Official Website & Docs](https://github.com/Laogaodhck/haoyue) •
 [中文](README.md) •
@@ -29,8 +29,9 @@ Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean archit
 
 ### 🚀 Runtime First Architecture
 
-- **Clean Architecture**: Separation of concerns with `haoyue_runtime` as the core and `haoyue_cli` as the default frontend
-- **Plugin System**: Extensible through Tools, Skills, and MCP (Model Context Protocol)
+- **Clean Architecture**: Separation of concerns with `haoyue_runtime` as the core, and `haoyue_cli` (terminal) and `haoyue_desktop` (desktop) as frontends
+- **Resident Daemon**: the daemon exposes JSON-RPC over Named Pipe / Unix Socket; the desktop app and CLI share the same runtime
+- **Plugin System**: Tools, Skills, Prompts, and MCP (Model Context Protocol) — a four-layer extension mechanism
 - **Event-Driven**: Decoupled rendering and business logic via event bus
 
 ### 🤖 Multi-Provider Support
@@ -44,9 +45,28 @@ Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean archit
 
 ### 🛠️ Tool Ecosystem
 
-- **Built-in Tools**: File operations (read/write/edit), search (grep/glob), bash execution
-- **MCP Support**: stdio and SSE transports with automatic tool/prompt/resource discovery
-- **Skills**: Directory-based skill system with prompt injection and workflow support
+- **Files & Execution**: File read/write/edit with precise diff application, grep/glob search, bash execution
+- **Networking**: Web search (web_search) and web fetch (web_fetch)
+- **Task Planning**: Built-in plan tool maintaining a task list with multi-step progress tracking
+- **Screen Capture**: Screenshot tool that hands screen content to the model for analysis
+- **MCP Support**: stdio and SSE transports with automatic tool/prompt/resource discovery; prompt and resource contents are injected into context (trimmed to the injection token budget, degrading gracefully on read failure)
+- **Skills**: Directory-based skill system; manifest v2 adds trigger keywords, tool allow-lists, and parameter collection
+
+### 🧠 Knowledge Base & Memory
+
+- **Automatic Curation**: The agent saves, searches, and forgets knowledge in conversation (knowledge_save / knowledge_search / knowledge_forget)
+- **Fault-Tolerant Retrieval**: Synonym expansion, full/half-width normalization, CJK bigram tokenization, and edit-distance fallback — typos, mixed CJK/Latin input, and full-width text still hit
+- **Custom Synonyms**: A user-editable synonym table (`~/.haoyue/knowledge/synonyms.txt`) with hot reload, tailored for vertical-domain jargon
+- **Rules & Memory**: AGENTS.md workspace rules injected automatically (toggleable); MEMORY.md long-term memory in auto or manual mode
+- **Visual Maintenance**: The desktop knowledge base page supports entry CRUD, document import, and live search
+
+### 🖥️ Desktop App
+
+- **Modern UI**: Electron + Vue 3 + TypeScript with streaming markdown, image preview, and reasoning depth control
+- **Expert System**: Built-in domain experts with one-click role presets
+- **Visual Configuration**: Providers, models, profiles, and MCP servers fully managed in the UI
+- **Task Management**: Scheduled tasks and archived runs, with instant desktop notifications and webhook callbacks on failure
+- **Usage Analytics**: Token usage trends and model distribution charts
 
 ### 💻 Modern Terminal Experience
 
@@ -61,11 +81,17 @@ Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean archit
 - **Isolated Config**: Per-workspace configuration, cache, and memory with workspace-scoped sessions
 - **Bootstrap**: Automatic project setup with `.haoyue/` directory structure
 
+### 🌐 Website & Skill Market
+
+- **Bilingual Docs**: Online documentation site in Chinese and English
+- **Skill Market**: Browse, search, and submit skill shares; the desktop app can install official skills
+- **Accounts**: Registration, login, and admin console with cookie auth and rate limiting
+
 ### 🔧 Developer Experience
 
-- **Session Management**: SQLite-backed persistence, restoration, and concurrent access
+- **Session Management**: SQLite-backed persistence, restoration, and concurrent access, with full-text search across titles and message bodies (ranked by hit count and recency)
 - **Memory System**: Workspace-specific memory with automatic context injection
-- **Verification**: Automatic build/check/repair cycle after code modifications
+- **Verification**: Automatic build/check/repair cycle with multi-step command chains (run in order with fail-fast; the failing step's error-line summary feeds the repair prompt)
 - **Hot Reload**: Prompt files and configurations reload without restart
 
 ## 📦 Installation
@@ -106,7 +132,7 @@ Building from source requires:
 
 ```bash
 git clone https://github.com/Laogaodhck/haoyue.git
-cd Haoyue
+cd haoyue
 dotnet build
 ```
 
@@ -135,7 +161,7 @@ dotnet run --project haoyue_cli -- --model "openai/gpt-5.5"
 flowchart TD
     subgraph Frontends[Frontends]
         CLI[haoyue_cli<br/>System.CommandLine + Rendering Engine]
-        GUI[GUI / Web / IDE<br/>Future]
+        DESKTOP[haoyue_desktop<br/>Electron + Vue 3]
     end
 
     subgraph Runtime[haoyue_runtime]
@@ -165,7 +191,7 @@ flowchart TD
     end
 
     CLI --> Facade
-    GUI -. daemon protocol .-> DMN
+    DESKTOP -. daemon protocol .-> DMN
     DMN --> Agent
     Facade --> Agent
     Agent --> PM
@@ -191,26 +217,33 @@ flowchart TD
 ```
 Haoyue/
 ├── haoyue_cli/           # CLI frontend
-│   ├── Commands/           # CLI commands (provider, model, profile, etc.)
+│   ├── Commands/           # CLI commands (provider, model, profile, knowledge, schedule, etc.)
 │   ├── Ui/                 # Terminal rendering engine
 │   └── Program.cs          # Entry point
 ├── haoyue_runtime/       # Core runtime
 │   ├── Agents/             # Agent loop and context planning
+│   ├── ComputerUse/        # Screen capture
 │   ├── Configuration/      # Config management
+│   ├── Daemon/             # Daemon (Named Pipe / Unix Socket JSON-RPC)
+│   ├── Data/               # Data layer (knowledge store, import, and search ranking)
 │   ├── Events/             # Event bus system
+│   ├── Experts/            # Expert system
 │   ├── Mcp/                # MCP client implementation
 │   ├── Prompts/            # Prompt loading and composition
 │   ├── Providers/          # LLM provider integrations
+│   ├── Scheduling/         # Scheduled tasks
 │   ├── Sessions/           # Session persistence
 │   ├── Skills/             # Skill management
 │   ├── Tools/              # Tool registry and implementations
 │   ├── Verification/       # Build verification
 │   └── Workspaces/         # Workspace detection and management
-├── haoyue_tests/         # Unit tests
-├── docs/                   # Documentation
-├── prompts/                # Prompt templates (future)
-├── skills/                 # Skill definitions (future)
-└── mcp/                    # MCP server configurations (future)
+├── haoyue_desktop/       # Desktop app (Electron + Vue 3 + TypeScript)
+├── haoyue_webserver/     # Website & skill market (Blazor Server + SQLite)
+├── haoyue_website/       # Docs site source (VitePress)
+├── haoyue_tests/         # Runtime unit tests
+├── haoyue_cli_tests/     # CLI tests
+├── models/               # Local GGUF models (dev environment)
+└── packaging/            # Packaging scripts and configuration
 ```
 
 ## ⚙️ Configuration
@@ -291,6 +324,26 @@ haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4
 
 Use `--models-directory` to point at a different folder. Local models support streaming and thinking output; tool calling is not supported yet.
 
+Local inference tuning (provider options in `~/.haoyue/config.json`):
+
+```json
+{
+  "providers": {
+    "local": {
+      "kind": "local",
+      "modelsDirectory": "~/.haoyue/models",
+      "gpuLayers": 0,
+      "threads": 8,
+      "localPrefixReuse": true
+    }
+  }
+}
+```
+
+- `gpuLayers`: number of layers offloaded to GPU (llama.cpp `n_gpu_layers`). Defaults to `0` (CPU only). Install a CUDA backend (e.g. `LLamaSharp.Backend.Cuda12`) and set it to `999` to offload everything; the value is ignored when no GPU backend is present.
+- `threads`: CPU inference thread count. Defaults to llama.cpp auto-selection (all logical cores).
+- `localPrefixReuse`: reuse decoded KV prefixes across requests. In multi-step agent turns each step only decodes the newly appended suffix tokens, skipping repeated prefill of the system prompt and history for significantly higher throughput. Falls back to full recomputation automatically when the prefix mismatches or the backend does not support memory moves, with identical results.
+
 ### Model Management
 
 ```bash
@@ -309,6 +362,33 @@ haoyue session export <session-id> --format json
 ```
 
 Sessions and the Desktop project list are stored in `~/.haoyue/haoyue.db`. On first access after upgrading, legacy `.session/*.jsonl`, `.haoyue/sessions/*.jsonl`, and global `~/.haoyue/sessions/*.jsonl` files are imported automatically and retained as backups. Provider, model, profile, MCP, skill, and workspace configuration remains in the existing JSON/text files; usage records remain in `~/.haoyue/usage.jsonl`.
+
+### Knowledge Base & Data Management
+
+The CLI ships management commands for the knowledge base, workspace rules, memory, experts, and scheduled tasks:
+
+```bash
+# Knowledge base: search, capture, and maintenance (content can be piped in)
+haoyue knowledge search "deployment workflow"
+haoyue knowledge add "Release steps" --tags ops,release
+haoyue knowledge list
+
+# Workspace rules (hierarchical AGENTS.md discovery and editing)
+haoyue rules list
+haoyue rules set
+
+# Long-term memory (--global targets the global memory file)
+haoyue memory show
+haoyue memory set "Run the full test suite before releasing this repo"
+
+# Built-in expert catalog
+haoyue expert list
+
+# Scheduled tasks (an 8-char short id prefix locates a task)
+haoyue schedule add "Daily report" "0 9 * * *" "Summarize yesterday's commits into a report"
+haoyue schedule list
+haoyue schedule enable <id>
+```
 
 ### Health Check
 
@@ -351,6 +431,23 @@ skills/
     tools/              # Optional tool implementations
 ```
 
+`skill.yaml` supports optional v2 fields that control injection behavior:
+
+```yaml
+name: my-skill
+description: One line describing when this skill applies
+triggers:            # When declared, the skill is injected only if the user message hits a keyword; otherwise it is always injected
+  - deploy
+  - release
+allowed-tools:       # Tool allow-list while the skill is injected; undeclared means unrestricted
+  - bash
+  - read_file
+parameters:          # Appends a parameter-collection appendix to the injected prompt
+  - name: env
+    description: Target deployment environment
+    required: true
+```
+
 ### MCP Servers
 
 Configure in `mcp/servers.json`:
@@ -366,6 +463,8 @@ Configure in `mcp/servers.json`:
   }
 }
 ```
+
+Prompts and text resources exposed by the server are registered automatically as context contributions to the system prompt: contents are trimmed to the injection token budget, at most 16 resources per server are injected, and failed reads degrade gracefully without affecting the session.
 
 ## 🧪 Testing
 

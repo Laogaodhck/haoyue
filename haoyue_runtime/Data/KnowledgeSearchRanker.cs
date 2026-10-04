@@ -32,40 +32,9 @@ public sealed record KnowledgeQueryToken(IReadOnlyList<string> ExactVariants, IR
 /// </summary>
 public static class KnowledgeSearchRanker
 {
-    // Query-side synonym table. Keys and values are already normalized (lowercase,
-    // half-width). Kept deliberately small and high-precision; rare synonyms add
-    // noise, not recall.
-    private static readonly Dictionary<string, string[]> Synonyms = new()
-    {
-        ["部署"] = ["发布", "上线"],
-        ["发布"] = ["部署", "上线"],
-        ["上线"] = ["部署", "发布"],
-        ["安装"] = ["安装包", "部署"],
-        ["打包"] = ["构建", "编译"],
-        ["构建"] = ["打包", "编译"],
-        ["编译"] = ["构建", "打包"],
-        ["登录"] = ["登陆", "登入"],
-        ["登陆"] = ["登录", "登入"],
-        ["登入"] = ["登录", "登陆"],
-        ["账号"] = ["帐号", "账户"],
-        ["帐号"] = ["账号", "账户"],
-        ["配置"] = ["设置"],
-        ["设置"] = ["配置"],
-        ["报错"] = ["出错", "异常", "失败"],
-        ["出错"] = ["报错", "异常"],
-        ["异常"] = ["报错", "出错"],
-        ["失败"] = ["报错", "出错"],
-        ["崩溃"] = ["闪退"],
-        ["闪退"] = ["崩溃"],
-        ["卡顿"] = ["卡住", "卡死"],
-        ["文档"] = ["说明", "手册"],
-        ["命令"] = ["指令"],
-        ["端口"] = ["port"],
-        ["端口占用"] = ["端口被占用"],
-        ["密钥"] = ["key"],
-        ["乱码"] = ["编码"],
-        ["编码"] = ["乱码"],
-    };
+    // Synonyms live in KnowledgeTuning (built-in defaults + user-editable
+    // ~/.haoyue/knowledge/synonyms.txt, hot-reloaded). Weights and fuzzy
+    // thresholds are named constants there too.
 
     public static string Normalize(string? text)
     {
@@ -93,6 +62,7 @@ public static class KnowledgeSearchRanker
         if (normalized.Length == 0) return [];
 
         var rawTokens = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var synonyms = KnowledgeTuning.Synonyms;
         var tokens = new List<KnowledgeQueryToken>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
@@ -103,7 +73,7 @@ public static class KnowledgeSearchRanker
 
             // The raw word plus its synonyms are matched as whole strings…
             var words = new List<string> { raw };
-            if (Synonyms.TryGetValue(raw, out var synonyms)) words.AddRange(synonyms);
+            if (synonyms.TryGetValue(raw, out var rawSynonyms)) words.AddRange(rawSynonyms);
 
             foreach (var word in words)
             {
@@ -122,7 +92,7 @@ public static class KnowledgeSearchRanker
                     {
                         var gram = word.Substring(i, 2);
                         if (seen.Add("e:" + gram)) exact.Add(gram);
-                        if (Synonyms.TryGetValue(gram, out var gramSynonyms))
+                        if (synonyms.TryGetValue(gram, out var gramSynonyms))
                         {
                             foreach (var synonym in gramSynonyms)
                                 if (seen.Add("e:" + synonym)) exact.Add(synonym);
@@ -158,7 +128,9 @@ public static class KnowledgeSearchRanker
                 if (!inContent && content.Contains(variant, StringComparison.Ordinal)) inContent = true;
                 if (!inTags && tags.Length > 0 && tags.Contains(variant, StringComparison.Ordinal)) inTags = true;
             }
-            var tokenScore = (inTitle ? 3 : 0) + (inContent ? 2 : 0) + (inTags ? 2 : 0);
+            var tokenScore = (inTitle ? KnowledgeTuning.TitleWeight : 0)
+                             + (inContent ? KnowledgeTuning.ContentWeight : 0)
+                             + (inTags ? KnowledgeTuning.TagsWeight : 0);
             if (tokenScore > 0)
             {
                 score += tokenScore;
@@ -234,7 +206,10 @@ public static class KnowledgeSearchRanker
     public static bool FuzzyContains(string text, string pattern, int maxDistance = -1)
     {
         if (pattern.Length == 0 || text.Length == 0) return false;
-        if (maxDistance < 0) maxDistance = pattern.Length <= 6 ? 1 : 2;
+        if (maxDistance < 0)
+            maxDistance = pattern.Length <= KnowledgeTuning.FuzzyShortWordLength
+                ? KnowledgeTuning.FuzzyShortWordDistance
+                : KnowledgeTuning.FuzzyLongWordDistance;
         if (maxDistance == 0 || text.Contains(pattern, StringComparison.Ordinal)) return true;
 
         var m = pattern.Length;

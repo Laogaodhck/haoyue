@@ -44,6 +44,7 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
     private readonly CircuitBreaker _sharedBreaker;
     private readonly LocalModelCache? _sharedLocalModels;
     private readonly ScheduleTurnRunner _turnRunner;
+    private readonly ScheduleWebhookNotifier _webhook;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> _running = new();
     private readonly ConcurrentDictionary<string, string> _upcomingNotified = new();
@@ -59,7 +60,8 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         CircuitBreaker sharedBreaker,
         ScheduleTurnRunner? turnRunner = null,
         TimeProvider? clock = null,
-        LocalModelCache? sharedLocalModels = null)
+        LocalModelCache? sharedLocalModels = null,
+        ScheduleWebhookNotifier? webhook = null)
     {
         _store = store;
         _runtime = runtime;
@@ -68,6 +70,7 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         _sharedBreaker = sharedBreaker;
         _sharedLocalModels = sharedLocalModels;
         _turnRunner = turnRunner ?? RunIsolatedTurnAsync;
+        _webhook = webhook ?? new ScheduleWebhookNotifier();
         if (clock is not null) _clock = clock;
     }
 
@@ -208,6 +211,13 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         var updated = _store.RecordRun(id, status, error, output);
         _runtime.Events.Publish(new ScheduledTaskCompletedEvent(
             updated.Id, updated.DisplayName, sessionId, status, updated.LastError, updated.LastOutput));
+
+        // Fire-and-forget webhook: the scheduler must never wait on (or fail with)
+        // an external endpoint; CancellationToken.None because runCt may already be
+        // cancelled exactly when a timeout notification matters most.
+        var webhookUrl = _runtime.ConfigStore.Config.Agent.ScheduleWebhookUrl;
+        if (!string.IsNullOrWhiteSpace(webhookUrl))
+            _ = Task.Run(() => _webhook.NotifyAsync(webhookUrl, updated, sessionId, CancellationToken.None));
         return updated;
     }
 
@@ -251,6 +261,7 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         _lifetime.Dispose();
         _dispose.Dispose();
         _gate.Dispose();
+        _webhook.Dispose();
         return ValueTask.CompletedTask;
     }
 }

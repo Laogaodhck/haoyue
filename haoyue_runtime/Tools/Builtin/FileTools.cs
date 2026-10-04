@@ -67,12 +67,14 @@ public abstract class BuiltinTool(IPromptProvider prompts) : ITool
 
     protected static int? GetInt(JsonObject args, string name)
     {
-        // JSON numbers arrive element-backed (model path) or CLR-backed Int64
-        // (in-memory callers); JsonValue only converts the former to double.
+        // JSON numbers arrive element-backed (model path) or CLR-backed Int32/Int64
+        // (in-memory callers); JsonValue only converts to the exact boxed type, so
+        // try each integer shape and fall back to parsing the JSON text.
         if (args[name] is not JsonValue value) return null;
+        if (value.TryGetValue<int>(out var intValue)) return intValue;
         if (value.TryGetValue<double>(out var doubleValue)) return (int)doubleValue;
         if (value.TryGetValue<long>(out var longValue)) return (int)longValue;
-        return null;
+        return int.TryParse(value.ToString(), out var parsed) ? parsed : null;
     }
 
     protected static bool GetBool(JsonObject args, string name) =>

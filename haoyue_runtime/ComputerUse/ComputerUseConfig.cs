@@ -12,10 +12,17 @@ public sealed class ComputerUseConfig
     /// <summary>Driver selection: "auto", "windows", "linux", "mac", or "vision". Default "auto".</summary>
     public string Driver { get; set; } = "auto";
 
-    /// <summary>Whether dangerous/irreversible operations trigger an interactive confirmation.</summary>
-    public bool RequireConfirmation { get; set; } = true;
+    /// <summary>Whether computer_exec (PowerShell / cmd / Python) is registered alongside the Computer Use tools.</summary>
+    public bool ShellEnabled { get; set; } = true;
 
-    /// <summary>Maximum computer action steps permitted in a single turn.</summary>
+    /// <summary>Python executable for computer_exec; empty auto-detects python.exe / py.exe on PATH.</summary>
+    public string PythonPath { get; set; } = "";
+
+    /// <summary>
+    /// Burst limit of computer actions before the tool asks the agent to report progress.
+    /// The window resets automatically after a pause, so long interactive sessions keep working.
+    /// 0 or negative disables the limit.
+    /// </summary>
     public int MaxStepsPerTurn { get; set; } = 30;
 
     /// <summary>Delay in milliseconds between successive atomic actions to allow UI stabilization.</summary>

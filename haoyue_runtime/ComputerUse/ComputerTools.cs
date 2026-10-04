@@ -136,8 +136,26 @@ public static class ScreenCoordinateTransformer
 }
 
 /// <summary>
+/// Converts model-facing scroll semantics (wheel notches, positive = content moves
+/// down/right) into the driver-boundary convention (Windows/X11 wheel delta,
+/// 120 per notch, positive = up/left).
+/// </summary>
+public static class ScrollNormalizer
+{
+    public const int WheelDelta = 120;
+    public const int MaxNotches = 50;
+
+    public static (int driverDeltaX, int driverDeltaY) FromModelDeltas(int modelDeltaX, int modelDeltaY) =>
+    (
+        Math.Clamp(modelDeltaX, -MaxNotches, MaxNotches) * WheelDelta,
+        -Math.Clamp(modelDeltaY, -MaxNotches, MaxNotches) * WheelDelta
+    );
+}
+
+/// <summary>
 /// Unified computer operation tool supporting clicks, cursor movement, typing, key combinations,
-/// scrolling, and screen capture. Compatible with standard AI computer use conventions.
+/// scrolling, clipboard, app launch, element-based clicking, and screen capture.
+/// Compatible with standard AI computer use conventions.
 /// </summary>
 public sealed class ComputerTool(
     IPromptProvider prompts,
@@ -149,14 +167,24 @@ public sealed class ComputerTool(
     public override bool Mutating => true;
     public override bool RequiresWorkspace => false;
 
+    private const int MaxWaitMs = 15000;
+    private static readonly TimeSpan StepWindowIdleReset = TimeSpan.FromMinutes(2);
+
+    private readonly Lock _stepGate = new();
+    private DateTimeOffset _stepWindowStart = DateTimeOffset.MinValue;
+    private int _stepsThisWindow;
+
     public override JsonObject ParameterSchema => ToolSchema.Object(
-        ("action", ToolSchema.String("Action: 'screenshot', 'left_click', 'right_click', 'middle_click', 'double_click', 'mouse_move', 'type', 'key', 'scroll', 'focus_window', 'list_windows'"), true),
-        ("coordinate", ToolSchema.Array("Coordinate pair [x, y] to click or move to", ToolSchema.Integer("pixel value")), false),
+        ("action", ToolSchema.String("Action: 'screenshot', 'left_click', 'right_click', 'middle_click', 'double_click', 'triple_click', 'element_click', 'drag', 'mouse_move', 'cursor_position', 'type', 'key', 'scroll', 'wait', 'clipboard_get', 'clipboard_set', 'open', 'focus_window', 'list_windows'"), true),
+        ("coordinate", ToolSchema.Array("Coordinate pair [x, y]: click position, move target, drag start, or scroll anchor (pixel coordinates of the most recent screenshot)", ToolSchema.Integer("pixel value")), false),
+        ("destination", ToolSchema.Array("End coordinate pair [x, y] for drag", ToolSchema.Integer("pixel value")), false),
         ("x", ToolSchema.Integer("X coordinate (alternative to coordinate array)"), false),
         ("y", ToolSchema.Integer("Y coordinate (alternative to coordinate array)"), false),
-        ("text", ToolSchema.String("Text to type, key combo to press, or window title/id to focus"), false),
-        ("delta_x", ToolSchema.Integer("Horizontal scroll delta"), false),
-        ("delta_y", ToolSchema.Integer("Vertical scroll delta"), false),
+        ("text", ToolSchema.String("Text to type, key combo to press, clipboard content (clipboard_set), target to open (app name / file / URL), or window title to focus"), false),
+        ("element_id", ToolSchema.String("Element Id from a previous computer_inspect result (element_click)"), false),
+        ("delta_x", ToolSchema.Integer("Horizontal scroll in wheel notches (positive = right)"), false),
+        ("delta_y", ToolSchema.Integer("Vertical scroll in wheel notches (positive = scroll down)"), false),
+        ("duration_ms", ToolSchema.Integer("Milliseconds to wait (wait action, max 15000)"), false),
         ("auto_screenshot", ToolSchema.Boolean("Whether to capture and return screenshot after the action (default false)"), false));
 
     public override async Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
@@ -167,10 +195,22 @@ public sealed class ComputerTool(
             return ToolResult.Fail("The 'action' parameter is required.");
         }
 
+        if (!TryAcquireStep(config.MaxStepsPerTurn, out var stepsUsed))
+        {
+            return ToolResult.Fail(
+                $"Computer step budget exhausted: {stepsUsed} actions in this burst (limit {config.MaxStepsPerTurn}). " +
+                "Report progress to the user before continuing; the budget resets after a pause.");
+        }
+
         var (x, y) = ResolveCoordinates(arguments);
+        var (toX, toY) = arguments["destination"] is JsonArray dest && dest.Count >= 2
+            ? (ReadIntNode(dest[0]), ReadIntNode(dest[1]))
+            : (null, null);
         var text = GetString(arguments, "text") ?? "";
+        var elementId = GetString(arguments, "element_id");
         var deltaX = ReadIntNode(arguments["delta_x"]) ?? 0;
         var deltaY = ReadIntNode(arguments["delta_y"]) ?? 0;
+        var durationMs = ReadIntNode(arguments["duration_ms"]) ?? 0;
         var autoScreenshot = arguments.ContainsKey("auto_screenshot") && GetBool(arguments, "auto_screenshot");
 
         var metrics = driver.ScreenCapture.GetScreenMetrics();
@@ -181,6 +221,12 @@ public sealed class ComputerTool(
             var (physX, physY) = ScreenCoordinateTransformer.ToPhysicalCoordinates(x.Value, y.Value, lastCapture, metrics);
             x = physX;
             y = physY;
+        }
+        if (toX.HasValue && toY.HasValue)
+        {
+            var (physX, physY) = ScreenCoordinateTransformer.ToPhysicalCoordinates(toX.Value, toY.Value, lastCapture, metrics);
+            toX = physX;
+            toY = physY;
         }
 
         ActionResult result;
@@ -211,9 +257,42 @@ public sealed class ComputerTool(
                 result = await driver.ClickAsync(x.Value, y.Value, MouseButton.Left, 2, ct).ConfigureAwait(false);
                 break;
 
+            case "triple_click":
+                if (!x.HasValue || !y.HasValue) return ToolResult.Fail("Triple click requires coordinates [x, y].");
+                result = await driver.ClickAsync(x.Value, y.Value, MouseButton.Left, 3, ct).ConfigureAwait(false);
+                break;
+
+            case "element_click" or "click_element":
+            {
+                if (string.IsNullOrWhiteSpace(elementId))
+                    return ToolResult.Fail("Element click requires 'element_id' from a previous computer_inspect result.");
+                var element = await driver.FindElementAsync(elementId, ct).ConfigureAwait(false);
+                if (element is null)
+                    return ToolResult.Fail($"Element '{elementId}' not found (stale hierarchy or unsupported driver). Run computer_inspect first, then use an element Id.");
+                result = await driver.ClickAsync(element.CenterX, element.CenterY, MouseButton.Left, 1, ct).ConfigureAwait(false);
+                if (result.Success)
+                {
+                    var label = string.IsNullOrWhiteSpace(element.Name) ? "(unnamed)" : element.Name;
+                    result = result with { Message = $"{result.Message} — element [{element.ControlType}] \"{label}\"" };
+                }
+                break;
+            }
+
+            case "drag":
+            {
+                if (!x.HasValue || !y.HasValue || !toX.HasValue || !toY.HasValue)
+                    return ToolResult.Fail("Drag requires 'coordinate' [x1, y1] (start) and 'destination' [x2, y2] (end).");
+                result = await driver.DragAsync(x.Value, y.Value, toX.Value, toY.Value, ct).ConfigureAwait(false);
+                break;
+            }
+
             case "mouse_move" or "move":
                 if (!x.HasValue || !y.HasValue) return ToolResult.Fail("Mouse move requires coordinates [x, y].");
                 result = await driver.MoveMouseAsync(x.Value, y.Value, ct).ConfigureAwait(false);
+                break;
+
+            case "cursor_position":
+                result = await driver.GetCursorPositionAsync(ct).ConfigureAwait(false);
                 break;
 
             case "type":
@@ -227,13 +306,57 @@ public sealed class ComputerTool(
                 break;
 
             case "scroll":
-                result = await driver.ScrollAsync(x ?? 0, y ?? 0, deltaX, deltaY, ct).ConfigureAwait(false);
+            {
+                var (driverX, driverY) = ScrollNormalizer.FromModelDeltas(deltaX, deltaY);
+                result = await driver.ScrollAsync(x ?? -1, y ?? -1, driverX, driverY, ct).ConfigureAwait(false);
+                if (result.Success)
+                {
+                    var dir = deltaY != 0 ? (deltaY > 0 ? "down" : "up") : deltaX > 0 ? "right" : "left";
+                    result = result with { Message = $"Scrolled {Math.Abs(deltaY != 0 ? deltaY : deltaX)} notches {dir}" };
+                }
+                break;
+            }
+
+            case "wait":
+            {
+                var ms = Math.Clamp(durationMs, 0, MaxWaitMs);
+                if (ms == 0) return ToolResult.Fail("Wait requires 'duration_ms' (1-15000).");
+                await Task.Delay(ms, ct).ConfigureAwait(false);
+                result = ActionResult.Ok($"Waited {ms} ms", "wait");
+                break;
+            }
+
+            case "clipboard_get":
+            {
+                if (driver.Clipboard is null) return ToolResult.Fail("Clipboard is not supported by this driver.");
+                var clip = await driver.Clipboard.GetTextAsync(ct).ConfigureAwait(false);
+                result = clip is null
+                    ? ActionResult.Failed("Clipboard is empty or unreadable.", "clipboard_get")
+                    : ActionResult.Ok(clip.Length <= 2000
+                        ? clip
+                        : $"{clip[..2000]}\n…(truncated, {clip.Length} characters total)", "clipboard_get");
+                break;
+            }
+
+            case "clipboard_set":
+            {
+                if (string.IsNullOrEmpty(text)) return ToolResult.Fail("Clipboard set requires non-empty 'text'.");
+                if (driver.Clipboard is null)
+                    result = ActionResult.Failed("Clipboard is not supported by this driver.", "clipboard_set");
+                else
+                    result = await driver.Clipboard.SetTextAsync(text, ct).ConfigureAwait(false);
+                break;
+            }
+
+            case "open" or "launch":
+                if (string.IsNullOrWhiteSpace(text)) return ToolResult.Fail("Open requires 'text' naming the app, file, or URL to launch.");
+                result = await driver.LaunchAppAsync(text, ct).ConfigureAwait(false);
                 break;
 
             case "focus_window":
                 if (string.IsNullOrWhiteSpace(text)) return ToolResult.Fail("Focus window action requires non-empty 'text' specifying window title or ID.");
                 var focused = await driver.WindowManager.FocusWindowAsync(text, ct).ConfigureAwait(false);
-                result = focused 
+                result = focused
                     ? ActionResult.Ok($"Focused window matching '{text}'", "focus_window", target: text)
                     : ActionResult.Failed($"Could not find or focus window matching '{text}'", "focus_window");
                 break;
@@ -244,16 +367,17 @@ public sealed class ComputerTool(
                 winSb.AppendLine($"Found {windows.Count} open windows:");
                 foreach (var w in windows)
                 {
-                    winSb.AppendLine($"  - [{(w.IsActive ? "ACTIVE" : "WINDOW")}] \"{w.Title}\" ({w.Width}x{w.Height} at {w.X},{w.Y}) Id:{w.Id}");
+                    var proc = string.IsNullOrWhiteSpace(w.ProcessName) ? "" : $" [{w.ProcessName}]";
+                    winSb.AppendLine($"  - [{(w.IsActive ? "ACTIVE" : "WINDOW")}] \"{w.Title}\"{proc} ({w.Width}x{w.Height} at {w.X},{w.Y}) Id:{w.Id}");
                 }
                 result = ActionResult.Ok(winSb.ToString().TrimEnd(), "list_windows");
                 break;
 
             default:
-                return ToolResult.Fail($"Unsupported action '{rawAction}'. Supported: screenshot, left_click, right_click, middle_click, double_click, mouse_move, type, key, scroll, focus_window, list_windows.");
+                return ToolResult.Fail($"Unsupported action '{rawAction}'. Supported: screenshot, left_click, right_click, middle_click, double_click, triple_click, element_click, drag, mouse_move, cursor_position, type, key, scroll, wait, clipboard_get, clipboard_set, open, focus_window, list_windows.");
         }
 
-        if (config.ActionDelayMs > 0 && rawAction != "screenshot")
+        if (config.ActionDelayMs > 0 && rawAction != "screenshot" && rawAction != "wait")
         {
             await Task.Delay(config.ActionDelayMs, ct).ConfigureAwait(false);
         }
@@ -285,7 +409,7 @@ public sealed class ComputerTool(
             Action: rawAction,
             X: x,
             Y: y,
-            Target: !string.IsNullOrEmpty(text) ? text : null,
+            Target: !string.IsNullOrEmpty(text) ? text : elementId,
             Success: result.Success,
             Error: result.Success ? null : result.Message,
             Base64Screenshot: base64));
@@ -302,12 +426,47 @@ public sealed class ComputerTool(
         }
 
         var message = result.Message ?? $"Executed {rawAction}";
+
+        // For cursor_position, also express the position in the screenshot's pixel
+        // space so the model can calibrate its coordinate frame.
+        if (rawAction == "cursor_position" && result.Success && result.CoordinateX.HasValue && result.CoordinateY.HasValue)
+        {
+            var originX = lastCapture?.OriginX ?? metrics.OriginX;
+            var originY = lastCapture?.OriginY ?? metrics.OriginY;
+            var physW = lastCapture?.EffectivePhysicalWidth ?? metrics.PhysicalWidth;
+            var physH = lastCapture?.EffectivePhysicalHeight ?? metrics.PhysicalHeight;
+            if (lastCapture is not null && lastCapture.Width > 0 && physW > 0 && physH > 0)
+            {
+                var modelX = (int)Math.Round((result.CoordinateX.Value - originX) * lastCapture.Width / (double)physW);
+                var modelY = (int)Math.Round((result.CoordinateY.Value - originY) * lastCapture.Height / (double)physH);
+                message += $"\n(≈ ({modelX}, {modelY}) in the most recent screenshot's pixel space)";
+            }
+        }
+
         if (images is not null)
         {
             message += "\n(Latest screen state captured and attached)";
         }
 
         return ToolResult.Ok(message, images, $"Computer: {rawAction}");
+    }
+
+    // Burst guard: allows MaxStepsPerTurn actions within a window that resets after
+    // an idle pause, so long interactive sessions are not cut off but runaway loops stop.
+    private bool TryAcquireStep(int maxSteps, out int stepsUsed)
+    {
+        lock (_stepGate)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (now - _stepWindowStart > StepWindowIdleReset)
+            {
+                _stepWindowStart = now;
+                _stepsThisWindow = 0;
+            }
+            _stepsThisWindow++;
+            stepsUsed = _stepsThisWindow;
+            return maxSteps <= 0 || _stepsThisWindow <= maxSteps;
+        }
     }
 
     private static (int? x, int? y) ResolveCoordinates(JsonObject args)

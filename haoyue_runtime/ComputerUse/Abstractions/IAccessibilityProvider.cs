@@ -12,4 +12,11 @@ using System.Threading.Tasks;
 public interface IAccessibilityProvider
 {
     Task<UiHierarchyResult> GetVisualElementsAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Looks up an element from the most recent hierarchy by Id (exact, case-insensitive)
+    /// or Name (contains, case-insensitive). Returns null when unsupported or stale.
+    /// </summary>
+    Task<UiElementInfo?> FindElementAsync(string idOrName, CancellationToken ct) =>
+        Task.FromResult<UiElementInfo?>(null);
 }

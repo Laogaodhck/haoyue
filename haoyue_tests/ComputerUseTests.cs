@@ -34,7 +34,6 @@ public sealed class ComputerUseTests : IAsyncDisposable
         Assert.NotNull(config.ComputerUse);
         Assert.False(config.ComputerUse.Enabled);
         Assert.Equal("auto", config.ComputerUse.Driver);
-        Assert.True(config.ComputerUse.RequireConfirmation);
         Assert.Equal(30, config.ComputerUse.MaxStepsPerTurn);
     }
 
@@ -65,6 +64,22 @@ public sealed class ComputerUseTests : IAsyncDisposable
 
         Assert.NotNull(runtime.Tools.Resolve("computer"));
         Assert.NotNull(runtime.Tools.Resolve("computer_inspect"));
+        Assert.NotNull(runtime.Tools.Resolve("computer_exec"));
+    }
+
+    [Fact]
+    public void Runtime_ComputerExecDisabled_RegistersNoExecTool()
+    {
+        var configPath = Path.Combine(_tempDir, "config_noexec.json");
+        var statePath = Path.Combine(_tempDir, "state_noexec.json");
+        var store = new ConfigStore(configPath, statePath);
+        store.Config.ComputerUse.Enabled = true;
+        store.Config.ComputerUse.ShellEnabled = false;
+
+        using var runtime = HaoyueRuntime.Create(_tempDir, store);
+
+        Assert.NotNull(runtime.Tools.Resolve("computer"));
+        Assert.Null(runtime.Tools.Resolve("computer_exec"));
     }
 
 
@@ -281,6 +296,157 @@ public sealed class ComputerUseTests : IAsyncDisposable
     }
 
     [Fact]
+    public void ScrollNormalizer_ConvertsNotchesToWheelDelta_WithDownPositiveSemantics()
+    {
+        // Model: +3 notches down → driver: -360 (positive = up convention)
+        var (x, y) = ScrollNormalizer.FromModelDeltas(0, 3);
+        Assert.Equal(0, x);
+        Assert.Equal(-360, y);
+
+        // Model: -2 notches (up) → driver: +240
+        (_, y) = ScrollNormalizer.FromModelDeltas(0, -2);
+        Assert.Equal(240, y);
+
+        // Horizontal: positive = right, no flip
+        (x, _) = ScrollNormalizer.FromModelDeltas(2, 0);
+        Assert.Equal(240, x);
+
+        // Clamped to ±50 notches
+        (x, y) = ScrollNormalizer.FromModelDeltas(999, -999);
+        Assert.Equal(50 * ScrollNormalizer.WheelDelta, x);
+        Assert.Equal(50 * ScrollNormalizer.WheelDelta, y);
+    }
+
+    [Fact]
+    public async Task ComputerTool_Scroll_PassesNormalizedDeltasAndSkipsAnchorWithoutCoordinates()
+    {
+        var prompts = new MockPromptProvider();
+        var driver = new MockWorkingDriver();
+        var tool = new ComputerTool(prompts, driver, new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["action"] = "scroll",
+            ["delta_y"] = 2
+        }, context, CancellationToken.None);
+
+        Assert.True(res.Success);
+        Assert.Equal(-240, driver.LastScrollDeltaY);
+        Assert.Equal(-1, driver.LastScrollAnchorX); // no coordinate → no cursor move
+
+        await tool.ExecuteAsync(new JsonObject
+        {
+            ["action"] = "scroll",
+            ["delta_y"] = -1,
+            ["coordinate"] = new JsonArray { 500, 400 }
+        }, context, CancellationToken.None);
+        Assert.Equal(120, driver.LastScrollDeltaY);
+        Assert.Equal(500, driver.LastScrollAnchorX);
+        Assert.Equal(400, driver.LastScrollAnchorY);
+    }
+
+    [Fact]
+    public async Task ComputerTool_ElementClick_UsesElementCenter()
+    {
+        var prompts = new MockPromptProvider();
+        var driver = new MockWorkingDriver();
+        var tool = new ComputerTool(prompts, driver, new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["action"] = "element_click",
+            ["element_id"] = "btn_submit"
+        }, context, CancellationToken.None);
+
+        Assert.True(res.Success);
+        // Center of (100, 200, 80x30)
+        Assert.Equal(140, driver.LastClickX);
+        Assert.Equal(215, driver.LastClickY);
+        Assert.Contains("SubmitButton", res.Output);
+    }
+
+    [Fact]
+    public async Task ComputerTool_ElementClick_WithoutIdFails()
+    {
+        var prompts = new MockPromptProvider();
+        var driver = new MockWorkingDriver();
+        var tool = new ComputerTool(prompts, driver, new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["action"] = "element_click"
+        }, context, CancellationToken.None);
+
+        Assert.False(res.Success);
+        Assert.Contains("element_id", res.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ComputerTool_Wait_SucceedsWithinClamp()
+    {
+        var prompts = new MockPromptProvider();
+        var driver = new MockWorkingDriver();
+        var tool = new ComputerTool(prompts, driver, new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["action"] = "wait",
+            ["duration_ms"] = 30
+        }, context, CancellationToken.None);
+
+        Assert.True(res.Success);
+        Assert.Contains("Waited 30 ms", res.Output);
+
+        var noArg = await tool.ExecuteAsync(new JsonObject { ["action"] = "wait" }, context, CancellationToken.None);
+        Assert.False(noArg.Success);
+    }
+
+    [Fact]
+    public async Task ComputerTool_StepBudget_StopsRunawayLoopAndRecoversAfterReset()
+    {
+        var prompts = new MockPromptProvider();
+        var driver = new MockWorkingDriver();
+        var tool = new ComputerTool(prompts, driver, new ComputerUseConfig { MaxStepsPerTurn = 2 });
+        var context = CreateToolContext();
+
+        var args = new JsonObject { ["action"] = "list_windows" };
+        Assert.True((await tool.ExecuteAsync(args, context, CancellationToken.None)).Success);
+        Assert.True((await tool.ExecuteAsync(args, context, CancellationToken.None)).Success);
+
+        var third = await tool.ExecuteAsync(args, context, CancellationToken.None);
+        Assert.False(third.Success);
+        Assert.Contains("budget", third.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ComputerTool_Clipboard_RoundTripsThroughDriver()
+    {
+        var prompts = new MockPromptProvider();
+        var driver = new MockWorkingDriver();
+        var tool = new ComputerTool(prompts, driver, new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var set = await tool.ExecuteAsync(new JsonObject
+        {
+            ["action"] = "clipboard_set",
+            ["text"] = "记住 pnpm"
+        }, context, CancellationToken.None);
+        Assert.True(set.Success);
+        Assert.Equal("记住 pnpm", driver.ClipboardText);
+
+        var get = await tool.ExecuteAsync(new JsonObject
+        {
+            ["action"] = "clipboard_get"
+        }, context, CancellationToken.None);
+        Assert.True(get.Success);
+        Assert.Contains("记住 pnpm", get.Output);
+    }
+
+    [Fact]
     public async Task WindowsDriver_DpiAwarenessAndScreenMetrics_AreValid()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -294,6 +460,114 @@ public sealed class ComputerUseTests : IAsyncDisposable
         Assert.True(metrics.ScaleFactor > 0);
         Assert.True(metrics.LogicalWidth > 0);
         Assert.True(metrics.LogicalHeight > 0);
+    }
+
+    [Fact]
+    public async Task ComputerExec_Cmd_EchoesAsciiAndCjk()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "cmd",
+            ["command"] = "echo hello && echo 中文输出正常"
+        }, context, CancellationToken.None);
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains("hello", res.Output);
+        Assert.Contains("中文输出正常", res.Output);
+    }
+
+    [Fact]
+    public async Task ComputerExec_PowerShell_RunsScriptAndPreservesCjk()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "powershell",
+            ["command"] = "Write-Output ('ps-' + 'ok'); Write-Output '中文测试'"
+        }, context, CancellationToken.None);
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains("ps-ok", res.Output);
+        Assert.Contains("中文测试", res.Output);
+    }
+
+    [Fact]
+    public async Task ComputerExec_Python_ExecutesCode()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "python",
+            ["command"] = "print(7 * 6)"
+        }, context, CancellationToken.None);
+
+        if (res.Output.Contains("Python not found")) return; // not installed on this machine
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains("42", res.Output);
+    }
+
+    [Fact]
+    public async Task ComputerExec_Cmd_TimesOutAndReports()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "cmd",
+            ["command"] = "ping -n 6 127.0.0.1 >nul",
+            ["timeout_seconds"] = 1
+        }, context, CancellationToken.None);
+
+        Assert.False(res.Success);
+        Assert.Contains("timed out", res.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ComputerExec_Cmd_HonorsCwd()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "cmd",
+            ["command"] = "cd",
+            ["cwd"] = _tempDir
+        }, context, CancellationToken.None);
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains(_tempDir, res.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ComputerExec_RejectsUnknownKindAndEmptyCommand()
+    {
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var badKind = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "fish",
+            ["command"] = "echo x"
+        }, context, CancellationToken.None);
+        Assert.False(badKind.Success);
+
+        var noCommand = await tool.ExecuteAsync(new JsonObject { ["kind"] = "cmd" }, context, CancellationToken.None);
+        Assert.False(noCommand.Success);
     }
 
     private ToolContext CreateToolContext()
@@ -354,16 +628,31 @@ public sealed class ComputerUseTests : IAsyncDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class MockWorkingDriver : IComputerDriver, IScreenCapture, IInputController, IWindowManager, IAccessibilityProvider
+    private sealed class MockWorkingDriver : IComputerDriver, IScreenCapture, IInputController, IWindowManager, IAccessibilityProvider, IClipboardProvider
     {
         public string PlatformName => "MockWorking";
         public int LastClickX { get; private set; }
         public int LastClickY { get; private set; }
+        public int LastScrollAnchorX { get; private set; }
+        public int LastScrollAnchorY { get; private set; }
+        public int LastScrollDeltaX { get; private set; }
+        public int LastScrollDeltaY { get; private set; }
+        public string? ClipboardText { get; private set; }
 
         public IScreenCapture ScreenCapture => this;
         public IInputController InputController => this;
         public IWindowManager WindowManager => this;
         public IAccessibilityProvider AccessibilityProvider => this;
+        public IClipboardProvider? Clipboard => this;
+
+        public Task<string?> GetTextAsync(CancellationToken ct) =>
+            Task.FromResult(ClipboardText);
+
+        public Task<ActionResult> SetTextAsync(string text, CancellationToken ct)
+        {
+            ClipboardText = text;
+            return Task.FromResult(ActionResult.Ok($"Clipboard set ({text.Length} characters)", "clipboard_set"));
+        }
 
         public ScreenCapture? LastCapture { get; set; }
         public ScreenMetrics Metrics { get; set; } = ScreenMetrics.Default;
@@ -384,6 +673,10 @@ public sealed class ComputerUseTests : IAsyncDisposable
             return Task.FromResult(UiHierarchyResult.Ok("Mock Active Window", elements));
         }
 
+        public Task<UiElementInfo?> FindElementAsync(string idOrName, CancellationToken ct) =>
+            Task.FromResult<UiElementInfo?>(
+                idOrName == "btn_submit" ? new UiElementInfo("btn_submit", "SubmitButton", "Button", 100, 200, 80, 30) : null);
+
         public Task<ActionResult> ClickAsync(int x, int y, MouseButton button, int clickCount, CancellationToken ct)
         {
             LastClickX = x;
@@ -400,8 +693,14 @@ public sealed class ComputerUseTests : IAsyncDisposable
         public Task<ActionResult> SendKeyAsync(string keyCombo, CancellationToken ct) =>
             Task.FromResult(ActionResult.Ok($"Sent {keyCombo}", "key", target: keyCombo));
 
-        public Task<ActionResult> ScrollAsync(int x, int y, int deltaX, int deltaY, CancellationToken ct) =>
-            Task.FromResult(ActionResult.Ok($"Scrolled {deltaY}", "scroll", x, y));
+        public Task<ActionResult> ScrollAsync(int x, int y, int deltaX, int deltaY, CancellationToken ct)
+        {
+            LastScrollAnchorX = x;
+            LastScrollAnchorY = y;
+            LastScrollDeltaX = deltaX;
+            LastScrollDeltaY = deltaY;
+            return Task.FromResult(ActionResult.Ok($"Scrolled {deltaY}", "scroll", x, y));
+        }
 
         public Task<string?> GetActiveWindowTitleAsync(CancellationToken ct) =>
             Task.FromResult<string?>("Mock Active Window");

@@ -43,4 +43,19 @@ public interface IComputerDriver : IAsyncDisposable
 
     Task<ActionResult> ScrollAsync(int x, int y, int deltaX, int deltaY, CancellationToken ct) =>
         InputController.ScrollAsync(x, y, deltaX, deltaY, ct);
+
+    Task<ActionResult> DragAsync(int fromX, int fromY, int toX, int toY, CancellationToken ct) =>
+        InputController.DragAsync(fromX, fromY, toX, toY, ct);
+
+    Task<ActionResult> GetCursorPositionAsync(CancellationToken ct) =>
+        InputController.GetCursorPositionAsync(ct);
+
+    /// <summary>Clipboard access, or null when the platform driver lacks support.</summary>
+    IClipboardProvider? Clipboard => null;
+
+    Task<ActionResult> LaunchAppAsync(string target, CancellationToken ct) =>
+        WindowManager.LaunchAppAsync(target, ct);
+
+    Task<UiElementInfo?> FindElementAsync(string idOrName, CancellationToken ct) =>
+        AccessibilityProvider.FindElementAsync(idOrName, ct);
 }

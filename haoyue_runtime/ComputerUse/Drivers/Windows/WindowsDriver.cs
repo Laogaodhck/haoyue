@@ -9,7 +9,7 @@ namespace Haoyue.Runtime.ComputerUse.Drivers.Windows;
 /// Native Windows driver utilizing Win32 APIs, GDI+, and Window enumeration.
 /// Provides low-overhead screen capture, high-fidelity input injection, and structural UI inspection.
 /// </summary>
-public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputController, IWindowManager, IAccessibilityProvider
+public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputController, IWindowManager, IAccessibilityProvider, IClipboardProvider
 {
     public string PlatformName => "WindowsNative";
 
@@ -17,6 +17,7 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
     public IInputController InputController => this;
     public IWindowManager WindowManager => this;
     public IAccessibilityProvider AccessibilityProvider => this;
+    public IClipboardProvider Clipboard => this;
 
     public DriverCapabilities GetCapabilities() => new(
         CanCapture: true,
@@ -86,8 +87,12 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
 
         try
         {
-            var physW = Win32.GetDeviceCaps(hdc, Win32.DESKTOPHORZRES);
-            var physH = Win32.GetDeviceCaps(hdc, Win32.DESKTOPVERTRES);
+            // Virtual-desktop bounds so multi-monitor setups are captured and addressed
+            // consistently; on a single display this equals the primary monitor.
+            var physW = Win32.GetSystemMetrics(Win32.SM_CXVIRTUALSCREEN);
+            var physH = Win32.GetSystemMetrics(Win32.SM_CYVIRTUALSCREEN);
+            var originX = Win32.GetSystemMetrics(Win32.SM_XVIRTUALSCREEN);
+            var originY = Win32.GetSystemMetrics(Win32.SM_YVIRTUALSCREEN);
             var logPixelsX = Win32.GetDeviceCaps(hdc, Win32.LOGPIXELSX);
 
             if (physW <= 0 || physH <= 0)
@@ -108,8 +113,8 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
                 LogicalWidth: logicalW,
                 LogicalHeight: logicalH,
                 ScaleFactor: scale,
-                OriginX: 0,
-                OriginY: 0);
+                OriginX: originX,
+                OriginY: originY);
         }
         finally
         {
@@ -153,7 +158,7 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
             var hOld = Win32.SelectObject(hdcMem, hBitmap);
             try
             {
-                if (!Win32.BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, Win32.SRCCOPY))
+                if (!Win32.BitBlt(hdcMem, 0, 0, width, height, hdcScreen, metrics.OriginX, metrics.OriginY, Win32.SRCCOPY))
                 {
                     return null;
                 }
@@ -255,9 +260,7 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
             string? windowTitle = null;
             if (fgHwnd != IntPtr.Zero)
             {
-                var sb = new StringBuilder(256);
-                Win32.GetWindowText(fgHwnd, sb, sb.Capacity);
-                windowTitle = sb.ToString();
+                windowTitle = GetWindowTextCrossProcess(fgHwnd);
             }
 
             var elements = new List<UiElementInfo>();
@@ -280,9 +283,7 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
                         var h = childRect.Bottom - childRect.Top;
                         if (w > 0 && h > 0)
                         {
-                            var textSb = new StringBuilder(128);
-                            Win32.GetWindowText(childHwnd, textSb, textSb.Capacity);
-                            var text = textSb.ToString().Trim();
+                            var text = GetWindowTextCrossProcess(childHwnd)?.Trim() ?? "";
 
                             var classSb = new StringBuilder(64);
                             Win32.GetClassName(childHwnd, classSb, classSb.Capacity);
@@ -314,8 +315,78 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
                     Children: childElements));
             }
 
+            CacheHierarchy(elements);
             return UiHierarchyResult.Ok(windowTitle, elements);
         }, ct);
+    }
+
+    // GetWindowText cannot read control text of other processes; WM_GETTEXT with a
+    // hang-protected timeout can.
+    private static string? GetWindowTextCrossProcess(IntPtr hWnd)
+    {
+        try
+        {
+            Win32.SendMessageTimeout(hWnd, Win32.WM_GETTEXTLENGTH, UIntPtr.Zero, null,
+                Win32.SMTO_ABORTIFHUNG, 300, out var lenResult);
+            var len = (int)lenResult;
+            if (len <= 0) return null;
+
+            var sb = new StringBuilder(len + 1);
+            Win32.SendMessageTimeout(hWnd, Win32.WM_GETTEXT, (UIntPtr)(len + 1), sb,
+                Win32.SMTO_ABORTIFHUNG, 300, out _);
+            return sb.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private readonly Lock _hierarchyGate = new();
+    private Dictionary<string, UiElementInfo> _hierarchyIndex = new(StringComparer.OrdinalIgnoreCase);
+    private DateTimeOffset _hierarchyCachedAt = DateTimeOffset.MinValue;
+
+    private static readonly TimeSpan HierarchyCacheTtl = TimeSpan.FromSeconds(120);
+
+    private void CacheHierarchy(IReadOnlyList<UiElementInfo> roots)
+    {
+        var index = new Dictionary<string, UiElementInfo>(StringComparer.OrdinalIgnoreCase);
+        void Add(UiElementInfo el)
+        {
+            index.TryAdd(el.Id, el);
+            if (el.Children is { Count: > 0 })
+                foreach (var child in el.Children) Add(child);
+        }
+        foreach (var root in roots) Add(root);
+
+        lock (_hierarchyGate)
+        {
+            _hierarchyIndex = index;
+            _hierarchyCachedAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    public Task<UiElementInfo?> FindElementAsync(string idOrName, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(idOrName))
+            return Task.FromResult<UiElementInfo?>(null);
+
+        lock (_hierarchyGate)
+        {
+            if (DateTimeOffset.UtcNow - _hierarchyCachedAt > HierarchyCacheTtl)
+                return Task.FromResult<UiElementInfo?>(null);
+
+            if (_hierarchyIndex.TryGetValue(idOrName.Trim(), out var byId))
+                return Task.FromResult<UiElementInfo?>(byId);
+
+            foreach (var el in _hierarchyIndex.Values)
+            {
+                if (!string.IsNullOrWhiteSpace(el.Name) &&
+                    el.Name.Contains(idOrName, StringComparison.OrdinalIgnoreCase))
+                    return Task.FromResult<UiElementInfo?>(el);
+            }
+            return Task.FromResult<UiElementInfo?>(null);
+        }
     }
 
     public async Task<ActionResult> ClickAsync(int x, int y, MouseButton button, int clickCount, CancellationToken ct)
@@ -446,36 +517,54 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
             {
                 ct.ThrowIfCancellationRequested();
 
-                var inputDown = new Win32.INPUT
+                // KEYEVENTF_UNICODE \n rarely produces a line break in real apps;
+                // map control chars to their virtual keys, drop \r (Enter follows).
+                if (ch == '\r') continue;
+                if (ch == '\n')
                 {
-                    type = Win32.INPUT_KEYBOARD,
-                    U = new Win32.InputUnion
+                    SendVk(Win32.VK_RETURN, false);
+                    SendVk(Win32.VK_RETURN, true);
+                    await Task.Delay(15, ct).ConfigureAwait(false);
+                    continue;
+                }
+                if (ch == '\t')
+                {
+                    SendVk(Win32.VK_TAB, false);
+                    SendVk(Win32.VK_TAB, true);
+                    await Task.Delay(15, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                var inputs = new[]
+                {
+                    new Win32.INPUT
                     {
-                        ki = new Win32.KEYBDINPUT
+                        type = Win32.INPUT_KEYBOARD,
+                        U = new Win32.InputUnion
                         {
-                            wScan = ch,
-                            dwFlags = Win32.KEYEVENTF_UNICODE
+                            ki = new Win32.KEYBDINPUT
+                            {
+                                wScan = ch,
+                                dwFlags = Win32.KEYEVENTF_UNICODE
+                            }
+                        }
+                    },
+                    new Win32.INPUT
+                    {
+                        type = Win32.INPUT_KEYBOARD,
+                        U = new Win32.InputUnion
+                        {
+                            ki = new Win32.KEYBDINPUT
+                            {
+                                wScan = ch,
+                                dwFlags = Win32.KEYEVENTF_UNICODE | Win32.KEYEVENTF_KEYUP
+                            }
                         }
                     }
                 };
 
-                var inputUp = new Win32.INPUT
-                {
-                    type = Win32.INPUT_KEYBOARD,
-                    U = new Win32.InputUnion
-                    {
-                        ki = new Win32.KEYBDINPUT
-                        {
-                            wScan = ch,
-                            dwFlags = Win32.KEYEVENTF_UNICODE | Win32.KEYEVENTF_KEYUP
-                        }
-                    }
-                };
-
-                Win32.SendInput(1, [inputDown], Marshal.SizeOf<Win32.INPUT>());
-                await Task.Delay(10, ct).ConfigureAwait(false);
-                Win32.SendInput(1, [inputUp], Marshal.SizeOf<Win32.INPUT>());
-                await Task.Delay(15, ct).ConfigureAwait(false);
+                Win32.SendInput(2, inputs, Marshal.SizeOf<Win32.INPUT>());
+                await Task.Delay(8, ct).ConfigureAwait(false);
             }
 
             return ActionResult.Ok($"Typed {text.Length} characters", "type", target: text);
@@ -600,6 +689,180 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
         }, ct);
     }
 
+    public async Task<ActionResult> DragAsync(int fromX, int fromY, int toX, int toY, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows())
+            return ActionResult.Failed("Drag is only supported on Windows.", "drag");
+
+        return await Task.Run(async () =>
+        {
+            await SmoothMoveCursorAsync(fromX, fromY, ct).ConfigureAwait(false);
+            await Task.Delay(40, ct).ConfigureAwait(false);
+
+            var down = new Win32.INPUT
+            {
+                type = Win32.INPUT_MOUSE,
+                U = new Win32.InputUnion { mi = new Win32.MOUSEINPUT { dwFlags = Win32.MOUSEEVENTF_LEFTDOWN } }
+            };
+            Win32.SendInput(1, [down], Marshal.SizeOf<Win32.INPUT>());
+            await Task.Delay(80, ct).ConfigureAwait(false);
+
+            await SmoothMoveCursorAsync(toX, toY, ct).ConfigureAwait(false);
+            await Task.Delay(60, ct).ConfigureAwait(false);
+
+            var up = new Win32.INPUT
+            {
+                type = Win32.INPUT_MOUSE,
+                U = new Win32.InputUnion { mi = new Win32.MOUSEINPUT { dwFlags = Win32.MOUSEEVENTF_LEFTUP } }
+            };
+            Win32.SendInput(1, [up], Marshal.SizeOf<Win32.INPUT>());
+
+            return ActionResult.Ok($"Dragged from ({fromX}, {fromY}) to ({toX}, {toY})", "drag", toX, toY);
+        }, ct);
+    }
+
+    public Task<ActionResult> GetCursorPositionAsync(CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows())
+            return Task.FromResult(ActionResult.Failed("Cursor position is only supported on Windows.", "cursor_position"));
+
+        return Task.Run(() =>
+        {
+            if (!Win32.GetCursorPos(out var pt))
+                return ActionResult.Failed("Could not read cursor position.", "cursor_position");
+            return ActionResult.Ok($"Cursor at ({pt.X}, {pt.Y})", "cursor_position", pt.X, pt.Y);
+        }, ct);
+    }
+
+    public Task<string?> GetTextAsync(CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows()) return Task.FromResult<string?>(null);
+
+        return Task.Run(() =>
+        {
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                if (Win32.OpenClipboard(IntPtr.Zero))
+                {
+                    try
+                    {
+                        var handle = Win32.GetClipboardData(Win32.CF_UNICODETEXT);
+                        if (handle == IntPtr.Zero) return null;
+
+                        var size = (int)Win32.GlobalSize(handle);
+                        if (size <= 0) return null;
+
+                        var ptr = Win32.GlobalLock(handle);
+                        if (ptr == IntPtr.Zero) return null;
+                        try
+                        {
+                            return Marshal.PtrToStringUni(ptr);
+                        }
+                        finally
+                        {
+                            Win32.GlobalUnlock(handle);
+                        }
+                    }
+                    finally
+                    {
+                        Win32.CloseClipboard();
+                    }
+                }
+
+                Task.Delay(30, ct).Wait(ct);
+            }
+            return null;
+        }, ct);
+    }
+
+    public Task<ActionResult> SetTextAsync(string text, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows())
+            return Task.FromResult(ActionResult.Failed("Clipboard is only supported on Windows.", "clipboard_set"));
+
+        if (text is null)
+            return Task.FromResult(ActionResult.Failed("Clipboard text cannot be null.", "clipboard_set"));
+
+        return Task.Run(() =>
+        {
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                if (Win32.OpenClipboard(IntPtr.Zero))
+                {
+                    try
+                    {
+                        Win32.EmptyClipboard();
+
+                        var bytes = (text.Length + 1) * 2;
+                        var handle = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (nuint)bytes);
+                        if (handle == IntPtr.Zero)
+                            return ActionResult.Failed("Clipboard allocation failed.", "clipboard_set");
+
+                        var ptr = Win32.GlobalLock(handle);
+                        if (ptr == IntPtr.Zero)
+                        {
+                            Win32.GlobalFree(handle);
+                            return ActionResult.Failed("Clipboard lock failed.", "clipboard_set");
+                        }
+
+                        try
+                        {
+                            Marshal.Copy(text.ToCharArray(), 0, ptr, text.Length);
+                            Marshal.WriteInt16(ptr, text.Length * 2, 0);
+                        }
+                        finally
+                        {
+                            Win32.GlobalUnlock(handle);
+                        }
+
+                        // On success the system owns the memory; do not GlobalFree.
+                        if (Win32.SetClipboardData(Win32.CF_UNICODETEXT, handle) == IntPtr.Zero)
+                        {
+                            Win32.GlobalFree(handle);
+                            return ActionResult.Failed("Clipboard write failed.", "clipboard_set");
+                        }
+
+                        return ActionResult.Ok($"Clipboard set ({text.Length} characters)", "clipboard_set");
+                    }
+                    finally
+                    {
+                        Win32.CloseClipboard();
+                    }
+                }
+
+                Task.Delay(30, ct).Wait(ct);
+            }
+
+            return ActionResult.Failed("Clipboard is busy (another process holds it).", "clipboard_set");
+        }, ct);
+    }
+
+    public Task<ActionResult> LaunchAppAsync(string target, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows())
+            return Task.FromResult(ActionResult.Failed("Launching apps is only supported on Windows.", "open"));
+
+        if (string.IsNullOrWhiteSpace(target))
+            return Task.FromResult(ActionResult.Failed("Open action requires a non-empty target.", "open"));
+
+        return Task.Run(() =>
+        {
+            try
+            {
+                using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = target,
+                    UseShellExecute = true
+                });
+                return ActionResult.Ok($"Launched '{target}'", "open", target: target);
+            }
+            catch (Exception ex)
+            {
+                return ActionResult.Failed($"Could not launch '{target}': {ex.Message}", "open");
+            }
+        }, ct);
+    }
+
     private static void SendVk(ushort vk, bool isKeyUp)
     {
         uint flags = 0;
@@ -679,9 +942,7 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
         {
             if (Win32.IsWindowVisible(hWnd))
             {
-                var sb = new StringBuilder(256);
-                Win32.GetWindowText(hWnd, sb, sb.Capacity);
-                var title = sb.ToString();
+                var title = GetWindowTextCrossProcess(hWnd);
                 if (!string.IsNullOrWhiteSpace(title))
                 {
                     Win32.GetWindowRect(hWnd, out var rect);
@@ -692,7 +953,7 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
                         list.Add(new WindowInfo(
                             Id: hWnd.ToString(),
                             Title: title,
-                            ProcessName: string.Empty,
+                            ProcessName: GetProcessName(hWnd) ?? string.Empty,
                             X: rect.Left,
                             Y: rect.Top,
                             Width: width,
@@ -707,26 +968,49 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
         return Task.FromResult<IReadOnlyList<WindowInfo>>(list);
     }
 
+    private static string? GetProcessName(IntPtr hWnd)
+    {
+        try
+        {
+            Win32.GetWindowThreadProcessId(hWnd, out var pid);
+            if (pid == 0) return null;
+
+            var process = Win32.OpenProcess(Win32.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (process == IntPtr.Zero) return null;
+            try
+            {
+                var sb = new StringBuilder(1024);
+                var size = (uint)sb.Capacity;
+                return Win32.QueryFullProcessImageName(process, 0, sb, ref size)
+                    ? Path.GetFileName(sb.ToString())
+                    : null;
+            }
+            finally
+            {
+                Win32.CloseHandle(process);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public Task<bool> FocusWindowAsync(string titleOrId, CancellationToken ct)
     {
         if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(titleOrId))
             return Task.FromResult(false);
 
         if (nint.TryParse(titleOrId, out var parsedHwnd))
-        {
-            var res = Win32.SetForegroundWindow(parsedHwnd);
-            return Task.FromResult(res);
-        }
+            return Task.FromResult(TryFocusWindow(parsedHwnd));
 
         IntPtr foundHwnd = IntPtr.Zero;
         Win32.EnumWindows((hWnd, lParam) =>
         {
             if (Win32.IsWindowVisible(hWnd))
             {
-                var sb = new StringBuilder(256);
-                Win32.GetWindowText(hWnd, sb, sb.Capacity);
-                var title = sb.ToString();
-                if (title.Contains(titleOrId, StringComparison.OrdinalIgnoreCase))
+                var title = GetWindowTextCrossProcess(hWnd);
+                if (title is not null && title.Contains(titleOrId, StringComparison.OrdinalIgnoreCase))
                 {
                     foundHwnd = hWnd;
                     return false;
@@ -735,13 +1019,29 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
             return true;
         }, IntPtr.Zero);
 
-        if (foundHwnd != IntPtr.Zero)
-        {
-            var res = Win32.SetForegroundWindow(foundHwnd);
-            return Task.FromResult(res);
-        }
+        return Task.FromResult(foundHwnd != IntPtr.Zero && TryFocusWindow(foundHwnd));
+    }
 
-        return Task.FromResult(false);
+    private static bool TryFocusWindow(IntPtr hWnd)
+    {
+        if (Win32.SetForegroundWindow(hWnd)) return true;
+
+        // Windows foreground-lock: a background process may be denied focus.
+        // A synthetic ALT tap releases the lock and lets the retry succeed.
+        var altDown = new Win32.INPUT
+        {
+            type = Win32.INPUT_KEYBOARD,
+            U = new Win32.InputUnion { ki = new Win32.KEYBDINPUT { wVk = Win32.VK_MENU } }
+        };
+        var altUp = new Win32.INPUT
+        {
+            type = Win32.INPUT_KEYBOARD,
+            U = new Win32.InputUnion { ki = new Win32.KEYBDINPUT { wVk = Win32.VK_MENU, dwFlags = Win32.KEYEVENTF_KEYUP } }
+        };
+        Win32.SendInput(2, [altDown, altUp], Marshal.SizeOf<Win32.INPUT>());
+        Thread.Sleep(40);
+
+        return Win32.SetForegroundWindow(hWnd);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -750,11 +1050,23 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
     {
         public const int SM_CXSCREEN = 0;
         public const int SM_CYSCREEN = 1;
+        public const int SM_XVIRTUALSCREEN = 76;
+        public const int SM_YVIRTUALSCREEN = 77;
+        public const int SM_CXVIRTUALSCREEN = 78;
+        public const int SM_CYVIRTUALSCREEN = 79;
         public const int SRCCOPY = 0x00CC0020;
         public const int DESKTOPVERTRES = 117;
         public const int DESKTOPHORZRES = 118;
         public const int LOGPIXELSX = 88;
         public const int LOGPIXELSY = 90;
+
+        public const uint WM_GETTEXT = 0x000D;
+        public const uint WM_GETTEXTLENGTH = 0x000E;
+        public const uint SMTO_ABORTIFHUNG = 0x0002;
+
+        public const uint CF_UNICODETEXT = 13;
+        public const uint GMEM_MOVEABLE = 0x0002;
+        public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
         public static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (IntPtr)(-4);
         public static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE = (IntPtr)(-3);
 
@@ -974,5 +1286,43 @@ public sealed class WindowsDriver : IComputerDriver, IScreenCapture, IInputContr
 
         [DllImport("gdi32.dll", ExactSpelling = true)]
         public static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern IntPtr SendMessageTimeout(
+            IntPtr hWnd, uint msg, UIntPtr wParam, StringBuilder? lParam,
+            uint flags, uint timeout, out UIntPtr result);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool OpenClipboard(IntPtr hWndNewOwner);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool CloseClipboard();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool EmptyClipboard();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr GetClipboardData(uint format);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SetClipboardData(uint format, IntPtr hMem);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr GlobalAlloc(uint flags, nuint bytes);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr GlobalFree(IntPtr hMem);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder text, ref uint size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool CloseHandle(IntPtr handle);
     }
 }

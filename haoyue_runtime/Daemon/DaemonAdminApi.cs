@@ -6,6 +6,7 @@ using Cronos;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
 using Haoyue.Runtime.Data;
+using Haoyue.Runtime.Experts;
 using Haoyue.Runtime.Mcp;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
@@ -132,6 +133,9 @@ internal sealed class DaemonAdminApi(
         ["deepSeekOptimizationEnabled"] = runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled,
         ["computerUseEnabled"] = runtime.ConfigStore.Config.ComputerUse?.Enabled ?? false,
         ["computerUseDriver"] = runtime.ConfigStore.Config.ComputerUse?.Driver ?? "auto",
+        ["language"] = runtime.ConfigStore.Config.Agent.Language,
+        ["rulesEnabled"] = runtime.ConfigStore.Config.Agent.RulesEnabled,
+        ["memoryMode"] = runtime.ConfigStore.Config.Agent.MemoryMode,
     }.ToJsonString();
 
 
@@ -250,6 +254,23 @@ internal sealed class DaemonAdminApi(
         if (parameters["computerUseDriver"] is JsonValue driverVal && driverVal.TryGetValue<string>(out var driverStr))
         {
             runtime.ConfigStore.Config.ComputerUse.Driver = driverStr;
+        }
+
+        if (parameters["language"] is JsonValue languageVal && languageVal.TryGetValue<string>(out var language))
+        {
+            // Normalize rejects unknown values by falling back to auto (follow the OS language).
+            runtime.ConfigStore.Config.Agent.Language = OutputLanguage.Normalize(language);
+        }
+
+        if (parameters["rulesEnabled"] is JsonValue rulesVal && rulesVal.TryGetValue<bool>(out var rulesEnabled))
+        {
+            runtime.ConfigStore.Config.Agent.RulesEnabled = rulesEnabled;
+        }
+
+        if (parameters["memoryMode"] is JsonValue memoryModeVal && memoryModeVal.TryGetValue<string>(out var memoryMode))
+        {
+            // Normalize rejects unknown values by falling back to auto (agent may update MEMORY.md).
+            runtime.ConfigStore.Config.Agent.MemoryMode = MemoryMode.Normalize(memoryMode);
         }
 
         runtime.ConfigStore.Save();
@@ -845,6 +866,28 @@ internal sealed class DaemonAdminApi(
         }
 
         return catalog.ToJsonString();
+    }
+
+    /// <summary>Built-in expert personas for the desktop experts page.</summary>
+    public string ListExperts()
+    {
+        var experts = new JsonArray();
+        foreach (var expert in ExpertCatalog.Entries)
+        {
+            experts.Add((JsonNode)new JsonObject
+            {
+                ["id"] = expert.Id,
+                ["name"] = expert.Name,
+                ["title"] = expert.Title,
+                ["avatar"] = expert.Avatar,
+                ["bio"] = expert.Bio,
+                ["domains"] = new JsonArray(expert.Domains.Select(domain => (JsonNode)domain).ToArray()),
+                ["skills"] = new JsonArray(expert.Skills.Select(skill => (JsonNode)skill).ToArray()),
+                ["prompt"] = expert.Prompt,
+            });
+        }
+
+        return experts.ToJsonString();
     }
 
     public string InstallOfficialSkill(JsonObject parameters)

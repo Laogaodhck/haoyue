@@ -229,7 +229,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
           <h2 id="knowledge-title">
             <BookOpen :size="17" /> 知识库
           </h2>
-          <p v-if="workspaceLabel" :title="workspaceLabel">{{ scope === 'global' ? '全局范围' : workspaceLabel }} · {{ entries.length }} 条</p>
+          <div v-if="workspaceLabel" class="knowledge-stat-chips">
+            <span class="stat-chip" :title="workspaceLabel">{{ scope === 'global' ? '全局范围' : workspaceLabel }}</span>
+            <span class="stat-chip">{{ entries.length }} 条</span>
+          </div>
         </div>
       </div>
     </header>
@@ -246,7 +249,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
       <button class="icon-button" title="刷新" :disabled="loading" @click="loadEntries">
         <RefreshCw :size="16" :class="{ spinning: loading }" />
       </button>
-      <button class="secondary-button" :disabled="saving || importing" @click="showForm ? cancelEdit() : startCreate()">
+      <button class="secondary-button knowledge-push" :disabled="saving || importing" @click="showForm ? cancelEdit() : startCreate()">
         <Plus v-if="!showForm" :size="15" /> {{ showForm ? '取消编辑' : '添加知识' }}
       </button>
       <button class="secondary-button" :disabled="importing || saving" @click="importFiles">
@@ -362,21 +365,21 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   letter-spacing: -.01em;
 }
 
-.knowledge-title-copy p {
-  max-width: 560px;
-  margin: 2px 0 0;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* 标题下方的统计 chips（范围与条目数），与 MCP 页 stat-chip 风格统一。 */
+.knowledge-stat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
 }
 
 .knowledge-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  padding: 16px 22px 4px;
+  gap: 8px 10px;
+  padding: 14px 22px 6px;
 }
 
 .knowledge-scope {
@@ -387,7 +390,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 .knowledge-search {
   display: flex;
   flex: 1;
-  min-width: 0;
+  min-width: 200px;
   align-items: center;
   gap: 8px;
   padding: 0 12px;
@@ -405,6 +408,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   background: transparent;
   border: none;
   outline: none;
+}
+
+/* 「添加知识 / 导入文件」动作组推到工具栏右侧，与搜索区分层。 */
+.knowledge-push {
+  margin-left: auto;
 }
 
 .knowledge-form {
@@ -430,6 +438,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 
 .knowledge-form-row .form-input {
   flex: 1;
+  min-width: 0;
 }
 
 .knowledge-counter {
@@ -504,9 +513,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 60px 20px;
+  padding: 48px 20px;
   color: var(--text-muted);
   text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
 }
 
 .knowledge-empty strong {
@@ -523,21 +534,23 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 .knowledge-items {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .knowledge-row {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
+  gap: 6px;
   padding: 12px 12px 12px 6px;
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 10px;
+  transition: background 140ms ease, border-color 140ms ease;
 }
 
 .knowledge-row:hover {
   background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--border-strong) 70%, var(--border));
 }
 
 .knowledge-expand {
@@ -552,6 +565,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   border: none;
   border-radius: 6px;
   cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.knowledge-expand:hover {
+  color: var(--text);
+  background: var(--surface-hover);
 }
 
 .knowledge-main {
@@ -568,6 +587,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 }
 
 .knowledge-row-head strong {
+  overflow-wrap: anywhere;
   font-size: 13.5px;
 }
 
@@ -606,5 +626,46 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   font-size: 11.5px;
   background: var(--surface-raised);
   border-top: 1px solid var(--border);
+}
+
+/* 窄侧边栏：搜索框独占一行，动作按钮自然换行，内边距统一收窄。 */
+@media (max-width: 640px) {
+  .knowledge-header {
+    padding: 10px 16px;
+  }
+
+  .knowledge-toolbar {
+    padding: 12px 16px 6px;
+  }
+
+  .knowledge-search {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .knowledge-push {
+    margin-left: 0;
+  }
+
+  .knowledge-form {
+    margin: 12px 16px 0;
+  }
+
+  .knowledge-error,
+  .knowledge-notice {
+    margin: 10px 16px 0;
+  }
+
+  .knowledge-list {
+    padding: 12px 16px 14px;
+  }
+
+  .knowledge-row {
+    padding: 10px 10px 10px 4px;
+  }
+
+  .knowledge-footer {
+    padding: 10px 16px;
+  }
 }
 </style>

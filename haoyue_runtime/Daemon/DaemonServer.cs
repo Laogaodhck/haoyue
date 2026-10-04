@@ -738,6 +738,11 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.ListOfficialSkills()), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "expert.list":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListExperts()), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "skill.official.install":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
                             _ => Task.FromResult(_admin.InstallOfficialSkill(Params(request))), context.ConnectionCt).ConfigureAwait(false);
@@ -1461,6 +1466,7 @@ public sealed class DaemonServer : IAsyncDisposable
             "mcp.list", "mcp.upsert", "mcp.remove", "mcp.reload",
             "skill.list", "skill.import", "skill.toggle",
             "skill.official.list", "skill.official.install",
+            "expert.list",
             "knowledge.list", "knowledge.search", "knowledge.save", "knowledge.delete", "knowledge.import",
             "memory.get", "memory.save", "rules.list", "rules.save",
             "usage.get", "usage.timeline", "doctor", "doctor.run",

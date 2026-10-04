@@ -68,6 +68,12 @@ public sealed partial class Agent(
             var truncatedSteps = 0;
             var reachedMaxSteps = false;
             var step = 0;
+            // Composing the system prompt reads memory / AGENTS.md / prompt files from disk.
+            // Its inputs cannot change between steps of one turn (same model, tools and flags),
+            // so compose once and reuse: this removes per-step file I/O and keeps the provider
+            // prompt prefix byte-identical for cache hits.
+            string? cachedPromptKey = null;
+            string cachedSystemPrompt = "";
             events.Publish(new WorkflowEvent(0, "start", "开始任务"));
             while (true)
             {
@@ -93,8 +99,20 @@ public sealed partial class Agent(
                 var requiresVision = turnHasImages && model.Model.Capabilities.Vision;
                 var effectiveNetworkEnabled = session.Header.NetworkEnabled && agentConfig.NetworkEnabled;
                 var tools = ActiveTools(workspace, model, effectiveNetworkEnabled);
-                var systemPrompt = await ComposeSystemPromptAsync(
-                    workspace, model, tools, effectiveNetworkEnabled, ct).ConfigureAwait(false);
+                var promptKey = string.Join('|',
+                    model.Provider.Id, model.Model.Id, effectiveNetworkEnabled, tools.Count,
+                    string.Join(",", tools.Select(t => t.Name)),
+                    workspace.Config?.Mode ?? agentConfig.Mode,
+                    workspace.Config?.Personality ?? agentConfig.Personality,
+                    OutputLanguage.Resolve(workspace.Config, agentConfig),
+                    ShouldVerify(workspace, agentConfig));
+                if (promptKey != cachedPromptKey)
+                {
+                    cachedSystemPrompt = await ComposeSystemPromptAsync(
+                        workspace, model, tools, effectiveNetworkEnabled, ct).ConfigureAwait(false);
+                    cachedPromptKey = promptKey;
+                }
+                var systemPrompt = cachedSystemPrompt;
                 var source = requiresVision ? session.Messages : WithoutImages(session.Messages);
                 var history = ContextPlanner.FitToWindow(source, model.Model, systemPrompt);
                 // Context compaction: when plain trimming would have to drop history, first

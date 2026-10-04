@@ -10,6 +10,10 @@ namespace Haoyue.Runtime.Agents;
 public static class ContextPlanner
 {
     private const double CharsPerToken = 4.0;
+    // CJK scripts average ~1.5 chars per token across modern tokenizers (Qwen / DeepSeek /
+    // GPT-o series). Assuming 4 chars per token for Chinese text underestimates usage by
+    // ~2.7x, which lets history overflow the window and inflates prefill cost.
+    private const double CjkCharsPerToken = 1.5;
     private const int PerMessageOverheadTokens = 8;
 
     /// <summary>
@@ -22,8 +26,59 @@ public static class ContextPlanner
     /// <summary>Upper bound for the assembled system prompt before history budgeting starts.</summary>
     public const int MaxSystemPromptTokens = 24_000;
 
-    public static int EstimateTokens(string text) =>
-        (int)Math.Ceiling(text.Length / CharsPerToken);
+    public static int EstimateTokens(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        var cjk = CountCjkChars(text);
+        if (cjk == 0) return (int)Math.Ceiling(text.Length / CharsPerToken);
+        var other = text.Length - cjk;
+        return (int)Math.Ceiling(cjk / CjkCharsPerToken + other / CharsPerToken);
+    }
+
+    /// <summary>
+    /// Counts CJK characters (Han, Kana, Hangul, full-width forms). Very long strings are
+    /// sampled head+tail and the ratio extrapolated so per-step estimation stays cheap.
+    /// </summary>
+    private static long CountCjkChars(string text)
+    {
+        const int sampleLimit = 32_768;
+        long cjk = 0;
+        if (text.Length <= sampleLimit)
+        {
+            for (var i = 0; i < text.Length; i++)
+                if (IsCjk(text[i])) cjk++;
+            return cjk;
+        }
+
+        var half = sampleLimit / 2;
+        long sampled = 0;
+        for (var i = 0; i < half; i++)
+        {
+            sampled++;
+            if (IsCjk(text[i])) cjk++;
+            if (IsCjk(text[text.Length - 1 - i])) cjk++;
+        }
+
+        return (long)(cjk * text.Length / sampled);
+    }
+
+    private static bool IsCjk(char c) =>
+        c is >= (char)0x3040 and <= (char)0x30FF      // Hiragana + Katakana
+            or >= (char)0x3400 and <= (char)0x4DBF    // CJK Extension A
+            or >= (char)0x4E00 and <= (char)0x9FFF    // CJK Unified Ideographs
+            or >= (char)0xAC00 and <= (char)0xD7AF    // Hangul syllables
+            or >= (char)0xF900 and <= (char)0xFAFF    // CJK Compatibility Ideographs
+            or >= (char)0xFF00 and <= (char)0xFFEF;   // Full-width forms
+
+    /// <summary>Average characters per token for this text, honoring its script mix.</summary>
+    private static double CharsPerTokenFor(string text)
+    {
+        var cjk = CountCjkChars(text);
+        if (cjk == 0) return CharsPerToken;
+        var other = text.Length - cjk;
+        var tokens = cjk / CjkCharsPerToken + other / CharsPerToken;
+        return tokens > 0 ? text.Length / tokens : CharsPerToken;
+    }
 
     public static int EstimateTokens(ChatMessage message) =>
         EstimateTokens(message.Text)
@@ -40,7 +95,9 @@ public static class ContextPlanner
         if (string.IsNullOrWhiteSpace(text) || EstimateTokens(text) <= maxTokens)
             return text;
 
-        var budgetChars = Math.Max(1, (int)(maxTokens * CharsPerToken));
+        // The char budget follows the text's own script density so the fitted result
+        // estimates at (or near) the requested token budget for CJK and Latin alike.
+        var budgetChars = Math.Max(1, (int)(maxTokens * CharsPerTokenFor(text)));
         var headChars = budgetChars / 2;
         var tailChars = budgetChars - headChars;
         var head = text[..headChars];

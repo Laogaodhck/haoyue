@@ -154,6 +154,16 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
             return ValueTask.FromResult(prompts.TryGet($"personality/{personality}"));
         }));
 
+        // Reply-language contract: the model detects the source language of each user
+        // message and replies in the configured target language (auto follows the OS
+        // UI language). Kept next to personality so both user-facing voice layers sit
+        // after the workspace-overridable system prompt.
+        registry.Register(new PromptContribution("output-language", PromptSlot.System, (ctx, _) =>
+        {
+            var language = OutputLanguage.Resolve(ctx.WorkspaceConfig, configStore.Config.Agent);
+            return ValueTask.FromResult<string?>(OutputLanguage.BuildInstruction(language));
+        }));
+
         // Model capabilities are part of the runtime contract, not an assumption the model
         // must infer from its name. Keep this after the user-configurable system prompt so a
         // workspace override cannot accidentally make a declared vision model deny image input.
@@ -199,19 +209,25 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
         }));
 
         // Repository instructions (AGENTS.md) are injected as bounded, user-authored context.
+        // The global RulesEnabled switch lets users turn rule-file injection off entirely.
         registry.Register(new PromptContribution("agents-md", PromptSlot.Workspace, (ctx, _) =>
         {
+            if (!configStore.Config.Agent.RulesEnabled) return ValueTask.FromResult<string?>(null);
             if (!ctx.Variables.TryGetValue("agents_md", out var agentsMd) || string.IsNullOrWhiteSpace(agentsMd))
                 return ValueTask.FromResult<string?>(null);
             return ValueTask.FromResult(prompts.TryGet("builtin/agents_md"));
         }));
 
         // Workspace memory (MEMORY.md), injected through the builtin/memory template.
+        // Manual mode appends a read-only contract so the user stays the sole editor.
         registry.Register(new PromptContribution("memory", PromptSlot.Memory, (ctx, _) =>
         {
             if (!ctx.Variables.TryGetValue("memory", out var memory) || string.IsNullOrWhiteSpace(memory))
                 return ValueTask.FromResult<string?>(null);
-            return ValueTask.FromResult<string?>(prompts.TryGet("builtin/memory") ?? memory);
+            var template = prompts.TryGet("builtin/memory") ?? memory;
+            if (MemoryMode.Normalize(configStore.Config.Agent.MemoryMode) == MemoryMode.Manual)
+                template += "\n\n当前记忆处于手动管理模式：请把 MEMORY.md 当作只读上下文，不要主动改写或删除其中内容；仅当用户明确要求记录某条信息时，才以追加方式补充简短条目。";
+            return ValueTask.FromResult<string?>(template);
         }));
 
         // Knowledge base contract — the tools are self-describing, but the model also

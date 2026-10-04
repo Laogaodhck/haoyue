@@ -11,7 +11,8 @@ public sealed record KnowledgeSaveResult(KnowledgeEntry Entry, bool Created);
 /// Entries match by substring instead of FTS: SQLite tokenizers do not segment CJK
 /// text, so LIKE search is what makes mixed Chinese/English queries actually work.
 /// Knowledge bases are small (tens to hundreds of entries per workspace), so a
-/// scanned in-memory score stays fast and correct.
+/// scanned in-memory score stays fast and correct. Query preprocessing (normalization,
+/// CJK bigram slicing, synonyms, typo fallback) lives in KnowledgeSearchRanker.
 /// </summary>
 public sealed class KnowledgeStore(HaoyueDatabase database)
 {
@@ -94,36 +95,20 @@ public sealed class KnowledgeStore(HaoyueDatabase database)
 
     public IReadOnlyList<KnowledgeEntry> Search(string scope, string query, int limit = 8)
     {
-        var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (terms.Length == 0) return [];
-
-        var candidates = new List<(KnowledgeEntry Entry, int Score)>();
         using var connection = database.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id, title, content, tags, created_at, updated_at FROM knowledge WHERE scope = $scope;";
         command.Parameters.AddWithValue("$scope", scope);
+        var entries = new List<KnowledgeEntry>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            var entry = new KnowledgeEntry(
+            entries.Add(new KnowledgeEntry(
                 reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.GetString(5));
-            var score = 0;
-            foreach (var term in terms)
-            {
-                if (entry.Title.Contains(term, StringComparison.OrdinalIgnoreCase)) score += 3;
-                if (entry.Content.Contains(term, StringComparison.OrdinalIgnoreCase)) score += 2;
-                if (entry.Tags?.Contains(term, StringComparison.OrdinalIgnoreCase) == true) score += 2;
-            }
-            if (score > 0) candidates.Add((entry, score));
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.GetString(5)));
         }
 
-        return candidates
-            .OrderByDescending(c => c.Score)
-            .ThenByDescending(c => c.Entry.UpdatedAt, StringComparer.Ordinal)
-            .Take(limit)
-            .Select(c => c.Entry)
-            .ToList();
+        return KnowledgeSearchRanker.Rank(entries, query, limit);
     }
 
     public IReadOnlyList<KnowledgeEntry> List(string scope, int limit = 100)

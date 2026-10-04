@@ -34,6 +34,7 @@ import EditMessageDialog from './components/EditMessageDialog.vue'
 import GitWorkspacePanel from './components/GitWorkspacePanel.vue'
 
 import OfficialSkillsDialog from './components/OfficialSkillsDialog.vue'
+import ExpertsDialog from './components/ExpertsDialog.vue'
 import KnowledgeBaseDialog from './components/KnowledgeBaseDialog.vue'
 import RulesMemoryDialog from './components/RulesMemoryDialog.vue'
 import ProjectPropertiesDialog from './components/ProjectPropertiesDialog.vue'
@@ -104,7 +105,7 @@ const appInfo = ref<AppInfo>({
   documentsPath: '',
   userProfilePath: ''
 })
-type AppPage = 'main' | 'settings' | 'extensions' | 'archived' | 'scheduled' | 'official-skills' | 'knowledge' | 'rules-memory'
+type AppPage = 'main' | 'settings' | 'extensions' | 'archived' | 'scheduled' | 'official-skills' | 'experts' | 'knowledge' | 'rules-memory'
 
 const sidebarOpen = ref(true)
 const activePage = ref<AppPage>('main')
@@ -114,7 +115,7 @@ const gitPanelTab = ref<'diff' | 'history'>('diff')
 const gitPanelWidth = ref(560)
 const toolDiff = ref<{ path: string; diff: string } | null>(null)
 
-const settingsSection = ref<'general' | 'models' | 'mcp' | 'skills' | 'diagnostics' | 'advanced'>('general')
+const settingsSection = ref<'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'advanced'>('general')
 const extensionsSection = ref<'mcp' | 'skills'>('mcp')
 const taskSettingsThreadId = ref('')
 const activePropertiesProject = ref<ProjectItem | null>(null)
@@ -603,6 +604,12 @@ function openOfficialSkills(): void {
   activePropertiesProject.value = null
   taskSettingsThreadId.value = ''
   activePage.value = 'official-skills'
+}
+
+function openExperts(): void {
+  activePropertiesProject.value = null
+  taskSettingsThreadId.value = ''
+  activePage.value = 'experts'
 }
 
 function openKnowledge(): void {
@@ -1459,8 +1466,7 @@ watch(theme, applyTheme)
           @delete-project-tasks="deleteProjectTasks" @archive-global-tasks="archiveGlobalTasks"
           @delete-global-tasks="deleteGlobalTasks" @open-archived="openArchivedTasks"
           @open-scheduled-tasks="openScheduledTasks" @open-extensions="openExtensions('mcp')"
-          @open-official-skills="openOfficialSkills" @open-knowledge="openKnowledge"
-          @open-rules-memory="openRulesMemory"
+          @open-official-skills="openOfficialSkills" @open-experts="openExperts" @open-knowledge="openKnowledge"
           @open-settings="openSettings('general')" />
       </Transition>
       <Transition name="scrim-fade">
@@ -1629,9 +1635,11 @@ watch(theme, applyTheme)
       :workspace-path="runtimeWorkspacePath"
       :initial-section="activePage === 'settings' ? settingsSection : extensionsSection" @close="closePage"
       @change-theme="applyTheme" @reconnect="reconnectDaemon" @open-workspace="openWorkspace"
-      @open-official-skills="openOfficialSkills" @runtime-changed="refreshRuntimeState" />
+      @open-official-skills="openOfficialSkills" @open-rules-memory="openRulesMemory"
+      @runtime-changed="refreshRuntimeState" />
 
     <OfficialSkillsDialog :open="activePage === 'official-skills'" @close="closePage" />
+    <ExpertsDialog :open="activePage === 'experts'" @close="closePage" />
 
     <KnowledgeBaseDialog :open="activePage === 'knowledge'" @close="closePage" />
 

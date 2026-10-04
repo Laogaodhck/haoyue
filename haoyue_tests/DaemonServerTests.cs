@@ -873,6 +873,45 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Advanced_RulesAndMemoryConfig_RoundTripAndNormalize()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        // Both new switches round-trip through advanced.set / advanced.get.
+        await connection.SendAsync(1, "advanced.set", new JsonObject
+        {
+            ["rulesEnabled"] = false,
+            ["memoryMode"] = "manual"
+        });
+        var updated = ParseData(await connection.ReadAsync());
+        Assert.False(updated["rulesEnabled"]!.GetValue<bool>());
+        Assert.Equal("manual", updated["memoryMode"]!.GetValue<string>());
+
+        // Unknown memory modes fall back to auto instead of poisoning the config.
+        await connection.SendAsync(2, "advanced.set", new JsonObject { ["memoryMode"] = "bogus" });
+        Assert.Equal("auto", ParseData(await connection.ReadAsync())["memoryMode"]!.GetValue<string>());
+
+        // Rules come back on independently of the memory mode.
+        await connection.SendAsync(3, "advanced.set", new JsonObject { ["rulesEnabled"] = true });
+        var restored = ParseData(await connection.ReadAsync());
+        Assert.True(restored["rulesEnabled"]!.GetValue<bool>());
+        Assert.Equal("auto", restored["memoryMode"]!.GetValue<string>());
+
+        // The read path agrees with what was just written.
+        await connection.SendAsync(4, "advanced.get", new JsonObject());
+        var fetched = ParseData(await connection.ReadAsync());
+        Assert.True(fetched["rulesEnabled"]!.GetValue<bool>());
+        Assert.Equal("auto", fetched["memoryMode"]!.GetValue<string>());
+
+        // Rule and memory endpoints stay reachable with the new config in place.
+        await connection.SendAsync(5, "rules.list", new JsonObject());
+        Assert.Equal("result", (await connection.ReadAsync())["event"]!.GetValue<string>());
+        await connection.SendAsync(6, "memory.get", new JsonObject());
+        Assert.Equal("result", (await connection.ReadAsync())["event"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Knowledge_SaveListSearchDelete_AndScopeIsolation()
     {
         var connection = await StartServerAsync(

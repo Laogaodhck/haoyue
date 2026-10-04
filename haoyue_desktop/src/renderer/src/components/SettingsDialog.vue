@@ -26,6 +26,7 @@ import {
   Search,
   Settings2,
   SlidersHorizontal,
+  ScrollText,
   Sun,
   Trash2,
   Upload,
@@ -52,7 +53,7 @@ import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
 
-type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'diagnostics' | 'advanced'
+type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'advanced'
 
 interface ProviderInfo {
   id: string
@@ -154,6 +155,7 @@ const emit = defineEmits<{
   reconnect: []
   openWorkspace: []
   openOfficialSkills: []
+  openRulesMemory: []
   runtimeChanged: []
 }>()
 
@@ -164,6 +166,9 @@ const failoverEnabled = ref(true)
 const deepSeekOptimizationEnabled = ref(false)
 const computerUseEnabled = ref(false)
 const computerUseDriver = ref('auto')
+const replyLanguage = ref<'auto' | 'zh' | 'en'>('auto')
+const rulesEnabled = ref(true)
+const memoryMode = ref<'auto' | 'manual'>('auto')
 
 const action = ref('')
 const error = ref('')
@@ -244,6 +249,7 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'models', label: '模型与提供商', icon: Bot },
   { id: 'mcp', label: 'MCP', icon: Blocks },
   { id: 'skills', label: '技能', icon: Wrench },
+  { id: 'rules-memory', label: '规则与记忆', icon: ScrollText },
   { id: 'diagnostics', label: '诊断与用量', icon: Activity },
   { id: 'advanced', label: '高级设置', icon: SlidersHorizontal }
 ]
@@ -315,6 +321,7 @@ async function loadCurrentSection(): Promise<void> {
     if (section.value === 'models') await loadModels()
     if (section.value === 'mcp') mcpServers.value = await requestJson<McpServerInfo[]>('mcp.list')
     if (section.value === 'skills') skills.value = await requestJson<SkillInfo[]>('skill.list')
+    if (section.value === 'rules-memory') await loadRulesMemory()
     if (section.value === 'diagnostics') await loadDiagnostics()
     if (section.value === 'advanced') await loadAdvanced()
   } catch (reason) {
@@ -328,6 +335,71 @@ async function loadGeneral(): Promise<void> {
   const routing = await requestJson<{ failoverEnabled: boolean; deepSeekOptimizationEnabled: boolean }>('routing.get')
   failoverEnabled.value = routing.failoverEnabled
   deepSeekOptimizationEnabled.value = routing.deepSeekOptimizationEnabled
+  const advanced = await requestJson<{ language?: string }>('advanced.get')
+  replyLanguage.value = normalizeReplyLanguage(advanced.language)
+}
+
+function normalizeReplyLanguage(value?: string): 'auto' | 'zh' | 'en' {
+  return value === 'zh' || value === 'en' ? value : 'auto'
+}
+
+async function setReplyLanguage(value: 'auto' | 'zh' | 'en'): Promise<void> {
+  if (replyLanguage.value === value) return
+  const previous = replyLanguage.value
+  replyLanguage.value = value
+  beginAction('language.set')
+  try {
+    const config = await requestJson<{ language: string }>('advanced.set', { language: value })
+    replyLanguage.value = normalizeReplyLanguage(config.language)
+    notice.value = replyLanguage.value === 'en'
+      ? '回复语言已设为 English：模型将以英文回复'
+      : replyLanguage.value === 'zh'
+        ? '回复语言已设为中文：模型将以简体中文回复'
+        : '回复语言已设为跟随系统：中文系统默认中文回复，其它系统默认英文回复'
+  } catch (reason) {
+    replyLanguage.value = previous
+    fail(reason)
+  } finally {
+    endAction()
+  }
+}
+
+function normalizeMemoryMode(value?: string): 'auto' | 'manual' {
+  return value === 'manual' ? 'manual' : 'auto'
+}
+
+async function loadRulesMemory(): Promise<void> {
+  const config = await requestJson<{ rulesEnabled?: boolean; memoryMode?: string }>('advanced.get')
+  rulesEnabled.value = config.rulesEnabled ?? true
+  memoryMode.value = normalizeMemoryMode(config.memoryMode)
+}
+
+async function setRulesMemory(payload: { rulesEnabled?: boolean; memoryMode?: 'auto' | 'manual' }): Promise<void> {
+  const previousRules = rulesEnabled.value
+  const previousMode = memoryMode.value
+  if (payload.rulesEnabled !== undefined) rulesEnabled.value = payload.rulesEnabled
+  if (payload.memoryMode !== undefined) memoryMode.value = payload.memoryMode
+  beginAction('rulesMemory.set')
+  try {
+    const config = await requestJson<{ rulesEnabled: boolean; memoryMode: string }>(
+      'advanced.set',
+      { rulesEnabled: rulesEnabled.value, memoryMode: memoryMode.value }
+    )
+    rulesEnabled.value = config.rulesEnabled
+    memoryMode.value = normalizeMemoryMode(config.memoryMode)
+    if (!rulesEnabled.value)
+      notice.value = '规则注入已停用：Agent 不再读取 AGENTS.md，仅对话中的显式指令生效'
+    else if (memoryMode.value === 'manual')
+      notice.value = '记忆已切换为手动管理：Agent 把 MEMORY.md 视为只读，仅你能在编辑器中维护'
+    else
+      notice.value = '记忆已切换为自动管理：Agent 可在会话中沉淀长期事实到 MEMORY.md'
+  } catch (reason) {
+    rulesEnabled.value = previousRules
+    memoryMode.value = previousMode
+    fail(reason)
+  } finally {
+    endAction()
+  }
 }
 
 async function loadAdvanced(): Promise<void> {
@@ -895,6 +967,20 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="settings-row">
+              <div>
+                <strong>回复语言</strong>
+                <small>模型先识别输入语言，再以目标语言回复；跟随系统 = 中文系统默认中文</small>
+              </div>
+              <div class="segmented-control">
+                <button :class="{ active: replyLanguage === 'auto' }" :disabled="action === 'language.set'"
+                  title="跟随系统语言（中文系统默认中文）" @click="setReplyLanguage('auto')">自动</button>
+                <button :class="{ active: replyLanguage === 'zh' }" :disabled="action === 'language.set'"
+                  title="简体中文" @click="setReplyLanguage('zh')">中文</button>
+                <button :class="{ active: replyLanguage === 'en' }" :disabled="action === 'language.set'"
+                  title="English" @click="setReplyLanguage('en')">English</button>
+              </div>
+            </div>
+            <div class="settings-row">
               <div><strong>运行时Runtime</strong><small>{{ daemonEndpoint }}</small></div>
               <button class="secondary-button" @click="emit('reconnect')">
                 <RefreshCw :size="15" /> 重新连接
@@ -999,8 +1085,13 @@ onBeforeUnmount(() => {
           <div class="settings-section-heading">
             <div>
               <h3>MCP 服务器</h3>
-              <p>{{mcpServers.filter((server) => server.connected).length}} / {{ mcpServers.length }} 已连接 · {{
-                mcpServers.reduce((sum, server) => sum + server.toolCount, 0)}} 个工具</p>
+              <div class="settings-stat-chips">
+                <span class="stat-chip">
+                  <span class="status-dot" :class="{ online: mcpServers.some((server) => server.connected) }" />
+                  {{ mcpServers.filter((server) => server.connected).length }} / {{ mcpServers.length }} 已连接
+                </span>
+                <span class="stat-chip">{{ mcpServers.reduce((sum, server) => sum + server.toolCount, 0) }} 个工具</span>
+              </div>
             </div>
             <div class="row-actions">
               <button class="icon-button" title="重新加载" :disabled="action === 'mcp.reload'" @click="reloadMcp">
@@ -1021,23 +1112,26 @@ onBeforeUnmount(() => {
             <div v-for="server in mcpServers" :key="`${server.scope}:${server.name}`" class="settings-list-row">
               <span class="status-dot" :class="{ online: server.connected }" />
               <div class="list-main">
-                <div><strong>{{ server.name }}</strong><span class="inline-badge">{{ server.scope === 'workspace' ?
-                  '工作区' : '全局' }}</span></div>
-                <small :title="server.error">{{ mcpStatusText(server) }} · {{ transportLabel(server.transport)
-                }}</small>
+                <div>
+                  <strong :title="server.name">{{ server.name }}</strong>
+                  <span class="inline-badge">{{ server.scope === 'workspace' ? '工作区' : '全局' }}</span>
+                </div>
+                <small :title="server.error">{{ mcpStatusText(server) }} · {{ transportLabel(server.transport) }}</small>
               </div>
-              <button class="switch-control" :class="{ active: server.enabled, pending: mcpServerPending(server) }"
-                :disabled="mcpServerPending(server)"
-                :aria-label="mcpServerPending(server) ? '正在连接' : (server.enabled ? '禁用' : '启用')"
-                @click="toggleMcp(server)">
-                <LoaderCircle v-if="mcpServerPending(server)" class="spin" :size="12" /><span v-else />
-              </button>
-              <button class="icon-button compact" title="编辑" @click="editMcpServer(server)">
-                <Settings2 :size="15" />
-              </button>
-              <button class="icon-button compact danger-icon" title="删除" @click="removeMcp(server)">
-                <Trash2 :size="15" />
-              </button>
+              <div class="row-controls">
+                <button class="switch-control" :class="{ active: server.enabled, pending: mcpServerPending(server) }"
+                  :disabled="mcpServerPending(server)"
+                  :aria-label="mcpServerPending(server) ? '正在连接' : (server.enabled ? '禁用' : '启用')"
+                  @click="toggleMcp(server)">
+                  <LoaderCircle v-if="mcpServerPending(server)" class="spin" :size="12" /><span v-else />
+                </button>
+                <button class="icon-button compact" title="编辑" @click="editMcpServer(server)">
+                  <Settings2 :size="15" />
+                </button>
+                <button class="icon-button compact danger-icon" title="删除" @click="removeMcp(server)">
+                  <Trash2 :size="15" />
+                </button>
+              </div>
             </div>
           </section>
 
@@ -1066,15 +1160,61 @@ onBeforeUnmount(() => {
             <div v-for="skill in skills" :key="skill.name" class="settings-list-row skill-row">
               <Wrench :size="17" />
               <div class="list-main">
-                <div><strong>{{ skill.name }}</strong><span class="inline-badge">{{ skill.scope === 'workspace' ? '工作区'
-                  : '全局' }}</span><span v-if="skill.version" class="version-text">v{{ skill.version }}</span></div>
+                <div>
+                  <strong :title="skill.name">{{ skill.name }}</strong>
+                  <span class="inline-badge">{{ skill.scope === 'workspace' ? '工作区' : '全局' }}</span>
+                  <span v-if="skill.version" class="version-text">v{{ skill.version }}</span>
+                </div>
                 <small>{{ skill.description || skill.directory }}</small>
               </div>
-              <button class="icon-button compact" title="打开位置" @click="showPath(skill.directory)">
-                <FolderOpen :size="15" />
+              <div class="row-controls">
+                <button class="icon-button compact" title="打开位置" @click="showPath(skill.directory)">
+                  <FolderOpen :size="15" />
+                </button>
+                <button class="switch-control" :class="{ active: skill.enabled }"
+                  :aria-label="skill.enabled ? '禁用' : '启用'" @click="toggleSkill(skill)"><span /></button>
+              </div>
+            </div>
+          </section>
+        </template>
+
+        <template v-else-if="section === 'rules-memory'">
+          <div class="settings-section-heading">
+            <div>
+              <h3>规则与记忆</h3>
+              <p>管理注入每次会话的工作区规则（AGENTS.md）与长期记忆（MEMORY.md）</p>
+            </div>
+            <div class="row-actions">
+              <button class="secondary-button" @click="emit('openRulesMemory')">
+                <ScrollText :size="15" /> 打开编辑器
               </button>
-              <button class="switch-control" :class="{ active: skill.enabled }"
-                :aria-label="skill.enabled ? '禁用' : '启用'" @click="toggleSkill(skill)"><span /></button>
+            </div>
+          </div>
+
+          <section class="settings-group">
+            <label class="provider-enabled-row">
+              <span>
+                <strong>工作区规则注入</strong>
+                <small>启用后，Agent 在每次会话开始时读取层级规则文件（AGENTS.md），子目录规则在涉及该目录的文件时优先；停用后仅对话中的显式指令生效，已保存的规则内容不受影响，重新开启即恢复。</small>
+              </span>
+              <input v-model="rulesEnabled" class="sr-only" type="checkbox"
+                :disabled="action === 'rulesMemory.set'" @change="setRulesMemory({ rulesEnabled })" />
+              <span class="toggle-switch" aria-hidden="true"><span /></span>
+            </label>
+          </section>
+
+          <section class="settings-group">
+            <div class="settings-row">
+              <div>
+                <strong>记忆管理方式</strong>
+                <small>自动：Agent 可在会话中把长期事实沉淀到 MEMORY.md；手动：Agent 把记忆视为只读上下文，仅你能在编辑器中维护</small>
+              </div>
+              <div class="segmented-control">
+                <button :class="{ active: memoryMode === 'auto' }" :disabled="action === 'rulesMemory.set'"
+                  title="Agent 可更新 MEMORY.md" @click="setRulesMemory({ memoryMode: 'auto' })">自动</button>
+                <button :class="{ active: memoryMode === 'manual' }" :disabled="action === 'rulesMemory.set'"
+                  title="MEMORY.md 仅用户可编辑" @click="setRulesMemory({ memoryMode: 'manual' })">手动</button>
+              </div>
             </div>
           </section>
         </template>

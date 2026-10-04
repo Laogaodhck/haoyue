@@ -16,9 +16,9 @@ import {
   Settings2,
   SlidersHorizontal,
   SquarePen,
-  ScrollText,
   Store,
-  Trash2
+  Trash2,
+  Users
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logoUrl from '../../../../resources/logo.png?url'
@@ -51,8 +51,8 @@ const emit = defineEmits<{
   openScheduledTasks: []
   openExtensions: []
   openOfficialSkills: []
+  openExperts: []
   openKnowledge: []
-  openRulesMemory: []
   openSettings: []
 }>()
 
@@ -214,13 +214,13 @@ onBeforeUnmount(() => {
         <Store :size="18" />
         <span>技能市场</span>
       </button>
+      <button class="nav-item" @click="emit('openExperts')">
+        <Users :size="18" />
+        <span>专家</span>
+      </button>
       <button class="nav-item" @click="emit('openKnowledge')">
         <BookOpen :size="18" />
         <span>知识库</span>
-      </button>
-      <button class="nav-item" @click="emit('openRulesMemory')">
-        <ScrollText :size="18" />
-        <span>规则与记忆</span>
       </button>
     </nav>
 

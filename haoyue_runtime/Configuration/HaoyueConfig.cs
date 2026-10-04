@@ -33,6 +33,21 @@ public sealed class ProviderConfig
     public int TimeoutSeconds { get; set; } = 120;
     /// <summary>For kind "local": directory containing the GGUF files. Empty = auto-detected default (repository "models" folder or ~/.haoyue/models).</summary>
     public string? ModelsDirectory { get; set; }
+    /// <summary>
+    /// For kind "local": GPU layers to offload (llama.cpp n_gpu_layers). Null keeps CPU-only
+    /// inference. Offloading requires a GPU backend (e.g. the LLamaSharp.Backend.Cuda12
+    /// package replacing the Cpu backend); otherwise the value is silently ignored by
+    /// llama.cpp and inference stays on CPU.
+    /// </summary>
+    public int? GpuLayers { get; set; }
+    /// <summary>For kind "local": CPU inference thread count. Null lets llama.cpp pick (all logical cores).</summary>
+    public int? Threads { get; set; }
+    /// <summary>
+    /// For kind "local": reuse the decoded KV cache across requests when the new prompt
+    /// extends the previously decoded one, so multi-step agent turns skip repeated prefill
+    /// computation. A mismatched prefix falls back to a full re-prefill automatically.
+    /// </summary>
+    public bool LocalPrefixReuse { get; set; } = true;
     /// <summary>Optional URL used by the Desktop "fetch models" action; defaults to the provider /models endpoint.</summary>
     public string? ModelListUrl { get; set; }
     public Dictionary<string, string>? Headers { get; set; }
@@ -149,6 +164,23 @@ public sealed class AgentConfig
     /// <summary>Wall-clock budget for one scheduled-task turn; exceeded runs are cancelled and recorded.</summary>
     public int ScheduledTurnTimeoutSeconds { get; set; } = 1_800;
     /// <summary>
+    /// Reply language: auto (follow the OS UI language, Chinese systems resolve to Chinese)
+    /// | zh (简体中文) | en (English). Injected into the system prompt so the model detects
+    /// the source language per message and replies in the resolved target language.
+    /// </summary>
+    public string Language { get; set; } = "auto";
+    /// <summary>
+    /// Inject workspace AGENTS.md rule files into the system prompt. When false the
+    /// agent ignores rule files entirely and only explicit conversation instructions apply.
+    /// </summary>
+    public bool RulesEnabled { get; set; } = true;
+    /// <summary>
+    /// Memory maintenance mode: auto (default) lets the agent update MEMORY.md as it
+    /// works; manual treats MEMORY.md as read-only context the agent must not modify
+    /// unless the user explicitly asks — users maintain it through the editor instead.
+    /// </summary>
+    public string MemoryMode { get; set; } = "auto";
+    /// <summary>
     /// Global network access switch. When false, network tools (web_search, web_fetch) are stripped
     /// and the agent prompt enforces offline operation across all workspaces.
     /// </summary>
@@ -180,6 +212,8 @@ public sealed class WorkspaceConfig
     public string? Mode { get; set; }
     public string? SystemPrompt { get; set; }
     public string? Personality { get; set; }
+    /// <summary>Per-workspace reply language override (auto | zh | en). Null falls back to the global Agent.Language.</summary>
+    public string? Language { get; set; }
     public List<string>? DisabledSkills { get; set; }
     public List<string>? DisabledTools { get; set; }
     public McpConfig? Mcp { get; set; }

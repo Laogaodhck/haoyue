@@ -1,21 +1,24 @@
 using Haoyue.Runtime.Configuration;
 using LLama;
 using LLama.Common;
+using LLama.Native;
 
 namespace Haoyue.Runtime.Providers;
 
 /// <summary>
 /// Keeps at most one GGUF model loaded in process. Local inference is serialized: a lease
 /// holds the cache gate from load until the caller disposes it, so the weights can never be
-/// evicted while a generation is still running.
+/// evicted while a generation is still running. The cache also owns the KV-reuse context so
+/// its lifetime is tied to the weights: switching models or disposing the cache releases it.
 /// </summary>
 public sealed class LocalModelCache : IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private (string Path, LLamaWeights Weights)? _loaded;
+    private (string Path, LLamaWeights Weights, ReuseEntry? Reuse)? _loaded;
 
     /// <summary>Loads (or reuses) the model file and returns an exclusive lease on it.</summary>
-    public async Task<LocalModelLease> AcquireAsync(string path, CancellationToken ct = default)
+    public async Task<LocalModelLease> AcquireAsync(
+        string path, ModelParams? loadParams = null, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -24,13 +27,13 @@ public sealed class LocalModelCache : IDisposable
             {
                 _loaded?.Weights.Dispose();
                 _loaded = null;
-                var parameters = new ModelParams(path)
+                var parameters = loadParams ?? new ModelParams(path)
                 {
                     GpuLayerCount = 0,
                     UseMemorymap = true,
                 };
                 var weights = await Task.Run(() => LLamaWeights.LoadFromFile(parameters), ct).ConfigureAwait(false);
-                _loaded = (path, weights);
+                _loaded = (path, weights, null);
             }
             return new LocalModelLease(this, _loaded.Value.Weights);
         }
@@ -51,8 +54,49 @@ public sealed class LocalModelCache : IDisposable
 
     private void Release() => _gate.Release();
 
+    /// <summary>
+    /// Returns the reusable inference state (live context + tokens currently decoded into
+    /// its KV cache) when it belongs to the loaded model and was created with the same
+    /// context parameters. Returns null when absent or stale; a stale entry is discarded.
+    /// Only valid while a lease is held (local inference is serialized).
+    /// </summary>
+    public ReuseEntry? TryGetReuse(LLamaWeights weights, string signature)
+    {
+        if (_loaded is null || !ReferenceEquals(_loaded.Value.Weights, weights)) return null;
+        var reuse = _loaded.Value.Reuse;
+        if (reuse is null) return null;
+        if (reuse.Signature != signature)
+        {
+            reuse.Context.Dispose();
+            _loaded = _loaded.Value with { Reuse = null };
+            return null;
+        }
+        return reuse;
+    }
+
+    /// <summary>Stores (or replaces) the KV-reuse state after a successful generation.</summary>
+    public void StoreReuse(LLamaWeights weights, ReuseEntry entry)
+    {
+        if (_loaded is null || !ReferenceEquals(_loaded.Value.Weights, weights))
+        {
+            entry.Context.Dispose();
+            return;
+        }
+        _loaded.Value.Reuse?.Context.Dispose();
+        _loaded = _loaded.Value with { Reuse = entry };
+    }
+
+    /// <summary>Drops the KV-reuse state after a failed or interrupted generation.</summary>
+    public void DropReuse(LLamaWeights weights)
+    {
+        if (_loaded is null || !ReferenceEquals(_loaded.Value.Weights, weights)) return;
+        _loaded.Value.Reuse?.Context.Dispose();
+        _loaded = _loaded.Value with { Reuse = null };
+    }
+
     public void Dispose()
     {
+        _loaded?.Reuse?.Context.Dispose();
         _loaded?.Weights.Dispose();
         _loaded = null;
         _gate.Dispose();
@@ -76,5 +120,16 @@ public sealed class LocalModelCache : IDisposable
             var owner = Interlocked.Exchange(ref _owner, null);
             owner?.Release();
         }
+    }
+
+    /// <summary>
+    /// A live LLamaContext whose KV cache holds exactly the tokens listed in
+    /// <see cref="Tokens"/>, plus the context-parameter signature it was created with.
+    /// </summary>
+    public sealed class ReuseEntry
+    {
+        public required LLamaContext Context { get; init; }
+        public required List<LLamaToken> Tokens { get; init; }
+        public required string Signature { get; init; }
     }
 }

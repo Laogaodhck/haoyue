@@ -55,6 +55,53 @@ const isRules = computed(() => tab.value === 'rules')
 const isGlobal = computed(() => !isRules.value && scope.value === 'global')
 const dirty = computed(() => content.value !== baseline.value)
 
+/** 保存成功提示的自动消失定时器。 */
+let savedTimer: ReturnType<typeof setTimeout> | undefined
+/** 切换确认取消后回滚 ref 时抑制 watch 重入。 */
+let suppressSwitch = false
+
+function clearSavedTimer(): void {
+  if (savedTimer) {
+    clearTimeout(savedTimer)
+    savedTimer = undefined
+  }
+}
+
+function flashSaved(message: string): void {
+  clearSavedTimer()
+  savedMessage.value = message
+  savedTimer = setTimeout(() => {
+    savedMessage.value = ''
+  }, 3000)
+}
+
+/**
+ * Tab / 范围 / 规则文件切换前的脏检查：有未保存修改时先确认，
+ * 取消则回滚切换（回滚引发的 watch 触发由 suppressSwitch 抑制）。
+ */
+async function guardSwitch(rollback: () => void, reload: () => void): Promise<void> {
+  if (suppressSwitch) {
+    suppressSwitch = false
+    return
+  }
+  if (dirty.value) {
+    const confirmed = await confirmAction({
+      title: '放弃未保存的修改？',
+      message: '当前内容已修改但尚未保存，切换后将丢失这些修改。',
+      confirmLabel: '放弃修改',
+      danger: true
+    })
+    if (!confirmed) {
+      suppressSwitch = true
+      rollback()
+      return
+    }
+  }
+  clearSavedTimer()
+  savedMessage.value = ''
+  reload()
+}
+
 const ruleOptions = computed(() => {
   const options = files.value.map(file => ({
     value: file.path,
@@ -134,7 +181,7 @@ async function save(): Promise<void> {
       memoryPath.value = payload.path
       baseline.value = content.value
     }
-    savedMessage.value = isRules.value ? '规则已保存，新会话即生效' : '记忆已保存'
+    flashSaved(isRules.value ? '规则已保存，新会话即生效' : '记忆已保存')
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -155,25 +202,24 @@ async function requestClose(): Promise<void> {
   emit('close')
 }
 
-// SelectMenu 的 v-model 直接更新 scope；这里只负责切换后重新加载。
-watch(scope, () => {
+// SelectMenu 的 v-model 直接更新 scope；这里只负责切换前脏检查与重新加载。
+watch(scope, (_next, previous) => {
   if (!props.open || isRules.value) return
-  savedMessage.value = ''
-  void loadMemory()
+  void guardSwitch(() => { scope.value = previous }, () => void loadMemory())
 })
 
-watch(activePath, () => {
+watch(activePath, (_next, previous) => {
   if (!props.open || !isRules.value) return
-  const current = files.value.find(file => file.path === activePath.value)
-  content.value = current?.content ?? ''
-  baseline.value = content.value
-  savedMessage.value = ''
+  void guardSwitch(() => { activePath.value = previous }, () => {
+    const current = files.value.find(file => file.path === activePath.value)
+    content.value = current?.content ?? ''
+    baseline.value = content.value
+  })
 })
 
-watch(tab, () => {
+watch(tab, (_next, previous) => {
   if (!props.open) return
-  savedMessage.value = ''
-  void load()
+  void guardSwitch(() => { tab.value = previous }, () => void load())
 })
 
 watch(() => props.open, (open) => {
@@ -185,15 +231,25 @@ watch(() => props.open, (open) => {
   baseline.value = ''
   error.value = ''
   savedMessage.value = ''
+  suppressSwitch = false
   void loadRules()
 })
 
 function closeOnEscape(event: KeyboardEvent): void {
-  if (props.open && event.key === 'Escape') void requestClose()
+  if (!props.open) return
+  if (event.key === 'Escape') void requestClose()
+  // Ctrl/Cmd+S 快速保存，与设置编辑器的习惯一致。
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    if (dirty.value && !saving.value && !loading.value) void save()
+  }
 }
 
 onMounted(() => document.addEventListener('keydown', closeOnEscape))
-onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', closeOnEscape)
+  clearSavedTimer()
+})
 </script>
 
 <template>

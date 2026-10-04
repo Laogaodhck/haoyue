@@ -160,6 +160,7 @@ public sealed class LocalModelTests : IDisposable
 
         var text = new StringBuilder();
         var thinking = new StringBuilder();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         await foreach (var evt in client.StreamAsync(request, CancellationToken.None))
         {
             // A small token budget is spent entirely inside R1-style reasoning, so any
@@ -171,12 +172,47 @@ public sealed class LocalModelTests : IDisposable
             if (evt is LlmCompleted done)
                 Assert.True(done.Completion.Usage.InputTokens > 0);
         }
+        watch.Stop();
+        Console.WriteLine($"[local-smoke] first generation: {watch.ElapsedMilliseconds} ms, text={text} thinking={thinking}");
 
         Assert.True(
             text.Length > 0 || thinking.Length > 0,
             "Local inference produced no streamed tokens (neither thinking nor answer).");
         if (text.Length > 0)
             Assert.NotEmpty(text.ToString().Trim());
+
+        // Second generation extends the first conversation — the exact agent-loop shape.
+        // With KV prefix reuse this must decode only the new suffix and still produce text.
+        var firstAnswer = text.ToString();
+        var followUp = new LlmRequest
+        {
+            Provider = provider,
+            Model = model,
+            Messages =
+            [
+                .. request.Messages,
+                ChatMessage.Assistant(firstAnswer),
+                ChatMessage.User("Now reply with exactly one short farewell in Chinese."),
+            ],
+            MaxTokens = 24,
+        };
+
+        var followUpText = new StringBuilder();
+        var followUpThinking = new StringBuilder();
+        watch.Restart();
+        await foreach (var evt in client.StreamAsync(followUp, CancellationToken.None))
+        {
+            if (evt is LlmTextDelta delta)
+                followUpText.Append(delta.Text);
+            if (evt is LlmThinkingDelta think)
+                followUpThinking.Append(think.Text);
+        }
+        watch.Stop();
+        Console.WriteLine($"[local-smoke] second generation: {watch.ElapsedMilliseconds} ms, text={followUpText}");
+
+        Assert.True(
+            followUpText.Length > 0 || followUpThinking.Length > 0,
+            "The follow-up generation (KV prefix reuse path) produced no streamed tokens.");
     }
 
     private static async Task DrainAsync(LocalLlmClient client, ProviderConfig provider, ModelConfig model)

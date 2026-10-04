@@ -35,7 +35,7 @@ function platformLabel(): string {
           <div class="brand-lockup about-lockup">
             <img :src="logoUrl" alt="" />
             <div>
-              <h2 id="about-title">Haoyue</h2>
+              <h2 id="about-title">Haoyue（浩玥）</h2>
               <p>AI Agent</p>
             </div>
           </div>

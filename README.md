@@ -2,7 +2,7 @@
   <img src="haoyue_website/public/logo.png" alt="Haoyue Logo" width="60">
 </p>
 
-<h1 align="center">Haoyue</h1>
+<h1 align="center">Haoyue（浩玥）</h1>
 
 <div align="center">
 
@@ -64,6 +64,7 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 - **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown 渲染、图片预览、推理深度调节
 - **专家系统**：内置领域专家库，一键切换角色预设
 - **可视化配置**：Provider、模型、Profile、MCP 服务器全程图形化管理
+- **本地推理调优**：高级设置中可配置 CUDA 推理参数——GPU 层卸载、上下文长度、KV 缓存量化（q8_0/q4_0）与 Flash Attention，保存后下一次本地模型请求即生效
 - **任务管理**：定时任务调度与归档任务管理，任务失败即时桌面通知，并支持 Webhook 回调（桌面端离线也能收到）
 - **用量统计**：Token 用量趋势与模型分布图表
 
@@ -334,7 +335,9 @@ haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4
       "modelsDirectory": "~/.haoyue/models",
       "gpuLayers": 0,
       "threads": 8,
-      "localPrefixReuse": true
+      "localPrefixReuse": true,
+      "flashAttention": false,
+      "kvCacheQuantization": "none"
     }
   }
 }
@@ -343,6 +346,10 @@ haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4
 - `gpuLayers`：卸载到 GPU 的层数（llama.cpp `n_gpu_layers`）。默认 `0`（纯 CPU）。需要 GPU 时安装 CUDA 后端（如 `LLamaSharp.Backend.Cuda12`）后设为 `999` 卸载全部层；无 GPU 后端时该值被忽略。
 - `threads`：CPU 推理线程数。默认由 llama.cpp 自动选择（全部逻辑核心）。
 - `localPrefixReuse`：跨请求复用已解码的 KV 前缀。Agent 多步回合中，每步只解码新增的后缀 token，跳过对系统提示与历史记录的重复 prefill 计算，多步任务吞吐显著提升。前缀不匹配或后端不支持内存移动时自动回退为全量重算，结果不变。
+- `flashAttention`：启用 llama.cpp Flash Attention 注意力内核加速。默认 `false`；GPU 推理时建议开启。
+- `kvCacheQuantization`：KV 缓存量化类型，`none`（f16 原生）、`q8_0` 或 `q4_0`，量化后显存占用显著降低。仅在 `flashAttention` 开启时生效（llama.cpp 限制）；修改 GPU 卸载或上下文长度后，模型权重与推理上下文会在下一次请求时自动重载，无需重启。
+
+以上参数也可以在桌面应用的「设置 → 高级设置 → 本地推理加速（CUDA）」中图形化配置。
 
 ### 模型管理
 

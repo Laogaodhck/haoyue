@@ -43,6 +43,18 @@ public sealed class ProviderConfig
     /// <summary>For kind "local": CPU inference thread count. Null lets llama.cpp pick (all logical cores).</summary>
     public int? Threads { get; set; }
     /// <summary>
+    /// For kind "local": enable llama.cpp flash attention. Required for KV cache
+    /// quantization below; without a GPU backend the speedup is limited but still valid.
+    /// </summary>
+    public bool FlashAttention { get; set; }
+    /// <summary>
+    /// For kind "local": KV cache quantization for llama.cpp (type_k/type_v).
+    /// "none" keeps the native f16 cache; "q8_0" and "q4_0" shrink VRAM usage.
+    /// Only applied when <see cref="FlashAttention"/> is enabled — llama.cpp rejects
+    /// quantized KV caches with plain attention.
+    /// </summary>
+    public string? KvCacheQuantization { get; set; }
+    /// <summary>
     /// For kind "local": reuse the decoded KV cache across requests when the new prompt
     /// extends the previously decoded one, so multi-step agent turns skip repeated prefill
     /// computation. A mismatched prefix falls back to a full re-prefill automatically.

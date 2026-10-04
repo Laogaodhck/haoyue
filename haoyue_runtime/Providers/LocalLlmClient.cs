@@ -38,7 +38,11 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 $"Local model file not found: {path}. Put the GGUF file into the provider's models directory or fix the path.",
                 retryable: false);
 
-        using var lease = await cache.AcquireAsync(path, BuildLoadParams(path, request.Provider), ct).ConfigureAwait(false);
+        using var lease = await cache.AcquireAsync(
+            path,
+            BuildLoadParams(path, request.Provider),
+            LoadSignature(request.Provider),
+            ct).ConfigureAwait(false);
         var weights = lease.Weights;
 
         var (contextParams, signature) = BuildContextParams(path, request.Model, request.Provider, weights);
@@ -273,6 +277,14 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         UseMemorymap = true,
     };
 
+    /// <summary>
+    /// Identity of the provider-level load settings that force a weights reload when they
+    /// change (the model cache would otherwise reuse weights loaded with the old values).
+    /// FlashAttention is a context-level parameter and lives in the context signature instead.
+    /// </summary>
+    internal static string LoadSignature(ProviderConfig provider) =>
+        $"{provider.GpuLayers?.ToString() ?? "cpu"}|{provider.Threads?.ToString() ?? "auto"}";
+
     private static (ModelParams Params, string Signature) BuildContextParams(
         string path, ModelConfig model, ProviderConfig provider, LLamaWeights weights)
     {
@@ -286,17 +298,33 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         var contextSize = (uint)Math.Max(512, Math.Min(configured, Math.Min(trained, LocalModelProbe.DefaultContextWindow)));
         var gpuLayers = provider.GpuLayers ?? 0;
         var threads = provider.Threads;
+        // Quantized KV caches require flash attention in llama.cpp; silently keep f16
+        // when the user enabled quantization alone instead of failing every request.
+        var kvQuant = provider.FlashAttention ? NormalizeKvQuant(provider.KvCacheQuantization) : "none";
         var parameters = new ModelParams(path)
         {
             ContextSize = contextSize,
             GpuLayerCount = gpuLayers,
             Threads = threads is { } threadCount ? Math.Max(1, threadCount) : null,
+            FlashAttention = provider.FlashAttention,
             UseMemorymap = true,
         };
+        if (kvQuant != "none")
+        {
+            parameters.TypeK = kvQuant == "q4_0" ? GGMLType.GGML_TYPE_Q4_0 : GGMLType.GGML_TYPE_Q8_0;
+            parameters.TypeV = parameters.TypeK;
+        }
         // Any change to these values invalidates the reusable context (different KV layout).
-        var signature = $"{path}|{contextSize}|{gpuLayers}|{threads?.ToString() ?? "auto"}";
+        var signature = $"{path}|{contextSize}|{gpuLayers}|{threads?.ToString() ?? "auto"}|{provider.FlashAttention}|{kvQuant}";
         return (parameters, signature);
     }
+
+    internal static string NormalizeKvQuant(string? value) => value switch
+    {
+        "q8_0" => "q8_0",
+        "q4_0" => "q4_0",
+        _ => "none",
+    };
 
     /// <summary>Renders the conversation with the chat template embedded in the GGUF file.</summary>
     private static (string Prompt, bool StartsInThinking) BuildPrompt(LLamaWeights weights, LlmRequest request)

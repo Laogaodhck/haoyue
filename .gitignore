@@ -182,3 +182,6 @@ models/*
 
 # WorkBuddy local tool data
 .workbuddy/
+
+# Desktop packaging output (kept outside the repo via -c.directories.output)
+haoyue_desktop_release/

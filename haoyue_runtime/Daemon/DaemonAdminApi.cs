@@ -136,7 +136,27 @@ internal sealed class DaemonAdminApi(
         ["language"] = runtime.ConfigStore.Config.Agent.Language,
         ["rulesEnabled"] = runtime.ConfigStore.Config.Agent.RulesEnabled,
         ["memoryMode"] = runtime.ConfigStore.Config.Agent.MemoryMode,
+        ["localInference"] = LocalInferenceJson(),
     }.ToJsonString();
+
+    /// <summary>
+    /// CUDA / local-inference settings of the first "local" provider, or null when no
+    /// local provider exists (the desktop then hides the whole section).
+    /// </summary>
+    private JsonObject? LocalInferenceJson()
+    {
+        var provider = runtime.ConfigStore.Config.Providers.FirstOrDefault(p => p.IsLocal);
+        if (provider is null) return null;
+        return new JsonObject
+        {
+            ["providerId"] = provider.Id,
+            // 0 means CPU-only; >0 offloads that many layers to the GPU.
+            ["gpuLayers"] = provider.GpuLayers ?? 0,
+            ["contextLength"] = provider.Models.Count > 0 ? provider.Models[0].ContextWindow : 8192,
+            ["kvCacheQuantization"] = Providers.LocalLlmClient.NormalizeKvQuant(provider.KvCacheQuantization),
+            ["flashAttention"] = provider.FlashAttention,
+        };
+    }
 
 
     /// <summary>
@@ -273,9 +293,53 @@ internal sealed class DaemonAdminApi(
             runtime.ConfigStore.Config.Agent.MemoryMode = MemoryMode.Normalize(memoryMode);
         }
 
+        ApplyLocalInference(parameters["localInference"] as JsonObject);
+
         runtime.ConfigStore.Save();
         return GetAdvancedConfig();
 
+    }
+
+    /// <summary>
+    /// Persists the CUDA / local-inference settings onto the target "local" provider.
+    /// Every provided key overwrites that single setting; missing keys keep the current value.
+    /// </summary>
+    private void ApplyLocalInference(JsonObject? local)
+    {
+        if (local is null) return;
+
+        var config = runtime.ConfigStore.Config;
+        ProviderConfig provider;
+        if (local["providerId"] is JsonValue idValue && idValue.TryGetValue<string>(out var providerId))
+        {
+            provider = config.FindProvider(providerId)
+                ?? throw new DaemonRequestException($"Unknown provider: {providerId}");
+            if (!provider.IsLocal)
+                throw new DaemonRequestException($"Provider '{providerId}' is not a local provider; CUDA settings only apply to kind=\"local\".");
+        }
+        else
+        {
+            provider = config.Providers.FirstOrDefault(p => p.IsLocal)
+                ?? throw new DaemonRequestException("No local provider is configured; add one in the models settings first.");
+        }
+
+        if (local["gpuLayers"] is JsonValue gpuValue && gpuValue.TryGetValue<int>(out var gpuLayers))
+            provider.GpuLayers = Math.Clamp(gpuLayers, 0, 999);
+
+        if (local["flashAttention"] is JsonValue flashValue && flashValue.TryGetValue<bool>(out var flash))
+            provider.FlashAttention = flash;
+
+        if (local["kvCacheQuantization"] is JsonValue kvValue && kvValue.TryGetValue<string>(out var kv))
+            provider.KvCacheQuantization = Providers.LocalLlmClient.NormalizeKvQuant(kv);
+
+        if (local["contextLength"] is JsonValue ctxValue && ctxValue.TryGetValue<int>(out var contextLength))
+        {
+            // llama.cpp allocates the KV cache up front; values beyond the practical
+            // ceiling are clamped, matching the runtime's own clamp in BuildContextParams.
+            var clamped = Math.Clamp(contextLength, 512, Providers.LocalModelProbe.DefaultContextWindow);
+            foreach (var model in provider.Models)
+                model.ContextWindow = clamped;
+        }
     }
 
     public string ListSchedules() =>

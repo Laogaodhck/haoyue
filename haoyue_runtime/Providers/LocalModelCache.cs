@@ -14,17 +14,25 @@ namespace Haoyue.Runtime.Providers;
 public sealed class LocalModelCache : IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private (string Path, LLamaWeights Weights, ReuseEntry? Reuse)? _loaded;
+    private (string Path, string? LoadSignature, LLamaWeights Weights, ReuseEntry? Reuse)? _loaded;
 
-    /// <summary>Loads (or reuses) the model file and returns an exclusive lease on it.</summary>
+    /// <summary>
+    /// Loads (or reuses) the model file and returns an exclusive lease on it. When the
+    /// caller passes a <paramref name="loadSignature"/> that differs from the one the
+    /// current weights were loaded with (e.g. GPU offload changed in settings), the
+    /// weights are reloaded even though the model path is unchanged.
+    /// </summary>
     public async Task<LocalModelLease> AcquireAsync(
-        string path, ModelParams? loadParams = null, CancellationToken ct = default)
+        string path, ModelParams? loadParams = null, string? loadSignature = null, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_loaded is null || !string.Equals(_loaded.Value.Path, path, StringComparison.OrdinalIgnoreCase))
+            if (_loaded is null
+                || !string.Equals(_loaded.Value.Path, path, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(_loaded.Value.LoadSignature, loadSignature, StringComparison.Ordinal))
             {
+                _loaded?.Reuse?.Context.Dispose();
                 _loaded?.Weights.Dispose();
                 _loaded = null;
                 var parameters = loadParams ?? new ModelParams(path)
@@ -33,7 +41,8 @@ public sealed class LocalModelCache : IDisposable
                     UseMemorymap = true,
                 };
                 var weights = await Task.Run(() => LLamaWeights.LoadFromFile(parameters), ct).ConfigureAwait(false);
-                _loaded = (path, weights, null);
+                _loaded = (path, loadSignature, weights, null);
+                return new LocalModelLease(this, weights);
             }
             return new LocalModelLease(this, _loaded.Value.Weights);
         }

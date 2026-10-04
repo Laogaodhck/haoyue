@@ -873,6 +873,84 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Advanced_LocalInference_RoundTripAndClamp()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        // No local provider yet: the desktop hides the whole section.
+        await connection.SendAsync(1, "advanced.get", new JsonObject());
+        Assert.True(ParseData(await connection.ReadAsync())["localInference"] is null);
+
+        await connection.SendAsync(2, "workspace.init");
+        Assert.Equal("result", (await connection.ReadAsync())["event"]!.GetValue<string>());
+
+        // Local provider registrations require the GGUF file to exist on disk.
+        File.WriteAllBytes(Path.Combine(_tempDir, "test-model.gguf"), new byte[] { 1 });
+        await connection.SendAsync(3, "provider.upsert", new JsonObject
+        {
+            ["id"] = "local",
+            ["kind"] = "local",
+            ["modelsDirectory"] = _tempDir,
+            ["models"] = new JsonArray("test-model"),
+        });
+        Assert.Equal("result", (await connection.ReadAsync())["event"]!.GetValue<string>());
+
+        // Full CUDA settings round-trip onto the local provider.
+        await connection.SendAsync(4, "advanced.set", new JsonObject
+        {
+            ["localInference"] = new JsonObject
+            {
+                ["providerId"] = "local",
+                ["gpuLayers"] = 33,
+                ["contextLength"] = 8192,
+                ["kvCacheQuantization"] = "q8_0",
+                ["flashAttention"] = true,
+            }
+        });
+        var updated = ParseData(await connection.ReadAsync())["localInference"]!.AsObject();
+        Assert.Equal(33, updated["gpuLayers"]!.GetValue<int>());
+        Assert.Equal(8192, updated["contextLength"]!.GetValue<int>());
+        Assert.Equal("q8_0", updated["kvCacheQuantization"]!.GetValue<string>());
+        Assert.True(updated["flashAttention"]!.GetValue<bool>());
+
+        // The values persist through a config reload and the model window was updated too.
+        var reloaded = new ConfigStore(
+            Path.Combine(_tempDir, "config.json"),
+            Path.Combine(_tempDir, "state.json"));
+        var localProvider = reloaded.Config.FindProvider("local")!;
+        Assert.Equal(33, localProvider.GpuLayers);
+        Assert.True(localProvider.FlashAttention);
+        Assert.Equal("q8_0", localProvider.KvCacheQuantization);
+        Assert.Equal(8192, localProvider.Models[0].ContextWindow);
+
+        // Out-of-range values are clamped; unknown quantization normalizes to none.
+        await connection.SendAsync(5, "advanced.set", new JsonObject
+        {
+            ["localInference"] = new JsonObject
+            {
+                ["providerId"] = "local",
+                ["gpuLayers"] = 5000,
+                ["contextLength"] = 1_000_000,
+                ["kvCacheQuantization"] = "bogus",
+                ["flashAttention"] = false,
+            }
+        });
+        var clamped = ParseData(await connection.ReadAsync())["localInference"]!.AsObject();
+        Assert.Equal(999, clamped["gpuLayers"]!.GetValue<int>());
+        Assert.Equal(32768, clamped["contextLength"]!.GetValue<int>());
+        Assert.Equal("none", clamped["kvCacheQuantization"]!.GetValue<string>());
+        Assert.False(clamped["flashAttention"]!.GetValue<bool>());
+
+        // CUDA settings on a remote provider are rejected.
+        await connection.SendAsync(6, "advanced.set", new JsonObject
+        {
+            ["localInference"] = new JsonObject { ["providerId"] = "missing-provider" }
+        });
+        Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Advanced_RulesAndMemoryConfig_RoundTripAndNormalize()
     {
         var connection = await StartServerAsync(

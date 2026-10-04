@@ -16,7 +16,7 @@
 
 **Modern, High-Performance AI Agent**
 
-Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean architecture and event-driven design. It ships with an out-of-the-box terminal CLI and desktop app, providing a complete platform for building AI-powered coding assistants with support for multiple LLM providers, tool execution, a knowledge base, session management, and a smooth interaction experience.
+Haoyue (Chinese: 浩玥) is a high-performance AI agent built on .NET 10.0, featuring clean architecture and event-driven design. It ships with an out-of-the-box terminal CLI and desktop app, providing a complete platform for building AI-powered coding assistants with support for multiple LLM providers, tool execution, a knowledge base, session management, and a smooth interaction experience.
 
 [🌐 Official Website & Docs](https://github.com/Laogaodhck/haoyue) •
 [中文](README.md) •
@@ -65,6 +65,7 @@ Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean archit
 - **Modern UI**: Electron + Vue 3 + TypeScript with streaming markdown, image preview, and reasoning depth control
 - **Expert System**: Built-in domain experts with one-click role presets
 - **Visual Configuration**: Providers, models, profiles, and MCP servers fully managed in the UI
+- **Local Inference Tuning**: configure CUDA inference parameters in Advanced Settings — GPU layer offload, context length, KV cache quantization (q8_0/q4_0), and Flash Attention; changes take effect on the next local model request
 - **Task Management**: Scheduled tasks and archived runs, with instant desktop notifications and webhook callbacks on failure
 - **Usage Analytics**: Token usage trends and model distribution charts
 
@@ -335,7 +336,9 @@ Local inference tuning (provider options in `~/.haoyue/config.json`):
       "modelsDirectory": "~/.haoyue/models",
       "gpuLayers": 0,
       "threads": 8,
-      "localPrefixReuse": true
+      "localPrefixReuse": true,
+      "flashAttention": false,
+      "kvCacheQuantization": "none"
     }
   }
 }
@@ -344,6 +347,10 @@ Local inference tuning (provider options in `~/.haoyue/config.json`):
 - `gpuLayers`: number of layers offloaded to GPU (llama.cpp `n_gpu_layers`). Defaults to `0` (CPU only). Install a CUDA backend (e.g. `LLamaSharp.Backend.Cuda12`) and set it to `999` to offload everything; the value is ignored when no GPU backend is present.
 - `threads`: CPU inference thread count. Defaults to llama.cpp auto-selection (all logical cores).
 - `localPrefixReuse`: reuse decoded KV prefixes across requests. In multi-step agent turns each step only decodes the newly appended suffix tokens, skipping repeated prefill of the system prompt and history for significantly higher throughput. Falls back to full recomputation automatically when the prefix mismatches or the backend does not support memory moves, with identical results.
+- `flashAttention`: enable the llama.cpp Flash Attention kernel. Defaults to `false`; recommended for GPU inference.
+- `kvCacheQuantization`: KV cache type — `none` (native f16), `q8_0`, or `q4_0`; quantization substantially reduces VRAM usage. Only applied when `flashAttention` is enabled (llama.cpp limitation). After changing the GPU offload or context length, model weights and inference contexts are reloaded automatically on the next request — no restart required.
+
+All of these can also be configured graphically in the desktop app under "Settings → Advanced → Local Inference (CUDA)".
 
 ### Model Management
 

@@ -48,6 +48,7 @@ import {
 } from '../mcp-form'
 import McpEditorDialog from './McpEditorDialog.vue'
 import type { ModelDetailConfig } from './ModelConfigModal.vue'
+import FieldLabel from './FieldLabel.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
@@ -169,6 +170,21 @@ const computerUseDriver = ref('auto')
 const replyLanguage = ref<'auto' | 'zh' | 'en'>('auto')
 const rulesEnabled = ref(true)
 const memoryMode = ref<'auto' | 'manual'>('auto')
+
+/** CUDA / local inference settings; null when no local provider is configured. */
+const localInference = reactive({
+  providerId: '',
+  gpuLayers: 0,
+  contextLength: 8192,
+  kvCacheQuantization: 'none',
+  flashAttention: false
+})
+const localInferenceAvailable = ref(false)
+const kvQuantOptions = [
+  { value: 'none', label: 'f16（原生，不量化）', description: '最高精度，显存占用最大' },
+  { value: 'q8_0', label: 'q8_0', description: '接近 f16 的精度，显存减半' },
+  { value: 'q4_0', label: 'q4_0', description: '显存占用最小，精度损失明显' }
+]
 
 const action = ref('')
 const error = ref('')
@@ -409,12 +425,57 @@ async function loadAdvanced(): Promise<void> {
     deepSeekOptimizationEnabled: boolean
     computerUseEnabled?: boolean
     computerUseDriver?: string
+    localInference?: {
+      providerId: string
+      gpuLayers: number
+      contextLength: number
+      kvCacheQuantization: string
+      flashAttention: boolean
+    } | null
   }>('advanced.get')
   networkEnabled.value = config.networkEnabled
   failoverEnabled.value = config.failoverEnabled
   deepSeekOptimizationEnabled.value = config.deepSeekOptimizationEnabled
   computerUseEnabled.value = config.computerUseEnabled ?? false
   computerUseDriver.value = config.computerUseDriver ?? 'auto'
+  if (config.localInference) {
+    localInference.providerId = config.localInference.providerId
+    localInference.gpuLayers = config.localInference.gpuLayers
+    localInference.contextLength = config.localInference.contextLength
+    localInference.kvCacheQuantization = config.localInference.kvCacheQuantization
+    localInference.flashAttention = config.localInference.flashAttention
+    localInferenceAvailable.value = true
+  } else {
+    localInferenceAvailable.value = false
+  }
+}
+
+async function saveLocalInference(): Promise<void> {
+  const previous = { ...localInference }
+  beginAction('advanced.set:localInference')
+  try {
+    const config = await requestJson<{ localInference: typeof localInference | null }>('advanced.set', {
+      localInference: {
+        providerId: localInference.providerId,
+        gpuLayers: Math.max(0, Math.floor(localInference.gpuLayers) || 0),
+        contextLength: Math.max(512, Math.floor(localInference.contextLength) || 8192),
+        kvCacheQuantization: localInference.kvCacheQuantization,
+        flashAttention: localInference.flashAttention
+      }
+    })
+    if (config.localInference) {
+      localInference.gpuLayers = config.localInference.gpuLayers
+      localInference.contextLength = config.localInference.contextLength
+      localInference.kvCacheQuantization = config.localInference.kvCacheQuantization
+      localInference.flashAttention = config.localInference.flashAttention
+    }
+    notice.value = '本地推理设置已保存，下一次本地模型请求生效'
+  } catch (reason) {
+    Object.assign(localInference, previous)
+    fail(reason)
+  } finally {
+    endAction()
+  }
 }
 
 async function toggleComputerUse(): Promise<void> {
@@ -1388,6 +1449,45 @@ onBeforeUnmount(() => {
               <h3>高级设置</h3>
             </div>
           </div>
+
+          <section v-if="localInferenceAvailable" class="settings-group">
+            <div class="settings-group-title">
+              <strong>本地推理加速（CUDA）</strong>
+              <small>作用于本地 GGUF 模型提供商「{{ localInference.providerId }}」；GPU 卸载需要 CUDA 后端运行时
+                (LLamaSharp.Backend.Cuda12)，仅 CPU 后端时这些选项将被忽略或效果有限。</small>
+            </div>
+            <div class="local-inference-grid">
+              <label>
+                <FieldLabel en="GPU Offload" zh="GPU 层卸载 (GPU Offload)"
+                  help="卸载到 GPU 的 Transformer 层数（0-999）。0 = 仅 CPU 推理；数值越大显存占用越高、速度越快。" />
+                <input v-model.number="localInference.gpuLayers" type="number" min="0" max="999" step="1" />
+              </label>
+              <label>
+                <FieldLabel en="Context Length" zh="上下文长度 (Context Length)"
+                  help="推理上下文窗口大小（512-32768 token）。越大可处理越长的对话，KV 缓存显存占用也成比例增长。" />
+                <input v-model.number="localInference.contextLength" type="number" min="512" max="32768" step="512" />
+              </label>
+              <label>
+                <FieldLabel en="KV Cache Quantization" zh="KV 缓存量化"
+                  help="量化 KV 缓存以降低显存占用；需要先开启 Flash Attention，否则保持 f16 不生效。" />
+                <SelectMenu v-model="localInference.kvCacheQuantization" class="settings-select"
+                  label="KV 缓存量化" :options="kvQuantOptions" :disabled="action === 'advanced.set:localInference'" />
+              </label>
+            </div>
+            <label class="provider-enabled-row">
+              <span>
+                <strong>Flash Attention（注意力加速）</strong>
+                <small>启用 llama.cpp flash attention 内核加速注意力计算，并解锁 KV 缓存量化；建议 GPU 推理时开启。</small>
+              </span>
+              <input v-model="localInference.flashAttention" class="sr-only" type="checkbox"
+                :disabled="action === 'advanced.set:localInference'" />
+              <span class="toggle-switch" aria-hidden="true"><span /></span>
+            </label>
+            <button class="secondary-button primary-action save-inference-button"
+              :disabled="action === 'advanced.set:localInference'" @click="saveLocalInference">
+              {{ action === 'advanced.set:localInference' ? '保存中…' : '保存本地推理设置' }}
+            </button>
+          </section>
 
           <section class="settings-group">
             <label class="provider-enabled-row">

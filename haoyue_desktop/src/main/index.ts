@@ -186,7 +186,7 @@ function createTray(): void {
   if (tray) return
   try {
     tray = new Tray(icon)
-    tray.setToolTip('Haoyue')
+    tray.setToolTip('Haoyue（浩玥）')
 
     const contextMenu = Menu.buildFromTemplate([
       {
@@ -266,7 +266,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: supportsMica ? '#00000000' : colors.background,
     ...(supportsMica ? { backgroundMaterial: 'mica' as const } : {}),
-    title: 'Haoyue',
+    title: 'Haoyue（浩玥）',
     icon,
     titleBarStyle: 'hidden',
     titleBarOverlay: process.platform === 'darwin' ? false : {

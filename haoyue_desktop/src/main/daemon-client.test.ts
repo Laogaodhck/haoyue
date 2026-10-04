@@ -85,7 +85,7 @@ describe('DaemonClient', () => {
       socket.setEncoding('utf8')
       socket.on('error', () => undefined)
       socket.on('data', (chunk: string) => {
-        const request = JSON.parse(chunk.trim().split('\n')[0]) as ParsedRequest
+        const request = JSON.parse(chunk.trim().split('\n')[0] ?? '') as ParsedRequest
         if (request.method === 'handshake') {
           socket.write(`${JSON.stringify({ id: request.id, event: 'result', data: '{}' })}\n`)
         }
@@ -190,7 +190,7 @@ describe('DaemonClient', () => {
     const server = createServer((socket) => {
       socket.setEncoding('utf8')
       socket.on('data', (chunk: string) => {
-        const request = JSON.parse(chunk.trim().split('\n')[0]) as ParsedRequest
+        const request = JSON.parse(chunk.trim().split('\n')[0] ?? '') as ParsedRequest
         if (request.method === 'handshake') {
           socket.write(
             `${JSON.stringify({ id: request.id, event: 'error', data: 'authentication failed: missing or invalid handshake token' })}\n`

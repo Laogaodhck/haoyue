@@ -5943,3 +5943,36 @@ select:focus-visible {
   background: var(--surface);
   border-top: 1px solid var(--border);
 }
+/* Local inference (CUDA) settings in the advanced settings section */
+.settings-group-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-group-title small {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.local-inference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin: 12px 0;
+}
+
+.local-inference-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.local-inference-grid input[type='number'] {
+  width: 100%;
+}
+
+.save-inference-button {
+  margin-top: 12px;
+  align-self: flex-start;
+}

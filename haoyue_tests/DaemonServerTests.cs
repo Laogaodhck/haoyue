@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -868,6 +869,249 @@ public sealed class DaemonServerTests : IAsyncDisposable
         });
 
         await connection.SendAsync(2, "skill.official.install", new JsonObject { ["slug"] = "definitely-missing" });
+        Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Knowledge_SaveListSearchDelete_AndScopeIsolation()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "knowledge.save", new JsonObject
+        {
+            ["title"] = "构建命令",
+            ["content"] = "使用 pnpm build 构建桌面端",
+            ["tags"] = "build,前端"
+        });
+        var saved = ParseData(await connection.ReadAsync());
+        Assert.Equal(1, saved["count"]!.GetValue<int>());
+        Assert.Equal("构建命令", saved["entries"]![0]!["title"]!.GetValue<string>());
+
+        // Re-saving with the same title updates instead of duplicating.
+        await connection.SendAsync(2, "knowledge.save", new JsonObject
+        {
+            ["title"] = "构建命令",
+            ["content"] = "使用 pnpm build:desktop 构建桌面端"
+        });
+        var updated = ParseData(await connection.ReadAsync());
+        Assert.Equal(1, updated["count"]!.GetValue<int>());
+        Assert.Contains("build:desktop", updated["entries"]![0]!["content"]!.GetValue<string>());
+
+        await connection.SendAsync(3, "knowledge.search", new JsonObject { ["query"] = "构建" });
+        var searched = ParseData(await connection.ReadAsync());
+        Assert.Equal(1, searched["count"]!.GetValue<int>());
+
+        await connection.SendAsync(4, "knowledge.search", new JsonObject { ["query"] = "不存在的词条" });
+        Assert.Equal(0, ParseData(await connection.ReadAsync())["count"]!.GetValue<int>());
+
+        // Global scope keeps its own entries and stays isolated from the workspace.
+        await connection.SendAsync(5, "knowledge.save", new JsonObject
+        {
+            ["global"] = true,
+            ["title"] = "全局偏好",
+            ["content"] = "回复使用中文"
+        });
+        var globalList = ParseData(await connection.ReadAsync());
+        Assert.Equal(1, globalList["count"]!.GetValue<int>());
+        Assert.Equal("全局偏好", globalList["entries"]![0]!["title"]!.GetValue<string>());
+
+        await connection.SendAsync(6, "knowledge.list");
+        var workspaceList = ParseData(await connection.ReadAsync());
+        Assert.Equal(1, workspaceList["count"]!.GetValue<int>());
+        Assert.Equal("构建命令", workspaceList["entries"]![0]!["title"]!.GetValue<string>());
+
+        var globalId = globalList["entries"]![0]!["id"]!.GetValue<int>();
+        await connection.SendAsync(7, "knowledge.delete", new JsonObject { ["global"] = true, ["id"] = globalId });
+        Assert.Equal(0, ParseData(await connection.ReadAsync())["count"]!.GetValue<int>());
+
+        await connection.SendAsync(8, "knowledge.delete", new JsonObject { ["id"] = 424242 });
+        Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+
+        var workspaceId = workspaceList["entries"]![0]!["id"]!.GetValue<int>();
+        await connection.SendAsync(9, "knowledge.delete", new JsonObject { ["id"] = workspaceId });
+        Assert.Equal(0, ParseData(await connection.ReadAsync())["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task Knowledge_ImportTextDocxXlsx_AndRejectsBinary()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        var importDir = Path.Combine(_tempDir, "import");
+        Directory.CreateDirectory(importDir);
+
+        var notesPath = Path.Combine(importDir, "部署笔记.txt");
+        await File.WriteAllTextAsync(notesPath, "部署命令是 pnpm deploy\r\n端口固定为 7800", new UTF8Encoding(false));
+
+        // >6000 chars forces multi-chunk splitting with · 第i/n部分 titles.
+        var longPath = Path.Combine(importDir, "长文.md");
+        var paragraph = "这是一段足够长的知识内容，用来撑爆单条 6000 字符的分块上限。" + new string('知', 200) + "\n\n";
+        await File.WriteAllTextAsync(longPath, string.Concat(Enumerable.Repeat(paragraph, 40)), new UTF8Encoding(false));
+
+        var docxPath = Path.Combine(importDir, "会议纪要.docx");
+        using (var stream = File.Create(docxPath))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+        {
+            var entry = archive.CreateEntry("word/document.xml");
+            await using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+            await writer.WriteAsync(
+                """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:body><w:p><w:r><w:t>发布流程第一步</w:t></w:r></w:p>
+                <w:p><w:r><w:t>发布流程第二步</w:t></w:r></w:p></w:body></w:document>
+                """);
+        }
+
+        var gbkPath = Path.Combine(importDir, "旧文档.txt");
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        await File.WriteAllTextAsync(gbkPath, "旧编码的中文说明：构建使用 pnpm build", Encoding.GetEncoding(936));
+
+        var xlsxPath = Path.Combine(importDir, "清单.xlsx");
+        using (var stream = File.Create(xlsxPath))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+        {
+            var strings = archive.CreateEntry("xl/sharedStrings.xml");
+            await using (var writer = new StreamWriter(strings.Open(), new UTF8Encoding(false)))
+            {
+                await writer.WriteAsync(
+                    """<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>项目名</t></si><si><t>Haoyue</t></si></sst>""");
+            }
+            var sheet = archive.CreateEntry("xl/worksheets/sheet1.xml");
+            await using (var writer = new StreamWriter(sheet.Open(), new UTF8Encoding(false)))
+            {
+                await writer.WriteAsync(
+                    """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2"><v>备注列</v></c></row></sheetData></worksheet>""");
+            }
+        }
+
+        var binaryPath = Path.Combine(importDir, "图片.png");
+        await File.WriteAllBytesAsync(binaryPath, [0x89, 0x50, 0x4E, 0x47, 0x00, 0x0D, 0x0A, 0x1A]);
+
+        await connection.SendAsync(1, "knowledge.import", new JsonObject
+        {
+            ["paths"] = new JsonArray(notesPath, docxPath, xlsxPath, gbkPath)
+        });
+        var imported = ParseData(await connection.ReadAsync());
+        Assert.Equal(4, imported["importedFiles"]!.GetValue<int>());
+        Assert.Equal(4, imported["importedEntries"]!.GetValue<int>());
+        Assert.Equal(4, imported["count"]!.GetValue<int>());
+        Assert.Contains(imported["entries"]!.AsArray(),
+            item => item!["title"]!.GetValue<string>() == "部署笔记.txt");
+        Assert.Contains(imported["entries"]!.AsArray(),
+            item => item!["title"]!.GetValue<string>() == "会议纪要.docx"
+                && item["content"]!.GetValue<string>().Contains("发布流程第二步"));
+        Assert.Contains(imported["entries"]!.AsArray(),
+            item => item!["title"]!.GetValue<string>() == "清单.xlsx"
+                && item["content"]!.GetValue<string>().Contains("项目名\tHaoyue\t")
+                && item["content"]!.GetValue<string>().Contains("备注列"));
+        Assert.Contains(imported["entries"]!.AsArray(),
+            item => item!["title"]!.GetValue<string>() == "旧文档.txt"
+                && item["content"]!.GetValue<string>().Contains("pnpm build"));
+        Assert.Contains(imported["entries"]!.AsArray(),
+            item => item["tags"]!.GetValue<string>() == "导入,txt");
+
+        // Re-import upserts by title instead of duplicating.
+        await connection.SendAsync(2, "knowledge.import", new JsonObject
+        {
+            ["paths"] = new JsonArray(notesPath)
+        });
+        var reimported = ParseData(await connection.ReadAsync());
+        Assert.Equal(1, reimported["importedEntries"]!.GetValue<int>());
+        Assert.Equal(4, reimported["count"]!.GetValue<int>());
+
+        await connection.SendAsync(3, "knowledge.import", new JsonObject
+        {
+            ["paths"] = new JsonArray(longPath)
+        });
+        var chunked = ParseData(await connection.ReadAsync());
+        var chunkCount = chunked["importedEntries"]!.GetValue<int>();
+        Assert.True(chunkCount > 1, $"long file should split into multiple chunks, got {chunkCount}");
+        Assert.Contains(chunked["entries"]!.AsArray(),
+            item => item!["title"]!.GetValue<string>().StartsWith("长文.md · 第1/"));
+        Assert.Equal(4 + chunkCount, chunked["count"]!.GetValue<int>());
+
+        await connection.SendAsync(4, "knowledge.import", new JsonObject
+        {
+            ["paths"] = new JsonArray(binaryPath)
+        });
+        var failed = await connection.ReadAsync();
+        Assert.Equal("error", failed["event"]!.GetValue<string>());
+        Assert.Contains("不支持", failed["data"]!.GetValue<string>());
+
+        await connection.SendAsync(5, "knowledge.import", new JsonObject
+        {
+            ["paths"] = new JsonArray(Path.Combine(importDir, "missing.txt"))
+        });
+        var missing = await connection.ReadAsync();
+        Assert.Equal("error", missing["event"]!.GetValue<string>());
+        Assert.Contains("文件不存在", missing["data"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Rules_AndMemory_GetSave_ListAndTraversalGuard()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        // Memory starts absent and round-trips through save/get.
+        await connection.SendAsync(1, "memory.get", new JsonObject());
+        var memory = ParseData(await connection.ReadAsync());
+        Assert.False(memory["exists"]!.GetValue<bool>());
+        Assert.Equal("", memory["content"]!.GetValue<string>());
+        Assert.EndsWith("MEMORY.md", memory["path"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+
+        await connection.SendAsync(2, "memory.save", new JsonObject { ["content"] = "# 项目记忆\n\n- 构建用 pnpm build" });
+        var saved = ParseData(await connection.ReadAsync());
+        Assert.True(File.Exists(saved["path"]!.GetValue<string>()));
+        Assert.Contains("pnpm build", File.ReadAllText(saved["path"]!.GetValue<string>()));
+
+        // Global memory lives in a different file and stays isolated.
+        await connection.SendAsync(3, "memory.save", new JsonObject { ["global"] = true, ["content"] = "全局偏好：中文回复" });
+        ParseData(await connection.ReadAsync());
+        await connection.SendAsync(4, "memory.get", new JsonObject());
+        var workspaceMemory = ParseData(await connection.ReadAsync());
+        Assert.Contains("pnpm build", workspaceMemory["content"]!.GetValue<string>());
+        await connection.SendAsync(5, "memory.get", new JsonObject { ["global"] = true });
+        var globalMemory = ParseData(await connection.ReadAsync());
+        Assert.Contains("全局偏好", globalMemory["content"]!.GetValue<string>());
+        Assert.NotEqual(workspaceMemory["path"]!.GetValue<string>(), globalMemory["path"]!.GetValue<string>());
+
+        // No rules yet — the list is empty and saving creates the root file.
+        await connection.SendAsync(6, "rules.list", new JsonObject());
+        Assert.Equal(0, ParseData(await connection.ReadAsync())["files"]!.AsArray().Count);
+
+        await connection.SendAsync(7, "rules.save", new JsonObject { ["content"] = "- 构建命令：pnpm build" });
+        var ruleSaved = ParseData(await connection.ReadAsync());
+        Assert.Equal("AGENTS.md", ruleSaved["path"]!.GetValue<string>());
+
+        await connection.SendAsync(8, "rules.save", new JsonObject
+        {
+            ["path"] = "packages/app/AGENTS.md",
+            ["content"] = "- 仅适用于 packages/app 的前端规则"
+        });
+        ParseData(await connection.ReadAsync());
+
+        await connection.SendAsync(9, "rules.list", new JsonObject());
+        var listed = ParseData(await connection.ReadAsync());
+        Assert.Equal(2, listed["files"]!.AsArray().Count);
+        var rootFile = listed["files"]!.AsArray().First(item => item!["isRoot"]!.GetValue<bool>());
+        Assert.Equal("AGENTS.md", rootFile["path"]!.GetValue<string>());
+        Assert.Contains(listed["files"]!.AsArray(),
+            item => item!["path"]!.GetValue<string>() == "packages/app/AGENTS.md");
+
+        // Path traversal and non-AGENTS.md names are rejected.
+        await connection.SendAsync(10, "rules.save", new JsonObject { ["path"] = "../evil/AGENTS.md", ["content"] = "evil" });
+        Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+        Assert.False(File.Exists(Path.Combine(_tempDir, "evil", "AGENTS.md")));
+
+        await connection.SendAsync(11, "rules.save", new JsonObject { ["path"] = "README.md", ["content"] = "x" });
+        Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+
+        // Global sessions carry no rules.
+        await connection.SendAsync(12, "rules.save", new JsonObject { ["global"] = true, ["content"] = "x" });
         Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
     }
 

@@ -2,6 +2,7 @@
 import {
   Archive,
   Blocks,
+  BookOpen,
   CalendarClock,
   ChevronDown,
   ChevronRight,
@@ -15,6 +16,7 @@ import {
   Settings2,
   SlidersHorizontal,
   SquarePen,
+  ScrollText,
   Store,
   Trash2
 } from '@lucide/vue'
@@ -49,6 +51,8 @@ const emit = defineEmits<{
   openScheduledTasks: []
   openExtensions: []
   openOfficialSkills: []
+  openKnowledge: []
+  openRulesMemory: []
   openSettings: []
 }>()
 
@@ -209,6 +213,14 @@ onBeforeUnmount(() => {
       <button class="nav-item" @click="emit('openOfficialSkills')">
         <Store :size="18" />
         <span>技能市场</span>
+      </button>
+      <button class="nav-item" @click="emit('openKnowledge')">
+        <BookOpen :size="18" />
+        <span>知识库</span>
+      </button>
+      <button class="nav-item" @click="emit('openRulesMemory')">
+        <ScrollText :size="18" />
+        <span>规则与记忆</span>
       </button>
     </nav>
 

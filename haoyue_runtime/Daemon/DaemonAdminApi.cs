@@ -5,6 +5,7 @@ using System.IO;
 using Cronos;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
+using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Mcp;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
@@ -862,6 +863,273 @@ internal sealed class DaemonAdminApi(
         {
             throw new DaemonRequestException($"Skill install failed: {ex.Message}");
         }
+    }
+
+    /// <summary>Knowledge entries for one scope; params accept the standard global/workspace selectors.</summary>
+    public string ListKnowledge(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 500, 1, 2000);
+        return KnowledgePayload(workspace, runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), limit));
+    }
+
+    public string SearchKnowledge(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var query = RequiredString(parameters, "query");
+        var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 50, 1, 100);
+        return KnowledgePayload(workspace, runtime.Knowledge.Search(HaoyueDatabase.ScopeKey(workspace), query, limit));
+    }
+
+    /// <summary>Creates or updates one entry (same-title upsert) and returns the refreshed list.</summary>
+    public string SaveKnowledge(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var title = RequiredString(parameters, "title");
+        var content = RequiredString(parameters, "content");
+        if (content.Length > 8000)
+            throw new DaemonRequestException($"Knowledge content is too long ({content.Length} chars); keep entries under 8000 characters.");
+        runtime.Knowledge.Save(HaoyueDatabase.ScopeKey(workspace), title, content, OptionalString(parameters, "tags"));
+        return KnowledgePayload(workspace, runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), 500));
+    }
+
+    public string DeleteKnowledge(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        long? id = null;
+        if (parameters["id"] is JsonValue value)
+        {
+            if (value.TryGetValue<long>(out var longId)) id = longId;
+            else if (value.TryGetValue<double>(out var doubleId)) id = (long)doubleId;
+        }
+        if (id is null)
+            throw new DaemonRequestException("params.id is required");
+        if (!runtime.Knowledge.Delete(HaoyueDatabase.ScopeKey(workspace), id.Value))
+            throw new DaemonRequestException($"No knowledge entry #{id} in this scope.");
+        return KnowledgePayload(workspace, runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), 500));
+    }
+
+    /// <summary>Workspace or global MEMORY.md content plus its absolute path.</summary>
+    public string GetMemory(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        string? content = null;
+        if (File.Exists(workspace.MemoryFile))
+        {
+            try { content = File.ReadAllText(workspace.MemoryFile); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new DaemonRequestException($"无法读取记忆文件：{ex.Message}");
+            }
+        }
+        return new JsonObject
+        {
+            ["path"] = workspace.MemoryFile,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["exists"] = content is not null,
+            ["content"] = content ?? "",
+        }.ToJsonString();
+    }
+
+    public string SaveMemory(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var content = RequiredString(parameters, "content");
+        try
+        {
+            Directory.CreateDirectory(workspace.MemoryDir);
+            File.WriteAllText(workspace.MemoryFile, content);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new DaemonRequestException($"无法写入记忆文件：{ex.Message}");
+        }
+        return new JsonObject
+        {
+            ["path"] = workspace.MemoryFile,
+            ["isGlobal"] = workspace.IsGlobal,
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// Lists the hierarchical AGENTS.md rule files under the workspace root
+    /// (root plus two directory levels). Global workspaces carry no rules.
+    /// </summary>
+    public string ListRules(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var files = new JsonArray();
+        if (!workspace.IsGlobal)
+        {
+            var rootPath = Path.GetFullPath(workspace.Root);
+            foreach (var candidate in RuleCandidates(rootPath))
+            {
+                if (!File.Exists(candidate)) continue;
+                try
+                {
+                    files.Add((JsonNode)new JsonObject
+                    {
+                        ["path"] = Path.GetRelativePath(rootPath, candidate).Replace('\\', '/'),
+                        ["isRoot"] = string.Equals(Path.GetDirectoryName(candidate), rootPath, StringComparison.OrdinalIgnoreCase),
+                        ["content"] = File.ReadAllText(candidate),
+                    });
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["files"] = files,
+        }.ToJsonString();
+    }
+
+    public string SaveRules(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        if (workspace.IsGlobal)
+            throw new DaemonRequestException("全局会话不加载规则文件，请选择工作区后保存。");
+        var content = RequiredString(parameters, "content");
+        var relative = (OptionalString(parameters, "path") ?? "AGENTS.md").Trim().Replace('\\', '/');
+        if (relative.Length == 0 || !relative.EndsWith("AGENTS.md", StringComparison.OrdinalIgnoreCase))
+            throw new DaemonRequestException("规则文件必须命名为 AGENTS.md");
+
+        var rootPath = Path.GetFullPath(workspace.Root);
+        string fullPath;
+        try { fullPath = Path.GetFullPath(Path.Combine(rootPath, relative)); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new DaemonRequestException($"Invalid rules path: {ex.Message}");
+        }
+        if (!fullPath.StartsWith(rootPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new DaemonRequestException("规则路径越出了工作区根目录");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, content);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new DaemonRequestException($"无法写入规则文件：{ex.Message}");
+        }
+        return new JsonObject
+        {
+            ["path"] = Path.GetRelativePath(rootPath, fullPath).Replace('\\', '/'),
+        }.ToJsonString();
+    }
+
+    private static IEnumerable<string> RuleCandidates(string rootPath)
+    {
+        yield return Path.Combine(rootPath, "AGENTS.md");
+        var skipped = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "node_modules", ".git", ".haoyue", ".session", ".cache", ".venv", "venv",
+            "bin", "obj", "dist", "build", "out", "logs", "__pycache__", ".next", ".nuxt", "coverage",
+        };
+        foreach (var level1 in SafeDirectories(rootPath, skipped))
+        {
+            yield return Path.Combine(level1, "AGENTS.md");
+            foreach (var level2 in SafeDirectories(level1, skipped))
+                yield return Path.Combine(level2, "AGENTS.md");
+        }
+    }
+
+    private static IEnumerable<string> SafeDirectories(string directory, HashSet<string> skipped)
+    {
+        string[] directories;
+        try { directories = Directory.GetDirectories(directory); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { yield break; }
+        foreach (var dir in directories.OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!skipped.Contains(Path.GetFileName(dir)))
+                yield return dir;
+        }
+    }
+
+    /// <summary>
+    /// Imports files (text formats, .docx, .xlsx) into the knowledge base. Long
+    /// documents are split into entry-sized chunks with stable titles, so repeated
+    /// imports of the same file upsert instead of duplicating.
+    /// </summary>
+    public string ImportKnowledge(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+
+        var paths = parameters["paths"] as JsonArray
+            ?? throw new DaemonRequestException("params.paths is required");
+        if (paths.Count == 0)
+            throw new DaemonRequestException("params.paths must contain at least one file path");
+
+        var files = new JsonArray();
+        var totalEntries = 0;
+        foreach (var node in paths)
+        {
+            var raw = node?.GetValue<string>() ?? throw new DaemonRequestException("params.paths must contain file paths");
+            string fullPath;
+            try { fullPath = Path.GetFullPath(raw.Trim()); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                throw new DaemonRequestException($"Invalid knowledge import path: {ex.Message}");
+            }
+            if (!File.Exists(fullPath))
+                throw new DaemonRequestException($"文件不存在：{fullPath}");
+            if (new FileInfo(fullPath).Length > KnowledgeImport.MaxFileBytes)
+                throw new DaemonRequestException($"文件过大：{Path.GetFileName(fullPath)} 超过 10 MB 限制");
+
+            string text;
+            try { text = KnowledgeImport.ExtractText(fullPath); }
+            catch (KnowledgeImportException ex)
+            {
+                throw new DaemonRequestException(ex.Message);
+            }
+
+            var chunks = KnowledgeImport.SplitChunks(text);
+            if (chunks.Count == 0)
+                throw new DaemonRequestException($"文件内容为空：{Path.GetFileName(fullPath)}");
+
+            var fileName = Path.GetFileName(fullPath);
+            var tags = $"导入,{Path.GetExtension(fullPath).TrimStart('.').ToLowerInvariant()}";
+            for (var index = 0; index < chunks.Count; index++)
+            {
+                var title = chunks.Count == 1 ? fileName : $"{fileName} · 第{index + 1}/{chunks.Count}部分";
+                runtime.Knowledge.Save(scope, title, chunks[index], tags);
+            }
+
+            files.Add((JsonNode)new JsonObject { ["file"] = fileName, ["entries"] = chunks.Count });
+            totalEntries += chunks.Count;
+        }
+
+        var payload = JsonNode.Parse(KnowledgePayload(workspace, runtime.Knowledge.List(scope, 500)))!.AsObject();
+        payload["importedFiles"] = files.Count;
+        payload["importedEntries"] = totalEntries;
+        payload["files"] = files;
+        return payload.ToJsonString();
+    }
+
+    private string KnowledgePayload(Haoyue.Runtime.Workspaces.WorkspaceInfo workspace, IReadOnlyList<KnowledgeEntry> entries)
+    {
+        var data = new JsonArray();
+        foreach (var entry in entries)
+        {
+            data.Add((JsonNode)new JsonObject
+            {
+                ["id"] = entry.Id,
+                ["title"] = entry.Title,
+                ["content"] = entry.Content,
+                ["tags"] = entry.Tags,
+                ["createdAt"] = entry.CreatedAt,
+                ["updatedAt"] = entry.UpdatedAt,
+            });
+        }
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["count"] = data.Count,
+            ["entries"] = data,
+        }.ToJsonString();
     }
 
     public string Usage(JsonObject parameters)

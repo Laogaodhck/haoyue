@@ -34,6 +34,8 @@ import EditMessageDialog from './components/EditMessageDialog.vue'
 import GitWorkspacePanel from './components/GitWorkspacePanel.vue'
 
 import OfficialSkillsDialog from './components/OfficialSkillsDialog.vue'
+import KnowledgeBaseDialog from './components/KnowledgeBaseDialog.vue'
+import RulesMemoryDialog from './components/RulesMemoryDialog.vue'
 import ProjectPropertiesDialog from './components/ProjectPropertiesDialog.vue'
 import RuntimeReconnectDialog from './components/RuntimeReconnectDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
@@ -102,7 +104,7 @@ const appInfo = ref<AppInfo>({
   documentsPath: '',
   userProfilePath: ''
 })
-type AppPage = 'main' | 'settings' | 'extensions' | 'archived' | 'scheduled' | 'official-skills'
+type AppPage = 'main' | 'settings' | 'extensions' | 'archived' | 'scheduled' | 'official-skills' | 'knowledge' | 'rules-memory'
 
 const sidebarOpen = ref(true)
 const activePage = ref<AppPage>('main')
@@ -601,6 +603,18 @@ function openOfficialSkills(): void {
   activePropertiesProject.value = null
   taskSettingsThreadId.value = ''
   activePage.value = 'official-skills'
+}
+
+function openKnowledge(): void {
+  activePropertiesProject.value = null
+  taskSettingsThreadId.value = ''
+  activePage.value = 'knowledge'
+}
+
+function openRulesMemory(): void {
+  activePropertiesProject.value = null
+  taskSettingsThreadId.value = ''
+  activePage.value = 'rules-memory'
 }
 
 function closePage(): void {
@@ -1445,7 +1459,9 @@ watch(theme, applyTheme)
           @delete-project-tasks="deleteProjectTasks" @archive-global-tasks="archiveGlobalTasks"
           @delete-global-tasks="deleteGlobalTasks" @open-archived="openArchivedTasks"
           @open-scheduled-tasks="openScheduledTasks" @open-extensions="openExtensions('mcp')"
-          @open-official-skills="openOfficialSkills" @open-settings="openSettings('general')" />
+          @open-official-skills="openOfficialSkills" @open-knowledge="openKnowledge"
+          @open-rules-memory="openRulesMemory"
+          @open-settings="openSettings('general')" />
       </Transition>
       <Transition name="scrim-fade">
         <button v-if="sidebarOpen" class="sidebar-scrim" title="关闭侧栏" @click="sidebarOpen = false" />
@@ -1610,11 +1626,16 @@ watch(theme, applyTheme)
     <SettingsDialog :open="activePage === 'settings' || activePage === 'extensions'"
       :page="activePage === 'extensions' ? 'extensions' : 'settings'" :theme="theme"
       :daemon-connected="daemonState.connected" :daemon-endpoint="daemonState.endpoint"
+      :workspace-path="runtimeWorkspacePath"
       :initial-section="activePage === 'settings' ? settingsSection : extensionsSection" @close="closePage"
       @change-theme="applyTheme" @reconnect="reconnectDaemon" @open-workspace="openWorkspace"
       @open-official-skills="openOfficialSkills" @runtime-changed="refreshRuntimeState" />
 
     <OfficialSkillsDialog :open="activePage === 'official-skills'" @close="closePage" />
+
+    <KnowledgeBaseDialog :open="activePage === 'knowledge'" @close="closePage" />
+
+    <RulesMemoryDialog :open="activePage === 'rules-memory'" @close="closePage" />
 
     <ScheduledTasksDialog :open="activePage === 'scheduled'" :projects="projects" @close="closePage" />
 

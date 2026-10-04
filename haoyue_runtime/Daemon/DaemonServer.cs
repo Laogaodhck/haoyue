@@ -743,6 +743,51 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.InstallOfficialSkill(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "knowledge.list":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.search":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.SearchKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.save":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SaveKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.delete":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.DeleteKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.import":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.ImportKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "memory.get":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.GetMemory(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "memory.save":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SaveMemory(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "rules.list":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListRules(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "rules.save":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SaveRules(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "usage.get":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.Usage(Params(request))), context.ConnectionCt).ConfigureAwait(false);
@@ -1416,6 +1461,8 @@ public sealed class DaemonServer : IAsyncDisposable
             "mcp.list", "mcp.upsert", "mcp.remove", "mcp.reload",
             "skill.list", "skill.import", "skill.toggle",
             "skill.official.list", "skill.official.install",
+            "knowledge.list", "knowledge.search", "knowledge.save", "knowledge.delete", "knowledge.import",
+            "memory.get", "memory.save", "rules.list", "rules.save",
             "usage.get", "usage.timeline", "doctor", "doctor.run",
             "project.list", "project.upsert", "project.remove",
             "session.list", "session.get", "session.update", "session.archive", "session.delete",

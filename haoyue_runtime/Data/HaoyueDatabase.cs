@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Runtime.Data;
@@ -7,6 +8,9 @@ namespace Haoyue.Runtime.Data;
 /// <summary>Shared SQLite storage for durable user data. Configuration remains file based.</summary>
 public sealed class HaoyueDatabase
 {
+    /// <summary>One journaled event row restored from the database.</summary>
+    public sealed record PersistedEvent(long Id, string Timestamp, string Type, string Payload);
+
     private static readonly object InitializationGate = new();
     private static readonly HashSet<string> InitializedFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _connectionString;
@@ -56,6 +60,52 @@ public sealed class HaoyueDatabase
         }
     }
 
+    /// <summary>
+    /// Appends one durable event row and prunes the journal down to
+    /// <see cref="Events.EventJournal.RetainedEvents"/> entries.
+    /// </summary>
+    public void AppendEvent(DateTimeOffset timestamp, string type, string payloadJson)
+    {
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT INTO events (timestamp, type, payload) VALUES ($ts, $type, $payload);";
+            insert.Parameters.AddWithValue("$ts", timestamp.ToString("O"));
+            insert.Parameters.AddWithValue("$type", type);
+            insert.Parameters.AddWithValue("$payload", payloadJson);
+            insert.ExecuteNonQuery();
+        }
+        using (var prune = connection.CreateCommand())
+        {
+            prune.Transaction = transaction;
+            prune.CommandText =
+                "DELETE FROM events WHERE id <= (SELECT COALESCE(MAX(id), 0) FROM events) - $keep;";
+            prune.Parameters.AddWithValue("$keep", EventJournal.RetainedEvents);
+            prune.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    /// <summary>Most recent journal entries, oldest first, ready for replay.</summary>
+    public IReadOnlyList<PersistedEvent> RecentEvents(int limit = 100)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id, timestamp, type, payload FROM events ORDER BY id DESC LIMIT $limit;";
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, EventJournal.RetainedEvents));
+        var events = new List<PersistedEvent>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                events.Add(new PersistedEvent(
+                    reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+        }
+        events.Reverse();
+        return events;
+    }
+
     public static string ScopeKey(WorkspaceInfo workspace) =>
         (workspace.IsGlobal ? "global|" : "workspace|") + PathKey(workspace.Root);
 
@@ -92,6 +142,7 @@ public sealed class HaoyueDatabase
             DROP TABLE IF EXISTS scheduled_tasks;
             DROP TABLE IF EXISTS migrations;
             DROP TABLE IF EXISTS knowledge;
+            DROP TABLE IF EXISTS events;
             """;
         command.ExecuteNonQuery();
     }
@@ -189,6 +240,13 @@ public sealed class HaoyueDatabase
                 ON knowledge(scope, updated_at DESC);
             CREATE INDEX IF NOT EXISTS ix_knowledge_scope_title
                 ON knowledge(scope, title);
+
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                type TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
             """;
         command.ExecuteNonQuery();
 

@@ -280,7 +280,11 @@ public static class RuntimeServiceCollectionExtensions
         IFileLockCoordinator? coordinator = null,
         string? turnOwner = null)
     {
-        services.AddSingleton<IEventBus, EventBus>();
+        // Event journal: key lifecycle/tool/provider events persist to SQLite so
+        // clients can query and replay them after a restart. Streaming noise
+        // stays memory-only.
+        services.AddSingleton<IEventBus>(sp => new JournaledEventBus(
+            new EventBus(), sp.GetRequiredService<HaoyueDatabase>()));
         services.AddSingleton<IConfigStore>(_ => new ConfigStore());
         services.AddSingleton<IPromptProvider>(_ => new FilePromptProvider());
         services.AddSingleton<IPromptRegistry, PromptRegistry>();

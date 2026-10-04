@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection, type Socket } from 'node:net'
@@ -13,6 +14,23 @@ interface PendingRequest {
 }
 
 const TERMINAL_EVENTS = new Set(['pong', 'result', 'done', 'cancelled', 'error', 'bye'])
+
+/** How long the daemon gets to answer the mandatory handshake. */
+const HANDSHAKE_TIMEOUT_MS = 5000
+
+/**
+ * The daemon requires a handshake token as the first message of every
+ * connection. It lives next to the socket in ~/.haoyue/daemon.token and is
+ * readable only by the current user; a missing file simply means the daemon
+ * has not been started with the current version yet.
+ */
+export function readDaemonToken(): string | null {
+  try {
+    return readFileSync(join(homedir(), '.haoyue', 'daemon.token'), 'utf8').trim() || null
+  } catch {
+    return null
+  }
+}
 
 export class DaemonClient extends EventEmitter {
   private socket: Socket | null = null
@@ -60,10 +78,20 @@ export class DaemonClient extends EventEmitter {
       }
 
       socket.setEncoding('utf8')
-      socket.once('connect', () => {
-        this.socket = socket
-        this.bindSocket(socket)
-        finish({ connected: true, endpoint: this.endpoint })
+      socket.once('connect', async () => {
+        try {
+          await this.authenticate(socket)
+          this.socket = socket
+          this.bindSocket(socket)
+          finish({ connected: true, endpoint: this.endpoint })
+        } catch (error) {
+          socket.destroy()
+          finish({
+            connected: false,
+            endpoint: this.endpoint,
+            error: (error as Error).message
+          })
+        }
       })
       socket.once('timeout', () => {
         socket.destroy()
@@ -75,6 +103,51 @@ export class DaemonClient extends EventEmitter {
     })
 
     return this.connecting
+  }
+
+  /**
+   * Sends {"method":"handshake"} carrying the shared token and waits for the
+   * daemon's verdict. Runs before the regular message pump is bound; any bytes
+   * arriving after the handshake reply are pushed back onto the socket so the
+   * normal pipeline sees them in order.
+   */
+  private authenticate(socket: Socket): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const token = readDaemonToken()
+      let buffer = ''
+      let timer: NodeJS.Timeout | null = setTimeout(() => {
+        timer = null
+        socket.removeListener('data', onData)
+        reject(new Error('Daemon handshake timed out'))
+      }, HANDSHAKE_TIMEOUT_MS)
+
+      const onData = (chunk: string): void => {
+        buffer += chunk
+        const newline = buffer.indexOf('\n')
+        if (newline < 0) return
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+        socket.removeListener('data', onData)
+        const rest = buffer.slice(newline + 1)
+        if (rest) socket.unshift(rest)
+        try {
+          const response = JSON.parse(buffer.slice(0, newline).trim()) as {
+            id: number
+            event: string
+            data: string
+          }
+          if (response.id === 0 && response.event === 'result') resolve()
+          else reject(new Error(`Daemon authentication failed: ${response.data || 'invalid token'}`))
+        } catch {
+          reject(new Error('Invalid daemon handshake response'))
+        }
+      }
+
+      socket.on('data', onData)
+      socket.write(`${JSON.stringify({ id: 0, method: 'handshake', params: { token } })}\n`)
+    })
   }
 
   disconnect(): void {

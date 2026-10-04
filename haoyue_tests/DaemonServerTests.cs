@@ -1154,9 +1154,81 @@ public sealed class DaemonServerTests : IAsyncDisposable
         Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task EventsRecent_ReplaysJournaledEventsOldestFirst()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        _runtime!.Events.Publish(new ErrorEvent("first"));
+        _runtime!.Events.Publish(new WarningEvent("second"));
+
+        await connection.SendAsync(1, "events.recent", new JsonObject { ["limit"] = 10 });
+        var journal = JsonNode.Parse((await connection.ReadAsync())["data"]!.GetValue<string>())!.AsArray();
+        Assert.Equal(2, journal.Count);
+        Assert.Equal("ErrorEvent", journal[0]!["type"]!.GetValue<string>());
+        Assert.Equal("first", journal[0]!["payload"]!["Message"]!.GetValue<string>());
+        Assert.Equal("WarningEvent", journal[1]!["type"]!.GetValue<string>());
+        Assert.Equal("second", journal[1]!["payload"]!["Message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Handshake_WithValidToken_ServesSubsequentRequests()
+    {
+        var token = new string('a', 64);
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            handshakeToken: token);
+
+        await connection.HandshakeAsync(token, id: 7);
+        var authed = await connection.ReadAsync();
+        Assert.Equal(7, authed["id"]!.GetValue<long>());
+        Assert.Equal("result", authed["event"]!.GetValue<string>());
+        var info = JsonNode.Parse(authed["data"]!.GetValue<string>())!;
+        Assert.Equal(DaemonServer.ProtocolVersion, info["version"]!.GetValue<string>());
+
+        await connection.SendAsync(1, "ping");
+        Assert.Equal("pong", (await connection.ReadAsync())["event"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Handshake_WithWrongToken_RejectsAndClosesTheConnection()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            handshakeToken: new string('a', 64));
+
+        await connection.HandshakeAsync(new string('b', 64));
+        var rejected = await connection.ReadAsync();
+        Assert.Equal("error", rejected["event"]!.GetValue<string>());
+        Assert.Contains("authentication", rejected["data"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+
+        // The server closes the link right after the rejection.
+        await Assert.ThrowsAnyAsync<Exception>(() => connection.ReadAsync());
+    }
+
+    [Fact]
+    public async Task Handshake_RequiredBeforeAnyOtherMethod()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            handshakeToken: new string('a', 64));
+
+        // A business method sent before the handshake is rejected with an
+        // authentication error and the connection is dropped.
+        await connection.SendAsync(1, "ping");
+        var rejected = await connection.ReadAsync();
+        Assert.Equal(1, rejected["id"]!.GetValue<long>());
+        Assert.Equal("error", rejected["event"]!.GetValue<string>());
+        Assert.Contains("authentication", rejected["data"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => connection.ReadAsync());
+    }
+
     private async Task<TestConnection> StartServerAsync(
         Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>> runTurn,
-        string? workspace = null)
+        string? workspace = null,
+        string? handshakeToken = null)
     {
         workspace ??= CreateWorkspace("workspace");
         var configStore = new ConfigStore(
@@ -1168,7 +1240,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
             Path.Combine(_tempDir, "haoyue.db"),
             new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
         var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-state"));
-        var server = new DaemonServer(_runtime, runTurn, globalWorkspace);
+        var server = new DaemonServer(_runtime, runTurn, globalWorkspace, handshakeToken);
         _asyncDisposables.Add(server);
 
         var pipeName = $"haoyue-test-{Guid.NewGuid():N}";
@@ -1328,6 +1400,10 @@ public sealed class DaemonServerTests : IAsyncDisposable
             };
             return _writer.WriteLineAsync(request.ToJsonString());
         }
+
+        /// <summary>Sends the mandatory handshake message the daemon expects first.</summary>
+        public Task HandshakeAsync(string token, long id = 0) =>
+            SendAsync(id, "handshake", new JsonObject { ["token"] = token });
 
         public async Task<JsonObject> ReadAsync()
         {

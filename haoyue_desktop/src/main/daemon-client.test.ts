@@ -1,7 +1,7 @@
 import { once } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createServer, type Server } from 'node:net'
+import { createServer, type Server, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { DaemonMessage } from '../shared/ipc.js'
 import { DaemonClient } from './daemon-client.js'
@@ -14,6 +14,31 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
 })
 
+type ParsedRequest = { id: number; method: string; params: Record<string, unknown> }
+
+/**
+ * Wraps a request handler so the mandatory daemon handshake is answered first.
+ * Lines are split defensively: the client may pipeline messages into one chunk.
+ */
+function withHandshake(
+  handler: (socket: Socket, request: ParsedRequest) => void
+): (socket: Socket) => void {
+  return (socket) => {
+    socket.setEncoding('utf8')
+    socket.on('data', (chunk: string) => {
+      for (const line of chunk.split('\n')) {
+        if (!line.trim()) continue
+        const request = JSON.parse(line.trim()) as ParsedRequest
+        if (request.method === 'handshake') {
+          socket.write(`${JSON.stringify({ id: request.id, event: 'result', data: '{}' })}\n`)
+          continue
+        }
+        handler(socket, request)
+      }
+    })
+  }
+}
+
 describe('DaemonClient', () => {
   it('streams JSONL events and resolves on the terminal event', async () => {
     const suffix = `${process.pid}-${Date.now()}`
@@ -21,16 +46,14 @@ describe('DaemonClient', () => {
       ? String.raw`\\.\pipe\haoyue-test-${suffix}`
       : join(tmpdir(), `haoyue-test-${suffix}.sock`)
 
-    const server = createServer((socket) => {
-      socket.setEncoding('utf8')
-      socket.once('data', (chunk: string) => {
-        const request = JSON.parse(chunk.trim()) as { id: number; method: string }
+    const server = createServer(
+      withHandshake((socket, request) => {
         expect(request.method).toBe('chat')
         socket.write(`${JSON.stringify({ id: request.id, event: 'thinking', data: 'checking' })}\n`)
         socket.write(`${JSON.stringify({ id: request.id, event: 'delta', data: 'hello' })}\n`)
         socket.write(`${JSON.stringify({ id: request.id, event: 'done', data: 'hello' })}\n`)
       })
-    })
+    )
     servers.push(server)
     server.listen(endpoint)
     await once(server, 'listening')
@@ -54,13 +77,20 @@ describe('DaemonClient', () => {
       ? String.raw`\\.\pipe\haoyue-test-${suffix}`
       : join(tmpdir(), `haoyue-test-${suffix}.sock`)
 
-    // A server that accepts the connection but never answers. Resume the
-    // socket so the client disconnect is observed and the teardown can close.
-    const sockets: import('node:net').Socket[] = []
+    // A server that answers the handshake but never the request itself. Resume
+    // the socket so the client disconnect is observed and teardown can close.
+    const sockets: Socket[] = []
     const server = createServer((socket) => {
       sockets.push(socket)
+      socket.setEncoding('utf8')
       socket.on('error', () => undefined)
-      socket.on('data', () => undefined)
+      socket.on('data', (chunk: string) => {
+        const request = JSON.parse(chunk.trim().split('\n')[0]) as ParsedRequest
+        if (request.method === 'handshake') {
+          socket.write(`${JSON.stringify({ id: request.id, event: 'result', data: '{}' })}\n`)
+        }
+        // Business requests are deliberately never answered.
+      })
     })
     servers.push(server)
     server.listen(endpoint)
@@ -78,10 +108,8 @@ describe('DaemonClient', () => {
       ? String.raw`\\.\pipe\haoyue-test-${suffix}`
       : join(tmpdir(), `haoyue-test-${suffix}.sock`)
 
-    const server = createServer((socket) => {
-      socket.setEncoding('utf8')
-      socket.once('data', (chunk) => {
-        const request = JSON.parse(chunk.toString().trim()) as { id: number }
+    const server = createServer(
+      withHandshake((socket, request) => {
         // Answer long after the timeout window, but first emit activity that
         // confirms the turn is running and should keep waiting.
         socket.write(`${JSON.stringify({ id: request.id, event: 'status', data: 'Thinking' })}\n`)
@@ -89,7 +117,7 @@ describe('DaemonClient', () => {
           socket.write(`${JSON.stringify({ id: request.id, event: 'done', data: 'ok' })}\n`)
         }, 250)
       })
-    })
+    )
     servers.push(server)
     server.listen(endpoint)
     await once(server, 'listening')
@@ -107,12 +135,11 @@ describe('DaemonClient', () => {
       ? String.raw`\\.\pipe\haoyue-test-${suffix}`
       : join(tmpdir(), `haoyue-test-${suffix}.sock`)
 
-    const server = createServer((socket) => {
-      socket.once('data', (chunk) => {
-        const request = JSON.parse(chunk.toString().trim()) as { id: number }
+    const server = createServer(
+      withHandshake((socket, request) => {
         socket.write(`${JSON.stringify({ id: request.id, event: 'cancelled', data: 'partial' })}\n`)
       })
-    })
+    )
     servers.push(server)
     server.listen(endpoint)
     await once(server, 'listening')
@@ -132,9 +159,8 @@ describe('DaemonClient', () => {
       : join(tmpdir(), `haoyue-test-${suffix}.sock`)
 
     const largePayload = 'A'.repeat(50_000)
-    const server = createServer((socket) => {
-      socket.once('data', (chunk) => {
-        const request = JSON.parse(chunk.toString().trim()) as { id: number }
+    const server = createServer(
+      withHandshake((socket, request) => {
         const line = `${JSON.stringify({ id: request.id, event: 'result', data: largePayload })}\n`
         // Fragment into 1KB slices
         const sliceSize = 1024
@@ -142,7 +168,7 @@ describe('DaemonClient', () => {
           socket.write(line.slice(i, i + sliceSize))
         }
       })
-    })
+    )
     servers.push(server)
     server.listen(endpoint)
     await once(server, 'listening')
@@ -153,5 +179,34 @@ describe('DaemonClient', () => {
 
     expect(response.event).toBe('result')
     expect(response.data).toBe(largePayload)
+  })
+
+  it('fails to connect when the daemon rejects the handshake', async () => {
+    const suffix = `${process.pid}-${Date.now()}-authfail`
+    const endpoint = process.platform === 'win32'
+      ? String.raw`\\.\pipe\haoyue-test-${suffix}`
+      : join(tmpdir(), `haoyue-test-${suffix}.sock`)
+
+    const server = createServer((socket) => {
+      socket.setEncoding('utf8')
+      socket.on('data', (chunk: string) => {
+        const request = JSON.parse(chunk.trim().split('\n')[0]) as ParsedRequest
+        if (request.method === 'handshake') {
+          socket.write(
+            `${JSON.stringify({ id: request.id, event: 'error', data: 'authentication failed: missing or invalid handshake token' })}\n`
+          )
+        }
+      })
+    })
+    servers.push(server)
+    server.listen(endpoint)
+    await once(server, 'listening')
+
+    const client = new DaemonClient(endpoint)
+    clients.push(client)
+    const state = await client.connect()
+
+    expect(state.connected).toBe(false)
+    expect(state.error).toContain('authentication failed')
   })
 })

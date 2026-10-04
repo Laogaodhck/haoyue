@@ -30,7 +30,7 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 ### 🚀 Runtime First 架构
 
 - **清洁架构**：以 `haoyue_runtime` 为核心，`haoyue_cli`（终端）与 `haoyue_desktop`（桌面）作为前端，关注点分离
-- **常驻守护进程**：daemon 通过 Named Pipe / Unix Socket 暴露 JSON-RPC，桌面端与 CLI 共享同一运行时
+- **常驻守护进程**：daemon 通过 Named Pipe / Unix Socket 暴露 JSON-RPC，桌面端与 CLI 共享同一运行时；启动时生成随机握手 token（`~/.haoyue/daemon.token`，仅当前用户可读），客户端首条消息必须携带 token 认证，未认证连接拒绝并断开
 - **插件系统**：Tools、Skills、Prompts 与 MCP（Model Context Protocol）四层扩展机制
 - **事件驱动**：通过事件总线实现渲染与业务逻辑解耦
 
@@ -78,7 +78,7 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 
 - **项目识别**：自动识别 Git、.NET、Node.js、Python、Rust、Go、Unity、Vue 项目
 - **隔离配置**：每个工作区独立的配置、缓存和内存，会话按工作区作用域隔离
-- **自动初始化**：自动创建 `.haoyue/` 目录结构
+- **模板化初始化**：`haoyue init` 生成 AGENTS.md、工作区 config.json 与自定义提示词结构；在 `~/.haoyue/templates/workspace/` 放置同名文件即可全局定制模板，已有文件从不覆盖
 
 ### 🌐 官网与技能市场
 
@@ -91,6 +91,7 @@ Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和�
 - **会话管理**：基于 SQLite 的会话持久化、恢复与并发访问，支持标题与消息正文全文搜索（按命中数与时间排序）
 - **内存系统**：工作区特定的内存，自动上下文注入
 - **验证机制**：代码修改后自动构建/检查/修复循环，支持多步验证命令链（按序执行、fail-fast，失败步骤的错误行摘要直接进入修复提示）
+- **事件持久化**：关键事件（轮次、工具调用、用量、诊断等）写入 SQLite 事件日志（保留最近 5000 条），daemon 支持 `events.recent` 查询重放，重启不丢失
 - **热重载**：提示文件和配置无需重启即可重载
 
 ## 📦 安装

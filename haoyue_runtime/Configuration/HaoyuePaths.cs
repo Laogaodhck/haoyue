@@ -17,6 +17,8 @@ public static class HaoyuePaths
     public static string SkillsDir => Path.Combine(Home, "skills");
     public static string PromptsDir => Path.Combine(Home, "prompts");
     public static string SessionsDir => Path.Combine(Home, "sessions");
+    /// <summary>Handshake token the daemon shares with its local clients.</summary>
+    public static string DaemonTokenFile => Path.Combine(Home, "daemon.token");
 
     /// <summary>Directory of the running application (default prompts / seed config ship here).</summary>
     public static string AppDir => AppContext.BaseDirectory;

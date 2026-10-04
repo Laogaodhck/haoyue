@@ -37,7 +37,7 @@ public interface IWorkspaceManager
     WorkspaceInfo CreateGlobal(string? stateRoot = null);
 
     /// <summary>Creates the standard workspace directories and .gitignore entries (haoyue init).</summary>
-    IReadOnlyList<string> Bootstrap(WorkspaceInfo workspace);
+    IReadOnlyList<string> Bootstrap(WorkspaceInfo workspace, string? templatesRoot = null);
 
     string? LoadMemory(WorkspaceInfo workspace);
 
@@ -182,7 +182,7 @@ public sealed class WorkspaceManager : IWorkspaceManager
         }
     }
 
-    public IReadOnlyList<string> Bootstrap(WorkspaceInfo workspace)
+    public IReadOnlyList<string> Bootstrap(WorkspaceInfo workspace, string? templatesRoot = null)
     {
         var created = new List<string>();
         foreach (var dir in new[]
@@ -197,6 +197,32 @@ public sealed class WorkspaceManager : IWorkspaceManager
                 Directory.CreateDirectory(dir);
                 created.Add(Path.GetRelativePath(workspace.Root, dir));
             }
+        }
+
+        // Seed files: AGENTS.md at the root, the workspace config and any custom
+        // prompt templates. Global overrides live under ~/.haoyue/templates/
+        // workspace/; existing files are never overwritten.
+        var agentsMd = Path.Combine(workspace.Root, "AGENTS.md");
+        if (!File.Exists(agentsMd))
+        {
+            File.WriteAllText(agentsMd, WorkspaceTemplates.AgentsMdTemplate(templatesRoot));
+            created.Add("AGENTS.md");
+        }
+
+        var workspaceConfig = Path.Combine(workspace.HaoyueDir, "config.json");
+        if (!File.Exists(workspaceConfig))
+        {
+            File.WriteAllText(workspaceConfig, WorkspaceTemplates.WorkspaceConfigTemplate(templatesRoot));
+            created.Add(".haoyue/config.json");
+        }
+
+        foreach (var (relativePath, content) in WorkspaceTemplates.PromptTemplates(templatesRoot))
+        {
+            var target = Path.Combine(workspace.PromptsDir, relativePath);
+            if (File.Exists(target)) continue;
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.WriteAllText(target, content);
+            created.Add(Path.Combine(".haoyue", "prompts", relativePath));
         }
 
         var gitignore = Path.Combine(workspace.Root, ".gitignore");

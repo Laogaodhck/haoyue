@@ -162,7 +162,7 @@ public static class InitCommand
 {
     public static Command Build()
     {
-        var command = new Command("init", "Bootstrap the workspace (.cache, .session, logs, skills, mcp, docs, .gitignore)");
+        var command = new Command("init", "Bootstrap the workspace (state directories, AGENTS.md, config.json, prompt templates, .gitignore)");
         command.SetAction(_ =>
         {
             using var rt = CliHost.CreateRuntime();
@@ -329,7 +329,11 @@ public static class DaemonCommand
                 ? $@"\\.\pipe\{DaemonServer.PipeName}"
                 : DaemonServer.SocketPath;
             AnsiConsole.MarkupLine($"[green]Haoyue daemon listening[/] on [cyan]{Markup.Escape(endpoint)}[/] (ctrl+c to stop)");
-            await using var daemonServer = new DaemonServer(rt);
+            // Local clients (desktop, scripts) must present this token as their
+            // first message; it lives in ~/.haoyue/daemon.token, readable only
+            // by the current user.
+            var handshakeToken = DaemonAuth.LoadOrCreateToken();
+            await using var daemonServer = new DaemonServer(rt, handshakeToken);
             var daemon = daemonServer.RunAsync(ct);
             try { await Task.WhenAll(daemon, mcpConnection); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { }

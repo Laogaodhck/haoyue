@@ -30,7 +30,7 @@ Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean archit
 ### 🚀 Runtime First Architecture
 
 - **Clean Architecture**: Separation of concerns with `haoyue_runtime` as the core, and `haoyue_cli` (terminal) and `haoyue_desktop` (desktop) as frontends
-- **Resident Daemon**: the daemon exposes JSON-RPC over Named Pipe / Unix Socket; the desktop app and CLI share the same runtime
+- **Resident Daemon**: the daemon exposes JSON-RPC over Named Pipe / Unix Socket; the desktop app and CLI share the same runtime. On startup it generates a random handshake token (`~/.haoyue/daemon.token`, readable only by the current user); every client must present the token as its first message or the connection is rejected and closed
 - **Plugin System**: Tools, Skills, Prompts, and MCP (Model Context Protocol) — a four-layer extension mechanism
 - **Event-Driven**: Decoupled rendering and business logic via event bus
 
@@ -79,7 +79,7 @@ Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean archit
 
 - **Project Detection**: Automatic recognition of Git, .NET, Node.js, Python, Rust, Go, Unity, Vue projects
 - **Isolated Config**: Per-workspace configuration, cache, and memory with workspace-scoped sessions
-- **Bootstrap**: Automatic project setup with `.haoyue/` directory structure
+- **Templated Bootstrap**: `haoyue init` seeds AGENTS.md, the workspace config.json and custom prompt files; place same-named files under `~/.haoyue/templates/workspace/` to customize all templates globally — existing files are never overwritten
 
 ### 🌐 Website & Skill Market
 
@@ -92,6 +92,7 @@ Haoyue is a high-performance AI agent built on .NET 10.0, featuring clean archit
 - **Session Management**: SQLite-backed persistence, restoration, and concurrent access, with full-text search across titles and message bodies (ranked by hit count and recency)
 - **Memory System**: Workspace-specific memory with automatic context injection
 - **Verification**: Automatic build/check/repair cycle with multi-step command chains (run in order with fail-fast; the failing step's error-line summary feeds the repair prompt)
+- **Event Journal**: Key events (turns, tool calls, usage, diagnostics) persist to a SQLite journal (last 5000 entries retained); the daemon exposes `events.recent` for query and replay across restarts
 - **Hot Reload**: Prompt files and configurations reload without restart
 
 ## 📦 Installation

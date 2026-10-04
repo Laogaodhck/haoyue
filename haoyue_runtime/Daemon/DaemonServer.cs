@@ -25,11 +25,16 @@ namespace Haoyue.Runtime.Daemon;
 public sealed class DaemonServer : IAsyncDisposable
 {
     public const string PipeName = "haoyue";
-    public const string ProtocolVersion = "2.1";
+    public const string ProtocolVersion = "2.2";
     public static string SocketPath => Path.Combine(HaoyuePaths.Home, "daemon.sock");
     private const int MaxImageCount = 10;
     private const int MaxImageBytes = 10 * 1024 * 1024;
     private const int MaxTotalImageBytes = 40 * 1024 * 1024;
+
+    /// <summary>Seconds a client has to present a valid handshake before the link is dropped.</summary>
+    private const int HandshakeTimeoutSeconds = 15;
+    /// <summary>Upper bound for the handshake line so an unauthenticated peer cannot stream unbounded data.</summary>
+    private const int MaxHandshakeLineLength = 4096;
     private static readonly HashSet<string> SupportedImageTypes =
         ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
@@ -39,6 +44,10 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>>? _runTurn;
     private readonly bool _useIsolatedTurnRuntime;
     private readonly CancellationTokenSource _shutdown = new();
+
+    // When set, every connection must authenticate with this token as its very
+    // first message before it can dispatch methods or receive broadcasts.
+    private readonly string? _handshakeToken;
 
     // Central Task Coordinator: one instance per daemon process is the single
     // source of truth for file write locks across all concurrent agent turns.
@@ -101,6 +110,15 @@ public sealed class DaemonServer : IAsyncDisposable
     {
     }
 
+    /// <summary>
+    /// Production host: pass <see cref="DaemonAuth.LoadOrCreateToken"/> so local
+    /// clients must present the shared handshake token before dispatching.
+    /// </summary>
+    public DaemonServer(HaoyueRuntime runtime, string? handshakeToken)
+        : this(runtime, null, runtime.Workspaces.CreateGlobal(), handshakeToken)
+    {
+    }
+
     internal DaemonServer(
         HaoyueRuntime runtime,
         Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>>? runTurn)
@@ -111,12 +129,14 @@ public sealed class DaemonServer : IAsyncDisposable
     internal DaemonServer(
         HaoyueRuntime runtime,
         Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>>? runTurn,
-        WorkspaceInfo globalWorkspace)
+        WorkspaceInfo globalWorkspace,
+        string? handshakeToken = null)
     {
         _runtime = runtime;
         _globalWorkspace = globalWorkspace;
         _runTurn = runTurn;
         _useIsolatedTurnRuntime = runTurn is null;
+        _handshakeToken = handshakeToken;
         _sharedBreaker = new CircuitBreaker(runtime.ConfigStore.Config.Routing.Retry);
         // Tests inject a stub turn runner; route scheduled runs through it too so the
         // daemon harness stays deterministic. Production keeps the isolated runtime path.
@@ -298,6 +318,16 @@ public sealed class DaemonServer : IAsyncDisposable
             AutoFlush = true,
         };
         using var writerGate = new SemaphoreSlim(1, 1);
+
+        // Handshake gate: when a token is configured, the very first message must
+        // authenticate. Unauthenticated connections never receive broadcasts and
+        // cannot dispatch any method; failures drop the link immediately.
+        if (_handshakeToken is not null
+            && !await AuthenticateConnectionAsync(reader, writer, writerGate, ct).ConfigureAwait(false))
+        {
+            return;
+        }
+
         var clientId = RegisterClient(writer, writerGate);
         var context = new ConnectionContext(writer, writerGate, ct);
 
@@ -366,6 +396,68 @@ public sealed class DaemonServer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Requires {"method":"handshake","params":{"token":...}} as the first message.
+    /// Returns true once authenticated; on a missing/wrong token, a malformed
+    /// message or a timeout the client is told why and the link is dropped.
+    /// </summary>
+    private async Task<bool> AuthenticateConnectionAsync(
+        StreamReader reader,
+        StreamWriter writer,
+        SemaphoreSlim writerGate,
+        CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(HandshakeTimeoutSeconds));
+        try
+        {
+            var line = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(line) || line.Length > MaxHandshakeLineLength)
+                return false;
+
+            JsonObject? request;
+            try { request = JsonNode.Parse(line) as JsonObject; }
+            catch (JsonException) { request = null; }
+
+            if (request is null)
+            {
+                await WriteAsync(writer, writerGate, 0, "error",
+                    "authentication failed: invalid handshake message", timeout.Token).ConfigureAwait(false);
+                return false;
+            }
+
+            long id = 0;
+            string? method = null;
+            string? token = null;
+            try
+            {
+                id = request["id"]?.GetValue<long>() ?? 0;
+                method = request["method"]?.GetValue<string>();
+                token = Params(request)["token"]?.GetValue<string>();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            if (method == "handshake"
+                && token is not null
+                && DaemonAuth.TokensEqual(_handshakeToken!, token))
+            {
+                await WriteAsync(writer, writerGate, id, "result", ProtocolInfoJson(), timeout.Token).ConfigureAwait(false);
+                return true;
+            }
+
+            await WriteAsync(writer, writerGate, id, "error",
+                "authentication failed: missing or invalid handshake token", timeout.Token).ConfigureAwait(false);
+            return false;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Handshake timeout: the client never authenticated in time.
+            return false;
+        }
+    }
+
     private async Task DispatchMethodAsync(JsonObject request, long id, string method, ConnectionContext context)
     {
         switch (method)
@@ -377,6 +469,22 @@ public sealed class DaemonServer : IAsyncDisposable
                     case "protocol.info":
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", ProtocolInfoJson(), context.ConnectionCt).ConfigureAwait(false);
                         break;
+
+                    case "events.recent":
+                    {
+                        var limit = Params(request)["limit"]?.GetValue<int>() ?? 100;
+                        var journal = new JsonArray();
+                        foreach (var persisted in _runtime.Database.RecentEvents(limit))
+                            journal.Add(new JsonObject
+                            {
+                                ["id"] = persisted.Id,
+                                ["timestamp"] = persisted.Timestamp,
+                                ["type"] = persisted.Type,
+                                ["payload"] = JsonNode.Parse(persisted.Payload),
+                            });
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", journal.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
 
                     case "workspace.init":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
@@ -1478,7 +1586,7 @@ public sealed class DaemonServer : IAsyncDisposable
             "project.list", "project.upsert", "project.remove",
             "session.list", "session.search", "session.get", "session.update", "session.archive", "session.delete",
             "session.resume", "session.new",
-            "lock.list", "factory.reset", "shutdown"),
+            "lock.list", "factory.reset", "shutdown", "events.recent"),
     }.ToJsonString();
 
     private async Task RunAdminAsync(

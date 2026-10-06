@@ -208,7 +208,7 @@ public sealed class EditFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
         string path, string oldString, string newString, bool replaceAll, ToolContext context, CancellationToken ct)
     {
         var text = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-        var occurrences = CountOccurrences(text, oldString);
+        var (effectiveOld, effectiveNew, occurrences) = ResolveMatch(text, oldString, newString);
         if (occurrences == 0)
             return ToolResult.Fail($"old_string not found in {path}. Read the file again — the content may have changed.");
 
@@ -217,8 +217,8 @@ public sealed class EditFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
                 $"old_string matches {occurrences} locations in {path}. Provide more surrounding context to make it unique, or set replace_all.");
 
         var updated = replaceAll
-            ? text.Replace(oldString, newString)
-            : ReplaceFirst(text, oldString, newString);
+            ? text.Replace(effectiveOld, effectiveNew)
+            : ReplaceFirst(text, effectiveOld, effectiveNew);
         await File.WriteAllTextAsync(path, updated, ct).ConfigureAwait(false);
 
         var relative = Path.GetRelativePath(context.Workspace.Root, path);
@@ -230,6 +230,47 @@ public sealed class EditFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
             ? $"Replaced {occurrences} occurrences in {relative}"
             : $"Edited {relative}";
         return ToolResult.Ok(summary, summary) with { Diff = diff, FilePath = path };
+    }
+
+    /// <summary>
+    /// Resolves the effective old/new pair for the replacement. Exact matching wins; when
+    /// it finds nothing, the match is retried with the other line-ending style — models
+    /// routinely describe edits with "\n" while Windows files use "\r\n" (and vice versa),
+    /// and a raw byte comparison would report a false "not found". The matched variant also
+    /// normalizes new_string to the same style, so the file never ends up with mixed
+    /// line endings. Uniqueness is enforced on the variant actually being replaced.
+    /// </summary>
+    internal static (string EffectiveOld, string EffectiveNew, int Occurrences) ResolveMatch(
+        string text, string oldString, string newString)
+    {
+        var occurrences = CountOccurrences(text, oldString);
+        if (occurrences > 0)
+            return (oldString, newString, occurrences);
+
+        foreach (var (variantOld, normalizeNew) in LineEndingVariants(oldString))
+        {
+            var variantOccurrences = CountOccurrences(text, variantOld);
+            if (variantOccurrences > 0)
+                return (variantOld, normalizeNew(newString), variantOccurrences);
+        }
+        return (oldString, newString, 0);
+    }
+
+    /// <summary>
+    /// Yields the old_string rewritten in the opposite line-ending style (LF↔CRLF) together
+    /// with a function that normalizes new_string into that same style. A string without
+    /// any line break produces no variants.
+    /// </summary>
+    private static List<(string VariantOld, Func<string, string> NormalizeNew)> LineEndingVariants(string oldString)
+    {
+        var variants = new List<(string, Func<string, string>)>();
+        var lfForm = oldString.Replace("\r\n", "\n");
+        if (lfForm != oldString)
+            variants.Add((lfForm, newString => newString.Replace("\r\n", "\n")));
+        var crlfForm = lfForm.Replace("\n", "\r\n");
+        if (crlfForm != oldString)
+            variants.Add((crlfForm, newString => newString.Replace("\r\n", "\n").Replace("\n", "\r\n")));
+        return variants;
     }
 
     internal static int CountOccurrences(string text, string value)

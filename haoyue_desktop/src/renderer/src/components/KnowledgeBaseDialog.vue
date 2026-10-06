@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, BookOpen, ChevronDown, ChevronRight, FileUp, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2 } from '@lucide/vue'
+import { ArrowLeft, BookOpen, ChevronDown, ChevronRight, FileUp, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, X } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { confirmAction } from '../confirmation'
 import SelectMenu from './SelectMenu.vue'
@@ -34,6 +34,12 @@ const SCOPE_OPTIONS = [
   { value: 'global', label: '全局', description: '跨工作区共享' }
 ]
 
+const SORT_OPTIONS = [
+  { value: 'updated', label: '按更新时间' },
+  { value: 'created', label: '按创建时间' },
+  { value: 'title', label: '按标题' }
+]
+
 const CONTENT_LIMIT = 8000
 
 const entries = ref<KnowledgeEntry[]>([])
@@ -45,6 +51,7 @@ const error = ref('')
 const notice = ref('')
 const scope = ref<'workspace' | 'global'>('workspace')
 const query = ref('')
+const sort = ref<'updated' | 'created' | 'title'>('updated')
 const expandedIds = ref(new Set<number>())
 /** null = 新增；数字 = 正在编辑的条目 id。 */
 const editingId = ref<number | null>(null)
@@ -60,6 +67,21 @@ interface ImportPayload extends KnowledgePayload {
 const hasQuery = computed(() => query.value.trim().length > 0)
 const contentLength = computed(() => form.content.length)
 const formInvalid = computed(() => !form.title.trim() || !form.content.trim() || contentLength.value > CONTENT_LIMIT)
+
+/** 搜索词列表（空格分词），用于结果高亮与本地兜底过滤。 */
+const searchTerms = computed(() => query.value.trim().toLowerCase().split(/\s+/).filter(Boolean))
+
+/** 列表排序：默认按更新时间（与服务端顺序一致），也可按创建时间或标题。 */
+const sortedEntries = computed(() => {
+  const list = [...entries.value]
+  if (sort.value === 'title') {
+    list.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN'))
+  } else {
+    const key = sort.value === 'created' ? 'createdAt' : 'updatedAt'
+    list.sort((a, b) => (b[key] ?? '').localeCompare(a[key] ?? ''))
+  }
+  return list
+})
 
 async function requestJson<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   const response = await window.haoyue.daemon.request(method, params)
@@ -101,6 +123,48 @@ watch(scope, (next, previous) => {
   expandedIds.value = new Set()
   void loadEntries()
 })
+
+/** 输入即搜：350ms 防抖触发服务端语义检索；清空时立即恢复完整列表。 */
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+watch(query, (next, previous) => {
+  if (!props.open || next === previous) return
+  if (searchTimer) clearTimeout(searchTimer)
+  if (!next.trim()) {
+    void loadEntries()
+    return
+  }
+  searchTimer = setTimeout(() => void loadEntries(), 350)
+})
+
+/** 点击标签：以该标签作为关键词立即检索，实现按主题快速过滤。 */
+function setQueryFromTag(tag: string): void {
+  query.value = tag
+  expandedIds.value = new Set()
+}
+
+function clearSearch(): void {
+  query.value = ''
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/**
+ * 高亮文本中的搜索命中片段：先转义再包 mark，避免注入。
+ * 命中判定与内容一样走小写包含（与服务端归一化近似的本地兜底）。
+ */
+function highlightHtml(text: string): string {
+  const escaped = escapeHtml(text)
+  if (searchTerms.value.length === 0) return escaped
+  let result = escaped
+  for (const term of searchTerms.value) {
+    if (!term) continue
+    const safeTerm = escapeHtml(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    result = result.replace(new RegExp(safeTerm, 'gi'), (match) => `<mark>${match}</mark>`)
+  }
+  return result
+}
 
 function startCreate(): void {
   editingId.value = null
@@ -241,11 +305,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
       <SelectMenu v-model="scope" :options="SCOPE_OPTIONS" label="知识库范围" class="knowledge-scope" />
       <label class="knowledge-search">
         <Search :size="16" />
-        <input v-model="query" placeholder="搜索标题、内容与标签" aria-label="搜索知识" @keydown.enter="loadEntries" />
+        <input v-model="query" placeholder="搜索标题、内容与标签（输入即搜）" aria-label="搜索知识" @keydown.enter="loadEntries" />
+        <button v-if="hasQuery" class="knowledge-search-clear" title="清空搜索" @click="clearSearch">
+          <X :size="14" />
+        </button>
       </label>
-      <button class="icon-button" title="搜索" :disabled="loading" @click="loadEntries">
-        <Search :size="16" />
-      </button>
       <button class="icon-button" title="刷新" :disabled="loading" @click="loadEntries">
         <RefreshCw :size="16" :class="{ spinning: loading }" />
       </button>
@@ -256,6 +320,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
         <LoaderCircle v-if="importing" class="spin" :size="15" />
         <FileUp v-else :size="15" /> 导入文件
       </button>
+      <SelectMenu v-model="sort" :options="SORT_OPTIONS" label="排序方式" class="knowledge-sort" />
     </div>
 
     <form v-if="showForm" class="knowledge-form" @submit.prevent="saveForm">
@@ -289,7 +354,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
         <span>{{ hasQuery ? '换个关键词试试。' : 'Agent 会在对话中自动沉淀经验（knowledge_save），也可以点「添加知识」手动记录。' }}</span>
       </div>
       <div v-else class="knowledge-items">
-        <div v-for="entry in entries" :key="entry.id" class="knowledge-row">
+        <div v-for="entry in sortedEntries" :key="entry.id" class="knowledge-row">
           <button class="knowledge-expand" type="button" :aria-label="expandedIds.has(entry.id) ? '收起' : '展开'"
             @click="toggleExpanded(entry.id)">
             <ChevronDown v-if="expandedIds.has(entry.id)" :size="15" />
@@ -297,12 +362,19 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
           </button>
           <div class="knowledge-main" @click="toggleExpanded(entry.id)">
             <div class="knowledge-row-head">
-              <strong>{{ entry.title }}</strong>
-              <span v-for="tag in (entry.tags ?? '').split(',').map((tag) => tag.trim()).filter(Boolean)"
-                :key="tag" class="inline-badge">{{ tag }}</span>
+              <strong v-html="highlightHtml(entry.title)" />
+              <button v-for="tag in (entry.tags ?? '').split(',').map((tag) => tag.trim()).filter(Boolean)"
+                :key="tag" class="inline-badge knowledge-tag" type="button"
+                :title="`按标签「${tag}」筛选`" @click.stop="setQueryFromTag(tag)">{{ tag }}</button>
             </div>
-            <p :class="{ clamped: !expandedIds.has(entry.id) }">{{ entry.content }}</p>
-            <small>更新于 {{ formatTime(entry.updatedAt) }}</small>
+            <p v-if="!expandedIds.has(entry.id)" class="clamped" v-html="highlightHtml(entry.content)" />
+            <p v-else v-html="highlightHtml(entry.content)" />
+            <small>
+              更新于 {{ formatTime(entry.updatedAt) }}
+              <template v-if="expandedIds.has(entry.id)">
+                · 创建于 {{ formatTime(entry.createdAt) }} · {{ entry.content.length }} 字
+              </template>
+            </small>
           </div>
           <div class="knowledge-row-actions">
             <button class="icon-button compact" title="编辑" @click="startEdit(entry)">
@@ -385,6 +457,52 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 .knowledge-scope {
   width: 150px;
   flex: 0 0 auto;
+}
+
+/* 排序方式选择器，靠右与工具栏动作同层。 */
+.knowledge-sort {
+  width: 128px;
+  flex: 0 0 auto;
+}
+
+.knowledge-search-clear {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.knowledge-search-clear:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+/* 搜索命中高亮：跟随主题强调色，弱化背景保持可读。 */
+.knowledge-main :deep(mark) {
+  color: var(--accent);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+/* 标签可点击筛选：视觉沿用 inline-badge，交互上给出按钮反馈。 */
+.knowledge-tag {
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.knowledge-tag:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .knowledge-search {

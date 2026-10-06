@@ -38,6 +38,10 @@ public sealed partial class Agent(
     ISkillManager? skills = null)
 {
     private readonly ISkillManager? _skills = skills;
+
+    /// <summary>Identical failed tool calls (same tool + normalized args) tolerated before a strategy nudge is injected.</summary>
+    internal const int RepeatedFailureNudgeThreshold = 2;
+
     public async Task<AgentTurnResult> RunTurnAsync(
         AgentSession session,
         WorkspaceInfo workspace,
@@ -64,6 +68,36 @@ public sealed partial class Agent(
         string? error = null;
         var cancelled = false;
 
+        // Strategy-repair tracking: consecutive failures of the same tool with the same
+        // normalized arguments usually mean the model is stuck retrying a dead end.
+        var failureSignature = "";
+        var consecutiveFailures = 0;
+        void HandleToolResult(ToolCallRequest call, ToolExecution execution)
+        {
+            mutated |= execution.ToolMutated;
+            sessionStore.Append(session, execution.Message);
+            if (execution.Message.ToolSuccess)
+            {
+                consecutiveFailures = 0;
+                failureSignature = "";
+                return;
+            }
+            var signature = $"{call.Name}|{ToolArguments.Sanitize(call.ArgumentsJson)}";
+            if (signature == failureSignature) consecutiveFailures++;
+            else
+            {
+                failureSignature = signature;
+                consecutiveFailures = 1;
+            }
+            if (consecutiveFailures == RepeatedFailureNudgeThreshold)
+            {
+                sessionStore.Append(session, ChatMessage.User(
+                    $">>> [repeated tool failure] 工具 {call.Name} 已用相同参数连续失败 {consecutiveFailures} 次。请停止原样重试：先用读取类工具确认文件与环境的当前状态，再调整参数或换一种方法完成任务。"));
+                events.Publish(new WarningEvent(
+                    $"工具 {call.Name} 连续失败 {consecutiveFailures} 次，已注入策略纠偏提示。"));
+            }
+        }
+
         try
         {
             // Repair iterations are extra model turns appended after a failed build
@@ -74,6 +108,8 @@ public sealed partial class Agent(
             var compactedThisTurn = false;
             var truncatedSteps = 0;
             var reachedMaxSteps = false;
+            var wrapUpRequested = false;
+            var emptyAnswerNudged = false;
             var step = 0;
             // Composing the system prompt reads memory / AGENTS.md / prompt files from disk.
             // Its inputs cannot change between steps of one turn (same model, tools and flags),
@@ -85,7 +121,26 @@ public sealed partial class Agent(
             while (true)
             {
                 step++;
-                if (step > maxSteps) { reachedMaxSteps = true; break; }
+                if (step > maxSteps)
+                {
+                    // Budget exhausted. Ending the turn here would leave the user without
+                    // any conclusion, so grant exactly one wrap-up turn: the nudge goes in
+                    // at step == maxSteps + 1, the model summarizes at maxSteps + 2, and
+                    // anything beyond that ends the turn.
+                    if (!wrapUpRequested)
+                    {
+                        wrapUpRequested = true;
+                        sessionStore.Append(session, ChatMessage.User(
+                            ">>> [step budget] 已达到本回合最大步数上限。请立即停止调用工具，直接总结当前进展、已完成的改动与未完成事项，给出最终回答。"));
+                        events.Publish(new StatusEvent("Step budget reached; wrapping up"));
+                        continue;
+                    }
+                    if (step > maxSteps + 2)
+                    {
+                        reachedMaxSteps = true;
+                        break;
+                    }
+                }
                 ct.ThrowIfCancellationRequested();
                 PublishSteering(AppendSteering(session, steering));
 
@@ -191,18 +246,13 @@ public sealed partial class Agent(
                             {
                                 foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
                                 var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, ct))).ConfigureAwait(false);
-                                foreach (var result in batchResults)
-                                {
-                                    mutated |= result.ToolMutated;
-                                    sessionStore.Append(session, result.Message);
-                                }
+                                for (var i = 0; i < batchResults.Length; i++)
+                                    HandleToolResult(readOnlyBatch[i], batchResults[i]);
                                 readOnlyBatch.Clear();
                             }
 
                             PublishWorkflow(step, "tool", call.Name);
-                            var singleResult = await ExecuteToolAsync(call, workspace, model, ct).ConfigureAwait(false);
-                            mutated |= singleResult.ToolMutated;
-                            sessionStore.Append(session, singleResult.Message);
+                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, ct).ConfigureAwait(false));
                         }
                     }
 
@@ -210,11 +260,8 @@ public sealed partial class Agent(
                     {
                         foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
                         var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, ct))).ConfigureAwait(false);
-                        foreach (var result in batchResults)
-                        {
-                            mutated |= result.ToolMutated;
-                            sessionStore.Append(session, result.Message);
-                        }
+                        for (var i = 0; i < batchResults.Length; i++)
+                            HandleToolResult(readOnlyBatch[i], batchResults[i]);
                     }
                     PublishSteering(guidance);
                     continue;
@@ -250,6 +297,19 @@ public sealed partial class Agent(
                     continue;
                 }
                 truncatedSteps = 0;
+
+                // A completion with no text, no tool calls and no truncation is an empty
+                // answer — often a decoding hiccup. Nudge once instead of ending the turn
+                // with nothing; the second empty answer ends the turn as before.
+                if (completion.Text.Length == 0 && !emptyAnswerNudged)
+                {
+                    emptyAnswerNudged = true;
+                    sessionStore.Append(session, ChatMessage.User(
+                        ">>> [empty answer] 上一轮没有产出任何文本内容。请直接给出面向用户的最终回答；如任务未完成，请说明当前进展与下一步。"));
+                    events.Publish(new WarningEvent("模型返回了空回答，已请求重新生成。"));
+                    PublishSteering(guidance);
+                    continue;
+                }
 
                 // Model believes it is done. If it changed files, prove the project still builds.
                 if (mutated && ShouldVerify(workspace, agentConfig) && repairAttempts < agentConfig.MaxRepairAttempts)

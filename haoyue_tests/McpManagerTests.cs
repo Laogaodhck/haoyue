@@ -99,12 +99,21 @@ public class McpManagerTests : IDisposable
         Assert.Contains(prompts.All, c => c.Id == "mcp:demo:resource:demo://docs/b");
 
         var prompt = prompts.All.Single(c => c.Id == "mcp:demo:greet");
-        Assert.Equal("hello from mcp", await prompt.Resolver(RenderContext(), CancellationToken.None));
+        // Third-party text is wrapped in a trust boundary (data, not instructions) with
+        // the original payload intact.
+        var promptText = await prompt.Resolver(RenderContext(), CancellationToken.None);
+        Assert.NotNull(promptText);
+        Assert.Contains("hello from mcp", promptText);
+        Assert.Contains("EXTERNAL CONTENT BEGIN", promptText);
+        Assert.Contains("MCP server 'demo' prompt 'greet'", promptText);
 
         // Alpha resolves through resources/read; Beta falls back to the
         // method-not-found branch and must degrade to null.
         var alpha = prompts.All.Single(c => c.Id == "mcp:demo:resource:demo://docs/a");
-        Assert.Equal("resource alpha body", await alpha.Resolver(RenderContext(), CancellationToken.None));
+        var alphaText = await alpha.Resolver(RenderContext(), CancellationToken.None);
+        Assert.NotNull(alphaText);
+        Assert.Contains("resource alpha body", alphaText);
+        Assert.Contains("EXTERNAL CONTENT BEGIN", alphaText);
 
         var beta = prompts.All.Single(c => c.Id == "mcp:demo:resource:demo://docs/b");
         Assert.Null(await beta.Resolver(RenderContext(), CancellationToken.None));

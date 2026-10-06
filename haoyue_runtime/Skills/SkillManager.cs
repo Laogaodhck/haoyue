@@ -210,7 +210,12 @@ public sealed class SkillManager : ISkillManager
             meta.Add($"触发条件：用户消息命中 {string.Join(" / ", triggers.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()))} 时自动注入");
         var head = meta.Count > 0 ? string.Join("；", meta) : "";
 
-        var body = ContextPlanner.FitInjectedText(File.ReadAllText(skill.PromptFile).Trim());
+        // Imported skill bodies are third-party text entering the system prompt: fit the
+        // payload to the injected-fragment budget, then wrap it in a trust boundary so
+        // the model treats it as data rather than instructions.
+        var body = ContextPlanner.WrapUntrustedSource(
+            ContextPlanner.FitInjectedText(File.ReadAllText(skill.PromptFile).Trim()),
+            $"skill '{skill.Manifest.Name}'");
         var parameters = skill.Manifest.Parameters;
         if (parameters is not { Count: > 0 })
             return string.Join("\n\n", new[] { head, body }.Where(part => part.Length > 0)).Trim();

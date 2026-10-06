@@ -106,6 +106,25 @@ public sealed partial class Agent
                 FinishReason = "cancelled",
             };
         }
+        catch (LlmException) when (streamedText.Length > 0)
+        {
+            // Network drop / server abort after the first token. The text already reached
+            // the UI via delta events; without this branch it would never reach the session
+            // history (the exception would propagate and the turn would end with nothing
+            // persisted), so resuming the session showed a different conversation than the
+            // user just saw. Persist the partial output and end the step cleanly instead of
+            // throwing — ProviderManager has already exhausted its retry/failover chain, so
+            // a rethrow only converts kept work into a lost half-answer.
+            if (thinkingOpen) events.Publish(new ThinkingCompletedEvent());
+            events.Publish(new WarningEvent(
+                "模型连接中断，已保留中断前生成的部分输出。可点击重新生成或继续提问补全。"));
+            return new LlmCompletion
+            {
+                Text = streamedText.ToString(),
+                Thinking = streamedThinking.ToString(),
+                FinishReason = "interrupted",
+            };
+        }
 
         if (thinkingOpen) events.Publish(new ThinkingCompletedEvent());
         return completion ?? new LlmCompletion

@@ -227,6 +227,24 @@ public sealed class McpServerConfig
     public Dictionary<string, string>? Env { get; set; }
     public string? Url { get; set; }
     public bool Enabled { get; set; } = true;
+    /// <summary>
+    /// Tool names (exact, case-insensitive) always treated as mutating, regardless of the
+    /// name heuristic. Use this for tools like send_email / deploy whose names carry no
+    /// write keyword but do perform real-world changes.
+    /// </summary>
+    public List<string>? MutatingTools { get; set; }
+    /// <summary>
+    /// Tool names (exact, case-insensitive) always treated as read-only. Takes precedence
+    /// over <see cref="MutatingTools"/> and the name heuristic.
+    /// </summary>
+    public List<string>? ReadOnlyTools { get; set; }
+    /// <summary>
+    /// Escape hatch restoring permissive inference for a known-safe server: when true,
+    /// tools whose name carries no mutating keyword are treated as read-only. When false
+    /// (the default) unknown-name tools are treated as mutating — MCP exposes no mutating
+    /// metadata, so the safe default is to refuse such tools in readonly/plan mode.
+    /// </summary>
+    public bool TrustReadOnly { get; set; }
 }
 
 /// <summary>Per-workspace overrides stored in &lt;workspace&gt;/.haoyue/config.json.</summary>

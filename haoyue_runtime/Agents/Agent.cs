@@ -42,6 +42,30 @@ public sealed partial class Agent(
     /// <summary>Identical failed tool calls (same tool + normalized args) tolerated before a strategy nudge is injected.</summary>
     internal const int RepeatedFailureNudgeThreshold = 2;
 
+    /// <summary>
+    /// Runtime notices (step budget, output truncation, empty answer, context compaction,
+    /// repeated tool failure, steering …) are injected as user-role messages whose text
+    /// starts with ">>> [". Without neutralization a user could impersonate such a notice
+    /// (fake step budget, fake instructions) by typing the same prefix. Break the exact
+    /// marker in user-provided text — ">>> [" becomes ">> [" — while leaving ordinary
+    /// content untouched.
+    /// </summary>
+    internal static string SanitizeRuntimeNoticePrefix(string input)
+    {
+        if (string.IsNullOrEmpty(input) || !input.Contains(">>> ["))
+            return input;
+        var lines = input.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var trimmed = line.TrimStart();
+            if (!trimmed.StartsWith(">>> [")) continue;
+            var indent = line[..(line.Length - trimmed.Length)];
+            lines[i] = indent + ">>" + trimmed[3..];
+        }
+        return string.Join("\n", lines);
+    }
+
     public async Task<AgentTurnResult> RunTurnAsync(
         AgentSession session,
         WorkspaceInfo workspace,
@@ -53,6 +77,9 @@ public sealed partial class Agent(
     {
         var agentConfig = configStore.Config.Agent;
         events.Publish(new TurnStartedEvent(session.Header.Id, userInput));
+        // Neutralize user text that mimics the runtime-notice prefix before it enters
+        // history (see SanitizeRuntimeNoticePrefix).
+        userInput = SanitizeRuntimeNoticePrefix(userInput);
         var userMessage = ChatMessage.User(userInput, images);
         // Everything appended from here on belongs to this turn; earlier entries are history.
         var turnMessageIndex = session.Messages.Count;
@@ -67,6 +94,9 @@ public sealed partial class Agent(
         var finalText = "";
         string? error = null;
         var cancelled = false;
+        // Declared outside the try so the terminal WorkflowEvent below the catch blocks
+        // can always publish the step number, even when a catch path is taken.
+        var step = 0;
 
         // Strategy-repair tracking: consecutive failures of the same tool with the same
         // normalized arguments usually mean the model is stuck retrying a dead end.
@@ -110,7 +140,6 @@ public sealed partial class Agent(
             var reachedMaxSteps = false;
             var wrapUpRequested = false;
             var emptyAnswerNudged = false;
-            var step = 0;
             // Composing the system prompt reads memory / AGENTS.md / prompt files from disk.
             // Its inputs cannot change between steps of one turn (same model, tools and flags),
             // so compose once and reuse: this removes per-step file I/O and keeps the provider
@@ -337,11 +366,7 @@ public sealed partial class Agent(
                 if (steering is not null && !steering.TryCompleteIfEmpty()) continue;
                 break;
             }
-            events.Publish(new WorkflowEvent(
-                step,
-                error is null && !cancelled ? "done" : "error",
-                error is null && !cancelled ? "任务完成" : "任务失败"));
-            if (reachedMaxSteps && error is null && !cancelled)
+            if (reachedMaxSteps)
             {
                 events.Publish(new WarningEvent(
                     $"已达到最大步数 {maxSteps}，任务可能尚未完成。可在 ~/.haoyue/config.json 中调大 agent.maxSteps。"));
@@ -363,6 +388,15 @@ public sealed partial class Agent(
             error = $"Unexpected error: {ex.Message}";
             events.Publish(new ErrorEvent("Agent turn failed", error));
         }
+
+        // Terminal WorkflowEvent MUST live on the common path after all catches: the
+        // previous placement inside the try made the "error" branch unreachable, so
+        // failed/cancelled turns never closed the client's workflow view. kind reflects
+        // the real outcome instead of always reporting "任务完成".
+        events.Publish(new WorkflowEvent(
+            step,
+            error is null && !cancelled ? "done" : "error",
+            error is null && !cancelled ? "任务完成" : "任务失败"));
 
         PublishSteering(AppendSteering(session, steering));
         steering?.Complete();

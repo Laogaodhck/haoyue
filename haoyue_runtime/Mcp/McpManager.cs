@@ -179,7 +179,8 @@ public sealed class McpManager(
                 var suffix = 2;
                 while (!usedNames.Add(uniqueName))
                     uniqueName = $"{baseName}_{suffix++}";
-                _registrations.Add(toolRegistry.Register(new McpToolAdapter(client, tool, uniqueName)));
+                _registrations.Add(toolRegistry.Register(new McpToolAdapter(
+                    client, tool, uniqueName, McpToolAdapter.ResolveMutating(server, tool.Name))));
             }
 
             // Auto-discover prompts into the prompt registry. Resolvers degrade to
@@ -195,7 +196,11 @@ public sealed class McpManager(
                     async (_, token) =>
                     {
                         var text = await client.GetPromptAsync(promptName, token).ConfigureAwait(false);
-                        return text is null ? null : ContextPlanner.FitInjectedText(text);
+                        if (text is null) return null;
+                        // Third-party text enters the system prompt: wrap it in a trust
+                        // boundary so it is treated as data, not instructions.
+                        return ContextPlanner.WrapUntrustedSource(
+                            ContextPlanner.FitInjectedText(text), $"MCP server '{name}' prompt '{promptName}'");
                     })));
             }
 
@@ -213,7 +218,9 @@ public sealed class McpManager(
                     async (_, token) =>
                     {
                         var text = await client.GetResourceAsync(uri, token).ConfigureAwait(false);
-                        return text is null ? null : ContextPlanner.FitInjectedText(text);
+                        if (text is null) return null;
+                        return ContextPlanner.WrapUntrustedSource(
+                            ContextPlanner.FitInjectedText(text), $"MCP server '{name}' resource '{uri}'");
                     })));
             }
 
@@ -299,7 +306,9 @@ public sealed class McpToolAdapter : ITool
     public string Name => _name;
     public string Description => _tool.Description ?? $"MCP tool {_tool.Name} from server {_client.ServerName}.";
     public JsonObject ParameterSchema => _tool.InputSchema;
-    public bool Mutating => _isMutating || InferMutating(_tool.Name);
+    // Resolved once at registration time via ResolveMutating — the per-server explicit
+    // lists and the fail-closed default must be stable for the adapter's lifetime.
+    public bool Mutating => _isMutating;
     public string StatusLabel => $"Calling {_client.ServerName}";
 
     public async Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
@@ -334,6 +343,26 @@ public sealed class McpToolAdapter : ITool
         foreach (var ch in value)
             sb.Append(char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-' ? ch : '_');
         return sb.Length == 0 ? "tool" : sb.ToString();
+    }
+
+    /// <summary>
+    /// Decides whether an MCP tool counts as mutating. The MCP protocol exposes no
+    /// mutating metadata, so the decision is: explicit per-server ReadOnlyTools list wins
+    /// (config vouches the tool is safe), then the explicit MutatingTools list, then the
+    /// name heuristic, and finally a fail-closed default — a tool whose name carries no
+    /// read-only signal (send_email, deploy, post_message, db_query with INSERT …) is
+    /// treated as mutating so readonly/plan mode refuses it, unless the server config
+    /// sets <see cref="McpServerConfig.TrustReadOnly"/> to vouch for the whole server.
+    /// </summary>
+    public static bool ResolveMutating(McpServerConfig? server, string toolName)
+    {
+        if (server?.ReadOnlyTools?.Any(t => t.Equals(toolName, StringComparison.OrdinalIgnoreCase)) == true)
+            return false;
+        if (server?.MutatingTools?.Any(t => t.Equals(toolName, StringComparison.OrdinalIgnoreCase)) == true)
+            return true;
+        if (InferMutating(toolName))
+            return true;
+        return server?.TrustReadOnly != true;
     }
 
     private static bool InferMutating(string name)

@@ -27,7 +27,16 @@ public sealed class AgentSteeringQueue
         lock (_gate)
         {
             var messages = new List<ChatMessage>(_messages.Count);
-            while (_messages.Count > 0) messages.Add(_messages.Dequeue());
+            while (_messages.Count > 0)
+            {
+                // Single choke point for steer text from every entry path (daemon RPC,
+                // CLI REPL): tag it as a runtime steering notice — so the model can tell
+                // guidance from ordinary user turns, uniformly across both paths — and
+                // neutralize a spoofed ">>> [" runtime-notice prefix inside the payload.
+                var message = _messages.Dequeue();
+                message.Text = $">>> [steering] {Agent.SanitizeRuntimeNoticePrefix(message.Text)}";
+                messages.Add(message);
+            }
             return messages;
         }
     }

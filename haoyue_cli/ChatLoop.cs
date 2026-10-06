@@ -97,6 +97,7 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
             renderer.WriteLine);
 
         Task? activeTurnTask = null;
+        AgentSteeringQueue? activeSteering = null;
 
         while (!_exitRequested)
         {
@@ -112,13 +113,22 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
                 continue;
             }
 
-            // If an AI agent turn is actively running, treat input as mid-turn steering guidance!
+            // If an AI agent turn is actively running, treat input as mid-turn steering
+            // guidance routed through the same thread-safe AgentSteeringQueue the daemon
+            // uses. Directly appending to session history from the REPL thread raced with
+            // the agent loop's concurrent reads/trims of the same message list, and a
+            // steer landing after the final drain was silently demoted to a normal next
+            // question.
             if (activeTurnTask is not null && !activeTurnTask.IsCompleted)
             {
-                var steerMsg = ChatMessage.User($"[User Steering Instruction]: {input}");
-                runtime.Sessions.Append(session, steerMsg);
-                runtime.Events.Publish(new UserSteerEvent(input));
-                continue;
+                if (activeSteering is { } queue && queue.TryEnqueue(ChatMessage.User(input)))
+                {
+                    runtime.Events.Publish(new UserSteerEvent(input));
+                    continue;
+                }
+                // The turn is finishing (queue already closed): wait it out, then treat
+                // the input as the next prompt instead of racing its last steps.
+                await activeTurnTask.ConfigureAwait(false);
             }
 
             // Start a new agent turn asynchronously so LineEditor remains responsive for user steering!
@@ -126,12 +136,14 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
             _turnCts = new CancellationTokenSource();
             var currentCts = _turnCts;
             var currentPrompt = input;
+            var currentSteering = new AgentSteeringQueue();
+            activeSteering = currentSteering;
 
             activeTurnTask = Task.Run(async () =>
             {
                 try
                 {
-                    await runtime.Agent.RunTurnAsync(session, runtime.Workspace, currentPrompt, currentCts.Token).ConfigureAwait(false);
+                    await runtime.Agent.RunTurnAsync(session, runtime.Workspace, currentPrompt, currentCts.Token, steering: currentSteering).ConfigureAwait(false);
                 }
                 finally
                 {

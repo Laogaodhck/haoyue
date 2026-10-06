@@ -930,6 +930,42 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task StreamAsync_ChainBudgetExhausted_SkipsRemainingCandidates()
+    {
+        var store = _store;
+        store.Config.Routing.Retry.MaxAttempts = 3;
+        store.Config.Routing.Retry.BaseDelaySeconds = 0.01;
+        store.Config.Routing.Retry.ChainBudgetSeconds = 0.5; // honored as-is (lower clamp 0.5s)
+        store.Config.Routing.Fallback = ["beta/tiny"];
+        store.Config.Provider = "alpha";
+        store.Config.Model = "big";
+
+        // Each attempt of the active model burns 400ms: two attempts exhaust the 0.5s
+        // budget before the third attempt and the fallback candidate can start.
+        var active = new StubLlmClient("openai", new LlmException("primary slow-down", 500, retryable: true), delayMs: 400);
+        var fallback = new StubLlmClient("anthropic", new LlmException("fallback down", 500, retryable: true));
+        var manager = NewManagerWithClients(
+            store, _registry, Path.Combine(_dir, "usage-budget.jsonl"), active, fallback);
+
+        var request = new LlmRequest
+        {
+            Provider = store.Config.Providers[0],
+            Model = store.Config.Providers[0].Models[0],
+            Messages = [ChatMessage.User("hi")],
+        };
+
+        var ex = await Record.ExceptionAsync(async () =>
+        {
+            await foreach (var _ in manager.StreamAsync(_ => request, null, CancellationToken.None)) { }
+        });
+
+        var aggregate = Assert.IsType<LlmException>(ex);
+        Assert.True(active.Calls < 3, $"expected budget to cut retries short, got {active.Calls}");
+        Assert.Equal(0, fallback.Calls); // budget spent: no new attempt is started
+        Assert.Contains("failover chain budget exhausted", aggregate.Message);
+    }
+
+    [Fact]
     public void BuildCandidates_RespectsInjectedSharedCircuitBreaker()
     {
         // The daemon injects one process-wide breaker into every turn runtime; an
@@ -1008,7 +1044,7 @@ public sealed class ProviderTests : IDisposable
             store, _registry, Path.Combine(_dir, "usage2.jsonl"),
             new StubLlmClient("openai", new LlmException("local server failed", 500, retryable: true)),
             new StubLlmClient("anthropic", new LlmException("HTTP 401: x-api-key header is required", 401, retryable: false)),
-            new StubLlmClient("gamma", null, new LlmCompleted(new LlmCompletion { Text = "ok" })));
+            new StubLlmClient("gamma", null, delayMs: 0, new LlmCompleted(new LlmCompletion { Text = "ok" })));
 
         var request = new LlmRequest
         {
@@ -1143,7 +1179,7 @@ public sealed class ProviderTests : IDisposable
         new UsageTracker(new EventBus(), usageFile),
         new EventBus());
 
-    private sealed class StubLlmClient(string kind, LlmException? error = null, params LlmStreamEvent[] events) : ILlmClient
+    private sealed class StubLlmClient(string kind, LlmException? error = null, int delayMs = 0, params LlmStreamEvent[] events) : ILlmClient
     {
         public int Calls { get; private set; }
 
@@ -1158,6 +1194,7 @@ public sealed class ProviderTests : IDisposable
         {
             Calls++;
             await Task.Yield();
+            if (delayMs > 0) await Task.Delay(delayMs, ct);
             ct.ThrowIfCancellationRequested();
             if (error is not null) throw error;
             foreach (var evt in events) yield return evt;

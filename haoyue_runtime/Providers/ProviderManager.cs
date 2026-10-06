@@ -143,9 +143,12 @@ public sealed class ProviderManager(
         var maxAttempts = Math.Max(1, retry.MaxAttempts);
         // Wall-clock budget for the whole chain: without it the worst case (candidates ×
         // attempts × header timeout) could stretch to tens of minutes before the user
-        // sees any error. Once the budget is gone, new attempts are not started.
+        // sees any error. Once the budget is gone, new attempts are not started. The
+        // lower clamp only guards against zero/negative misconfigurations — a small
+        // explicit budget is honored as-is (which also keeps the exhausted-budget path
+        // unit-testable without sleeping for seconds).
         var chainDeadline = DateTimeOffset.UtcNow
-            + TimeSpan.FromSeconds(Math.Clamp(retry.ChainBudgetSeconds, 10, 600));
+            + TimeSpan.FromSeconds(Math.Clamp(retry.ChainBudgetSeconds, 0.5, 600));
         var attemptsStarted = 0;
 
         for (var candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)

@@ -155,7 +155,9 @@ public static class ProviderCommands
             provider.Models = [.. provider.IsLocal
                 ? MapLocalModels(LocalModelProbe.Scan(provider.ModelsDirectory), models)
                 : models.Select(modelId => new ModelConfig { Id = modelId })];
-            config.Providers.Add(provider);
+            // Copy-on-Write: swap the list reference instead of mutating it, mirroring the
+            // daemon path so a concurrently enumerating reader can never observe a torn list.
+            config.Providers = [.. config.Providers, provider];
             rt.ConfigStore.Save();
 
             AnsiConsole.MarkupLine($"[green]Added provider '{Markup.Escape(provider.Id)}'[/] with {provider.Models.Count} model(s).");
@@ -197,7 +199,10 @@ public static class ProviderCommands
                 AnsiConsole.MarkupLine("[red]Provider not found.[/]");
                 return 1;
             }
-            config.Providers.Remove(provider);
+            // Copy-on-Write: replace the list reference instead of a structural Remove.
+            config.Providers = config.Providers
+                .Where(item => !item.Id.Equals(provider.Id, StringComparison.OrdinalIgnoreCase))
+                .ToList();
             rt.ConfigStore.Save();
             AnsiConsole.MarkupLine($"[green]Removed '{Markup.Escape(provider.Id)}'.[/]");
             return 0;

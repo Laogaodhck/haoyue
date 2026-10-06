@@ -126,4 +126,4 @@
 
 **行为变化说明**：所有候选熔断中时，此前仍会逐个硬试（长时间挂起后失败），现在快速报「circuit open (cooling down)」，冷却期满后自动放行单探针——对单模型配置的用户是更快的明确报错而非 2 分钟无响应悬挂。
 
-**遗留**：CLI 侧 `ProviderCommands.cs` 的 `Providers.Add/Remove` 未改 CoW（CLI 命令无并发回合，进程间靠文件交换配置，风险不变）；`ChainBudgetSeconds` 的 clamp 下限 10s 使超预算路径难以低成本单测，由单次尝试用例间接覆盖。
+**遗留处置（同日第二轮）**：原两项遗留均已消解——① CLI 侧 `ProviderCommands.cs` 的 add/remove 也改为 Copy-on-Write，与 daemon 路径一致；② `ChainBudgetSeconds` 的 clamp 下限从 10s 降为 0.5s（仅防 0/负数误配，显式小预算被尊重），使超预算路径可直接单测——新增 `StreamAsync_ChainBudgetExhausted_SkipsRemainingCandidates`（活动模型每次尝试 400ms，0.5s 预算耗尽后后备候选 0 次调用、聚合错误含 "failover chain budget exhausted"），并为 `StubLlmClient` 增加 `delayMs` 延迟能力。ProviderTests 55 → 56 全绿。

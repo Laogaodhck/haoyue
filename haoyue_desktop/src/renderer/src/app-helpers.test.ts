@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatTokenCount, normalizePath, pathName, samePath } from './app-helpers'
+import { classifyModelError, extractModelError, formatTokenCount, normalizePath, pathName, samePath, stripModelErrorBlock } from './app-helpers'
 
 describe('formatTokenCount', () => {
   it('formats millions with M suffix correctly without unnecessary trailing zeros', () => {
@@ -108,5 +108,48 @@ describe('hydrateMessages', () => {
     expect(hydrated).toHaveLength(2)
     expect(hydrated[0]!.createdAt).toBe(ts1)
     expect(hydrated[1]!.createdAt).toBe(ts2)
+  })
+})
+
+describe('classifyModelError', () => {
+  it.each([
+    ['circuit open (cooling down)', '模型服务暂时不可用'],
+    ['HTTP 429: rate limit exceeded', '请求被限流或配额不足'],
+    ['quota exceeded for project', '请求被限流或配额不足'],
+    ['HTTP 401 Unauthorized: invalid api key', '认证失败'],
+    ['Request timed out after 120s', '请求超时'],
+    ['Connection refused (ECONNRESET)', '网络连接失败'],
+    ['no provider configured', '模型未配置'],
+    ['something totally unexpected', '模型调用失败']
+  ])('maps "%s" to a human summary', (detail, title) => {
+    expect(classifyModelError(detail).title).toBe(title)
+  })
+
+  it('always provides an actionable suggestion', () => {
+    const meta = classifyModelError('HTTP 500 internal error')
+    expect(meta.suggestion.length).toBeGreaterThan(5)
+    expect(meta.suggestion).toMatch(/重试|设置|检查|网络/)
+  })
+})
+
+describe('extractModelError / stripModelErrorBlock', () => {
+  const block = '半截回答\n\n模型调用失败：\n```text\n    HTTP 429: rate limit exceeded\n```'
+
+  it('recovers the raw detail from persisted content', () => {
+    expect(extractModelError(block)).toBe('HTTP 429: rate limit exceeded')
+  })
+
+  it('returns empty for content without an error block', () => {
+    expect(extractModelError('正常回答')).toBe('')
+  })
+
+  it('strips the error block while keeping the real answer', () => {
+    expect(stripModelErrorBlock(block)).toBe('半截回答')
+    expect(stripModelErrorBlock('正常回答')).toBe('正常回答')
+  })
+
+  it('keeps earlier error blocks when a newer turn appended one', () => {
+    const doubled = block + '\n\n后续正文\n\n模型调用失败：\n```text\n    boom\n```'
+    expect(stripModelErrorBlock(doubled)).toBe('半截回答\n\n后续正文')
   })
 })

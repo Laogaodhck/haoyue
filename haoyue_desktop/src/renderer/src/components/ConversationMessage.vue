@@ -17,7 +17,14 @@ import {
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref } from 'vue'
 import type { ChatMessage } from '../types'
-import { fileBadgeText, fileExtClass, formatMessageTime } from '../app-helpers'
+import {
+  classifyModelError,
+  extractModelError,
+  fileBadgeText,
+  fileExtClass,
+  formatMessageTime,
+  stripModelErrorBlock
+} from '../app-helpers'
 import ImagePreviewDialog from './ImagePreviewDialog.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 
@@ -44,6 +51,7 @@ const emit = defineEmits<{
 
 const thinkingOpen = ref(false)
 const systemOpen = ref(false)
+const errorOpen = ref(false)
 const preview = ref<{ src: string; name: string } | null>(null)
 const isCopied = ref(false)
 let copyTimer: ReturnType<typeof setTimeout> | undefined
@@ -101,6 +109,16 @@ const thinkingLabel = computed(() => {
   }
   return '已完成思考'
 })
+
+/** Structured error card (H18): icon + summary + collapsible detail + one-click retry. */
+const errorMeta = computed(() => {
+  const detail = props.message.errorDetail || extractModelError(props.message.content)
+  return { ...classifyModelError(detail), detail }
+})
+
+/** Failed turns keep the technical block in content for persistence; hide it here. */
+const displayContent = computed(() =>
+  props.message.state === 'error' ? stripModelErrorBlock(props.message.content) : props.message.content)
 
 function imageUrl(id: string): string | undefined {
   return props.imageSources[id]
@@ -270,8 +288,30 @@ function openFileLocation(path?: string): void {
         </section>
       </div>
 
-      <MarkdownMessage v-if="message.content" :content="message.content"
+      <MarkdownMessage v-if="displayContent" :content="displayContent"
         :streaming="streaming && message.state === 'streaming'" />
+      <div v-if="message.state === 'error' && !streaming" class="error-card" role="alert">
+        <div class="error-card-header">
+          <span class="error-card-icon">
+            <CircleAlert :size="15" />
+          </span>
+          <div class="error-card-text">
+            <strong>{{ errorMeta.title }}</strong>
+            <small>{{ errorMeta.suggestion }}</small>
+          </div>
+          <button class="error-retry" type="button" title="用原始提问重新执行这一轮"
+            @click="emit('regenerate', message)">
+            <RefreshCw :size="13" />
+            <span>重试</span>
+          </button>
+        </div>
+        <button v-if="errorMeta.detail" class="error-detail-toggle" type="button"
+          :aria-expanded="errorOpen" @click="errorOpen = !errorOpen">
+          <span>{{ errorOpen ? '收起技术详情' : '查看技术详情' }}</span>
+          <ChevronDown :size="13" class="chevron" :class="{ rotated: errorOpen }" />
+        </button>
+        <pre v-if="errorOpen && errorMeta.detail" class="error-detail">{{ errorMeta.detail }}</pre>
+      </div>
       <div v-if="message.interrupted" class="interrupted-note" role="status">
         <CircleAlert :size="13" />
         <span>已手动停止，回复可能不完整</span>
@@ -517,5 +557,110 @@ function openFileLocation(path?: string): void {
   background: color-mix(in srgb, var(--text-muted) 12%, transparent);
   font-size: 11.5px;
   user-select: none;
+}
+
+.error-card {
+  overflow: hidden;
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 32%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger, #ef4444) 6%, transparent);
+}
+
+.error-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.error-card-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
+}
+
+.error-card-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.error-card-text strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.error-card-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.error-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 40%, transparent);
+  border-radius: 8px;
+  color: var(--danger, #ef4444);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.error-retry:hover {
+  color: #fff;
+  background: var(--danger, #ef4444);
+}
+
+.error-detail-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--danger, #ef4444) 16%, transparent);
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.error-detail-toggle:hover {
+  color: var(--text);
+}
+
+.error-detail-toggle .chevron {
+  transition: transform 160ms ease;
+}
+
+.error-detail-toggle .chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.error-detail {
+  margin: 0;
+  padding: 10px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--danger, #ef4444) 16%, transparent);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

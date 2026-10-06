@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import type { Ref } from 'vue'
 import type { DaemonEventContext } from './daemon-event-handler'
 import { createDaemonEventHandler } from './daemon-event-handler'
+import { extractModelError, stripModelErrorBlock } from './app-helpers'
 import type { DaemonMessage } from '../../shared/ipc'
 import type { ProjectItem, ThreadItem } from './types'
 
@@ -164,5 +165,27 @@ describe('daemon event handler — stream batching', () => {
     handler(chatEvent('delta', 'done text', 's2'))
     handler(chatEvent('done', '', 's2'))
     expect(thread2.messages[0]!.interrupted).toBeUndefined()
+  })
+
+  it('stores structured error detail for the error card', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+    const assistant = thread.messages[0]!
+
+    handler(chatEvent('delta', '半截回答'))
+    handler(chatEvent('error', 'HTTP 429: rate limit exceeded', 's1'))
+
+    expect(assistant.state).toBe('error')
+    expect(assistant.errorDetail).toBe('HTTP 429: rate limit exceeded')
+    // Technical block stays in content (persistence), card strips it for display.
+    expect(assistant.content).toContain('模型调用失败：')
+    expect(extractModelError(assistant.content)).toBe('HTTP 429: rate limit exceeded')
+    expect(stripModelErrorBlock(assistant.content)).toBe('半截回答')
+
+    // Duplicate error events must not stack identical details twice.
+    handler(chatEvent('error', 'HTTP 429: rate limit exceeded', 's1'))
+    expect(assistant.content.match(/模型调用失败：/g)).toHaveLength(1)
   })
 })

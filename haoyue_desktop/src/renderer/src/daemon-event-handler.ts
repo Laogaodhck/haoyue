@@ -33,9 +33,11 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
 
   function appendModelError(message: ChatMessage, detail: string): void {
     const normalized = detail.trim() || 'Unknown model error'
-    if (message.content.includes(normalized)) return
-    const indentedDetail = normalized.split(/\r?\n/).map((line) => `    ${line}`).join('\n')
-    message.content += `${message.content ? '\n\n' : ''}模型调用失败：\n\`\`\`text\n${indentedDetail}\n\`\`\``
+    message.errorDetail = normalized
+    if (!message.content.includes(normalized)) {
+      const indentedDetail = normalized.split(/\r?\n/).map((line) => `    ${line}`).join('\n')
+      message.content += `${message.content ? '\n\n' : ''}模型调用失败：\n\`\`\`text\n${indentedDetail}\n\`\`\``
+    }
     message.state = 'error'
   }
 

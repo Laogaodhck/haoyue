@@ -63,6 +63,8 @@ export interface ChatMessage {
   state?: 'thinking' | 'streaming' | 'done' | 'error'
   /** True when the user manually stopped the turn mid-answer (reply may be incomplete). */
   interrupted?: boolean
+  /** Raw technical detail of the model error that failed this turn (error card). */
+  errorDetail?: string
   tools?: ToolActivity[]
   createdAt: number
 }

@@ -300,3 +300,83 @@ export function formatMessageTime(timestamp?: number): string {
   const minutes = date.getMinutes().toString().padStart(2, '0')
   return `${month}月${day}日 ${hours}:${minutes}`
 }
+
+// ------------------------------------------------------------------ error card
+/** Human-facing summary + actionable suggestion for a failed model turn (H18). */
+export interface ErrorCardMeta {
+  title: string
+  suggestion: string
+}
+
+export function classifyModelError(detail: string): ErrorCardMeta {
+  const d = detail.toLowerCase()
+  if (d.includes('circuit open') || d.includes('cooling down')) {
+    return {
+      title: '模型服务暂时不可用',
+      suggestion: '所有候选均处于熔断冷却中，通常稍等片刻即可重试；也可到设置中检查各服务商状态。'
+    }
+  }
+  if (/\b429\b|rate.?limit|quota|配额/.test(d)) {
+    return {
+      title: '请求被限流或配额不足',
+      suggestion: '请求过于频繁或额度已用尽：稍后重试，或到设置中更换模型候选。'
+    }
+  }
+  if (/\b401\b|\b403\b|unauthorized|forbidden|invalid.{0,16}key|api.?key|authentication/.test(d)) {
+    return {
+      title: '认证失败',
+      suggestion: 'API 密钥无效或已过期：到设置中检查对应服务商的密钥配置后重试。'
+    }
+  }
+  if (d.includes('timeout') || d.includes('timed out') || d.includes('deadline') || d.includes('超时')) {
+    return {
+      title: '请求超时',
+      suggestion: '模型响应过慢或网络不畅：可直接重试；若持续超时请检查网络或代理设置。'
+    }
+  }
+  if (d.includes('network') || d.includes('socket') || d.includes('econn')
+    || d.includes('connection') || d.includes('unreachable') || d.includes('dns')
+    || d.includes('getaddrinfo')) {
+    return {
+      title: '网络连接失败',
+      suggestion: '无法连接到模型服务：检查网络或代理设置后重试。'
+    }
+  }
+  if (d.includes('no provider') || d.includes('not configured') || d.includes('未配置')
+    || d.includes('no candidates') || d.includes('no enabled')) {
+    return {
+      title: '模型未配置',
+      suggestion: '当前没有可用的模型候选：到设置中添加并启用至少一个服务商。'
+    }
+  }
+  return {
+    title: '模型调用失败',
+    suggestion: '服务返回了异常：可点击重试；若持续失败请展开技术详情定位原因。'
+  }
+}
+
+const MODEL_ERROR_MARKER = '模型调用失败：'
+const MODEL_ERROR_BLOCK_RE = /(?:\r?\n)+模型调用失败：\r?\n```text\n[\s\S]*?```/g
+
+/** Recover the raw error detail from persisted content (historical/reloaded messages).
+ * A candidate chain may fail several times, so the last block wins. */
+export function extractModelError(content: string): string {
+  let detail = ''
+  const global = new RegExp(MODEL_ERROR_BLOCK_RE.source, 'g')
+  for (const match of content.matchAll(global)) {
+    const fenced = match[0].match(/```text\n([\s\S]*?)(?:```|$)/)
+    detail = (fenced?.[1] ?? match[0].slice(MODEL_ERROR_MARKER.length))
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^ {4}/, ''))
+      .join('\n')
+      .trim()
+  }
+  if (detail) return detail
+  const marker = content.lastIndexOf(MODEL_ERROR_MARKER)
+  return marker >= 0 ? content.slice(marker + MODEL_ERROR_MARKER.length).trim() : ''
+}
+
+/** "模型调用失败" blocks appended by the event handler; stripped for display. */
+export function stripModelErrorBlock(content: string): string {
+  return content.replace(MODEL_ERROR_BLOCK_RE, '')
+}

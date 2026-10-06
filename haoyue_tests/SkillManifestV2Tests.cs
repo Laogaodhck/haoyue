@@ -1,4 +1,6 @@
+using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Skills;
 using Haoyue.Runtime.Workspaces;
@@ -165,6 +167,106 @@ public sealed class SkillManifestV2Tests : IDisposable
         Assert.Contains("部署到 {{env}}", rendered); // body kept, placeholder intact
         Assert.Contains("{{env}}（必填） — 目标环境", rendered);
         Assert.Contains("{{region}}（可选（默认 cn-north））", rendered);
+    }
+
+    [Fact]
+    public void Triggered_AsciiKeywordsMatchOnWordBoundaries()
+    {
+        var manifest = new SkillManifest { Name = "git", Triggers = ["git"] };
+
+        // Substring hits like "digit" or "gitignore" must not trigger (误调用防护).
+        Assert.False(SkillManager.Triggered(manifest, "讨论 digit 的问题"));
+        Assert.False(SkillManager.Triggered(manifest, "看看 gitignore 的写法"));
+        // Real word hits still trigger, case-insensitively.
+        Assert.True(SkillManager.Triggered(manifest, "提交到 git"));
+        Assert.True(SkillManager.Triggered(manifest, "run GIT command"));
+
+        // Non-ASCII keywords keep substring semantics (CJK has no word boundaries).
+        var chinese = new SkillManifest { Name = "deploy", Triggers = ["部署"] };
+        Assert.True(SkillManager.Triggered(chinese, "帮我部署一下"));
+        Assert.True(SkillManager.Triggered(chinese, "先完成部署脚本"));
+    }
+
+    [Fact]
+    public void BuildSkillTriggerContext_CombinesCurrentInputWithRecentUserTurns()
+    {
+        var history = new List<ChatMessage>
+        {
+            ChatMessage.User("帮我做一个网站"),
+            ChatMessage.Assistant("好的，我先搭好骨架。"),
+            ChatMessage.User("用 Vue3 技术栈"),
+            ChatMessage.Assistant("已配置完成。"),
+        };
+
+        // Current input is first; previous user turns follow (newest first), assistant
+        // and tool messages are skipped.
+        var context = Agent.BuildSkillTriggerContext(history, history.Count, "继续");
+        Assert.NotNull(context);
+        Assert.Equal("继续\n用 Vue3 技术栈\n帮我做一个网站", context);
+
+        // Sticky window caps at SkillTriggerWindowTurns messages.
+        var capped = Agent.BuildSkillTriggerContext(history, history.Count, "继续")!;
+        Assert.Equal(3, capped.Split('\n').Length);
+
+        // Empty current input still yields a context from history (stickiness).
+        Assert.NotNull(Agent.BuildSkillTriggerContext(history, history.Count, ""));
+
+        // Overlong contexts keep the head so the current input survives truncation.
+        var longHistory = new List<ChatMessage>
+        {
+            ChatMessage.User(new string('旧', Agent.MaxSkillTriggerContextLength)),
+            ChatMessage.User("触发词网站"),
+        };
+        var truncated = Agent.BuildSkillTriggerContext(longHistory, longHistory.Count, "当前输入")!;
+        Assert.Equal(Agent.MaxSkillTriggerContextLength, truncated.Length);
+        Assert.StartsWith("当前输入", truncated);
+    }
+
+    [Fact]
+    public void SelectInjectedSkills_StaysInjectedAcrossFollowUpTurns()
+    {
+        WriteSkill("website", "name: website\ndescription: 建站技能\ntriggers:\n  - 网站\n", prompt: "建站内容");
+        var manager = NewManager(out _);
+        manager.Attach(Workspace);
+
+        // Turn 1: keyword hit.
+        var turn1 = Agent.BuildSkillTriggerContext([], 0, "帮我做一个网站")!;
+        Assert.Contains(manager.SelectInjectedSkills(Workspace, turn1), s => s.Name == "website");
+
+        // Turn 2: the follow-up alone has no keyword, but the sticky window keeps the
+        // skill injected — same for the derived tool policy.
+        var turn2 = Agent.BuildSkillTriggerContext(
+            [ChatMessage.User("帮我做一个网站"), ChatMessage.Assistant("已搭好骨架")], 2, "继续加一个登录页")!;
+        Assert.Contains(manager.SelectInjectedSkills(Workspace, turn2), s => s.Name == "website");
+
+        // After the window slides past the trigger turn, the skill drops out again.
+        var later = Agent.BuildSkillTriggerContext(
+        [
+            ChatMessage.User("帮我做一个网站"),
+            ChatMessage.Assistant("好"),
+            ChatMessage.User("随便聊聊天气"),
+            ChatMessage.Assistant("好"),
+            ChatMessage.User("今天天气如何"),
+            ChatMessage.Assistant("好"),
+            ChatMessage.User("明天呢"),
+        ], 7, "顺便看看新闻")!;
+        Assert.DoesNotContain(manager.SelectInjectedSkills(Workspace, later), s => s.Name == "website");
+    }
+
+    [Fact]
+    public void RenderSkillPrompt_PrependsApplicabilityHeader()
+    {
+        WriteSkill("deploy",
+            "name: deploy\ndescription: 部署服务到目标环境\ntriggers:\n  - 部署\n  - 上线\n",
+            prompt: "部署内容");
+        var manager = NewManager(out _);
+        var skill = manager.Discover(Workspace).Single();
+
+        var rendered = manager.RenderSkillPrompt(skill);
+
+        Assert.Contains("适用场景：部署服务到目标环境", rendered);
+        Assert.Contains("触发条件：用户消息命中 部署 / 上线", rendered);
+        Assert.Contains("部署内容", rendered);
     }
 
     [Fact]

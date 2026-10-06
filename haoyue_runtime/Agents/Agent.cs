@@ -53,6 +53,10 @@ public sealed partial class Agent(
         // Everything appended from here on belongs to this turn; earlier entries are history.
         var turnMessageIndex = session.Messages.Count;
         sessionStore.Append(session, userMessage);
+        // Skill trigger matching runs against a stickiness window (current input plus
+        // recent user turns) so multi-turn tasks keep their skills; computed once per
+        // turn and shared by the tool policy and the composed prompt.
+        var skillTriggerContext = BuildSkillTriggerContext(session.Messages, turnMessageIndex, userInput);
 
         var mutated = false;
         var repairAttempts = 0;
@@ -101,7 +105,7 @@ public sealed partial class Agent(
                     : providerManager.ResolveActive(workspace.Config);
                 var requiresVision = turnHasImages && model.Model.Capabilities.Vision;
                 var effectiveNetworkEnabled = session.Header.NetworkEnabled && agentConfig.NetworkEnabled;
-                var tools = ActiveTools(workspace, model, effectiveNetworkEnabled, userInput);
+                var tools = ActiveTools(workspace, model, effectiveNetworkEnabled, skillTriggerContext);
                 var promptKey = string.Join('|',
                     model.Provider.Id, model.Model.Id, effectiveNetworkEnabled, tools.Count,
                     string.Join(",", tools.Select(t => t.Name)),
@@ -112,7 +116,7 @@ public sealed partial class Agent(
                 if (promptKey != cachedPromptKey)
                 {
                     cachedSystemPrompt = await ComposeSystemPromptAsync(
-                        workspace, model, tools, effectiveNetworkEnabled, userInput, ct).ConfigureAwait(false);
+                        workspace, model, tools, effectiveNetworkEnabled, skillTriggerContext, ct).ConfigureAwait(false);
                     cachedPromptKey = promptKey;
                 }
                 var systemPrompt = cachedSystemPrompt;

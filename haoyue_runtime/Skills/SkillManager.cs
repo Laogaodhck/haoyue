@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.IO.Compression;
+using System.Text.RegularExpressions;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Prompts;
@@ -159,30 +160,60 @@ public sealed class SkillManager : ISkillManager
         if (string.IsNullOrWhiteSpace(userMessage)) return false;
         return triggers.Any(keyword =>
             !string.IsNullOrWhiteSpace(keyword)
-            && userMessage.Contains(keyword.Trim(), StringComparison.OrdinalIgnoreCase));
+            && MatchesKeyword(userMessage, keyword.Trim()));
     }
+
+    /// <summary>
+    /// Pure-ASCII keywords match on word boundaries so "git" never hits "digit" or
+    /// "gitignore" (误调用防护); keywords containing non-ASCII characters (中文等 CJK
+    /// 无词边界概念) keep plain case-insensitive substring matching.
+    /// </summary>
+    internal static bool MatchesKeyword(string text, string keyword)
+    {
+        if (IsAsciiWord(keyword))
+            return WordBoundaryRegexes.GetOrAdd(
+                keyword,
+                static key => new Regex($@"\b{Regex.Escape(key)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled))
+                .IsMatch(text);
+        return text.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAsciiWord(string keyword) =>
+        keyword.Length > 0
+        && keyword.All(ch => ch is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_' or '-');
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Regex> WordBoundaryRegexes = new(StringComparer.Ordinal);
 
     public SkillToolPolicy ResolveToolPolicy(WorkspaceInfo workspace, string? userMessage)
     {
-        var declared = SelectInjectedSkills(workspace, userMessage)
-            .Select(s => s.Manifest.AllowedTools)
-            .FirstOrDefault(list => list is { Count: > 0 });
-        if (declared is null) return new SkillToolPolicy(null);
-
+        // Single selection pass shared with injection semantics: one Discover scan,
+        // and the allow-list can never drift from what gets injected this turn.
         var union = SelectInjectedSkills(workspace, userMessage)
             .SelectMany(s => s.Manifest.AllowedTools ?? [])
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        return new SkillToolPolicy(union);
+        return new SkillToolPolicy(union.Count == 0 ? null : union);
     }
 
-    /// <summary>Prompt body (size-capped) plus a collect-before-use appendix for declared parameters.</summary>
+    /// <summary>
+    /// Applicability header (description + declared triggers, so the model can judge
+    /// when the skill applies), prompt body (size-capped), and a collect-before-use
+    /// appendix for declared parameters.
+    /// </summary>
     internal string RenderSkillPrompt(SkillInfo skill)
     {
+        var meta = new List<string>();
+        if (!string.IsNullOrWhiteSpace(skill.Manifest.Description))
+            meta.Add($"适用场景：{skill.Manifest.Description.Trim()}");
+        if (skill.Manifest.Triggers is { Count: > 0 } triggers)
+            meta.Add($"触发条件：用户消息命中 {string.Join(" / ", triggers.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()))} 时自动注入");
+        var head = meta.Count > 0 ? string.Join("；", meta) : "";
+
         var body = ContextPlanner.FitInjectedText(File.ReadAllText(skill.PromptFile).Trim());
         var parameters = skill.Manifest.Parameters;
-        if (parameters is not { Count: > 0 }) return body;
+        if (parameters is not { Count: > 0 })
+            return string.Join("\n\n", new[] { head, body }.Where(part => part.Length > 0)).Trim();
 
         var appendix = _prompts.TryGet("builtin/skill-parameters") ?? "";
         var lines = parameters
@@ -194,7 +225,7 @@ public sealed class SkillManager : ISkillManager
                 var marker = p.Required ? "必填" : "可选";
                 return $"- {{{{{p.Name.Trim()}}}}}（{marker}{defaultValue}）{description}";
             });
-        return string.Join("\n\n", body, appendix, string.Join("\n", lines)).Trim();
+        return string.Join("\n\n", new[] { head, body, appendix, string.Join("\n", lines) }.Where(part => part.Length > 0)).Trim();
     }
 
     public void SetEnabled(string skillName, bool enabled)

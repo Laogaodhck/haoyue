@@ -177,7 +177,7 @@ const composerCaption = computed(() => {
 
   if (conversationLoading.value) return '正在读取会话历史…'
   if (!activeThread.value) return '选择一个任务，或新建任务开始。'
-  if (activeThread.value.archived) return '此任务已归档，恢复后可继续。'
+  if (activeThread.value.archived) return '此任务已归档，发送消息后将自动恢复并继续对话。'
   const stats = activeThread.value.stats
   const number = (value?: number): string =>
     typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '—'
@@ -1033,13 +1033,14 @@ const vMeasure = {
 
 function continueAssistant(): void {
   const thread = activeThread.value
-  if (!thread || thread.running || thread.archived) return
+  if (!thread || thread.running) return
   void sendMessage('继续', [])
 }
 
 async function regenerateMessage(message: ChatMessage): Promise<void> {
   const thread = activeThread.value
-  if (!thread || thread.running || thread.archived || !thread.sessionId) return
+  if (!thread || thread.running || !thread.sessionId) return
+  if (!await resumeThreadIfArchived(thread)) return
   const index = thread.messages.findIndex((item) => item.id === message.id)
   if (index < 0) return
   // Re-run the turn from its user prompt: keep history through that prompt, then resend it.
@@ -1064,11 +1065,34 @@ async function regenerateMessage(message: ChatMessage): Promise<void> {
   await sendMessage(prompt, [])
 }
 
+// 归档任务收到新消息时自动恢复会话（等价于手动「恢复任务」），失败时返回 false 并中止发送。
+async function resumeThreadIfArchived(thread: ThreadItem): Promise<boolean> {
+  if (!thread.archived) return true
+  const project = projects.value.find((item) => item.id === thread.projectId)
+  if ((thread.projectId && !project) || !thread.sessionId) return false
+  try {
+    await window.haoyue.daemon.request('session.archive', {
+      id: thread.sessionId,
+      ...sessionScope(thread, project),
+      archived: false
+    })
+  } catch (error) {
+    conversationLoadError.value = error instanceof Error
+      ? `恢复任务失败：${error.message}`
+      : '恢复任务失败，请检查 Runtime 连接后重试。'
+    return false
+  }
+  thread.archived = false
+  thread.updatedAt = Date.now()
+  return true
+}
+
 async function sendMessage(content: string, images: ImageAttachment[], files?: FileAttachment[]): Promise<void> {
   const thread = activeThread.value
   const project = thread ? projects.value.find((item) => item.id === thread.projectId) : undefined
-  if (!thread || (thread.projectId && !project) || thread.archived) return
+  if (!thread || (thread.projectId && !project)) return
   if (!content.trim() && images.length === 0 && (!files || files.length === 0)) return
+  if (!await resumeThreadIfArchived(thread)) return
   if (thread.running || thread.queueDraining) {
     thread.queuedMessages ??= []
     thread.queuedMessages.push({ id: makeId(), content, images, files, createdAt: Date.now() })
@@ -1612,7 +1636,7 @@ watch(theme, applyTheme)
             <TaskStepList :steps="activeThreadTurnSteps" :running="activeThread?.running"
               :phase="activeThread?.phase" />
             <Composer ref="composer" :busy="busy"
-              :disabled="!activeThread || activeThread.archived || conversationLoading" :model="activeModel"
+              :disabled="!activeThread || conversationLoading" :model="activeModel"
               :models="models" :mode="mode" :task-id="activeThread?.id" :supports-images="activeModelSupportsImages"
               :reasoning-level="activeReasoningLevel" :network-enabled="activeThread?.networkEnabled ?? true"
               :optimize-prompt="optimizePrompt" @send="sendMessage" @stop="stopTurn" @change-model="changeModel"

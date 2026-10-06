@@ -500,7 +500,7 @@ watch(() => props.supportsImages, async (supported) => {
     </div>
     <p v-if="imageNotice" class="composer-image-notice">{{ imageNotice }}</p>
     <textarea ref="textarea" v-model="value" :disabled="disabled" rows="1"
-      :placeholder="disabled ? '恢复任务后可继续对话' : '交给 Haoyue'" aria-label="消息" @keydown="handleKeydown"
+      :placeholder="disabled ? '正在加载会话…' : '交给 Haoyue'" aria-label="消息" @keydown="handleKeydown"
       @paste="handlePaste" />
     <div class="composer-toolbar">
       <button class="icon-button composer-icon" type="button" title="添加文件附件（可直接拖拽任意文件或文件夹）"

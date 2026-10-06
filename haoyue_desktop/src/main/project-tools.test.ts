@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -55,6 +55,24 @@ describe('revertFileDiffs', () => {
       expect(result.failed).toHaveLength(1)
       expect(result.failed[0]?.filePath).toBe(file)
       expect(result.reverted).toHaveLength(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects patches whose target path escapes the workspace', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'haoyue-test-escape-'))
+    try {
+      // 目标路径越出工作区（父目录）：必须在触碰文件系统之前拒绝。
+      const result = await revertFileDiffs(dir, [{
+        filePath: join(dir, '..', 'haoyue-escaped-target.txt'),
+        diff: '--- a/escaped.txt\n+++ b/escaped.txt\n@@ -0,0 +1 @@\n+evil\n'
+      }])
+
+      expect(result.reverted).toHaveLength(0)
+      expect(result.failed).toHaveLength(1)
+      expect(result.failed[0]?.reason).toContain('越出工作区')
+      expect(existsSync(join(dir, '..', 'haoyue-escaped-target.txt'))).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

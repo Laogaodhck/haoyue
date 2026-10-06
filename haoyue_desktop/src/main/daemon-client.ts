@@ -38,6 +38,10 @@ export class DaemonClient extends EventEmitter {
   private nextId = 1
   private connecting: Promise<DaemonState> | null = null
   private readonly pending = new Map<number, PendingRequest>()
+  // Generation counter: disconnect() bumps it so an in-flight connect() can no
+  // longer adopt its socket after the handshake — previously disconnect() during
+  // the connect window was silently overridden by a "connected" state.
+  private generation = 0
 
   constructor(readonly endpoint = process.platform === 'win32'
     ? String.raw`\\.\pipe\haoyue`
@@ -54,6 +58,7 @@ export class DaemonClient extends EventEmitter {
     if (this.connecting) return this.connecting
 
     this.connecting = new Promise<DaemonState>((resolve) => {
+      const epoch = this.generation
       const socket = createConnection(this.endpoint)
       let settled = false
 
@@ -79,8 +84,18 @@ export class DaemonClient extends EventEmitter {
 
       socket.setEncoding('utf8')
       socket.once('connect', async () => {
+        if (epoch !== this.generation) {
+          socket.destroy()
+          finish({ connected: false, endpoint: this.endpoint, error: 'Connection cancelled' })
+          return
+        }
         try {
           await this.authenticate(socket)
+          if (epoch !== this.generation) {
+            socket.destroy()
+            finish({ connected: false, endpoint: this.endpoint, error: 'Connection cancelled' })
+            return
+          }
           this.socket = socket
           this.bindSocket(socket)
           finish({ connected: true, endpoint: this.endpoint })
@@ -92,10 +107,6 @@ export class DaemonClient extends EventEmitter {
             error: (error as Error).message
           })
         }
-      })
-      socket.once('timeout', () => {
-        socket.destroy()
-        finish({ connected: false, endpoint: this.endpoint, error: 'Connection timed out' })
       })
       socket.once('error', (error) => {
         finish({ connected: false, endpoint: this.endpoint, error: error.message })
@@ -151,6 +162,8 @@ export class DaemonClient extends EventEmitter {
   }
 
   disconnect(): void {
+    // Invalidate any in-flight connect() attempt before tearing down the socket.
+    this.generation++
     this.socket?.destroy()
     this.socket = null
     this.bufferChunks = []
@@ -168,7 +181,8 @@ export class DaemonClient extends EventEmitter {
       throw new Error(state.error ?? `Unable to connect to ${this.endpoint}`)
 
     const id = this.nextId++
-    const timeoutMs = options.timeoutMs ?? 60_000
+    // Guard against 0/negative timeouts that would fail the request instantly.
+    const timeoutMs = Math.max(1_000, options.timeoutMs ?? 60_000)
     return new Promise<DaemonMessage>((resolve, reject) => {
       const pending: PendingRequest = { method, resolve, reject }
       this.pending.set(id, pending)

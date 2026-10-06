@@ -119,6 +119,9 @@ export async function reloadThreadSession(
     })
     // 让出事件循环，避免后台同步任务卡顿前台动画与交互
     await new Promise((resolve) => setTimeout(resolve, 0))
+    // 等待期间用户可能已在该线程发起新回合：整体替换 messages 会使回合事件
+    // 失去锚点（消息丢失/气泡悬空），此时丢弃本次后台重载结果。
+    if (thread.running || thread.assistantId) return
     const saved = JSON.parse(response.data) as RuntimeSession
     thread.messages = hydrateMessages(saved)
     thread.sessionLoaded = true

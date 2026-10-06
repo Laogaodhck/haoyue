@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { existsSync, statSync, unlinkSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
+import { resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { GitCommit, GitHistory, GitOverview, RevertDiffItem, RevertDiffsResult } from '../shared/ipc.js'
 
@@ -15,13 +15,30 @@ async function workspaceDirectory(path: string): Promise<string> {
 }
 
 async function git(directory: string, args: string[]): Promise<string> {
-  const result = await execFileAsync('git', args, {
+  // core.quotepath=off：Windows 默认把非 ASCII 文件名转成八进制转义，中文路径会乱码。
+  const result = await execFileAsync('git', ['-c', 'core.quotepath=off', ...args], {
     cwd: directory,
     encoding: 'utf8',
     maxBuffer: 8 * 1024 * 1024,
     windowsHide: true
   })
   return result.stdout.trimEnd()
+}
+
+// 补丁来自 agent 生成的内容（file_diff 事件），必须假定可能被注入越界路径。
+// 统一在此校验：目标路径解析后必须落在工作区内，../ 与任意绝对路径逃逸一律拒绝
+//（file_diff 事件本身携带工作区内文件的绝对路径，属于合法输入）。
+function resolvePatchTarget(directory: string, filePath: string): string {
+  const target = resolve(directory, filePath)
+  const workspaceWithSep = directory.endsWith(sep) ? directory : directory + sep
+  const samePath = (left: string, right: string): boolean =>
+    process.platform === 'win32'
+      ? left.toLowerCase() === right.toLowerCase()
+      : left === right
+  if (samePath(target, directory) || target.toLowerCase().startsWith(workspaceWithSep.toLowerCase())) {
+    return target
+  }
+  throw new Error(`补丁路径越出工作区，已拒绝：${filePath}`)
 }
 
 function detail(error: unknown): string {
@@ -139,7 +156,8 @@ export function normalizeDiffForGit(diff: string): string {
 
 function cleanupNewFileIfEmpty(directory: string, patch: RevertDiffItem): void {
   if (/@@ -[01],0 \+/.test(patch.diff)) {
-    const target = isAbsolute(patch.filePath) ? patch.filePath : resolve(directory, patch.filePath)
+    // 与补丁应用一致：越出工作区的路径不允许触碰（包括按绝对路径 unlink）。
+    const target = resolvePatchTarget(directory, patch.filePath)
     if (existsSync(target)) {
       const stats = statSync(target)
       if (stats.size === 0) {
@@ -151,8 +169,11 @@ function cleanupNewFileIfEmpty(directory: string, patch: RevertDiffItem): void {
 
 async function applyPatchReverse(directory: string, patch: RevertDiffItem): Promise<void> {
   const normalizedDiff = normalizeDiffForGit(patch.diff)
+  // 预先校验补丁声明的目标路径；真正的越界防护仍由 git 自身边界检查兜底
+  //（--unsafe-paths 会关闭该防护，因此必须移除）。
+  resolvePatchTarget(directory, patch.filePath)
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    const child = spawn('git', ['apply', '--reverse', '--whitespace=nowarn', '--unsafe-paths'], {
+    const child = spawn('git', ['apply', '--reverse', '--whitespace=nowarn'], {
       cwd: directory,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']

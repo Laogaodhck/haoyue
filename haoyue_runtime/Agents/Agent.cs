@@ -186,6 +186,10 @@ public sealed partial class Agent(
                 {
                     PublishWorkflow(step, "compact", "压缩记忆");
                     await CompactContextAsync(session, workspace, model, source, systemPrompt, ct).ConfigureAwait(false);
+                    // 压缩会 Clear 并重建历史，压缩前记录的 turnMessageIndex 不再指向本回合的
+                    // 消息。归零让后续步骤扫描全部保留消息，避免本回合的图像（含最近保留窗里的
+                    // 图片）被静默剥离、回合被错误切到纯文本模型。
+                    turnMessageIndex = 0;
                     compactedThisTurn = true;
                     source = requiresVision ? session.Messages : WithoutImages(session.Messages);
                     history = ContextPlanner.FitToWindow(source, model.Model, systemPrompt);
@@ -351,6 +355,13 @@ public sealed partial class Agent(
         {
             error = ex.Message;
             events.Publish(new ErrorEvent("LLM request failed", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            // 意外异常（存储/IO 等）也要走受控失败路径：否则 TurnCompletedEvent 与
+            // workflow 收尾事件都不会发布，客户端的工作流视图停留在最后一步。
+            error = $"Unexpected error: {ex.Message}";
+            events.Publish(new ErrorEvent("Agent turn failed", error));
         }
 
         PublishSteering(AppendSteering(session, steering));

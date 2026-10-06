@@ -73,6 +73,17 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly Dictionary<long, ClientSink> _clients = [];
     private long _nextClientId;
 
+    // Live connection contexts (per connected client). Administration operations that
+    // mutate global state (factory reset, database rebuild) use this registry to
+    // coordinate with turns running on every connection, not just their own.
+    private readonly ConcurrentDictionary<long, ConnectionContext> _connections = new();
+
+    // Session-level turn mutual exclusion: at most one active turn per session across
+    // all connections. Concurrent turns on the same session interleave messages in the
+    // shared history and break tool-call pairing, so they are rejected at dispatch.
+    private readonly ConcurrentDictionary<string, ActiveTurn> _sessionTurns =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private sealed class SessionUsageAccumulator
     {
         public long LlmRounds { get; set; }
@@ -330,6 +341,7 @@ public sealed class DaemonServer : IAsyncDisposable
 
         var clientId = RegisterClient(writer, writerGate);
         var context = new ConnectionContext(writer, writerGate, ct);
+        _connections[clientId] = context;
 
         try
         {
@@ -388,6 +400,7 @@ public sealed class DaemonServer : IAsyncDisposable
         finally
         {
             UnregisterClient(clientId);
+            _connections.TryRemove(clientId, out _);
             foreach (var turn in context.ActiveTurns.Values) turn.Cancellation.Cancel();
             foreach (var turn in context.ActiveTurns.Values)
                 if (turn.Task is not null) await ObserveAsync(turn.Task).ConfigureAwait(false);
@@ -493,9 +506,10 @@ public sealed class DaemonServer : IAsyncDisposable
 
                     case "factory.reset":
                     {
-                        foreach (var turn in context.ActiveTurns.Values) turn.Cancellation.Cancel();
-                        foreach (var turn in context.ActiveTurns.Values)
-                            if (turn.Task is not null) await ObserveAsync(turn.Task).ConfigureAwait(false);
+                        // A rebuild drops every table: coordinate with turns on ALL
+                        // connections, not just the caller's, so live SQLite writers
+                        // cannot race the schema change.
+                        await CancelAllTurnsAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
                             _ => Task.FromResult(_admin.FactoryReset()), context.ConnectionCt).ConfigureAwait(false);
                         break;
@@ -553,10 +567,24 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(context.ConnectionCt);
                         var turn = new ActiveTurn(turnSession, workspace, turnCancellation);
+                        var sessionKey = turnSession.Header.Id;
+                        if (!_sessionTurns.TryAdd(sessionKey, turn))
+                        {
+                            turnCancellation.Dispose();
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                "A turn is already active for this session; wait for it to finish or send guidance with agent.steer",
+                                context.ConnectionCt, sessionKey).ConfigureAwait(false);
+                            break;
+                        }
                         context.ActiveTurns[id] = turn;
                         turn.Task = RunTurnAsync(
                             turnSession, workspace, message, images, reasoningLevel, id, context.Writer, context.WriterGate,
                             turnCancellation.Token, context.ConnectionCt, turn.Steering);
+                        // The session lock releases itself when the turn completes; the
+                        // value-aware removal never evicts a newer turn's registration.
+                        _ = turn.Task.ContinueWith(
+                            _ => _sessionTurns.TryRemove(KeyValuePair.Create(sessionKey, turn)),
+                            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                         break;
                     }
 
@@ -605,9 +633,16 @@ public sealed class DaemonServer : IAsyncDisposable
                     case "agent.cancel":
                     {
                         var requestedId = request["params"]?["requestId"]?.GetValue<long?>();
-                        var targets = requestedId is { } specific
-                            ? context.ActiveTurns.Where(item => item.Key == specific).Select(item => item.Value).ToList()
-                            : context.ActiveTurns.Values.ToList();
+                        var requestedSession = request["params"]?["sessionId"]?.GetValue<string>();
+                        // With no requestId the request may be scoped to a session; only
+                        // when both are absent do we cancel every turn on this connection.
+                        var targets = context.ActiveTurns
+                            .Where(item =>
+                                (requestedId is null || item.Key == requestedId) &&
+                                (string.IsNullOrWhiteSpace(requestedSession) ||
+                                 string.Equals(item.Value.Session.Header.Id, requestedSession, StringComparison.OrdinalIgnoreCase)))
+                            .Select(item => item.Value)
+                            .ToList();
                         if (targets.Count == 0)
                         {
                             await WriteAsync(context.Writer, context.WriterGate, id, "result", "no active turn", context.ConnectionCt).ConfigureAwait(false);
@@ -616,7 +651,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         foreach (var target in targets) target.Cancellation.Cancel();
                         var detail = requestedId is { } one
                             ? $"cancellation requested for {one}"
-                            : $"cancellation requested for {targets.Count} active turns";
+                            : $"cancellation requested for {targets.Count} active turn(s)";
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", detail, context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }
@@ -703,6 +738,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         break;
 
                     case "config.rebuild":
+                        await CancelAllTurnsAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
                             _ => Task.FromResult(_admin.RebuildConfigAndDatabase()), context.ConnectionCt).ConfigureAwait(false);
                         break;
@@ -1593,6 +1629,37 @@ public sealed class DaemonServer : IAsyncDisposable
             "session.resume", "session.new",
             "lock.list", "factory.reset", "shutdown", "events.recent"),
     }.ToJsonString();
+
+    /// <summary>
+    /// Cancels every active turn across all connections and waits (bounded) for them
+    /// to finish. Used by administration operations that mutate global state — factory
+    /// reset and database rebuild drop SQLite tables, which must not race live writers.
+    /// </summary>
+    private async Task CancelAllTurnsAsync(TimeSpan timeout)
+    {
+        var turns = new List<ActiveTurn>();
+        foreach (var connection in _connections.Values)
+        {
+            foreach (var turn in connection.ActiveTurns.Values)
+            {
+                turn.Cancellation.Cancel();
+                turns.Add(turn);
+            }
+        }
+        if (turns.Count == 0) return;
+        try
+        {
+            await Task.WhenAll(turns.Select(turn => turn.Task ?? Task.CompletedTask))
+                .WaitAsync(timeout).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Timeout or a failing turn must not block the reset; exceptions are
+            // observed (and swallowed) below.
+        }
+        foreach (var turn in turns)
+            if (turn.Task is not null) await ObserveAsync(turn.Task).ConfigureAwait(false);
+    }
 
     private async Task RunAdminAsync(
         StreamWriter writer,

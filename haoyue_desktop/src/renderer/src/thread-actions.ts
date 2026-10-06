@@ -82,7 +82,23 @@ export function createThreadActions(context: ThreadActionsContext) {
     taskSettingsThreadId.value = ''
   }
 
-  async function archiveProjectTasks(project: ProjectItem): Promise<void> {
+  // 批量会话操作的逐项保护：单条失败不中断整批，结束后汇总提示失败数量。
+async function applyBatch(targets: ThreadItem[], apply: (thread: ThreadItem) => Promise<void>): Promise<void> {
+  let failed = 0
+  for (const thread of targets) {
+    try {
+      await apply(thread)
+    } catch (error) {
+      failed++
+      console.error('Batch session action failed:', thread.title, error)
+    }
+  }
+  if (failed > 0) {
+    void window.haoyue?.notify?.('批量操作未全部完成', `${failed} 个任务处理失败，请检查 Runtime 连接后重试。`)
+  }
+}
+
+async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     if (!project.loaded) await refreshProjectSessions(project).catch(() => undefined)
     const targets = threads.value.filter((thread) => thread.projectId === project.id && !thread.archived)
     if (targets.length === 0 || targets.some((thread) => thread.running)) return
@@ -93,7 +109,7 @@ export function createThreadActions(context: ThreadActionsContext) {
     })) return
 
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
-    for (const thread of targets) {
+    await applyBatch(targets, async (thread) => {
       if (thread.sessionId) {
         await window.haoyue.daemon.request('session.archive', {
           id: thread.sessionId,
@@ -104,7 +120,7 @@ export function createThreadActions(context: ThreadActionsContext) {
       } else {
         threads.value = threads.value.filter((item) => item.id !== thread.id)
       }
-    }
+    })
     if (activeAffected) chooseAfterRemoval(project.id)
   }
 
@@ -118,7 +134,7 @@ export function createThreadActions(context: ThreadActionsContext) {
     })) return
 
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
-    for (const thread of targets) {
+    await applyBatch(targets, async (thread) => {
       if (thread.sessionId) {
         await window.haoyue.daemon.request('session.archive', {
           id: thread.sessionId,
@@ -129,7 +145,7 @@ export function createThreadActions(context: ThreadActionsContext) {
       } else {
         threads.value = threads.value.filter((item) => item.id !== thread.id)
       }
-    }
+    })
     if (activeAffected) chooseAfterRemoval()
   }
 
@@ -164,12 +180,12 @@ export function createThreadActions(context: ThreadActionsContext) {
     })) return
 
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
-    for (const thread of targets) {
+    await applyBatch(targets, async (thread) => {
       if (thread.sessionId) {
         await window.haoyue.daemon.request('session.delete', { id: thread.sessionId, global: true })
       }
       threads.value = threads.value.filter((item) => item.id !== thread.id)
-    }
+    })
     taskSettingsThreadId.value = ''
     if (activeAffected) chooseAfterRemoval()
   }
@@ -186,7 +202,7 @@ export function createThreadActions(context: ThreadActionsContext) {
     })) return
 
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
-    for (const thread of targets) {
+    await applyBatch(targets, async (thread) => {
       if (thread.sessionId) {
         await window.haoyue.daemon.request('session.delete', {
           id: thread.sessionId,
@@ -194,7 +210,7 @@ export function createThreadActions(context: ThreadActionsContext) {
         })
       }
       threads.value = threads.value.filter((item) => item.id !== thread.id)
-    }
+    })
     taskSettingsThreadId.value = ''
     if (activeAffected) chooseAfterRemoval(project.id)
   }
@@ -210,7 +226,7 @@ export function createThreadActions(context: ThreadActionsContext) {
     })) return
 
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
-    for (const thread of targets) {
+    await applyBatch(targets, async (thread) => {
       const project = projects.value.find((item) => item.id === thread.projectId)
       if (thread.sessionId && (project || !thread.projectId)) {
         await window.haoyue.daemon.request('session.delete', {
@@ -219,7 +235,7 @@ export function createThreadActions(context: ThreadActionsContext) {
         })
       }
       threads.value = threads.value.filter((item) => item.id !== thread.id)
-    }
+    })
     taskSettingsThreadId.value = ''
     if (activeAffected) {
       activeThreadId.value = ''

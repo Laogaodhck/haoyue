@@ -272,9 +272,6 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         }
         break
       }
-      case 'computer_step':
-        break
-
       case 'done':
 
       case 'cancelled':

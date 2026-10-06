@@ -165,57 +165,69 @@ public sealed class McpManager(
 
         _clients.Add(client);
 
-        // Auto-discover tools. Names are sanitized to [a-zA-Z0-9_-] (the character set
-        // most providers accept for function names) and de-duplicated so one server
-        // cannot register two tools under the same local name.
-        var tools = await client.ListToolsAsync(ct).ConfigureAwait(false);
-        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var tool in tools)
+        try
         {
-            var baseName = McpToolAdapter.BuildName(name, tool.Name);
-            var uniqueName = baseName;
-            var suffix = 2;
-            while (!usedNames.Add(uniqueName))
-                uniqueName = $"{baseName}_{suffix++}";
-            _registrations.Add(toolRegistry.Register(new McpToolAdapter(client, tool, uniqueName)));
-        }
+            // Auto-discover tools. Names are sanitized to [a-zA-Z0-9_-] (the character set
+            // most providers accept for function names) and de-duplicated so one server
+            // cannot register two tools under the same local name.
+            var tools = await client.ListToolsAsync(ct).ConfigureAwait(false);
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var tool in tools)
+            {
+                var baseName = McpToolAdapter.BuildName(name, tool.Name);
+                var uniqueName = baseName;
+                var suffix = 2;
+                while (!usedNames.Add(uniqueName))
+                    uniqueName = $"{baseName}_{suffix++}";
+                _registrations.Add(toolRegistry.Register(new McpToolAdapter(client, tool, uniqueName)));
+            }
 
-        // Auto-discover prompts into the prompt registry. Resolvers degrade to
-        // null when the server is gone or rejects the request, so an offline
-        // server never breaks prompt composition; text is fitted to the
-        // injected-fragment token budget.
-        var prompts = await client.ListPromptsAsync(ct).ConfigureAwait(false);
-        foreach (var prompt in prompts)
+            // Auto-discover prompts into the prompt registry. Resolvers degrade to
+            // null when the server is gone or rejects the request, so an offline
+            // server never breaks prompt composition; text is fitted to the
+            // injected-fragment token budget.
+            var prompts = await client.ListPromptsAsync(ct).ConfigureAwait(false);
+            foreach (var prompt in prompts)
+            {
+                var promptName = prompt.Name;
+                _registrations.Add(promptRegistry.Register(new PromptContribution(
+                    $"mcp:{name}:{promptName}", PromptSlot.Tool,
+                    async (_, token) =>
+                    {
+                        var text = await client.GetPromptAsync(promptName, token).ConfigureAwait(false);
+                        return text is null ? null : ContextPlanner.FitInjectedText(text);
+                    })));
+            }
+
+            // Auto-discover resources and expose their text contents as context
+            // contributions under the same mcp:* id family. Reads fail soft like
+            // prompts; blob-only resources resolve to null and are skipped by the
+            // composer.
+            var resources = await client.ListResourcesAsync(ct).ConfigureAwait(false);
+            foreach (var resource in resources.Take(MaxResourcesPerServer))
+            {
+                if (string.IsNullOrWhiteSpace(resource.Uri)) continue;
+                var uri = resource.Uri;
+                _registrations.Add(promptRegistry.Register(new PromptContribution(
+                    $"mcp:{name}:resource:{uri}", PromptSlot.Tool,
+                    async (_, token) =>
+                    {
+                        var text = await client.GetResourceAsync(uri, token).ConfigureAwait(false);
+                        return text is null ? null : ContextPlanner.FitInjectedText(text);
+                    })));
+            }
+
+            return new McpServerStatus(name, server.Transport, true, tools.Count, null);
+        }
+        catch
         {
-            var promptName = prompt.Name;
-            _registrations.Add(promptRegistry.Register(new PromptContribution(
-                $"mcp:{name}:{promptName}", PromptSlot.Tool,
-                async (_, token) =>
-                {
-                    var text = await client.GetPromptAsync(promptName, token).ConfigureAwait(false);
-                    return text is null ? null : ContextPlanner.FitInjectedText(text);
-                })));
+            // Discovery failed after the transport connected: without this cleanup the
+            // client (stdio: a live child process and two pump loops) stays alive until
+            // the next reload recycles it, and repeated failed reloads accumulate orphans.
+            _clients.Remove(client);
+            await client.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
-
-        // Auto-discover resources and expose their text contents as context
-        // contributions under the same mcp:* id family. Reads fail soft like
-        // prompts; blob-only resources resolve to null and are skipped by the
-        // composer.
-        var resources = await client.ListResourcesAsync(ct).ConfigureAwait(false);
-        foreach (var resource in resources.Take(MaxResourcesPerServer))
-        {
-            if (string.IsNullOrWhiteSpace(resource.Uri)) continue;
-            var uri = resource.Uri;
-            _registrations.Add(promptRegistry.Register(new PromptContribution(
-                $"mcp:{name}:resource:{uri}", PromptSlot.Tool,
-                async (_, token) =>
-                {
-                    var text = await client.GetResourceAsync(uri, token).ConfigureAwait(false);
-                    return text is null ? null : ContextPlanner.FitInjectedText(text);
-                })));
-        }
-
-        return new McpServerStatus(name, server.Transport, true, tools.Count, null);
     }
 
     private static IMcpTransport CreateTransport(string name, McpServerConfig server) =>

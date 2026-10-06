@@ -59,6 +59,71 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Chat_RejectsSecondConcurrentTurnOnSameSession()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<AgentTurnResult> SlowTurn(
+            AgentSession session, WorkspaceInfo workspace, string message, CancellationToken ct)
+        {
+            started.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new AgentTurnResult("unreachable", false, null);
+        }
+
+        var connection = await StartServerAsync(SlowTurn);
+        await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "first" });
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 同一会话的第二个并发回合必须被拒绝：并发写入会交错会话历史并破坏 tool-call 配对。
+        await connection.SendAsync(2, "chat", new JsonObject { ["message"] = "second" });
+        var second = await connection.ReadAsync();
+        Assert.Equal(2, second["id"]!.GetValue<long>());
+        Assert.Equal("error", second["event"]!.GetValue<string>());
+        Assert.Contains("already active", second["data"]!.GetValue<string>());
+
+        // 清理：空参 cancel 仍取消本连接的全部回合（向后兼容）。
+        await connection.SendAsync(3, "agent.cancel", new JsonObject());
+        var responses = new List<JsonObject>();
+        while (responses.Count < 2)
+            responses.Add(await connection.ReadAsync());
+        Assert.Contains(responses, response =>
+            response["id"]!.GetValue<long>() == 1
+            && response["event"]!.GetValue<string>() == "cancelled");
+    }
+
+    [Fact]
+    public async Task AgentCancel_WithSessionId_OnlyCancelsMatchingTurns()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<AgentTurnResult> SlowTurn(
+            AgentSession session, WorkspaceInfo workspace, string message, CancellationToken ct)
+        {
+            started.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new AgentTurnResult("unreachable", false, null);
+        }
+
+        var connection = await StartServerAsync(SlowTurn);
+        await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "long turn" });
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 不匹配的 sessionId 不得误伤本连接上的活动回合（渲染层在 requestId 未就绪时按会话取消）。
+        await connection.SendAsync(2, "agent.cancel", new JsonObject { ["sessionId"] = "no-such-session" });
+        var miss = await connection.ReadAsync();
+        Assert.Equal(2, miss["id"]!.GetValue<long>());
+        Assert.Equal("result", miss["event"]!.GetValue<string>());
+        Assert.Equal("no active turn", miss["data"]!.GetValue<string>());
+
+        await connection.SendAsync(3, "agent.cancel", new JsonObject());
+        var responses = new List<JsonObject>();
+        while (responses.Count < 2)
+            responses.Add(await connection.ReadAsync());
+        Assert.Contains(responses, response =>
+            response["id"]!.GetValue<long>() == 1
+            && response["event"]!.GetValue<string>() == "cancelled");
+    }
+
+    [Fact]
     public async Task Routing_GetAndSet_FailoverEnabled()
     {
         var connection = await StartServerAsync(

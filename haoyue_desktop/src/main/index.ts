@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, statSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { basename, extname, join, resolve } from 'node:path'
 import { release } from 'node:os'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell, Tray } from 'electron'
@@ -23,6 +23,12 @@ let tray: Tray | null = null
 let isQuitting = false
 let managedDaemon: ChildProcess | null = null
 let runtimeShutdownStarted = false
+// Supervised restart state: a crash of the bundled runtime must not brick the app
+// (previously the daemon was spawned exactly once and never re-spawned).
+let daemonRestartTimer: NodeJS.Timeout | null = null
+let daemonRestartAttempts = 0
+let daemonStartedAt = 0
+const maxDaemonRestartAttempts = 5
 const activeNotifications = new Set<Notification>()
 const supportsMica = process.platform === 'win32' && Number(release().split('.')[2] ?? 0) >= 22000
 const maxImageCount = 10
@@ -91,6 +97,9 @@ async function ensureDaemonRunning(): Promise<void> {
     windowsHide: true
   })
   managedDaemon = child
+  // stdout 是 pipe 但没有任何消费者：一旦 runtime 开始向 stdout 输出（日志/异常），
+  // 管道缓冲写满即阻塞 daemon 进程。保持排水，避免潜在的整进程假死。
+  child.stdout?.resume()
 
   let startupError: Error | null = null
   let childStderr = ''
@@ -106,6 +115,24 @@ async function ensureDaemonRunning(): Promise<void> {
     if (code !== 0 && code !== null) {
       console.error(`Haoyue Runtime exited with code ${code}. Stderr: ${childStderr}`)
     }
+    if (runtimeShutdownStarted || isQuitting) return
+    // Crash supervision: restart with capped exponential backoff. A run that lasted
+    // over 30s counts as healthy and resets the attempt budget.
+    if (Date.now() - daemonStartedAt > 30_000) daemonRestartAttempts = 0
+    if (daemonRestartAttempts >= maxDaemonRestartAttempts) {
+      showNativeNotification('Haoyue Runtime 已退出', '自动重启多次失败，请重启 Haoyue 应用。')
+      return
+    }
+    daemonRestartAttempts++
+    const backoff = Math.min(30_000, 1_000 * 2 ** (daemonRestartAttempts - 1))
+    if (daemonRestartTimer) clearTimeout(daemonRestartTimer)
+    daemonRestartTimer = setTimeout(() => {
+      daemonRestartTimer = null
+      ensureDaemonRunning().catch((error) => {
+        console.error('Haoyue Runtime restart failed:', error)
+        showNativeNotification('Haoyue Runtime 重启失败', error instanceof Error ? error.message : String(error))
+      })
+    }, backoff)
   })
 
   for (let attempt = 0; attempt < 28; attempt++) {
@@ -115,7 +142,11 @@ async function ensureDaemonRunning(): Promise<void> {
       throw new Error(`Haoyue Runtime exited with code ${child.exitCode}: ${childStderr.trim() || 'unknown error'}`)
     }
     const state = await daemon.connect()
-    if (state.connected) return
+    if (state.connected) {
+      daemonStartedAt = Date.now()
+      daemonRestartAttempts = 0
+      return
+    }
   }
 
   if (child.exitCode === null) child.kill()
@@ -415,12 +446,16 @@ function registerIpc(): void {
 
   ipcMain.handle('app:read-file-base64', async (_event, path: string) => {
     try {
+      // 安全边界：该通道面向图片附件，拒绝任意扩展名与超大文件，
+      // 防止渲染层被攻破后获得任意文件读取原语。
+      const ext = extname(String(path)).toLocaleLowerCase()
+      if (!imageMediaTypes[ext]) return null
+      const info = await stat(String(path))
+      if (!info.isFile() || info.size > maxTotalImageBytes) return null
       const data = await readFile(path)
-      const ext = extname(path).toLocaleLowerCase()
-      const mediaType = imageMediaTypes[ext] || 'image/png'
       return {
         data: data.toString('base64'),
-        mediaType,
+        mediaType: imageMediaTypes[ext] || 'image/png',
         sizeBytes: data.byteLength
       }
     } catch {
@@ -493,7 +528,14 @@ if (!hasSingleInstanceLock) {
     electronApp.setAppUserModelId('com.hoilai.haoyue')
     app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
     createTray()
-    await ensureDaemonRunning().catch((error) => console.error('Unable to start Haoyue Runtime:', error))
+    await ensureDaemonRunning().catch((error) => {
+      console.error('Unable to start Haoyue Runtime:', error)
+      // 启动失败必须让用户看到，而不是永远停留在笼统的「连接失败」。
+      dialog.showErrorBox(
+        'Haoyue Runtime 启动失败',
+        error instanceof Error ? error.message : String(error)
+      )
+    })
     createWindow()
     nativeTheme.on('updated', syncNativeWindowTheme)
 
@@ -505,6 +547,10 @@ if (!hasSingleInstanceLock) {
 
 app.on('before-quit', (event) => {
   isQuitting = true
+  if (daemonRestartTimer) {
+    clearTimeout(daemonRestartTimer)
+    daemonRestartTimer = null
+  }
   destroyComputerOverlay()
   if (tray) {
     tray.destroy()

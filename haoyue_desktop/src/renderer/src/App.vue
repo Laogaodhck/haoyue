@@ -636,6 +636,18 @@ function selectArchivedThread(id: string): void {
 function newTask(projectId?: string): void {
   const project = projectId ? projects.value.find((item) => item.id === projectId) : undefined
   if (projectId && !project) return
+  // 当前任务已是「未开始的新任务」且目标作用域一致时直接复用，避免连点堆积空线程。
+  const current = activeThread.value
+  if (current && !current.sessionId && !current.running && current.messages.length === 0
+    && (current.projectId ?? undefined) === (project?.id ?? undefined)
+    && current.id === activeThreadId.value) {
+    selectedProjectId.value = project?.id ?? ''
+    void nextTick(() => composer.value?.focus())
+    return
+  }
+  // 先把当前输入框内容归档为旧任务草稿，再清空输入框，避免文字归属到新任务。
+  if (current && composer.value) composerDrafts.set(current.id, composer.value.getValue())
+  composer.value?.setValue('')
   const thread: ThreadItem = {
     id: makeId(),
     title: '新任务',
@@ -679,9 +691,14 @@ async function branchFromMessage(message: ChatMessage): Promise<void> {
 
   let newSessionId: string | undefined
   if (currentThread.sessionId && daemonState.value.connected) {
+    // 后端按会话原始行序分叉：只有携带持久化行号后缀的消息才能安全分叉。
+    const match = /^.*:(\d+)$/.exec(message.id)
+    if (!match?.[1]) {
+      void window.haoyue?.notify?.('无法分叉', '该消息尚未与后端会话同步，请等待会话加载完成后重试。')
+      return
+    }
+    const keepCount = parseInt(match[1], 10) + 1
     try {
-      const match = /^.*:(\d+)$/.exec(message.id)
-      const keepCount = match && match[1] ? parseInt(match[1], 10) + 1 : 0
       const response = await window.haoyue.daemon.request('session.fork', {
         id: currentThread.sessionId,
         ...sessionScope(currentThread, project),
@@ -691,7 +708,9 @@ async function branchFromMessage(message: ChatMessage): Promise<void> {
       const data = JSON.parse(response.data) as { id: string }
       newSessionId = data.id
     } catch (err) {
-      console.error('Failed to fork session on daemon:', err)
+      // 分叉失败时不得本地伪造分支（会出现前端有历史、后端无会话的幽灵任务）。
+      void window.haoyue?.notify?.('分叉失败', err instanceof Error ? err.message : String(err))
+      return
     }
   }
 
@@ -811,24 +830,23 @@ async function handleEditConfirm(revertFiles: boolean): Promise<void> {
   }
 
   // Step 2: Truncate backend session in SQLite
-  let keepCount: number | null = null
-  if (message.id) {
-    const match = /^.*:(\d+)$/.exec(message.id)
-    if (match && match[1]) {
-      keepCount = parseInt(match[1], 10)
-    }
-  }
-  if (keepCount === null) keepCount = promptIndex
-
   if (thread.sessionId) {
+    const match = message.id ? /^.*:(\d+)$/.exec(message.id) : null
+    if (!match?.[1]) {
+      // 无持久化行号时禁止用本地索引猜测后端行号（tool 行合并会导致错位）。
+      void window.haoyue?.notify?.('无法编辑', '该消息尚未与后端会话同步，请等待会话加载完成后重试。')
+      return
+    }
     try {
       await window.haoyue.daemon.request('session.truncate', {
         id: thread.sessionId,
         ...sessionScope(thread, project),
-        keepCount
+        keepCount: parseInt(match[1], 10)
       })
     } catch (err) {
-      console.error('Failed to truncate session:', err)
+      // 截断失败必须中止：否则前端删了消息、后端还在，下次 reload 全部复活。
+      void window.haoyue?.notify?.('无法编辑', `会话截断失败：${err instanceof Error ? err.message : String(err)}`)
+      return
     }
   }
 
@@ -917,8 +935,8 @@ async function selectThread(id: string): Promise<void> {
   }
   if (selectionToken !== conversationSelectionToken.value) return
   autoFollowConversation.value = true
-  const draft = composerDrafts.get(thread.id)
-  if (draft) composer.value?.setValue(draft)
+  // 无条件按目标任务的草稿回填（无草稿则清空），避免上一个任务的输入串扰到当前任务。
+  composer.value?.setValue(composerDrafts.get(thread.id) ?? '')
   await scrollToBottom(false, true)
 }
 
@@ -1049,15 +1067,26 @@ async function regenerateMessage(message: ChatMessage): Promise<void> {
     if (thread.messages[i]?.role === 'user') { promptIndex = i; break }
   }
   if (promptIndex < 0) return
-  const prompt = thread.messages[promptIndex]?.content ?? ''
+  const promptMessage = thread.messages[promptIndex]
+  const prompt = promptMessage?.content ?? ''
   const project = projects.value.find((item) => item.id === thread.projectId)
+  // 后端 session.truncate 按会话原始行序截断；本地合并视图（tool 行并入 assistant 气泡）
+  // 的索引与原始行号存在偏移，只有持久化消息 id 的后缀才携带权威行号。无法解析时中止，
+  // 绝不用本地猜测值截断，否则会造成会话历史错乱。
+  const match = promptMessage ? /^.*:(\d+)$/.exec(promptMessage.id) : null
+  if (!match?.[1]) {
+    void window.haoyue?.notify?.('无法重新生成', '该消息尚未与后端会话同步，请等待会话加载完成后重试。')
+    return
+  }
+  const keepCount = parseInt(match[1], 10) + 1
   try {
     await window.haoyue.daemon.request('session.truncate', {
       id: thread.sessionId,
       ...sessionScope(thread, project),
-      keepCount: promptIndex + 1
+      keepCount
     })
-  } catch {
+  } catch (err) {
+    void window.haoyue?.notify?.('无法重新生成', `会话截断失败：${err instanceof Error ? err.message : String(err)}`)
     return
   }
   thread.messages = thread.messages.slice(0, promptIndex + 1)
@@ -1308,11 +1337,15 @@ async function saveTaskTitle(title: string): Promise<void> {
   if (!thread || (thread.projectId && !project)) return
   thread.title = title
   if (thread.sessionId) {
-    await window.haoyue.daemon.request('session.update', {
-      id: thread.sessionId,
-      ...sessionScope(thread, project),
-      title
-    })
+    try {
+      await window.haoyue.daemon.request('session.update', {
+        id: thread.sessionId,
+        ...sessionScope(thread, project),
+        title
+      })
+    } catch (error) {
+      void window.haoyue?.notify?.('重命名失败', error instanceof Error ? error.message : String(error))
+    }
   }
   taskSettingsThreadId.value = ''
 }
@@ -1377,9 +1410,16 @@ const handleDaemonEvent = createDaemonEventHandler({
 async function stopTurn(): Promise<void> {
   const thread = activeThread.value
   if (!thread?.running) return
+  // 优先按请求 id 精确取消；首个事件尚未到达（requestId 未就绪）时按会话取消。
+  // 绝不发送空参取消——那会取消该连接上的全部活动回合，误伤后台任务。
+  const params = thread.requestId !== undefined
+    ? { requestId: thread.requestId }
+    : thread.sessionId
+      ? { sessionId: thread.sessionId }
+      : null
+  if (!params) return
   try {
-    await window.haoyue.daemon.request('agent.cancel',
-      thread.requestId ? { requestId: thread.requestId } : {})
+    await window.haoyue.daemon.request('agent.cancel', params)
   } catch { /* sendMessage owns the final state */ }
 }
 

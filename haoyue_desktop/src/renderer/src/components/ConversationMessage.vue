@@ -6,10 +6,12 @@ import {
   CircleAlert,
   Copy,
   Eye,
+  FastForward,
   Image as ImageIcon,
   Layers,
   LoaderCircle,
   Pencil,
+  RefreshCw,
   Split,
   Wrench
 } from '@lucide/vue'
@@ -34,6 +36,10 @@ const emit = defineEmits<{
   openDiff: [filePath: string, diff: string]
   branch: [message: ChatMessage]
   edit: [message: ChatMessage]
+  /** Re-run the turn from its original user prompt (one-click retry after a failure). */
+  regenerate: [message: ChatMessage]
+  /** Ask the model to continue a cut-off answer. */
+  continueTurn: []
 }>()
 
 const thinkingOpen = ref(false)
@@ -264,7 +270,12 @@ function openFileLocation(path?: string): void {
         </section>
       </div>
 
-      <MarkdownMessage v-if="message.content" :content="message.content" />
+      <MarkdownMessage v-if="message.content" :content="message.content"
+        :streaming="streaming && message.state === 'streaming'" />
+      <div v-if="message.interrupted" class="interrupted-note" role="status">
+        <CircleAlert :size="13" />
+        <span>已手动停止，回复可能不完整</span>
+      </div>
       <div v-if="streaming && (message.state === 'thinking' || message.state === 'streaming')"
         class="response-placeholder" aria-label="AI 正在思考">
         <span /><span /><span />
@@ -286,6 +297,24 @@ function openFileLocation(path?: string): void {
           >
             <Check v-if="isCopied" :size="13" class="action-icon success-icon" />
             <Copy v-else :size="13" class="action-icon" />
+          </button>
+          <button
+            type="button"
+            class="action-btn"
+            title="重新生成此回答"
+            aria-label="重新生成此回答"
+            @click="emit('regenerate', message)"
+          >
+            <RefreshCw :size="13" class="action-icon" />
+          </button>
+          <button
+            type="button"
+            class="action-btn"
+            title="回答被截断时继续生成"
+            aria-label="继续生成"
+            @click="emit('continueTurn')"
+          >
+            <FastForward :size="13" class="action-icon" />
           </button>
           <button
             type="button"
@@ -475,5 +504,18 @@ function openFileLocation(path?: string): void {
   font-size: 11px;
   color: var(--text-muted);
   margin-left: 2px;
+}
+
+.interrupted-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  font-size: 11.5px;
+  user-select: none;
 }
 </style>

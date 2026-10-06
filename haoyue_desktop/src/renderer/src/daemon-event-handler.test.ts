@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import type { Ref } from 'vue'
 import type { DaemonEventContext } from './daemon-event-handler'
@@ -93,5 +93,76 @@ describe('daemon event handler — schedule notifications', () => {
     expect(() => handler(event)).not.toThrow()
     expect(notify).not.toHaveBeenCalled()
     expect(context.handleScheduleUpdated).not.toHaveBeenCalled()
+  })
+})
+
+describe('daemon event handler — stream batching', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    ;(globalThis as unknown as { window: unknown }).window = {
+      haoyue: { notify: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) }
+    }
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function chatEvent(event: string, data: string, sessionId = 's1'): DaemonMessage {
+    return { id: 7, event: event as DaemonMessage['event'], data, sessionId, requestMethod: 'chat' }
+  }
+
+  function threadFixture(): ThreadItem {
+    const thread: ThreadItem = {
+      id: 't1',
+      title: '任务',
+      updatedAt: Date.now(),
+      messages: [],
+      sessionId: 's1',
+      running: true,
+      requestId: 7,
+      assistantId: 'a1'
+    }
+    thread.messages.push({
+      id: 'a1', role: 'assistant', content: '', thinking: '', tools: [], state: 'thinking', createdAt: Date.now()
+    })
+    return thread
+  }
+
+  it('batches rapid deltas into one reactive flush per window', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+    const assistant = thread.messages[0]!
+
+    handler(chatEvent('delta', 'Hello'))
+    handler(chatEvent('delta', ' world'))
+    // Inside the batch window the message is still untouched: no reactive storm.
+    expect(assistant.content).toBe('')
+    vi.advanceTimersByTime(60)
+    expect(assistant.content).toBe('Hello world')
+    expect(assistant.state).toBe('streaming')
+  })
+
+  it('flushes pending deltas on the terminal event and marks manual stops', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+    const assistant = thread.messages[0]!
+
+    handler(chatEvent('delta', 'partial answer'))
+    handler(chatEvent('cancelled', '', 's1'))
+    // Nothing lost: the buffered text reached the bubble before finalization.
+    expect(assistant.content).toBe('partial answer')
+    expect(assistant.state).toBe('done')
+    expect(assistant.interrupted).toBe(true)
+
+    // A clean completion must not be flagged as manually stopped.
+    const thread2 = threadFixture()
+    context.threads.value.push(thread2)
+    handler(chatEvent('delta', 'done text', 's2'))
+    handler(chatEvent('done', '', 's2'))
+    expect(thread2.messages[0]!.interrupted).toBeUndefined()
   })
 })

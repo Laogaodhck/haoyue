@@ -61,6 +61,8 @@ export interface ChatMessage {
   modelRef?: string
   viewedImages?: ImageReference[]
   state?: 'thinking' | 'streaming' | 'done' | 'error'
+  /** True when the user manually stopped the turn mid-answer (reply may be incomplete). */
+  interrupted?: boolean
   tools?: ToolActivity[]
   createdAt: number
 }

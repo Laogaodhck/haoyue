@@ -39,6 +39,42 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
     message.state = 'error'
   }
 
+  // ---------------------------------------------------------------- stream throttle
+  // Every delta used to mutate the reactive message immediately, forcing the active
+  // bubble to re-run full markdown/highlight/katex parsing dozens of times per second
+  // (O(n²) over the reply length). Deltas are now batched into a ~50 ms window per
+  // message; terminal events flush pending buffers so nothing is lost.
+  interface PendingStream {
+    content: string
+    thinking: string
+    timer: ReturnType<typeof setTimeout> | undefined
+  }
+
+  const STREAM_FLUSH_MS = 50
+  const pendingStreams = new Map<ChatMessage, PendingStream>()
+
+  function flushStream(message: ChatMessage | undefined): void {
+    if (!message) return
+    const pending = pendingStreams.get(message)
+    if (!pending) return
+    pendingStreams.delete(message)
+    if (pending.timer !== undefined) clearTimeout(pending.timer)
+    if (pending.content) message.content += pending.content
+    if (pending.thinking) message.thinking = (message.thinking ?? '') + pending.thinking
+  }
+
+  function streamInto(message: ChatMessage, apply: (pending: PendingStream) => void): void {
+    let pending = pendingStreams.get(message)
+    if (!pending) {
+      pending = { content: '', thinking: '', timer: undefined }
+      pendingStreams.set(message, pending)
+    }
+    apply(pending)
+    if (pending.timer === undefined) {
+      pending.timer = setTimeout(() => flushStream(message), STREAM_FLUSH_MS)
+    }
+  }
+
   return function handleDaemonEvent(event: DaemonMessage): void {
     if (event.event === 'schedule.upcoming') return
     if (event.event === 'schedule.updated') {
@@ -137,12 +173,12 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
     switch (event.event) {
       case 'thinking':
         if (!message) break
-        message.thinking = (message.thinking ?? '') + event.data
+        streamInto(message, (pending) => { pending.thinking += event.data })
         message.state = 'thinking'
         break
       case 'delta':
         if (!message) break
-        message.content += event.data
+        streamInto(message, (pending) => { pending.content += event.data })
         message.state = 'streaming'
         break
       case 'status': {
@@ -202,6 +238,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         const previousHasOutput = Boolean(
           message?.content || message?.thinking || (message?.tools?.length ?? 0))
         if (message && step > 1 && previousHasOutput) {
+          flushStream(message)
           message.state = 'done'
           const nextAssistant: ChatMessage = {
             id: makeId(),
@@ -247,6 +284,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         if (kind === 'verify'
           && message?.content
           && (message.state === 'thinking' || message.state === 'streaming')) {
+          flushStream(message)
           message.state = 'done'
         }
         break
@@ -276,7 +314,11 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
 
       case 'cancelled':
         if (message) {
+          flushStream(message)
           message.state = 'done'
+          // Distinguish "model finished" from "user cut it off": a half answer with a
+          // plain done state read like a complete reply.
+          if (event.event === 'cancelled' && message.content) message.interrupted = true
           if (!message.content && event.data) message.content = event.data
         }
         finalizeAssistantBubbles(thread.messages, 'done')
@@ -297,6 +339,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         break
       case 'error':
         if (message) {
+          flushStream(message)
           message.state = 'error'
           appendModelError(message, event.data)
         }

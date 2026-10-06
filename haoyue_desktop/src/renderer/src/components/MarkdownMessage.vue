@@ -15,7 +15,12 @@ import 'katex/dist/katex.min.css'
 import MarkdownIt from 'markdown-it'
 import { computed, nextTick, ref, watch } from 'vue'
 
-const props = defineProps<{ content: string }>()
+const props = withDefaults(defineProps<{
+  content: string
+  /** True while this bubble is actively streaming: skips the expensive katex pass so
+   * the reply renders as plain $…$ text until the turn finishes, then renders once. */
+  streaming?: boolean
+}>(), { streaming: false })
 
 hljs.registerLanguage('bash', bash)
 hljs.registerLanguage('csharp', csharp)
@@ -97,7 +102,9 @@ function renderMath(source: string): string {
 const rendered = computed(() => {
   mathHtml.length = 0
   const { text, fences } = protectFences(props.content)
-  let processed = renderMath(text)
+  // Streaming bubbles skip the katex pass (the heaviest per-delta cost); the math
+  // renders properly on the final full pass once the turn completes.
+  let processed = props.streaming ? text : renderMath(text)
   fences.forEach((fence, index) => {
     processed = processed.replace(`@@FENCE${index}@@`, fence)
   })

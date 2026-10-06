@@ -13,6 +13,7 @@ import {
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ProjectItem, ScheduledTaskInfo } from '../types'
+import { confirmAction } from '../confirmation'
 import SelectMenu from './SelectMenu.vue'
 
 const props = defineProps<{
@@ -197,6 +198,15 @@ async function runTask(task: ScheduledTaskInfo): Promise<void> {
 }
 
 async function removeTask(task: ScheduledTaskInfo): Promise<void> {
+  // Align with every other destructive action in the app: deleting a task drops its
+  // cron configuration with no way to recover, so it requires an explicit confirm.
+  const confirmed = await confirmAction({
+    title: '删除计划任务',
+    message: `确定删除「${task.name}」吗？该操作不可撤销，任务的定时配置将一并移除。`,
+    confirmLabel: '删除',
+    danger: true
+  })
+  if (!confirmed) return
   beginAction(`schedule.delete:${task.id}`)
   try {
     await window.haoyue.daemon.request('schedule.delete', { id: task.id })

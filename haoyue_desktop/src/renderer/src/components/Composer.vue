@@ -521,11 +521,13 @@ watch(() => props.supportsImages, async (supported) => {
       <span class="toolbar-spacer" />
       <ReasoningDepthMenu :model-value="reasoningLevel" :disabled="busy || disabled"
         @update:model-value="emit('changeReasoningLevel', $event)" />
-      <button v-if="busy && !value.trim() && images.length === 0 && attachedFiles.length === 0" class="send-button"
-        title="停止" @click="emit('stop')">
+      <!-- Stop is always reachable while a turn runs: typing text must not hide the
+           only emergency exit. The send button turns into "queue" next to it. -->
+      <button v-if="busy" class="send-button" title="停止当前回合（Esc）" @click="emit('stop')">
         <Square :size="14" fill="currentColor" />
       </button>
-      <button v-else class="send-button" :title="busy ? '排队发送（本轮结束后自动发送）' : '发送'"
+      <button v-if="!busy || value.trim() || images.length > 0 || attachedFiles.length > 0" class="send-button"
+        :title="busy ? '排队发送（本轮结束后自动发送）' : '发送'"
         :disabled="disabled || (!value.trim() && images.length === 0 && attachedFiles.length === 0) || (images.length > 0 && !supportsImages)"
         @click="submit">
         <ArrowUp :size="19" />

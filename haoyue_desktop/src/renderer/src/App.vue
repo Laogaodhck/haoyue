@@ -1613,7 +1613,9 @@ watch(theme, applyTheme)
                       :dimmed="Boolean(conversationQuery.trim()) && !messageMatches(item.message, conversationQuery)"
                       @open-diff="openToolDiff"
                       @branch="branchFromMessage"
-                      @edit="onEditUserMessage" />
+                      @edit="onEditUserMessage"
+                      @regenerate="regenerateMessage"
+                      @continue-turn="continueAssistant" />
                   </div>
                 </template>
                 <div class="virtual-pad" :style="{ height: `${virtualWindow.bottomPad}px` }" />
@@ -1626,7 +1628,9 @@ watch(theme, applyTheme)
                     :dimmed="Boolean(conversationQuery.trim()) && !messageMatches(item.message, conversationQuery)"
                     @open-diff="openToolDiff"
                     @branch="branchFromMessage"
-                    @edit="onEditUserMessage" />
+                    @edit="onEditUserMessage"
+                    @regenerate="regenerateMessage"
+                    @continue-turn="continueAssistant" />
                 </template>
               </template>
             </div>

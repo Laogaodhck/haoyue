@@ -102,13 +102,14 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 else yield return new LlmTextDelta(piece.Text);
             }
 
+            var (answer, thinking) = FinalizeOutput(parser.Answer, parser.Thinking);
             yield return new LlmCompleted(new LlmCompletion
             {
-                Text = parser.Answer,
-                Thinking = parser.Thinking,
+                Text = answer,
+                Thinking = thinking,
                 Usage = new TokenUsage(
-                    CountTokens(weights, prompt),
-                    CountTokens(weights, parser.Answer) + CountTokens(weights, parser.Thinking)),
+                    CountTokens(weights, prompt, addBos: true),
+                    CountTokens(weights, answer) + CountTokens(weights, thinking)),
                 FinishReason = "stop",
             });
         }
@@ -186,14 +187,19 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 
             var parser = new ThinkTagParser(startsInThinking);
             var maxTokens = inferenceParams.MaxTokens < 0 ? int.MaxValue : inferenceParams.MaxTokens;
+            // 实测计数：generated 为本轮实际采样并解码的 token 数；stopped 表示模型正常收尾
+            // （EOS 或反提示命中）。循环自然耗尽预算即长度截断，需如实上报为 "length"。
+            var generated = 0;
+            var stopped = false;
             for (var i = 0; i < maxTokens && !ct.IsCancellationRequested; i++)
             {
                 var id = inferenceParams.SamplingPipeline.Sample(context.NativeHandle, batch.TokenCount - 1);
-                if (id.IsEndOfGeneration(weights.Vocab)) break;
+                if (id.IsEndOfGeneration(weights.Vocab)) { stopped = true; break; }
 
                 decoder.Add(id);
+                generated++;
                 var decoded = decoder.Read();
-                if (antiprocessor.Add(decoded)) break;
+                if (antiprocessor.Add(decoded)) { stopped = true; break; }
                 foreach (var piece in parser.Process(decoded))
                 {
                     if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
@@ -250,14 +256,19 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 else yield return new LlmTextDelta(piece.Text);
             }
 
+            var (answer, thinking) = FinalizeOutput(parser.Answer, parser.Thinking);
             var completion = new LlmCompletion
             {
-                Text = parser.Answer,
-                Thinking = parser.Thinking,
-                Usage = new TokenUsage(
-                    CountTokens(weights, prompt),
-                    CountTokens(weights, parser.Answer) + CountTokens(weights, parser.Thinking)),
-                FinishReason = "stop",
+                Text = answer,
+                Thinking = thinking,
+                // 使用本轮真实 token 计数替代推理后的重新分词：prompt 已在预填充时分词
+                // （tokens.Count 含 BOS），输出按采样循环实际计数，省掉一次全量重分词；
+                // KV 前缀复用命中的 token 数计入 CachedInputTokens，与远程提供商缓存口径一致。
+                Usage = new TokenUsage(tokens.Count, generated)
+                {
+                    CachedInputTokens = common,
+                },
+                FinishReason = stopped || ct.IsCancellationRequested ? "stop" : "length",
             };
             completed = true; // KV cache and history are consistent — keep the context
             yield return new LlmCompleted(completion);
@@ -394,6 +405,12 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         return null;
     }
 
+    /// <summary>
+    /// 采样参数配置。温度沿用 DeepSeek 官方对 R1 系列的建议值 0.6、top-p 0.95；
+    /// 显式设置重复惩罚是关键改进——库默认 RepeatPenalty=1（关闭），小参数量本地模型
+    /// 在无惩罚时极易陷入逐词复读循环；惩罚窗口 64 token 覆盖近邻重复，且不惩罚换行，
+    /// 避免长代码块与列表的格式被破坏。
+    /// </summary>
     private static InferenceParams BuildInferenceParams(LlmRequest request)
     {
         var maxTokens = request.MaxTokens is { } requested && requested > 0
@@ -405,14 +422,36 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             SamplingPipeline = new DefaultSamplingPipeline
             {
                 Temperature = (float)(request.Temperature ?? 0.6),
+                TopP = 0.95f,
+                TopK = 40,
+                MinP = 0.1f,
+                RepeatPenalty = 1.1f,
+                PenaltyCount = 64,
+                PenalizeNewline = false,
             },
         };
     }
 
-    private static int CountTokens(LLamaWeights weights, string text)
+    /// <summary>
+    /// 生成结束后的输出收尾（仅作用于最终 LlmCompletion，流式增量不受影响）：
+    /// 1) 模型把全部预算耗在推理里、从未输出结束标记时回答为空，下游只能收到一次空
+    ///    回复——此时把推理内容整体提升为回答兜底，保证下游总能拿到非空文本；
+    /// 2) 回答统一去掉尾部空白，进入会话历史后不会污染下一轮模板渲染。
+    /// </summary>
+    internal static (string Answer, string Thinking) FinalizeOutput(string answer, string thinking)
+    {
+        if (answer.Length == 0 && thinking.Length > 0)
+        {
+            answer = thinking.TrimStart();
+            thinking = "";
+        }
+        return (answer.TrimEnd(), thinking);
+    }
+
+    private static int CountTokens(LLamaWeights weights, string text, bool addBos = false)
     {
         if (string.IsNullOrEmpty(text)) return 0;
-        try { return weights.Tokenize(text, false, false, Encoding.UTF8).Count(); }
+        try { return weights.Tokenize(text, addBos, false, Encoding.UTF8).Count(); }
         catch { return 0; }
     }
 }

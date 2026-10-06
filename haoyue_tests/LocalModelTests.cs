@@ -215,6 +215,22 @@ public sealed class LocalModelTests : IDisposable
             "The follow-up generation (KV prefix reuse path) produced no streamed tokens.");
     }
 
+    [Theory]
+    // 模型把全部预算耗在推理里、从未输出结束标记：推理内容整体提升为回答，下游不会收到空回复。
+    [InlineData("", "  \n逐步分析……仍未完成", "逐步分析……仍未完成", "")]
+    // 正常回答：原样保留，仅去掉尾部空白，避免污染会话历史里下一轮的模板渲染。
+    [InlineData("回答正文\n\n", "推理", "回答正文", "推理")]
+    // 回答与推理都为空（模型立即输出 EOS）：不产生兜底文本。
+    [InlineData("", "", "", "")]
+    public void FinalizeOutput_PromotesUnfinishedThinkingAndTrimsTail(
+        string answer, string thinking, string expectedAnswer, string expectedThinking)
+    {
+        var (finalAnswer, finalThinking) = LocalLlmClient.FinalizeOutput(answer, thinking);
+
+        Assert.Equal(expectedAnswer, finalAnswer);
+        Assert.Equal(expectedThinking, finalThinking);
+    }
+
     private static async Task DrainAsync(LocalLlmClient client, ProviderConfig provider, ModelConfig model)
     {
         await foreach (var _ in client.StreamAsync(new LlmRequest

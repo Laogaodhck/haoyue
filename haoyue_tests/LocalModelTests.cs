@@ -142,6 +142,10 @@ public sealed class LocalModelTests : IDisposable
             Kind = "local",
             ModelsDirectory = Path.GetDirectoryName(path),
         };
+        // Set HAOYUE_LOCAL_MODEL_GPU_LAYERS (e.g. 99) to offload layers to the GPU
+        // (requires the CUDA backend build: dotnet build -p:LlamaBackend=Cuda12).
+        if (int.TryParse(Environment.GetEnvironmentVariable("HAOYUE_LOCAL_MODEL_GPU_LAYERS"), out var gpuLayers) && gpuLayers > 0)
+            provider.GpuLayers = gpuLayers;
         var model = new ModelConfig
         {
             Id = Path.GetFileName(path),

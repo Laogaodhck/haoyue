@@ -426,8 +426,12 @@ internal sealed class DaemonAdminApi(
         var isNew = provider is null;
         if (provider is null)
         {
+            // Copy-on-Write: the new provider is NOT appended to the live list here.
+            // Concurrent turns enumerate Config.Providers while this request runs, and a
+            // structural List<T> mutation would throw InvalidOperationException in the
+            // enumerator and crash the turn. The list reference is swapped atomically
+            // below, after validation.
             provider = new ProviderConfig { Id = id };
-            config.Providers.Add(provider);
         }
 
         var kind = OptionalString(parameters, "kind") ?? provider.Kind;
@@ -492,12 +496,10 @@ internal sealed class DaemonAdminApi(
 
         if (string.IsNullOrWhiteSpace(provider.BaseUrl) && !provider.IsLocal)
         {
-            if (isNew) config.Providers.Remove(provider);
             throw new DaemonRequestException("Provider baseUrl is required");
         }
         if (provider.Models.Count == 0)
         {
-            if (isNew) config.Providers.Remove(provider);
             throw new DaemonRequestException("At least one model is required");
         }
         // Local entries are only useful if the GGUF file can actually be found, so reject a
@@ -510,11 +512,15 @@ internal sealed class DaemonAdminApi(
                 .ToList();
             if (missing.Count > 0)
             {
-                if (isNew) config.Providers.Remove(provider);
                 throw new DaemonRequestException(
                     $"Local model file not found: {string.Join(", ", missing.Select(entry => entry.Id))}");
             }
         }
+
+        // Validation passed: publish the new provider via an atomic list swap
+        // (Copy-on-Write) so concurrent enumerations never observe a torn list.
+        if (isNew)
+            config.Providers = [.. config.Providers, provider];
 
         runtime.ConfigStore.Save();
         return ProviderJson(provider, provider.Id.Equals(config.Provider, StringComparison.OrdinalIgnoreCase)).ToJsonString();
@@ -569,7 +575,11 @@ internal sealed class DaemonAdminApi(
         var config = runtime.ConfigStore.Config;
         var provider = config.FindProvider(id)
                        ?? throw new DaemonRequestException($"Provider not found: {id}");
-        config.Providers.Remove(provider);
+        // Copy-on-Write: concurrent turns enumerate Config.Providers; a structural
+        // Remove on the live list would crash their enumerators. Swap the reference.
+        config.Providers = config.Providers
+            .Where(item => !item.Id.Equals(id, StringComparison.OrdinalIgnoreCase))
+            .ToList();
         if (id.Equals(config.Provider, StringComparison.OrdinalIgnoreCase))
         {
             config.Provider = null;

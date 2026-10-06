@@ -151,6 +151,13 @@ public sealed class RetryConfig
     /// <summary>Consecutive failures before a model's circuit opens.</summary>
     public int CircuitBreakThreshold { get; set; } = 4;
     public double CircuitCooldownSeconds { get; set; } = 60.0;
+    /// <summary>
+    /// Wall-clock budget for one whole failover chain (all candidates and retries combined).
+    /// Once exceeded the chain stops starting new attempts and surfaces the errors collected
+    /// so far, instead of letting worst-case 4 candidates × 3 retries × 120s stretch to
+    /// ~25 minutes before the user sees anything.
+    /// </summary>
+    public double ChainBudgetSeconds { get; set; } = 120.0;
 }
 
 public sealed class AgentConfig

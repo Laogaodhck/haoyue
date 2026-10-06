@@ -148,7 +148,9 @@ public sealed class DaemonServer : IAsyncDisposable
         _runTurn = runTurn;
         _useIsolatedTurnRuntime = runTurn is null;
         _handshakeToken = handshakeToken;
-        _sharedBreaker = new CircuitBreaker(runtime.ConfigStore.Config.Routing.Retry);
+        // Live config factory: a Reload() that replaces the whole Config object must also
+        // change breaker thresholds; a snapshot here would freeze the old policy.
+        _sharedBreaker = new CircuitBreaker(() => runtime.ConfigStore.Config.Routing.Retry);
         // Tests inject a stub turn runner; route scheduled runs through it too so the
         // daemon harness stays deterministic. Production keeps the isolated runtime path.
         _scheduler = new ScheduleService(

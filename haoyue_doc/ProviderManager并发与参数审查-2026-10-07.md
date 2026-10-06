@@ -101,3 +101,29 @@
 2. **P1+C3**（链级预算 + 半开互斥）——直接决定故障期间的用户体感；
 3. **C2+P2**（断路器参数过期 + 输入 clamp）——小幅改动；
 4. C4~C7、P4、P5 作为日常维护顺手修复。
+
+---
+
+## 四、修复实施记录（2026-10-07 同日完成）
+
+按「C1 → P1+C3 → C2+P2 → 其余」优先级全部实施，改动如下：
+
+| 编号 | 修复内容 | 位置 |
+|---|---|---|
+| C1 | provider 增删改走 Copy-on-Write：新增条目在校验通过后以 `config.Providers = [..旧列表, 新条目]` 原子换引用；`RemoveProvider` 改为 Where 过滤后整体替换。并发枚举不再可能抛 `InvalidOperationException` | `DaemonAdminApi.cs` UpsertProvider / RemoveProvider |
+| P1 | 新增 `RetryConfig.ChainBudgetSeconds`（默认 120s，clamp 10–600）；StreamAsync 快照链截止时间，超预算不再启动新尝试（退避延迟也会被截断到剩余预算） | `HaoyueConfig.cs`、`ProviderManager.cs` |
+| P1b | 非首选候选只试 1 次（`candidateAttempts = candidateIndex == 0 ? maxAttempts : 1`），故障链最长等待大幅缩短 | `ProviderManager.cs` StreamAsync |
+| C3/P3 | 熔断器半开改为单探针：`TryBeginProbe` 以 per-circuit `Interlocked` 标志放行一个探测者，其余并发回合跳过该模型；探测失败重置窗口、成功移除熔断记录 | `CircuitBreaker.cs`、StreamAsync 探测门 |
+| P4 | 冷却时长按错误类别区分：429 → 300s、5xx → 120s、其余用配置值；`RecordFailure` 接受 statusCode（由 LlmException.StatusCode 传入） | `CircuitBreaker.cs` |
+| C2 | 断路器改为 `Func<RetryConfig>` 活配置工厂（构造期快照重载保留供测试），daemon/HaoyueRuntime/ProviderManager 三处全部接线，config.reload 后阈值立即生效 | `CircuitBreaker.cs`、`DaemonServer.cs:151`、`HaoyueRuntime.cs`、`ProviderManager.cs` |
+| P2 | `BaseDelaySeconds`/`MaxDelaySeconds` clamp 到 ≥0（杜绝 Task.Delay 负值崩溃）；聊天超时 clamp 到 1–600s（与模型列表接口一致） | `ProviderManager.cs` BackoffDelay、`OpenAiCompatibleClient.cs`、`AnthropicClient.cs` |
+| C4 | 断路器懒初始化加锁（`_breakerGate`），消除 CLI 路径 `_breaker ??=` 竞态 | `ProviderManager.cs` |
+| C5 | `IsOpen` 读侧进入 `lock(circuit)`，与写侧对称；阈值读入时 clamp ≥1 | `CircuitBreaker.cs` |
+| C6 | StreamAsync 进入时快照 `var retry = Retry` 一份，整个链内一致使用（attempt 上界、退避、延迟判断同一来源） | `ProviderManager.cs` |
+| C7 | 删除两处 catch 内手动 `DisposeAsync`，统一交给 finally（幂等冗余清理） | `ProviderManager.cs` |
+
+**测试**：新增 3 个用例——`CircuitBreaker_HalfOpen_AdmitsSingleProbePerWindow`（单探针全语义：冷却拒止→窗口单探测→失败重启→成功清除）、`CircuitBreaker_RateLimitFailures_CoolDownLongerThanConfigured`（429 冷却覆盖配置值）、`StreamAsync_FallbackCandidatesGetSingleAttempt`（主模型 3 次重试 + 后备恰 1 次，StubLlmClient.Calls 计数验证）。ProviderTests 52 → 55 全绿。
+
+**行为变化说明**：所有候选熔断中时，此前仍会逐个硬试（长时间挂起后失败），现在快速报「circuit open (cooling down)」，冷却期满后自动放行单探针——对单模型配置的用户是更快的明确报错而非 2 分钟无响应悬挂。
+
+**遗留**：CLI 侧 `ProviderCommands.cs` 的 `Providers.Add/Remove` 未改 CoW（CLI 命令无并发回合，进程间靠文件交换配置，风险不变）；`ChainBudgetSeconds` 的 clamp 下限 10s 使超预算路径难以低成本单测，由单次尝试用例间接覆盖。

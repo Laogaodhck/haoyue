@@ -301,8 +301,9 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<IHealthChecker, HealthChecker>();
         // Resolvable breaker so every runtime has one; the daemon overrides this
         // registration with a process-wide instance shared across turn runtimes.
+        // Factory form keeps thresholds live across config reloads.
         services.AddSingleton<CircuitBreaker>(sp =>
-            new CircuitBreaker(sp.GetRequiredService<IConfigStore>().Config.Routing.Retry));
+            new CircuitBreaker(() => sp.GetRequiredService<IConfigStore>().Config.Routing.Retry));
         services.AddSingleton<IProviderManager, ProviderManager>();
 
         services.AddSingleton<IToolRegistry, ToolRegistry>();

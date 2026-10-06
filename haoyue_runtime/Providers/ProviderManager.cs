@@ -52,10 +52,23 @@ public sealed class ProviderManager(
     CircuitBreaker? breaker = null) : IProviderManager
 {
     private CircuitBreaker? _breaker;
+    private readonly object _breakerGate = new();
     private RetryConfig Retry => configStore.Config.Routing.Retry;
     // A shared breaker can be injected by the daemon so circuit state survives
     // across isolated per-turn runtimes; standalone runtimes create their own.
-    private CircuitBreaker Breaker => _breaker ??= breaker ?? new CircuitBreaker(Retry);
+    // The factory form keeps thresholds live across config reloads (C2).
+    private CircuitBreaker Breaker
+    {
+        get
+        {
+            if (_breaker is not null) return _breaker;
+            lock (_breakerGate)
+            {
+                _breaker ??= breaker ?? new CircuitBreaker(() => configStore.Config.Routing.Retry);
+            }
+            return _breaker;
+        }
+    }
 
     public ModelInfo ResolveActive(WorkspaceConfig? workspace = null)
     {
@@ -123,14 +136,36 @@ public sealed class ProviderManager(
         // fallback's error -- e.g. a default cloud provider that has no API key configured.
         var failures = new List<(string Ref, string Error)>();
 
+        // Snapshot the retry parameters once per chain so retries never mix old and new
+        // values mid-flight when a config reload lands between attempts, and clamp them
+        // so a bad config cannot crash the turn with a non-LlmException type.
+        var retry = Retry;
+        var maxAttempts = Math.Max(1, retry.MaxAttempts);
+        // Wall-clock budget for the whole chain: without it the worst case (candidates ×
+        // attempts × header timeout) could stretch to tens of minutes before the user
+        // sees any error. Once the budget is gone, new attempts are not started.
+        var chainDeadline = DateTimeOffset.UtcNow
+            + TimeSpan.FromSeconds(Math.Clamp(retry.ChainBudgetSeconds, 10, 600));
+        var attemptsStarted = 0;
+
         for (var candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
         {
             var model = candidates[candidateIndex];
+            if (attemptsStarted > 0 && DateTimeOffset.UtcNow >= chainDeadline)
+            {
+                failures.Add((model.Ref, "failover chain budget exhausted; attempt skipped"));
+                continue;
+            }
+
             if (candidateIndex > 0)
                 eventBus.Publish(new ProviderSwitchedEvent(
                     candidates[candidateIndex - 1].Ref, model.Ref, lastError?.Message ?? "failover"));
 
-            for (var attempt = 1; attempt <= Math.Max(1, Retry.MaxAttempts); attempt++)
+            // Fallback candidates get a single shot: retrying each of them the full
+            // MaxAttempts times multiplies the wait without meaningfully improving the odds.
+            var candidateAttempts = candidateIndex == 0 ? maxAttempts : 1;
+
+            for (var attempt = 1; attempt <= candidateAttempts; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -145,6 +180,24 @@ public sealed class ProviderManager(
                 // response body/connection would stay open until the provider times out.
                 try
                 {
+                    // Chain-level wall-clock budget: once exhausted, no new attempt is
+                    // started (an in-flight stream still runs to completion or failure).
+                    if (attemptsStarted > 0 && DateTimeOffset.UtcNow >= chainDeadline)
+                    {
+                        failures.Add((model.Ref, "failover chain budget exhausted; attempt skipped"));
+                        goto NextCandidate;
+                    }
+                    attemptsStarted++;
+
+                    // Half-open single-probe gate: when the circuit is cooling down, one
+                    // caller wins the probe and the rest skip the model instead of
+                    // thundering-herd probing a failing provider.
+                    if (!Breaker.TryBeginProbe(model.Ref))
+                    {
+                        failures.Add((model.Ref, "circuit open (cooling down); attempt skipped"));
+                        goto NextCandidate;
+                    }
+
                     stream = TryOpenStream(model, requestFactory, ct);
 
                     while (true)
@@ -158,13 +211,21 @@ public sealed class ProviderManager(
                         catch (LlmException ex) when (!committed && ex.Retryable && !ct.IsCancellationRequested)
                         {
                             lastError = ex;
-                            Breaker.RecordFailure(model.Ref);
+                            Breaker.RecordFailure(model.Ref, ex.StatusCode);
                             RecordUsage(model, null, stopwatch, success: false);
-                            await stream.DisposeAsync().ConfigureAwait(false);
 
-                            if (attempt < Retry.MaxAttempts)
+                            if (attempt < candidateAttempts)
                             {
-                                var delay = BackoffDelay(attempt);
+                                var delay = BackoffDelay(attempt, retry);
+                                // Never sleep past the chain budget: cap the backoff to the
+                                // remaining wall-clock time and bail out if it is spent.
+                                var remaining = chainDeadline - DateTimeOffset.UtcNow;
+                                if (remaining <= TimeSpan.Zero)
+                                {
+                                    failures.Add((model.Ref, ex.Message));
+                                    goto NextCandidate;
+                                }
+                                if (delay > remaining) delay = remaining;
                                 eventBus.Publish(new ProviderRetryEvent(model.Ref, attempt, ex.Message, delay));
                                 await Task.Delay(delay, ct).ConfigureAwait(false);
                             }
@@ -172,9 +233,8 @@ public sealed class ProviderManager(
                         }
                         catch (LlmException ex)
                         {
-                            Breaker.RecordFailure(model.Ref);
+                            Breaker.RecordFailure(model.Ref, ex.StatusCode);
                             RecordUsage(model, completion, stopwatch, success: false);
-                            await stream.DisposeAsync().ConfigureAwait(false);
                             // Once the stream has yielded tokens we can no longer switch providers
                             // mid-answer, so propagate immediately. A non-retryable failure of the
                             // active model (bad key, invalid request...) is also surfaced directly
@@ -431,11 +491,14 @@ public sealed class ProviderManager(
     public static decimal ComputeCost(ModelConfig model, TokenUsage usage) =>
         (model.InputPricePerMTok * usage.InputTokens + model.OutputPricePerMTok * usage.OutputTokens) / 1_000_000m;
 
-    private TimeSpan BackoffDelay(int attempt)
+    private static TimeSpan BackoffDelay(int attempt, RetryConfig retry)
     {
-        var baseDelay = Retry.BaseDelaySeconds * Math.Pow(2, attempt - 1);
+        // Clamps guarantee Task.Delay never sees a negative value from a bad config
+        // (which would crash the turn with an ArgumentOutOfRangeException instead of
+        // a controlled LlmException).
+        var baseDelay = Math.Max(0, retry.BaseDelaySeconds) * Math.Pow(2, attempt - 1);
         var jitter = Random.Shared.NextDouble() * 0.5 + 0.75; // 0.75x – 1.25x
-        return TimeSpan.FromSeconds(Math.Min(baseDelay * jitter, Retry.MaxDelaySeconds));
+        return TimeSpan.FromSeconds(Math.Min(baseDelay * jitter, Math.Max(0, retry.MaxDelaySeconds)));
     }
 
     private static string Qualify(string modelRef, string? providerId) =>

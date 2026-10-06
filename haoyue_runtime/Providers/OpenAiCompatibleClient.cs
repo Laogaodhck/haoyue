@@ -29,7 +29,7 @@ public sealed class OpenAiCompatibleClient(ILlmHttpFactory httpFactory) : ILlmCl
         ApplyHeaders(message, request.Provider);
 
         using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        headerCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, request.Provider.TimeoutSeconds)));
+        headerCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.Provider.TimeoutSeconds, 1, 600)));
 
         HttpResponseMessage response;
         try
@@ -91,7 +91,7 @@ public sealed class OpenAiCompatibleClient(ILlmHttpFactory httpFactory) : ILlmCl
 
             var idleTimeout = DeepSeekOptimizationPolicy.Applies(request)
                 ? DeepSeekOptimizationPolicy.GetStreamIdleTimeout(request.Provider)
-                : TimeSpan.FromSeconds(Math.Max(1, request.Provider.TimeoutSeconds));
+                : TimeSpan.FromSeconds(Math.Clamp(request.Provider.TimeoutSeconds, 1, 600));
 
             var acc = new Accumulator();
             Stream stream;
@@ -237,7 +237,7 @@ public sealed class OpenAiCompatibleClient(ILlmHttpFactory httpFactory) : ILlmCl
         ApplyHeaders(message, provider);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, provider.TimeoutSeconds)));
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(provider.TimeoutSeconds, 1, 600)));
 
         HttpResponseMessage response;
         try

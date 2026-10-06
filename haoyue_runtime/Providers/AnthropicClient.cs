@@ -31,7 +31,7 @@ public sealed class AnthropicClient(ILlmHttpFactory httpFactory) : ILlmClient
         ApplyHeaders(message, request.Provider);
 
         using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        headerCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, request.Provider.TimeoutSeconds)));
+        headerCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.Provider.TimeoutSeconds, 1, 600)));
 
         HttpResponseMessage response;
         try
@@ -97,7 +97,7 @@ public sealed class AnthropicClient(ILlmHttpFactory httpFactory) : ILlmClient
                 yield break;
             }
 
-            var idleTimeout = TimeSpan.FromSeconds(Math.Max(1, request.Provider.TimeoutSeconds));
+            var idleTimeout = TimeSpan.FromSeconds(Math.Clamp(request.Provider.TimeoutSeconds, 1, 600));
             var acc = new Accumulator();
             Stream stream;
             try { stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false); }

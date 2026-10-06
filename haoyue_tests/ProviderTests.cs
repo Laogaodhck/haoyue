@@ -847,6 +847,89 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
+    public void CircuitBreaker_HalfOpen_AdmitsSingleProbePerWindow()
+    {
+        var breaker = new CircuitBreaker(new RetryConfig { CircuitBreakThreshold = 1, CircuitCooldownSeconds = 0.1 });
+
+        breaker.RecordFailure("x/y");
+        Assert.True(breaker.IsOpen("x/y"));
+
+        // Still cooling down: no probe is admitted.
+        Assert.False(breaker.TryBeginProbe("x/y"));
+
+        Thread.Sleep(150); // cooldown elapsed → half-open
+
+        // Half-open: exactly one probe wins the race; concurrent turns must not
+        // thundering-herd probe the failing model.
+        Assert.True(breaker.TryBeginProbe("x/y"));
+        Assert.False(breaker.TryBeginProbe("x/y"));
+        Assert.False(breaker.TryBeginProbe("x/y"));
+
+        // A failed probe ends the window and restarts the cooldown.
+        breaker.RecordFailure("x/y");
+        Assert.False(breaker.TryBeginProbe("x/y"));
+
+        Thread.Sleep(150);
+        Assert.True(breaker.TryBeginProbe("x/y")); // new window, new probe
+
+        // Success closes the circuit entirely.
+        breaker.RecordSuccess("x/y");
+        Assert.False(breaker.IsOpen("x/y"));
+        Assert.True(breaker.TryBeginProbe("x/y"));
+    }
+
+    [Fact]
+    public void CircuitBreaker_RateLimitFailures_CoolDownLongerThanConfigured()
+    {
+        var breaker = new CircuitBreaker(new RetryConfig { CircuitBreakThreshold = 1, CircuitCooldownSeconds = 0.1 });
+
+        breaker.RecordFailure("x/y");
+        Thread.Sleep(150); // generic cooldown (0.1s) has elapsed
+        Assert.False(breaker.IsOpen("x/y"));
+
+        breaker.RecordFailure("x/y", 429); // rate-limit override: 300s
+        Thread.Sleep(150);
+        Assert.True(breaker.IsOpen("x/y")); // still cooling down
+
+        breaker.RecordFailure("x/y", 503); // server-error override: 120s
+        Assert.True(breaker.IsOpen("x/y"));
+    }
+
+    [Fact]
+    public async Task StreamAsync_FallbackCandidatesGetSingleAttempt()
+    {
+        var store = _store;
+        store.Config.Routing.Retry.MaxAttempts = 3;
+        store.Config.Routing.Retry.BaseDelaySeconds = 0.01;
+        store.Config.Routing.Fallback = ["beta/tiny"];
+        store.Config.Provider = "alpha";
+        store.Config.Model = "big";
+
+        var active = new StubLlmClient("openai", new LlmException("primary down", 500, retryable: true));
+        var fallback = new StubLlmClient("anthropic", new LlmException("fallback down", 500, retryable: true));
+        var manager = NewManagerWithClients(
+            store, _registry, Path.Combine(_dir, "usage-single-shot.jsonl"), active, fallback);
+
+        var request = new LlmRequest
+        {
+            Provider = store.Config.Providers[0],
+            Model = store.Config.Providers[0].Models[0],
+            Messages = [ChatMessage.User("hi")],
+        };
+
+        var ex = await Record.ExceptionAsync(async () =>
+        {
+            await foreach (var _ in manager.StreamAsync(_ => request, null, CancellationToken.None)) { }
+        });
+
+        // The active model is retried MaxAttempts times, but every fallback candidate
+        // gets exactly one shot so the chain cannot stretch into minutes of retries.
+        Assert.IsType<LlmException>(ex);
+        Assert.Equal(3, active.Calls);
+        Assert.Equal(1, fallback.Calls);
+    }
+
+    [Fact]
     public void BuildCandidates_RespectsInjectedSharedCircuitBreaker()
     {
         // The daemon injects one process-wide breaker into every turn runtime; an

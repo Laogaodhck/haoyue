@@ -16,6 +16,8 @@ const api: DesktopApi = {
     }
   },
   selectSkillFiles: () => ipcRenderer.invoke('app:select-skill-files'),
+  selectModelDirectory: () => ipcRenderer.invoke('app:select-model-directory'),
+  selectGgufFile: () => ipcRenderer.invoke('app:select-gguf-file'),
   showItemInFolder: (path) => ipcRenderer.invoke('app:show-item', path),
   closeApp: () => ipcRenderer.invoke('app:close'),
   openDevTools: () => ipcRenderer.invoke('app:open-devtools'),

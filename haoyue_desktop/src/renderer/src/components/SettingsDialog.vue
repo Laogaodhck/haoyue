@@ -779,6 +779,117 @@ async function testModel(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- local model load flow
+
+interface ModelTestState {
+  status: 'running' | 'ok' | 'fail'
+  detail: string
+  latencyMs?: number
+}
+
+/** Outcome of the load-verify flow for the currently selected model. */
+const modelTestState = ref<ModelTestState | null>(null)
+
+/**
+ * Load-verify flow: a cheap model.status pre-flight (file exists? correct size?)
+ * fails fast with a clear reason, then model.test performs a real generation.
+ * Both steps run inside the daemon, so the dialog never blocks.
+ */
+async function verifyModel(): Promise<void> {
+  if (!selectedModel.value || action.value) return
+  modelTestState.value = { status: 'running', detail: '正在校验模型文件…' }
+  beginAction('model.verify')
+  try {
+    const status = await requestJson<{
+      exists: boolean
+      path?: string
+      reason?: string
+      sizeBytes?: number
+      kind: string
+    }>('model.status', { model: selectedModel.value })
+    if (!status.exists) {
+      modelTestState.value = { status: 'fail', detail: status.reason ?? '模型文件不存在' }
+      return
+    }
+    const sizeHint = status.sizeBytes ? `（${formatBytes(status.sizeBytes)}）` : ''
+    modelTestState.value = { status: 'running', detail: `文件校验通过${sizeHint}，正在加载模型并试运行…` }
+    const result = await requestJson<{ success: boolean; detail: string; latencyMs: number }>(
+      'model.test', { model: selectedModel.value }, 300_000)
+    modelTestState.value = result.success
+      ? { status: 'ok', detail: `加载成功，试运行 ${Math.round(result.latencyMs)} ms · ${result.detail}`, latencyMs: result.latencyMs }
+      : { status: 'fail', detail: `加载失败：${result.detail}` }
+  } catch (reason) {
+    modelTestState.value = { status: 'fail', detail: reason instanceof Error ? reason.message : String(reason) }
+  } finally {
+    endAction()
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  return `${Math.round(bytes / 1024 ** 2)} MB`
+}
+
+// ---------------------------------------------------------------- inference presets
+
+interface InferencePreset {
+  name: string
+  gpuLayers: number
+  contextLength: number
+  kvCacheQuantization: string
+  flashAttention: boolean
+}
+
+const INFERENCE_PRESETS_KEY = 'haoyue.inference-presets'
+
+/** Named load-parameter presets persisted locally for one-click switching. */
+const inferencePresets = ref<InferencePreset[]>(loadInferencePresets())
+const presetNameInput = ref('')
+
+function loadInferencePresets(): InferencePreset[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(INFERENCE_PRESETS_KEY) ?? '[]') as InferencePreset[]
+    return Array.isArray(raw) ? raw.filter((preset) => preset && typeof preset.name === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function persistInferencePresets(): void {
+  localStorage.setItem(INFERENCE_PRESETS_KEY, JSON.stringify(inferencePresets.value))
+}
+
+function saveInferencePreset(): void {
+  const name = presetNameInput.value.trim() || `预设 ${inferencePresets.value.length + 1}`
+  if (inferencePresets.value.some((preset) => preset.name === name)) {
+    error.value = `预设「${name}」已存在，请换个名称`
+    return
+  }
+  inferencePresets.value = [...inferencePresets.value, {
+    name,
+    gpuLayers: localInference.gpuLayers,
+    contextLength: localInference.contextLength,
+    kvCacheQuantization: localInference.kvCacheQuantization,
+    flashAttention: localInference.flashAttention
+  }]
+  persistInferencePresets()
+  presetNameInput.value = ''
+  notice.value = `已保存预设「${name}」`
+}
+
+function applyInferencePreset(preset: InferencePreset): void {
+  localInference.gpuLayers = preset.gpuLayers
+  localInference.contextLength = preset.contextLength
+  localInference.kvCacheQuantization = preset.kvCacheQuantization
+  localInference.flashAttention = preset.flashAttention
+  notice.value = `已应用预设「${preset.name}」，保存后生效`
+}
+
+function removeInferencePreset(preset: InferencePreset): void {
+  inferencePresets.value = inferencePresets.value.filter((entry) => entry !== preset)
+  persistInferencePresets()
+}
+
 // Saving or toggling an MCP server reconnects every enabled server, so allow
 // headroom for slow servers while still guaranteeing the UI never waits forever.
 const MCP_ADMIN_TIMEOUT_MS = 120_000
@@ -1082,10 +1193,28 @@ onBeforeUnmount(() => {
               <div class="row-actions model-actions">
                 <SelectMenu v-model="selectedModel" class="settings-select model-select" :options="modelOptions"
                   label="活动模型" :menu-min-width="330" />
-                <button class="secondary-button" :disabled="!selectedModel" @click="testModel">测试</button>
+                <button class="secondary-button" :disabled="!selectedModel || action === 'model.verify'"
+                  @click="verifyModel">
+                  <LoaderCircle v-if="action === 'model.verify'" class="spin" :size="13" />
+                  <template v-else>加载验证</template>
+                </button>
                 <button class="secondary-button primary-action" :disabled="!selectedModel"
                   @click="switchModel">使用</button>
               </div>
+            </div>
+            <div v-if="modelTestState" class="model-verify-state" :class="modelTestState.status" role="status">
+              <LoaderCircle v-if="modelTestState.status === 'running'" class="spin" :size="14" />
+              <Check v-else-if="modelTestState.status === 'ok'" :size="14" />
+              <X v-else :size="14" />
+              <span class="model-verify-detail">{{ modelTestState.detail }}</span>
+              <button v-if="modelTestState.status === 'fail'" class="secondary-button compact-button"
+                @click="verifyModel">
+                <RefreshCw :size="13" /> 重试
+              </button>
+              <button class="icon-button compact model-verify-dismiss" title="收起"
+                @click="modelTestState = null">
+                <X :size="13" />
+              </button>
             </div>
           </section>
 
@@ -1488,6 +1617,31 @@ onBeforeUnmount(() => {
               :disabled="action === 'advanced.set:localInference'" @click="saveLocalInference">
               {{ action === 'advanced.set:localInference' ? '保存中…' : '保存本地推理设置' }}
             </button>
+
+            <div v-if="inferencePresets.length > 0" class="inference-presets">
+              <div class="inference-presets-header">
+                <strong>常用配置</strong>
+                <small>点击应用，保存后对本地推理生效</small>
+              </div>
+              <div class="inference-preset-chips">
+                <span v-for="preset in inferencePresets" :key="preset.name" class="inference-preset-chip">
+                  <button type="button" class="preset-apply" :title="`GPU ${preset.gpuLayers} 层 · 上下文 ${preset.contextLength}`"
+                    @click="applyInferencePreset(preset)">
+                    {{ preset.name }}
+                  </button>
+                  <button type="button" class="preset-remove" :title="`删除预设 ${preset.name}`"
+                    @click="removeInferencePreset(preset)">
+                    <X :size="12" />
+                  </button>
+                </span>
+              </div>
+            </div>
+            <div class="inference-preset-save">
+              <input v-model="presetNameInput" placeholder="将当前参数存为预设，例如：GPU 全量卸载" @keydown.enter.prevent="saveInferencePreset" />
+              <button type="button" class="secondary-button compact-button" @click="saveInferencePreset">
+                <Plus :size="13" /> 存为预设
+              </button>
+            </div>
           </section>
 
           <section v-else class="settings-group">

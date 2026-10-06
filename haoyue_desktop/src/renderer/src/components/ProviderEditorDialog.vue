@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Eye, EyeOff, Plus, RefreshCw, Save, Settings2, Trash2, X } from '@lucide/vue'
+import { Eye, EyeOff, FolderOpen, Plus, RefreshCw, Save, Settings2, Trash2, X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import FieldLabel from './FieldLabel.vue'
 import SelectMenu from './SelectMenu.vue'
@@ -70,6 +70,7 @@ const scannedModels = ref<ScannedLocalModel[]>([])
 const scanningModels = ref(false)
 const scanError = ref('')
 const scanDirectory = ref('')
+const localSaveError = ref('')
 
 function hasCustomAdvancedSettings(val: ProviderFormValue): boolean {
   return (
@@ -164,6 +165,22 @@ async function scanLocalModels(): Promise<void> {
   }
 }
 
+async function browseModelsDirectory(): Promise<void> {
+  const directory = await window.haoyue.selectModelDirectory()
+  if (!directory) return
+  form.modelsDirectory = directory
+  scanDirectory.value = directory
+  await scanLocalModels()
+}
+
+/** Local models must be GGUF files; anything else would fail at load time. */
+function localModelValidationError(): string {
+  if (!isLocalKind()) return ''
+  const invalid = modelList.value.find((m) => !m.id.trim().toLowerCase().endsWith('.gguf'))
+  if (invalid) return `本地模型必须为 .gguf 文件：${invalid.id}`
+  return ''
+}
+
 function registerScanned(model: ScannedLocalModel): void {
   if (isRegistered(model)) return
   modelList.value.push({
@@ -209,6 +226,12 @@ function close(): void {
 
 function save(): void {
   if (!form.id.trim() || props.saving) return
+  if (isLocalKind()) {
+    localSaveError.value = localModelValidationError()
+    if (localSaveError.value) return
+  } else {
+    localSaveError.value = ''
+  }
   if (!showAdvanced.value) {
     resetAdvancedToDefaults()
   }
@@ -253,6 +276,7 @@ watch(() => props.open, (open) => {
   revealKey.value = true
   scannedModels.value = []
   scanError.value = ''
+  localSaveError.value = ''
   scanDirectory.value = isLocalKind()
     ? (form.modelsDirectory.trim() || props.defaultModelsDirectory || '')
     : ''
@@ -322,6 +346,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                   <FieldLabel en="Models Directory" zh="模型目录" help="存放 GGUF 模型文件的目录；留空时使用运行时默认目录（仓库 models 目录或 ~/.haoyue/models）。" required />
                   <span class="directory-control">
                     <input v-model="form.modelsDirectory" placeholder="例如 E:\GitHub\haoyue\models" spellcheck="false" @keydown.enter.prevent="scanLocalModels" />
+                    <button type="button" class="secondary-button compact-button" @click="browseModelsDirectory">
+                      <FolderOpen :size="14" /> 浏览…
+                    </button>
                     <button type="button" class="secondary-button compact-button" :disabled="scanningModels" @click="scanLocalModels">
                       <RefreshCw :size="14" :class="{ spin: scanningModels }" /> {{ scanningModels ? '扫描中…' : '扫描模型' }}
                     </button>
@@ -470,7 +497,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
               </div>
             </div>
 
-            <div v-if="error" class="provider-editor-error">{{ error }}</div>
+            <div v-if="error || localSaveError" class="provider-editor-error">{{ error || localSaveError }}</div>
           </div>
 
           <footer class="provider-editor-footer">
@@ -487,6 +514,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
     </Transition>
   </Teleport>
 
-  <ModelConfigModal :open="modelConfigModalOpen" :model="selectedModelConfig" @close="modelConfigModalOpen = false"
-    @save="handleModelConfigSave" />
+  <ModelConfigModal :open="modelConfigModalOpen" :model="selectedModelConfig" :is-local="isLocalKind()"
+    @close="modelConfigModalOpen = false" @save="handleModelConfigSave" />
 </template>

@@ -653,6 +653,42 @@ internal sealed class DaemonAdminApi(
         }.ToJsonString();
     }
 
+    /// <summary>
+    /// Pre-flight check for a model without loading it: local GGUF models report the
+    /// resolved file path, existence and size, remote models report their endpoint.
+    /// The desktop calls this before a full load so a missing file fails fast with a
+    /// clear reason instead of a slow load error.
+    /// </summary>
+    public string ModelStatus(JsonObject parameters)
+    {
+        var reference = RequiredString(parameters, "model");
+        var model = runtime.Models.Resolve(reference)
+                    ?? throw new DaemonRequestException($"Model not found: {reference}");
+
+        var status = new JsonObject
+        {
+            ["model"] = model.Ref,
+            ["provider"] = model.Provider.Id,
+            ["kind"] = model.Provider.IsLocal ? "local" : model.Provider.Kind,
+        };
+        if (model.Provider.IsLocal)
+        {
+            var path = Providers.LocalModels.ResolveModelPath(model.Provider, model.Model);
+            var file = new FileInfo(path);
+            status["path"] = path;
+            status["exists"] = file.Exists;
+            status["sizeBytes"] = file.Exists ? file.Length : 0;
+            if (!file.Exists)
+                status["reason"] = $"模型文件不存在：{path}。请检查模型目录配置或重新扫描注册。";
+        }
+        else
+        {
+            status["exists"] = true;
+            status["baseUrl"] = model.Provider.BaseUrl;
+        }
+        return status.ToJsonString();
+    }
+
     public async Task<string> FetchProviderModelsAsync(JsonObject parameters, CancellationToken ct)
     {
         var id = RequiredString(parameters, "id");

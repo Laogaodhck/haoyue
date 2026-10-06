@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Save, X } from '@lucide/vue'
-import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { FolderOpen, Save, X } from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import ComboboxInput, { ComboboxOption } from './ComboboxInput.vue'
 import FieldLabel from './FieldLabel.vue'
 
@@ -26,6 +26,8 @@ export interface ModelDetailConfig {
 const props = defineProps<{
   open: boolean
   model: ModelDetailConfig | null
+  /** Local GGUF models expose a file path field with a native picker. */
+  isLocal?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -43,17 +45,38 @@ const form = reactive<ModelDetailConfig>({
 
 const firstInput = ref<HTMLInputElement | null>(null)
 
+/** Field-level validation: keeps invalid load params from ever reaching the runtime. */
+const validationError = computed((): string => {
+  const contextWindow = Number(form.contextWindow)
+  const maxOutput = Number(form.maxOutput)
+  if (!Number.isFinite(contextWindow) || contextWindow < 512)
+    return '上下文长度必须为不小于 512 的数值'
+  if (!Number.isFinite(maxOutput) || maxOutput < 16)
+    return '最大输出必须为不小于 16 的数值'
+  if (maxOutput > contextWindow)
+    return '最大输出不能超过上下文长度'
+  if (props.isLocal && form.localPath && !form.localPath.trim().toLowerCase().endsWith('.gguf'))
+    return '本地模型文件必须为 .gguf 格式'
+  return ''
+})
+
+async function browseLocalPath(): Promise<void> {  const file = await window.haoyue.selectGgufFile()
+  if (file) form.localPath = file
+}
+
 function close(): void {
   emit('close')
 }
 
 function handleSave(): void {
+  if (validationError.value) return
   emit('save', {
     id: form.id,
     alias: form.alias?.trim() || undefined,
     contextWindow: Number(form.contextWindow) || 1000000,
     maxOutput: Number(form.maxOutput) || 128000,
-    vision: Boolean(form.vision)
+    vision: Boolean(form.vision),
+    localPath: form.localPath?.trim() || undefined
   })
 }
 
@@ -76,6 +99,7 @@ watch(() => props.open, (open) => {
     form.contextWindow = props.model.contextWindow || 1000000
     form.maxOutput = props.model.maxOutput || 128000
     form.vision = Boolean(props.model.vision)
+    form.localPath = props.model.localPath ?? ''
   }
   document.addEventListener('keydown', handleKeydown)
   void nextTick(() => firstInput.value?.focus())
@@ -167,6 +191,26 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
               <small class="model-context-hint">当会话估算 Tokens 接近该上下文长度时，运行时会自动压缩较早的历史消息。</small>
             </section>
 
+            <section v-if="isLocal" class="model-form-section">
+              <div class="model-section-heading">
+                <strong>模型文件</strong>
+              </div>
+              <label class="form-field full-width">
+                <FieldLabel en="Model File" zh="模型文件路径" help="GGUF 模型文件的完整路径；留空时按模型 ID 在提供商的模型目录中解析。" />
+                <span class="model-path-control">
+                  <input
+                    v-model="form.localPath"
+                    class="form-input"
+                    placeholder="例如 E:\GitHub\haoyue\models\qwen2.5-0.5b-instruct-q4_k_m.gguf"
+                    spellcheck="false"
+                  />
+                  <button type="button" class="secondary-button compact-button" @click="browseLocalPath">
+                    <FolderOpen :size="14" /> 浏览…
+                  </button>
+                </span>
+              </label>
+            </section>
+
             <section class="model-form-section">
               <div class="model-section-heading">
                 <strong>多模态能力</strong>
@@ -182,11 +226,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
             </section>
           </div>
 
+          <div v-if="validationError" class="model-config-error" role="alert">{{ validationError }}</div>
+
           <footer class="model-config-footer">
             <span>按 Ctrl + Enter 保存</span>
             <div class="footer-buttons">
               <button class="secondary-button" type="button" @click="close">取消</button>
-              <button class="secondary-button primary-action" type="submit">
+              <button class="secondary-button primary-action" type="submit" :disabled="Boolean(validationError)">
                 <Save :size="15" /> 保存配置
               </button>
             </div>
@@ -424,6 +470,27 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
 .model-config-footer > span {
   color: var(--text-muted);
   font-size: 11.5px;
+}
+
+.model-config-error {
+  margin: 0;
+  padding: 9px 24px;
+  color: var(--danger);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.model-path-control {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  width: 100%;
+}
+
+.model-path-control .form-input {
+  flex: 1;
+  min-width: 0;
 }
 
 .footer-buttons {

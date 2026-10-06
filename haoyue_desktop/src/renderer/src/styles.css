@@ -5976,3 +5976,124 @@ select:focus-visible {
   margin-top: 12px;
   align-self: flex-start;
 }
+
+/* ---------------------------------------------------------------- model load-verify flow */
+
+.model-verify-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  font-size: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-hover) 65%, transparent);
+}
+
+.model-verify-state.running {
+  color: var(--text-secondary);
+}
+
+.model-verify-state.ok {
+  color: var(--success, #1a7f37);
+  border-color: color-mix(in srgb, var(--success, #1a7f37) 30%, var(--border));
+  background: color-mix(in srgb, var(--success, #1a7f37) 8%, transparent);
+}
+
+.model-verify-state.fail {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.model-verify-state .model-verify-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-verify-dismiss {
+  margin-left: auto;
+}
+
+/* ---------------------------------------------------------------- inference presets */
+
+.inference-presets {
+  margin-top: 12px;
+}
+
+.inference-presets-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.inference-presets-header strong {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.inference-presets-header small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.inference-preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inference-preset-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.inference-preset-chip .preset-apply {
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.inference-preset-chip .preset-apply:hover {
+  background: var(--surface-hover);
+}
+
+.inference-preset-chip .preset-remove {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.inference-preset-chip .preset-remove:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.inference-preset-save {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.inference-preset-save input {
+  flex: 1;
+  min-width: 0;
+}

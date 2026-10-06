@@ -801,6 +801,11 @@ public sealed class DaemonServer : IAsyncDisposable
                             token => _admin.TestModelAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "model.status":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ModelStatus(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "model.update":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
                             _ => Task.FromResult(_admin.UpdateModel(Params(request))), context.ConnectionCt).ConfigureAwait(false);
@@ -1575,7 +1580,7 @@ public sealed class DaemonServer : IAsyncDisposable
             "schedule.list", "schedule.create", "schedule.update", "schedule.toggle", "schedule.delete", "schedule.run",
             "provider.list", "provider.upsert", "provider.use", "provider.remove", "provider.test", "provider.models.fetch",
             "local.models",
-            "model.list", "model.catalog", "model.switch", "model.test", "model.update",
+            "model.list", "model.catalog", "model.switch", "model.test", "model.status", "model.update",
             "mcp.list", "mcp.upsert", "mcp.remove", "mcp.reload",
             "skill.list", "skill.import", "skill.toggle",
             "skill.official.list", "skill.official.install",

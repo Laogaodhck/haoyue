@@ -116,6 +116,8 @@ export interface DesktopApi {
   readFileBase64(path: string): Promise<{ data: string; mediaType: string; sizeBytes: number } | null>
   getPathForFile(file: File): string
   selectSkillFiles(): Promise<DesktopSkillFileSelection>
+  selectModelDirectory(): Promise<string | null>
+  selectGgufFile(): Promise<string | null>
   showItemInFolder(path: string): Promise<void>
   closeApp(): Promise<void>
   openDevTools(): Promise<void>

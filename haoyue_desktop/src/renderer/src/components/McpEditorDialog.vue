@@ -17,6 +17,7 @@ import {
   type McpServerSummary
 } from '../mcp-form'
 import SelectMenu from './SelectMenu.vue'
+import FieldLabel from './FieldLabel.vue'
 
 const props = defineProps<{
   open: boolean
@@ -113,9 +114,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
 
           <div class="mcp-editor-body">
             <section class="mcp-form-section">
+              <div class="mcp-section-heading">
+                <strong>基本信息</strong>
+              </div>
               <div class="mcp-form-grid">
                 <label class="form-field">
-                  <span>名称</span>
+                  <FieldLabel en="Name" zh="名称" help="MCP 服务器的唯一标识；创建后不可修改。" required />
                   <input
                     ref="firstInput"
                     v-model="form.name"
@@ -126,7 +130,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                   />
                 </label>
                 <label class="form-field">
-                  <span>范围</span>
+                  <FieldLabel en="Scope" zh="范围" help="全局对所有工作区生效；工作区仅对当前项目生效。" />
                   <SelectMenu v-model="form.scope" :options="MCP_SCOPE_OPTIONS" label="MCP 范围" />
                 </label>
               </div>
@@ -139,20 +143,21 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
               </div>
               <div class="mcp-form-grid">
                 <label class="form-field full-width">
+                  <FieldLabel en="Transport" zh="传输协议" help="stdio 为本机子进程；其余为远程 HTTP 连接。" />
                   <SelectMenu v-model="form.transport" :options="MCP_TRANSPORT_OPTIONS" label="MCP 连接方式" />
                 </label>
 
                 <template v-if="!remote">
                   <label class="form-field full-width">
-                    <span>命令</span>
+                    <FieldLabel en="Command" zh="命令" help="启动 MCP 服务器子进程的可执行命令，例如 npx、uvx 或 node。" required />
                     <input v-model="form.command" class="form-input" placeholder="npx" autocomplete="off" />
                   </label>
                   <label class="form-field full-width">
-                    <span>参数</span>
+                    <FieldLabel en="Arguments" zh="参数" help="每行一个参数，按顺序传给命令；对应 JSON 配置中的 args。" />
                     <textarea v-model="form.args" class="form-input" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
                   </label>
                   <label class="form-field full-width">
-                    <span>环境变量</span>
+                    <FieldLabel en="Environment" zh="环境变量" help="每行一个 KEY=VALUE；用于传入令牌等凭据，保存后加密存储。" />
                     <textarea v-model="form.env" class="form-input" rows="2" placeholder="TOKEN=..."></textarea>
                   </label>
 
@@ -172,7 +177,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                 </template>
 
                 <label v-else class="form-field full-width">
-                  <span>URL</span>
+                  <FieldLabel en="URL" zh="URL" help="远程 MCP 服务的完整地址；SSE 以 /sse 结尾，Streamable HTTP 以 /mcp 结尾。" required />
                   <input
                     v-model="form.url"
                     class="form-input"

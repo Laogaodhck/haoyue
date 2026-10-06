@@ -378,6 +378,29 @@ function registerIpc(): void {
     return { paths: result.filePaths }
   })
 
+  ipcMain.handle('app:select-model-directory', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: '选择模型目录',
+      properties: ['openDirectory', 'createDirectory']
+    }
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options)
+    return result.canceled ? null : result.filePaths[0] ?? null
+  })
+
+  ipcMain.handle('app:select-gguf-file', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: '选择 GGUF 模型文件',
+      filters: [{ name: 'GGUF 模型', extensions: ['gguf'] }],
+      properties: ['openFile']
+    }
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options)
+    return result.canceled ? null : result.filePaths[0] ?? null
+  })
+
   ipcMain.handle('app:select-files', async () => {
     const options: Electron.OpenDialogOptions = {
       title: '选择文件',

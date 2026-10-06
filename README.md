@@ -239,7 +239,7 @@ Haoyue/
 │   ├── Verification/       # 构建验证
 │   └── Workspaces/         # 工作区检测和管理
 ├── haoyue_desktop/       # 桌面应用（Electron + Vue 3 + TypeScript）
-├── haoyue_webserver/     # 官网与技能市场（Blazor Server + SQLite）
+├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── haoyue_tests/         # 运行时单元测试
 ├── haoyue_cli_tests/     # CLI 测试

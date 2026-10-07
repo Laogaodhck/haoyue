@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
+using Haoyue.Runtime.Evolution;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
@@ -518,6 +519,35 @@ public sealed class DaemonServer : IAsyncDisposable
                                 ["payload"] = JsonNode.Parse(persisted.Payload),
                             });
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", journal.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "evolution.inspect":
+                    {
+                        // Evolution engine E1: read-only aggregation of journaled failure
+                        // signals into structured defect reports (see Evolution/DefectAggregator).
+                        var limit = Params(request)["limit"]?.GetValue<int>() ?? DefectAggregator.DefaultScanLimit;
+                        var aggregator = new DefectAggregator(_runtime.Database);
+                        var reports = new JsonArray();
+                        foreach (var report in aggregator.Aggregate(limit))
+                            reports.Add(new JsonObject
+                            {
+                                ["fingerprint"] = report.Fingerprint,
+                                ["kind"] = report.Kind.ToString(),
+                                ["firstSeen"] = report.FirstSeen.ToString("O"),
+                                ["lastSeen"] = report.LastSeen.ToString("O"),
+                                ["occurrences"] = report.Occurrences,
+                                ["toolName"] = report.ToolName,
+                                ["errorSummary"] = report.ErrorSummary,
+                                ["sessionId"] = report.SessionId,
+                            });
+                        var result = new JsonObject
+                        {
+                            ["scanned"] = Math.Clamp(limit, 1, EventJournal.RetainedEvents),
+                            ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O"),
+                            ["reports"] = reports,
+                        };
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", result.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }
 
@@ -1891,6 +1921,7 @@ public sealed class DaemonServer : IAsyncDisposable
             "session.list", "session.search", "session.get", "session.update", "session.archive", "session.delete",
             "session.resume", "session.new",
             "agent.interrupted",
+            "evolution.inspect",
             "lock.list", "factory.reset", "shutdown", "events.recent"),
     }.ToJsonString();
 

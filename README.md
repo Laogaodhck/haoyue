@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="haoyue_website/public/logo.png" alt="Haoyue Logo" width="60">
+  <img src="haoyue_website/public/logo.png" alt="Haoyue Logo" width="64">
 </p>
 
 <h1 align="center">Haoyue（浩玥）</h1>
@@ -12,149 +12,130 @@
 [![GitHub Stars](https://img.shields.io/github/stars/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/issues)
-[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/pulls)
 
-**现代化、高性能的 AI Agent**
+**一个会自我反思的本地优先 AI Agent 平台**
 
-Haoyue 是基于 .NET 10.0 构建的高性能 AI Agent，采用清洁架构和事件驱动设计。它提供开箱即用的终端 CLI 与桌面应用，为构建 AI 驱动的编码助手提供完整平台，支持多 LLM 提供商、工具执行、知识库、会话管理和流畅的交互体验。
+Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时为核心，提供终端 CLI 与桌面应用双前端。除完整的 Agent 能力（多提供商、工具执行、技能、MCP、知识库）外，Haoyue 内置了少见的**元认知层**：自动聚合失败信号、驱动反思回合产出技能草稿、经人工审批后热加载生效——Agent 在使用中持续变好。
 
-[🌐 官方网站与文档](https://github.com/Laogaodhck/haoyue) •
-[English](README_EN.md) •
-[快速开始](#-安装) •
-[功能特性](#-功能特性)
+[快速开始](#-快速开始) •
+[功能特性](#-功能特性) •
+[架构设计](#️-架构设计) •
+[进化引擎](#-进化引擎) •
+[English](README_EN.md)
 
 </div>
 
+---
+
 ## ✨ 功能特性
 
-### 🚀 Runtime First 架构
+### 🏗️ Runtime First 架构
 
-- **清洁架构**：以 `haoyue_runtime` 为核心，`haoyue_cli`（终端）与 `haoyue_desktop`（桌面）作为前端，关注点分离
-- **常驻守护进程**：daemon 通过 Named Pipe / Unix Socket 暴露 JSON-RPC，桌面端与 CLI 共享同一运行时；启动时生成随机握手 token（`~/.haoyue/daemon.token`，仅当前用户可读），客户端首条消息必须携带 token 认证，未认证连接拒绝并断开
-- **插件系统**：Tools、Skills、Prompts 与 MCP（Model Context Protocol）四层扩展机制
-- **事件驱动**：通过事件总线实现渲染与业务逻辑解耦
+- **清洁架构**：`haoyue_runtime` 为核心，CLI 与桌面端是它的两个前端，关注点严格分离
+- **常驻守护进程**：daemon 经 Named Pipe / Unix Socket 暴露 JSON-RPC，桌面端与 CLI 共享同一运行时、HTTP 连接池、熔断器与文件锁协调器
+- **安全接入**：启动时生成随机握手 token（`~/.haoyue/daemon.token`，仅当前用户可读），客户端首条消息必须携带 token 认证，未认证连接立即拒绝
+- **事件溯源**：关键事件（轮次、工具调用、用量、诊断、进化信号）写入 SQLite 事件日志（保留 5000 条），`events.recent` 可查询重放，重启不丢失
+- **四层扩展**：Tools、Skills、Prompts、MCP（Model Context Protocol）插件机制
 
-### 🤖 多提供商支持
+### 🤖 多提供商与模型
 
-- **OpenAI 兼容**：GPT-5.5、GPT-5.5-mini 及所有 OpenAI 兼容 API
-- **Anthropic**：Claude Opus、Claude Sonnet、Claude Haiku
-- **Google**：Gemini Pro、Gemini Flash
-- **本地模型**：Ollama、LM Studio，或直接在进程内运行 GGUF 模型（无需任何服务器）
-- **智能路由**：快速、均衡、质量、经济、离线等多种策略
-- **故障转移**：自动重试、指数退避和熔断器机制
+- **OpenAI 兼容 / Anthropic / Google**：主流云端模型开箱即用
+- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用
+- **智能路由**：快速、均衡、质量、经济、离线多种策略，自动重试、指数退避与熔断器故障转移
+- **用量统计**：Token 计数、成本与模型分布，桌面端图表可视化
 
-### 🛠️ 工具生态系统
+### 🛠️ 工具与技能生态
 
-- **文件与执行**：文件读/写/编辑（diff 精确应用）、grep/glob 搜索、bash 执行
-- **联网能力**：网页搜索（web_search）与网页抓取（web_fetch）
-- **任务规划**：内置计划工具，维护任务列表并跟踪多步骤执行进度
-- **屏幕捕获**：截屏工具，可将屏幕内容交给模型分析
-- **MCP 支持**：stdio 和 SSE 传输，自动发现工具/提示/资源，提示与资源内容自动注入上下文（按注入 token 预算截断，读取失败自动降级）
-- **技能系统**：基于目录的技能，支持提示注入与工作流；manifest v2 提供触发关键词（triggers）、工具白名单（allowed-tools）与参数收集（parameters）
+- **内置工具**：文件读/写/编辑（diff 精确应用）、grep/glob、bash、网页搜索与抓取、任务规划、屏幕捕获
+- **MCP**：stdio 与 SSE 传输，自动发现工具/提示/资源；提示注入有每服务器 24 个、总量 48 个的限额，超限原因在 MCP 状态中可见
+- **技能系统**：目录式技能（`skill.yaml` + `prompt.txt`），manifest v2 支持触发关键词、工具白名单与参数收集；技能变更后扫描热加载，无需重启
 
 ### 🧠 知识库与记忆
 
-- **自动沉淀**：Agent 在对话中自动保存、检索、遗忘知识（knowledge_save / knowledge_search / knowledge_forget）
-- **高容错检索**：同义词扩展、全半角归一化、CJK 二元分词与编辑距离兜底，错别字、中英文混排、全角输入也能准确命中；支持自定义同义词表（`~/.haoyue/knowledge/synonyms.txt`，热重载，适配医疗、法律等垂直领域术语）
-- **规则与记忆**：AGENTS.md 工作区规则自动注入（可开关），MEMORY.md 长期记忆支持自动/手动两种管理模式
-- **可视化维护**：桌面端知识库页面支持条目增删改、文档导入与实时搜索
+- **自动沉淀**：对话中自动保存 / 检索 / 遗忘知识
+- **高容错检索**：同义词扩展、全半角归一化、CJK 二元分词与编辑距离兜底——错别字、中英混排也能命中；支持自定义同义词表热重载
+- **规则与记忆**：AGENTS.md 工作区规则自动注入（带来源信封、优先级钉死），MEMORY.md 长期记忆支持自动 / 手动管理
+
+### 🔒 可靠性与安全（元数据层之下）
+
+- **原子写**：配置与状态写入走「同目录临时文件 + 原子替换」，崩溃不产生半截文件；保存前做字段级 reload-merge，多端并发只保留各自的改动
+- **单写者收敛**：CLI 的配置写操作自动委托给在线 daemon（`config.save`），离线才回退本地——彻底消除多写点竞争
+- **提示预算**：上下文注入总量超 24k token 时按降级秩逆序丢弃（知识库 → 技能正文 → MCP → 目录/记忆），System/Developer 消息永不丢弃，丢弃动作在会话中明示
+- **回合回滚（TurnScope）**：每个回合维护步骤账本与补偿栈，`write`/`edit` 的文件变更可一键撤销（`agent.undo`）；桌面端回合完成后出现撤销横幅；daemon 崩溃后启动对账，提示未完成回合的可恢复文件
 
 ### 🖥️ 桌面应用
 
-- **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown 渲染、图片预览、推理深度调节
+- **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown、图片预览、推理深度调节
 - **专家系统**：内置领域专家库，一键切换角色预设
-- **可视化配置**：Provider、模型、Profile、MCP 服务器全程图形化管理
-- **本地推理调优**：高级设置中可配置 CUDA 推理参数——GPU 层卸载、上下文长度、KV 缓存量化（q8_0/q4_0）与 Flash Attention，保存后下一次本地模型请求即生效
-- **任务管理**：定时任务调度与归档任务管理，任务失败即时桌面通知，并支持 Webhook 回调（桌面端离线也能收到）
-- **用量统计**：Token 用量趋势与模型分布图表
+- **图形化配置**：Provider、模型、Profile、MCP 服务器、本地推理加速全程可视化
+- **定时任务**：cron 驱动的调度回合，失败即时桌面通知，支持 Webhook 回调
+- **回合撤销与负反馈**：文件变更一键回滚；每条助手回答可点踩并附原因，反馈直接进入进化信号
 
 ### 💻 现代化终端体验
 
-- **游戏式渲染**：30-60 FPS 刷新率，双缓冲技术
-- **流式输出**：实时 token 流式传输，显示思考/推理过程
-- **实时 UI**：加载动画、进度条、工具状态和 Markdown 渲染
-- **增量更新**：无闪烁、无滚动、平滑动画
+- **游戏式渲染**：30-60 FPS 双缓冲，流式输出、思考过程展示、工具状态与 Markdown 实时渲染，增量更新无闪烁
 
 ### 📁 工作区管理
 
 - **项目识别**：自动识别 Git、.NET、Node.js、Python、Rust、Go、Unity、Vue 项目
-- **隔离配置**：每个工作区独立的配置、缓存和内存，会话按工作区作用域隔离
-- **模板化初始化**：`haoyue init` 生成 AGENTS.md、工作区 config.json 与自定义提示词结构；在 `~/.haoyue/templates/workspace/` 放置同名文件即可全局定制模板，已有文件从不覆盖
+- **隔离配置**：每个工作区独立的配置、缓存、会话与记忆
+- **模板化初始化**：`haoyue init` 生成 AGENTS.md 与配置结构，模板可全局定制，已有文件从不覆盖
 
-### 🌐 官网与技能市场
+## 🚀 快速开始
 
-- **双语文档**：中英文在线文档站
-- **技能市场**：在线浏览、搜索与提交技能分享，桌面端可使用官方技能
-- **账号体系**：注册登录与管理后台，Cookie 认证 + 速率限制
+### npm 安装 CLI（推荐）
 
-### 🔧 开发者体验
+自包含 .NET 二进制，无需单独安装 .NET SDK。当前提供 Windows x64。
 
-- **会话管理**：基于 SQLite 的会话持久化、恢复与并发访问，支持标题与消息正文全文搜索（按命中数与时间排序）
-- **内存系统**：工作区特定的内存，自动上下文注入
-- **验证机制**：代码修改后自动构建/检查/修复循环，支持多步验证命令链（按序执行、fail-fast，失败步骤的错误行摘要直接进入修复提示）
-- **事件持久化**：关键事件（轮次、工具调用、用量、诊断等）写入 SQLite 事件日志（保留最近 5000 条），daemon 支持 `events.recent` 查询重放，重启不丢失
-- **热重载**：提示文件和配置无需重启即可重载
-
-## 📦 安装
-
-### 通过 npm 安装 CLI（推荐）
-
-已发布到 npm 的 `haoyue-cli` 是自包含 .NET 二进制包，安装后可直接使用，无需单独安装 .NET SDK。当前 npm 包提供 Windows x64 平台二进制。
-
-前置要求：
-
-- Node.js 18 或更高版本
-- Git（用于工作区检测）
+前置要求：Node.js 18+、Git。
 
 ```powershell
 npm install -g haoyue-cli
 
-# 验证安装
 haoyue --version
-
-# 进入交互式聊天
-haoyue
-```
-
-也可以执行单次任务或管理命令：
-
-```powershell
+haoyue              # 交互式聊天
 haoyue "解释这个项目的架构"
-haoyue --continue
-haoyue doctor
+haoyue doctor       # 健康检查
 ```
 
 ### 从源码构建
 
-开发者从源码构建时需要：
-
-- .NET 10.0 SDK 或更高版本
-- Git（用于工作区检测）
+需要 .NET 10 SDK 与 Git：
 
 ```bash
 git clone https://github.com/Laogaodhck/haoyue.git
 cd haoyue
 dotnet build
-```
 
-### 从源码运行
-
-```bash
-# 交互式聊天模式
-dotnet run --project haoyue_cli
-
-# 单次提示
-dotnet run --project haoyue_cli -- "解释这个项目的架构"
-
-# 继续上一个会话
-dotnet run --project haoyue_cli -- --continue
-
-# 恢复特定会话
-dotnet run --project haoyue_cli -- --resume <session-id>
-
-# 覆盖模型
+dotnet run --project haoyue_cli              # 交互式聊天
+dotnet run --project haoyue_cli -- --continue  # 继续上一个会话
 dotnet run --project haoyue_cli -- --model "openai/gpt-5.5"
 ```
+
+桌面应用：进入 `haoyue_desktop`，`pnpm install && pnpm dev`。
+
+## ⚡ 进化引擎
+
+Haoyue 的元认知层让 Agent 在使用中持续改进，全流程**代码零改动、人工终审**：
+
+```mermaid
+flowchart LR
+    A[运行失败信号<br/>工具失败簇 / 验证连败<br/>能力差距 / 用户点踩] --> B[DefectAggregator<br/>信号聚合 + 指纹]
+    B --> C[反思回合<br/>隔离环境产出技能草稿]
+    C --> D[labs 实验区<br/>草稿校验 + 验证链]
+    D --> E[候选目录<br/>惰性落盘 · 默认不生效]
+    E --> F{桌面人工审批}
+    F -->|采纳| G[正式技能目录<br/>热加载生效]
+    F -->|丢弃| H[关闭指纹<br/>归档]
+```
+
+- **四类信号**：同一（工具，错误）30 分钟内失败 ≥3 次；验证链连续失败 ≥3 次（含带病通过）；`declare_skill` 能力差距（单次即报）；用户点踩负反馈（每条独立成报告）
+- **反思回合**：cron 或手动触发，在隔离运行时中分析缺陷报告，产出 `new-skill` / `revise-skill` 结论
+- **实验区（labs）**：草稿必须写入 `~/.haoyue/labs/`，校验通过后晋升至 `~/.haoyue/skills-candidates/`——该目录不在技能扫描根内，**天然惰性**，审批前永不生效
+- **防自喂养**：同一指纹的缺陷只处理一次（决策账本幂等）；反思回合自身的事件被聚合器排除，反思不会反思自己的反思
+- **安全红线**：LLM 只允许产出技能层数据资产（`skill.yaml` / `prompt.txt`），禁止改动运行时代码与核心提示词；代码进化走人类流程
+
+相关 RPC：`evolution.inspect`（查看缺陷报告）、`evolution.reflect`（触发反思）、`evolution.pending-list` / `evolution.decide`（审批）、`feedback.turn`（负反馈）。
 
 ## 🏗️ 架构设计
 
@@ -167,39 +148,46 @@ flowchart TD
 
     subgraph Runtime[haoyue_runtime]
         Facade[HaoyueRuntime<br/>组合根 / Facade]
-        Agent[Agent 主循环]
-        Bus[(EventBus)]
+        Agent[Agent 主循环<br/>+ TurnScope 步骤账本]
+        Bus[(JournaledEventBus<br/>SQLite 事件溯源)]
         subgraph Provider[提供商层]
-            PM[ProviderManager<br/>路由·重试·故障转移·熔断]
+            PM[ProviderManager<br/>路由 · 重试 · 熔断]
             MR[ModelRegistry]
             OAI[OpenAiCompatibleClient]
             ANT[AnthropicClient]
-            HC[HealthChecker]
             UT[UsageTracker]
         end
         subgraph Plugins[插件体系]
             TR[ToolRegistry]
-            PR[PromptRegistry]
+            PR[PromptRegistry<br/>24k 预算 · 降级秩]
             SK[SkillManager]
-            MCP[McpManager<br/>stdio / SSE]
+            MCP[McpManager<br/>stdio / SSE · 限额]
         end
-        PP[PromptProvider<br/>文件化·热加载·变量]
+        subgraph Evolution[进化引擎]
+            DA[DefectAggregator<br/>四类信号]
+            ES[EvolutionStore<br/>决策账本]
+            RR[ReflectionRunner<br/>反思 · labs · 审批]
+        end
+        PP[PromptProvider<br/>文件化 · 热加载]
         WS[WorkspaceManager]
         SS[SessionStore]
-        VF[BuildVerifier]
-        CFG[ConfigStore<br/>~/.haoyue/config.json]
-        DMN[DaemonServer<br/>Named Pipe / Unix Socket]
+        VF[BuildVerifier<br/>构建验证循环]
+        CO[Coordination<br/>文件锁协调]
+        CFG[ConfigStore<br/>原子写 · reload-merge]
+        DMN[DaemonServer<br/>JSON-RPC + token 认证]
     end
 
     CLI --> Facade
     DESKTOP -. daemon 协议 .-> DMN
     DMN --> Agent
+    DMN --> RR
     Facade --> Agent
     Agent --> PM
     Agent --> TR
     Agent --> VF
     Agent --> SS
     Agent --> Bus
+    Agent --> CO
     PM --> MR
     PM --> OAI
     PM --> ANT
@@ -209,6 +197,9 @@ flowchart TD
     MCP --> PR
     Agent --> PP
     PP --> PR
+    Bus --> DA
+    DA --> RR
+    ES --> RR
     WS --> CFG
     Bus --> CLI
 ```
@@ -218,31 +209,34 @@ flowchart TD
 ```
 Haoyue/
 ├── haoyue_cli/           # CLI 前端
-│   ├── Commands/           # CLI 命令（provider、model、profile 等）
+│   ├── Commands/           # CLI 命令（provider、model、knowledge、schedule 等）
 │   ├── Ui/                 # 终端渲染引擎
 │   └── Program.cs          # 入口点
 ├── haoyue_runtime/       # 核心运行时
-│   ├── Agents/             # Agent 循环和上下文规划
+│   ├── Agents/             # Agent 循环、上下文规划与 TurnScope 回滚
 │   ├── ComputerUse/        # 屏幕捕获
-│   ├── Configuration/      # 配置管理
-│   ├── Daemon/             # 守护进程（Named Pipe / Unix Socket JSON-RPC）
-│   ├── Data/               # 数据层（知识库存储、导入与检索排序）
-│   ├── Events/             # 事件总线系统
+│   ├── Configuration/      # 配置管理（原子写、reload-merge、单写者桥接）
+│   ├── Coordination/       # 文件锁协调器
+│   ├── Daemon/             # 守护进程（JSON-RPC、RPC 路由、崩溃对账）
+│   ├── Data/               # 数据层（知识库存储、检索排序、SQLite）
+│   ├── Events/             # 事件总线与事件日志（SQLite 持久化）
+│   ├── Evolution/          # 进化引擎（信号聚合、决策账本、反思回合）
 │   ├── Experts/            # 专家系统
-│   ├── Mcp/                # MCP 客户端实现
-│   ├── Prompts/            # 提示加载和组合
-│   ├── Providers/          # LLM 提供商集成
-│   ├── Scheduling/         # 定时任务
-│   ├── Sessions/           # 会话持久化
-│   ├── Skills/             # 技能管理
+│   ├── Mcp/                # MCP 客户端（stdio/SSE、注入限额）
+│   ├── Prompts/            # 提示加载、组合与预算强制
+│   ├── Providers/          # LLM 提供商集成与熔断器
+│   ├── Scheduling/         # 定时任务调度
+│   ├── Sessions/           # 会话持久化（SQLite）
+│   ├── Skills/             # 技能管理（manifest v2、热加载）
 │   ├── Tools/              # 工具注册和实现
-│   ├── Verification/       # 构建验证
+│   ├── Verification/       # 构建验证链
 │   └── Workspaces/         # 工作区检测和管理
 ├── haoyue_desktop/       # 桌面应用（Electron + Vue 3 + TypeScript）
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
-├── haoyue_tests/         # 运行时单元测试
+├── haoyue_tests/         # 运行时单元测试（399 用例）
 ├── haoyue_cli_tests/     # CLI 测试
+├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引）
 ├── models/               # 本地 GGUF 模型（开发环境）
 └── packaging/            # 打包脚本与配置
 ```
@@ -251,24 +245,15 @@ Haoyue/
 
 ### 全局配置
 
-位于 `~/.haoyue/config.json`：
+位于 `~/.haoyue/config.json`（所有写入原子化，多端并发只合并改动字段）：
 
 ```json
 {
   "providers": {
-    "openai": {
-      "apiKey": "sk-...",
-      "baseUrl": "https://api.openai.com/v1"
-    },
-    "anthropic": {
-      "apiKey": "sk-ant-..."
-    }
+    "openai": { "apiKey": "sk-...", "baseUrl": "https://api.openai.com/v1" }
   },
   "profiles": {
-    "default": {
-      "provider": "openai",
-      "model": "gpt-5.5"
-    }
+    "default": { "provider": "openai", "model": "gpt-5.5" }
   },
   "agent": {
     "maxSteps": 10,
@@ -280,52 +265,9 @@ Haoyue/
 
 ### 工作区配置
 
-每个项目可以在 `.haoyue/config.json` 中覆盖：
+每个项目可在 `.haoyue/config.json` 中覆盖提供商与模型、温度与上下文、工具权限、技能与 MCP 服务器设置。
 
-- 提供商和模型选择
-- 温度和上下文设置
-- 工具权限
-- 技能配置
-- MCP 服务器设置
-
-## 🎯 使用示例
-
-### 交互式聊天
-
-```bash
-haoyue chat
-# 或直接
-haoyue
-```
-
-### 单次任务
-
-```bash
-haoyue "将认证模块重构为使用 JWT"
-haoyue "为 UserService 类编写单元测试"
-haoyue "修复项目中的构建错误"
-```
-
-### 提供商管理
-
-```bash
-haoyue provider list
-haoyue provider add openai --api-key sk-...
-haoyue provider test openai
-haoyue provider use anthropic
-```
-
-### 本地模型（GGUF）
-
-把 GGUF 文件放入 `~/.haoyue/models`（仓库开发环境为 `models/` 目录），即可在无网络、无任何服务器的情况下进程内运行：
-
-```bash
-haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf
-```
-
-也可用 `--models-directory` 指定其它模型目录。本地模型支持流式输出与思考过程展示，暂不支持工具调用。
-
-本地推理性能调优（`~/.haoyue/config.json` 的 provider 配置项）：
+### 本地模型调优
 
 ```json
 {
@@ -343,71 +285,36 @@ haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4
 }
 ```
 
-- `gpuLayers`：卸载到 GPU 的层数（llama.cpp `n_gpu_layers`）。默认 `0`（纯 CPU）。需要 GPU 时安装 CUDA 后端（如 `LLamaSharp.Backend.Cuda12`）后设为 `999` 卸载全部层；无 GPU 后端时该值被忽略。
-- `threads`：CPU 推理线程数。默认由 llama.cpp 自动选择（全部逻辑核心）。
-- `localPrefixReuse`：跨请求复用已解码的 KV 前缀。Agent 多步回合中，每步只解码新增的后缀 token，跳过对系统提示与历史记录的重复 prefill 计算，多步任务吞吐显著提升。前缀不匹配或后端不支持内存移动时自动回退为全量重算，结果不变。
-- `flashAttention`：启用 llama.cpp Flash Attention 注意力内核加速。默认 `false`；GPU 推理时建议开启。
-- `kvCacheQuantization`：KV 缓存量化类型，`none`（f16 原生）、`q8_0` 或 `q4_0`，量化后显存占用显著降低。仅在 `flashAttention` 开启时生效（llama.cpp 限制）；修改 GPU 卸载或上下文长度后，模型权重与推理上下文会在下一次请求时自动重载，无需重启。
+- `gpuLayers`：GPU 卸载层数，默认 `0`（纯 CPU）；安装 CUDA 后端后设 `999` 卸载全部层
+- `localPrefixReuse`：跨请求复用 KV 前缀，多步回合只解码新增 token，吞吐显著提升
+- `flashAttention` / `kvCacheQuantization`：注意力内核加速与 KV 缓存量化（`q8_0` / `q4_0`），量化仅在 Flash Attention 开启时生效
 
-以上参数也可以在桌面应用的「设置 → 高级设置 → 本地推理加速（CUDA）」中图形化配置。
+以上参数也可在桌面端「设置 → 高级设置 → 本地推理加速」图形化配置。
 
-### 模型管理
+## 🎯 使用示例
 
 ```bash
-haoyue model list
+# 会话与提供商
+haoyue session list && haoyue session resume <session-id>
+haoyue provider add openai --api-key sk-...
 haoyue model use openai/gpt-5.5
-haoyue model info claude-opus
-haoyue model search "快速编码模型"
-```
 
-### 会话管理
-
-```bash
-haoyue session list
-haoyue session resume <session-id>
-haoyue session export <session-id> --format json
-```
-
-会话数据和 Desktop 项目列表统一保存在 `~/.haoyue/haoyue.db`。升级后首次访问工作区时，旧的 `.session/*.jsonl`、`.haoyue/sessions/*.jsonl` 或全局 `~/.haoyue/sessions/*.jsonl` 会自动导入，原文件保留为备份。Provider、模型、Profile、MCP、Skill、工作区配置仍使用原有 JSON/文本文件，用量记录仍为 `~/.haoyue/usage.jsonl`。
-
-### 知识库与数据管理
-
-CLI 内置知识库、工作区规则、记忆、专家与定时任务的管理命令：
-
-```bash
-# 知识库：检索、沉淀与维护（内容可经管道输入）
+# 知识库与记忆
 haoyue knowledge search "部署流程"
 haoyue knowledge add "发布步骤" --tags 运维,发布
-haoyue knowledge list
-
-# 工作区规则（AGENTS.md 层级发现与编辑）
-haoyue rules list
-haoyue rules set
-
-# 长期记忆（--global 操作全局记忆）
-haoyue memory show
 haoyue memory set "本仓库发布前必须跑全量测试"
 
-# 内置专家目录
-haoyue expert list
-
-# 定时任务（8 位短 id 前缀即可定位任务）
+# 定时任务（cron 驱动完整 Agent 回合）
 haoyue schedule add "日报" "0 9 * * *" "汇总昨日提交生成日报"
-haoyue schedule list
-haoyue schedule enable <id>
 ```
 
-### 健康检查
-
-```bash
-haoyue doctor
-```
+会话数据保存在 `~/.haoyue/haoyue.db`，升级后旧格式会话自动导入。
 
 ## 🔌 扩展 Haoyue
 
 ### 添加工具
 
-实现 `ITool` 接口：
+实现 `ITool` 接口并在 ToolRegistry 注册：
 
 ```csharp
 public class MyTool : ITool
@@ -417,7 +324,7 @@ public class MyTool : ITool
     public JsonElement ParameterSchema => /* JSON schema */;
     public bool Mutating => false;
     public string StatusLabel => "正在运行我的工具";
-    
+
     public async Task<ToolResult> ExecuteAsync(
         JsonObject args, ToolContext ctx, CancellationToken ct)
     {
@@ -428,28 +335,23 @@ public class MyTool : ITool
 
 ### 创建技能
 
-在 `skills/` 目录中创建：
-
 ```
 skills/
   my-skill/
     skill.yaml          # 元数据和配置
     prompt.txt          # 提示模板
-    tools/              # 可选的工具实现
 ```
 
-`skill.yaml` 支持可选的 v2 字段控制注入行为：
+`skill.yaml` 支持可选 v2 字段控制注入行为：
 
 ```yaml
 name: my-skill
 description: 一句话描述这个技能什么时候用
 triggers:            # 声明后仅当用户消息命中关键词才注入；不声明则常驻
   - 部署
-  - 发布
 allowed-tools:       # 注入期间可用的工具白名单；不声明则不限制
   - bash
-  - read_file
-parameters:          # 注入提示末尾追加参数收集说明
+parameters:          # 提示末尾追加参数收集说明
   - name: env
     description: 目标部署环境
     required: true
@@ -457,51 +359,31 @@ parameters:          # 注入提示末尾追加参数收集说明
 
 ### MCP 服务器
 
-在 `mcp/servers.json` 中配置：
-
-```json
-{
-  "servers": {
-    "my-server": {
-      "command": "node",
-      "args": ["path/to/server.js"],
-      "transport": "stdio"
-    }
-  }
-}
-```
-
-服务器暴露的提示（prompts）与文本资源（resources）会自动注册为系统提示的上下文贡献：内容按注入 token 预算截断后进入提示词，每个服务器最多注入 16 个资源，读取失败自动降级，不影响正常会话。
+在 `mcp/servers.json` 中配置 stdio 或 SSE 服务器；其提示与资源自动注册为上下文贡献，按 24k 总预算注入，每服务器最多 24 条提示、全局限 48 条，超限原因可在 MCP 状态中查看。
 
 ## 🧪 测试
 
 ```bash
-# 运行所有测试
-dotnet test haoyue_tests
+dotnet test haoyue_tests      # 运行时测试（399 用例）
+dotnet test haoyue_cli_tests  # CLI 测试
 
-# 运行特定测试类
-dotnet test haoyue_tests --filter "ClassName=ProviderTests"
+# 桌面端（需先 pnpm install）
+cd haoyue_desktop && pnpm test && pnpm typecheck
 ```
 
-## 📊 监控
+## 📚 设计文档
 
-Haoyue 包含内置监控：
+架构评审、裁决与实施方案收录于 [`haoyue_doc/`](haoyue_doc/README.md)，包括：
 
-- **使用统计**：Token 计数、成本、响应时间
-- **健康检查**：提供商可用性和延迟
-- **熔断器**：自动故障检测和恢复
-- **会话分析**：对话历史和模式
+- 状态并发、上下文边界与原子性风险评审（含修复对账）
+- 工作流编排层架构裁决与 TurnScope 设计
+- 进化引擎设计蓝图评审与落地设计（E1-E4）
+- NLP 与 HCI 全面优化评估报告、知识库优化说明
+- ProviderManager 并发与参数审查
 
 ## 📄 许可证
 
 本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 🙏 致谢
-
-- 使用 .NET 10.0 和 System.CommandLine 构建
-- 使用 Spectre.Console 进行终端渲染
-- 遵循清洁架构和垂直切片模式
-- 采用 Native AOT 友好的设计理念
 
 ## 👤 作者
 
@@ -509,4 +391,4 @@ Haoyue 包含内置监控：
 
 ---
 
-**Haoyue** - 基于现代化 .NET 的高性能 AI Agent。
+**Haoyue** - 一个会自我反思的本地优先 AI Agent 平台。

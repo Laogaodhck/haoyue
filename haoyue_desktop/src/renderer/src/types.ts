@@ -142,6 +142,8 @@ export interface ThreadItem {
   stats?: ThreadStats
   /** Tracks the highest execution step seen in the current turn (workflow events). */
   turnStepHighWater?: number
+  /** Workspace-relative files the latest finished turn changed; agent.undo can revert them. */
+  undoableFiles?: string[]
 }
 
 

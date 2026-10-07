@@ -1964,6 +1964,49 @@ select:focus-visible {
   scrollbar-width: thin;
 }
 
+/* TurnScope undo banner: revert the latest turn's builtin file-tool changes. */
+.undo-banner {
+  display: flex;
+  width: min(100%, 940px);
+  align-items: center;
+  gap: 8px;
+  margin: 0 auto 8px;
+  padding: 8px 11px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.undo-banner span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.undo-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.undo-button:hover:not(:disabled) {
+  background: var(--surface-hover, rgb(127 127 127 / 12%));
+}
+
+.undo-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+
 .pending-message-card {
   display: flex;
   min-width: 0;

@@ -41,6 +41,18 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
     message.state = 'error'
   }
 
+  /**
+   * Terminal events carry the workspace-relative files the turn's builtin file tools
+   * changed (daemon-side undo ledger). A new turn replaces the list; a turn without
+   * changes clears it. agent.undo itself is user-triggered from the thread footer.
+   */
+  function applyUndoableFiles(thread: ThreadItem, event: DaemonMessage): void {
+    const raw = event.details?.undoableFiles
+    thread.undoableFiles = Array.isArray(raw)
+      ? raw.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      : undefined
+  }
+
   // ---------------------------------------------------------------- stream throttle
   // Every delta used to mutate the reactive message immediately, forcing the active
   // bubble to re-run full markdown/highlight/katex parsing dozens of times per second
@@ -340,6 +352,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         thread.requestId = undefined
         thread.assistantId = undefined
         thread.phase = undefined
+        applyUndoableFiles(thread, event)
         scheduleQueuedDrain(thread)
         if (isBackgroundThread) {
           void window.haoyue.notify('后台任务完成', `「${thread.title}」已完成`)
@@ -362,6 +375,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         thread.requestId = undefined
         thread.assistantId = undefined
         thread.phase = undefined
+        applyUndoableFiles(thread, event)
         scheduleQueuedDrain(thread)
         if (isBackgroundThread) {
           void window.haoyue.notify('后台任务执行失败', `「${thread.title}」执行失败`)

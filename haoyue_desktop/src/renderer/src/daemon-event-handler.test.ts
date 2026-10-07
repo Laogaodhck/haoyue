@@ -237,3 +237,59 @@ describe('daemon event handler — turn.interrupted (N17)', () => {
     expect(context.reloadThreadSession).not.toHaveBeenCalled()
   })
 })
+
+describe('daemon event handler — turn undo ledger (TurnScope)', () => {
+  beforeEach(() => {
+    ;(globalThis as unknown as { window: unknown }).window = {
+      haoyue: { notify: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) }
+    }
+  })
+
+  function terminalEvent(
+    event: 'done' | 'cancelled' | 'error',
+    details?: Record<string, unknown>
+  ): DaemonMessage {
+    return { id: 7, event, data: '', sessionId: 's1', requestMethod: 'chat', details }
+  }
+
+  function finishedThread(): ThreadItem {
+    return {
+      id: 't1', title: '任务', updatedAt: Date.now(), messages: [],
+      sessionId: 's1', running: true, requestId: 7, assistantId: 'a1'
+    }
+  }
+
+  it('stores undoableFiles from the terminal envelope', () => {
+    const context = createContext()
+    const thread = finishedThread()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(terminalEvent('done', { undoableFiles: ['src/a.ts', 'src/b.ts'] }))
+
+    expect(thread.undoableFiles).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(thread.running).toBe(false)
+  })
+
+  it('clears undoableFiles when the turn changed nothing or an older list existed', () => {
+    const context = createContext()
+    const thread = finishedThread()
+    thread.undoableFiles = ['old.ts']
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(terminalEvent('done'))
+    expect(thread.undoableFiles).toBeUndefined()
+  })
+
+  it('filters non-string entries from a malformed payload', () => {
+    const context = createContext()
+    const thread = finishedThread()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(terminalEvent('cancelled', { undoableFiles: ['ok.ts', 42, '', null] }))
+
+    expect(thread.undoableFiles).toEqual(['ok.ts'])
+  })
+})

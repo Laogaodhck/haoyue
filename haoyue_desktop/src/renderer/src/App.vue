@@ -20,6 +20,7 @@ import {
   Telescope,
   TerminalSquare,
   Trash2,
+  Undo2,
   X
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -1270,6 +1271,32 @@ function rememberFinishedRequest(thread: ThreadItem, requestId: number): void {
   if (thread.finishedRequestIds.length > 12) thread.finishedRequestIds.splice(0, thread.finishedRequestIds.length - 12)
 }
 
+// ---------------------------------------------------------------- turn undo (TurnScope)
+const undoInFlight = ref(false)
+
+/** One-shot revert of the latest finished turn's builtin file-tool changes. The daemon
+ * keeps a single ledger per session and consumes it, so the button hides itself after. */
+async function undoLastTurn(): Promise<void> {
+  const thread = activeThread.value
+  if (!thread?.sessionId || !thread.undoableFiles?.length || undoInFlight.value) return
+  if (!daemonState.value.connected) return
+  undoInFlight.value = true
+  try {
+    const response = await window.haoyue.daemon.request('agent.undo', { sessionId: thread.sessionId })
+    if (response.event === 'error') {
+      await window.haoyue.notify('撤销失败', response.data)
+      return
+    }
+    thread.undoableFiles = undefined
+    const project = projects.value.find((item) => item.id === thread.projectId)
+    await reloadThreadSession(thread, project)
+  } catch {
+    await window.haoyue.notify('撤销失败', '无法连接 Runtime，请稍后重试')
+  } finally {
+    undoInFlight.value = false
+  }
+}
+
 function isFinishedRequest(thread: ThreadItem, requestId: number): boolean {
   return thread.finishedRequestIds?.includes(requestId) === true
 }
@@ -1844,6 +1871,18 @@ watch(theme, applyTheme)
           </Transition>
 
           <footer class="composer-region">
+            <!-- TurnScope: one-click revert of the latest turn's builtin file-tool changes.
+                 The daemon keeps one undo ledger per session; agent.undo is one-shot. -->
+            <div v-if="activeThread?.undoableFiles?.length && activeThread.sessionId && !activeThread.running"
+              class="undo-banner" role="status">
+              <History :size="14" aria-hidden="true" />
+              <span>本回合修改了 {{ activeThread.undoableFiles.length }} 个文件，可撤销恢复到修改前状态</span>
+              <button type="button" class="undo-button" :disabled="undoInFlight"
+                title="按修改的逆序恢复这些文件" @click="undoLastTurn">
+                <Undo2 :size="14" />
+                {{ undoInFlight ? '撤销中…' : '撤销' }}
+              </button>
+            </div>
             <div v-if="activeThread?.queuedMessages?.length" class="pending-message-stack" aria-label="等待发送的消息">
               <button v-if="!queuedHintDismissed" type="button" class="pending-message-hint"
                 title="点击不再显示" @click="queuedHintDismissed = true">

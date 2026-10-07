@@ -84,6 +84,18 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly ConcurrentDictionary<string, ActiveTurn> _sessionTurns =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Crash marker: in-flight turns mirrored to disk so a process death leaves a
+    // residue the next start can turn into per-session interruption notices.
+    private readonly ConcurrentDictionary<string, ActiveTurnRecord> _turnJournal =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly string _activeTurnsFile;
+
+    // Turn ids recovered by startup crash recovery (this daemon process lifetime).
+    // Clients query these via agent.interrupted on reconnect, because the startup
+    // broadcast fires before any client has connected.
+    private readonly Lock _interruptedTurnsGate = new();
+    private readonly List<string> _interruptedTurns = [];
+
     private sealed class SessionUsageAccumulator
     {
         public long LlmRounds { get; set; }
@@ -141,13 +153,15 @@ public sealed class DaemonServer : IAsyncDisposable
         HaoyueRuntime runtime,
         Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>>? runTurn,
         WorkspaceInfo globalWorkspace,
-        string? handshakeToken = null)
+        string? handshakeToken = null,
+        string? activeTurnsFile = null)
     {
         _runtime = runtime;
         _globalWorkspace = globalWorkspace;
         _runTurn = runTurn;
         _useIsolatedTurnRuntime = runTurn is null;
         _handshakeToken = handshakeToken;
+        _activeTurnsFile = activeTurnsFile ?? HaoyuePaths.ActiveTurnsFile;
         // Live config factory: a Reload() that replaces the whole Config object must also
         // change breaker thresholds; a snapshot here would freeze the old policy.
         _sharedBreaker = new CircuitBreaker(() => runtime.ConfigStore.Config.Routing.Retry);
@@ -190,6 +204,7 @@ public sealed class DaemonServer : IAsyncDisposable
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _shutdown.Token);
         var runCt = linkedCts.Token;
+        await RecoverInterruptedTurnsAsync(runCt).ConfigureAwait(false);
         var schedulerTask = RunSchedulerAsync(runCt);
         try
         {
@@ -579,13 +594,27 @@ public sealed class DaemonServer : IAsyncDisposable
                             break;
                         }
                         context.ActiveTurns[id] = turn;
+                        // Mirror the turn into the crash journal (production isolated
+                        // runtime only; stub-runner tests stay off the real file).
+                        if (_useIsolatedTurnRuntime)
+                        {
+                            _turnJournal[sessionKey] = new ActiveTurnRecord(
+                                sessionKey, Haoyue.Runtime.Data.HaoyueDatabase.ScopeKey(workspace), workspace.Root,
+                                workspace.IsGlobal, DateTimeOffset.UtcNow);
+                            ActiveTurnJournal.Write(_activeTurnsFile, _turnJournal.Values.ToList());
+                        }
                         turn.Task = RunTurnAsync(
                             turnSession, workspace, message, images, reasoningLevel, id, context.Writer, context.WriterGate,
                             turnCancellation.Token, context.ConnectionCt, turn.Steering);
                         // The session lock releases itself when the turn completes; the
                         // value-aware removal never evicts a newer turn's registration.
                         _ = turn.Task.ContinueWith(
-                            _ => _sessionTurns.TryRemove(KeyValuePair.Create(sessionKey, turn)),
+                            finishedTask =>
+                            {
+                                _sessionTurns.TryRemove(KeyValuePair.Create(sessionKey, turn));
+                                if (_turnJournal.TryRemove(sessionKey, out _))
+                                    ActiveTurnJournal.Write(_activeTurnsFile, _turnJournal.Values.ToList());
+                            },
                             CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                         break;
                     }
@@ -629,6 +658,19 @@ public sealed class DaemonServer : IAsyncDisposable
                             break;
                         }
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", "guidance queued", context.ConnectionCt, target.Session.Header.Id).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "agent.interrupted":
+                    {
+                        // Session ids whose turns were interrupted by the last daemon
+                        // crash, recovered at startup. Lets a reconnecting client clear
+                        // stale "running" spinners it kept from before the crash.
+                        List<string> snapshot;
+                        lock (_interruptedTurnsGate) snapshot = _interruptedTurns.ToList();
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            JsonSerializer.Serialize(snapshot, HaoyueJsonContext.Compact.ListString),
+                            context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }
 
@@ -1555,6 +1597,74 @@ public sealed class DaemonServer : IAsyncDisposable
         public Task? Task { get; set; }
     }
 
+    /// <summary>
+    /// Turn-resume semantics after a daemon crash: any session still recorded in the
+    /// crash journal was mid-turn when the process died. Best effort only — the
+    /// session gets an interruption notice appended to its history and every client
+    /// receives a <c>turn.interrupted</c> broadcast; the turn is never re-run
+    /// automatically because half-executed tools make a blind retry unsafe.
+    /// </summary>
+    internal async Task RecoverInterruptedTurnsAsync(CancellationToken ct)
+    {
+        var records = ActiveTurnJournal.Read(_activeTurnsFile);
+        if (records.Count == 0) return;
+
+        foreach (var record in records)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var workspace = record.IsGlobal
+                    ? _runtime.Workspaces.CreateGlobal()
+                    : TryDetectWorkspace(record.WorkspaceRoot);
+                if (workspace is not null)
+                {
+                    var session = _runtime.Sessions.Load(workspace, record.SessionId);
+                    if (session is not null)
+                    {
+                        _runtime.Sessions.Append(session, ChatMessage.User(
+                            ">>> [turn interrupted] 上次回合因 Runtime 异常退出而中断，上方可能缺少本轮的最终回答。可重新发送消息或要求重试。"));
+                    }
+                }
+            }
+            catch
+            {
+                // Recovery is best effort: an unloadable workspace or session is skipped.
+            }
+
+            var details = new JsonObject
+            {
+                ["sessionId"] = record.SessionId,
+                ["reason"] = "daemon_crash",
+            };
+            lock (_interruptedTurnsGate) _interruptedTurns.Add(record.SessionId);
+            try
+            {
+                await BroadcastAsync(0, "turn.interrupted", "上次回合被 Runtime 重启中断", ct, details)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
+            {
+                // Clients are not connected yet (typical at startup) or are vanishing.
+            }
+        }
+
+        ActiveTurnJournal.Clear(_activeTurnsFile);
+    }
+
+    private WorkspaceInfo? TryDetectWorkspace(string root)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return null;
+            return _runtime.Workspaces.Detect(root);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private string CurrentMode() =>
         AgentModeExtensions.Parse(
             _runtime.Workspace.Config?.Mode ?? _runtime.ConfigStore.Config.Agent.Mode)
@@ -1629,6 +1739,7 @@ public sealed class DaemonServer : IAsyncDisposable
             "project.list", "project.upsert", "project.remove",
             "session.list", "session.search", "session.get", "session.update", "session.archive", "session.delete",
             "session.resume", "session.new",
+            "agent.interrupted",
             "lock.list", "factory.reset", "shutdown", "events.recent"),
     }.ToJsonString();
 

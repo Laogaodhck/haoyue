@@ -43,6 +43,12 @@ public sealed class SkillManifest
     /// triggers stay always-on like before.
     /// </summary>
     public List<string>? Triggers { get; set; }
+    /// <summary>
+    /// N5 stage 1 (manifest key <c>always-listed</c>): whether the skill appears in
+    /// the model-visible catalog so it can be pulled mid-turn via declare_skill.
+    /// Default true; set false to hide internal/sensitive skills from the catalog.
+    /// </summary>
+    public bool AlwaysListed { get; set; } = true;
 }
 
 public sealed record SkillInfo(SkillManifest Manifest, string Directory, bool Enabled)
@@ -70,6 +76,15 @@ public interface ISkillManager
     /// Null means unrestricted — no triggered skill declared allowed-tools.
     /// </summary>
     SkillToolPolicy ResolveToolPolicy(WorkspaceInfo workspace, string? userMessage);
+
+    /// <summary>
+    /// N5 stage 1: lets the model pull a listed skill mid-turn via declare_skill.
+    /// Returns false when no such enabled + always-listed skill exists.
+    /// </summary>
+    bool DeclareForTurn(WorkspaceInfo workspace, string skillName);
+
+    /// <summary>Clears model-declared skills (called at the start of every turn).</summary>
+    void ResetTurnDeclarations();
 }
 
 /// <summary>
@@ -90,6 +105,11 @@ public sealed class SkillManager : ISkillManager
     private readonly IPromptProvider _prompts;
     private WorkspaceInfo? _workspace;
 
+    // N5 stage 1: skills the model pulled via declare_skill this turn. Lives on the
+    // manager instance — isolated turn runtimes give every concurrent turn its own
+    // SkillManager, and RunTurnAsync resets it at the start for shared managers (CLI).
+    private readonly HashSet<string> _turnDeclared = new(StringComparer.OrdinalIgnoreCase);
+
     public SkillManager(IConfigStore configStore, IPromptRegistry promptRegistry, string? globalSkillsDir = null, IPromptProvider? prompts = null)
     {
         _configStore = configStore;
@@ -104,11 +124,15 @@ public sealed class SkillManager : ISkillManager
                 return ValueTask.FromResult<string?>(null);
 
             var userMessage = ctx.Variables.TryGetValue("user_message", out var value) ? value : null;
-            var parts = SelectInjectedSkills(_workspace, userMessage)
+            // N5 stage 1: the catalog tells the model which trigger-gated skills exist
+            // so declare_skill can recover keyword misses; injected prompts follow.
+            var parts = new List<string>();
+            var catalog = RenderSkillCatalog(_workspace);
+            if (catalog is not null) parts.Add(catalog);
+            parts.AddRange(SelectInjectedSkills(_workspace, userMessage, _turnDeclared)
                 .Where(s => File.Exists(s.PromptFile))
                 .Select(s => RenderSkillPrompt(s))
-                .Where(text => text.Length > 0)
-                .ToList();
+                .Where(text => text.Length > 0));
             return ValueTask.FromResult<string?>(parts.Count == 0 ? null : string.Join("\n\n", parts));
         }));
     }
@@ -142,13 +166,17 @@ public sealed class SkillManager : ISkillManager
     /// <summary>
     /// Single source of truth for what is injected this turn: enabled skills, gated
     /// by manifest triggers against the user message (skills without triggers stay
-    /// always-on). Both the prompt contribution and the tool policy derive from this,
-    /// so injection and tool authority can never drift apart.
+    /// always-on) plus anything the model pulled via declare_skill this turn. Both
+    /// the prompt contribution and the tool policy derive from this, so injection
+    /// and tool authority can never drift apart.
     /// </summary>
-    internal IReadOnlyList<SkillInfo> SelectInjectedSkills(WorkspaceInfo workspace, string? userMessage)
+    internal IReadOnlyList<SkillInfo> SelectInjectedSkills(
+        WorkspaceInfo workspace, string? userMessage, IReadOnlyCollection<string>? modelDeclared = null)
     {
         return Discover(workspace)
-            .Where(s => s.Enabled && Triggered(s.Manifest, userMessage))
+            .Where(s => s.Enabled
+                        && (Triggered(s.Manifest, userMessage)
+                            || (modelDeclared?.Contains(s.Name) ?? false)))
             .ToList();
     }
 
@@ -188,12 +216,60 @@ public sealed class SkillManager : ISkillManager
     {
         // Single selection pass shared with injection semantics: one Discover scan,
         // and the allow-list can never drift from what gets injected this turn.
-        var union = SelectInjectedSkills(workspace, userMessage)
+        var union = SelectInjectedSkills(workspace, userMessage, _turnDeclared)
             .SelectMany(s => s.Manifest.AllowedTools ?? [])
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         return new SkillToolPolicy(union.Count == 0 ? null : union);
+    }
+
+    /// <inheritdoc />
+    public bool DeclareForTurn(WorkspaceInfo workspace, string skillName)
+    {
+        if (string.IsNullOrWhiteSpace(skillName)) return false;
+        var match = Discover(workspace).FirstOrDefault(s =>
+            s.Enabled
+            && s.Manifest.AlwaysListed
+            && string.Equals(s.Name, skillName.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (match is null) return false;
+        _turnDeclared.Add(match.Name);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public void ResetTurnDeclarations() => _turnDeclared.Clear();
+
+    /// <summary>
+    /// N5 stage 1: a model-visible catalog of trigger-gated skills so the agent can
+    /// declare (declare_skill) skills that keyword matching missed. Always-on skills
+    /// need no declaration and internal skills (<c>always-listed: false</c>) stay hidden.
+    /// </summary>
+    internal string? RenderSkillCatalog(WorkspaceInfo workspace)
+    {
+        var candidates = Discover(workspace)
+            .Where(s => s.Enabled && s.Manifest.AlwaysListed && s.Manifest.Triggers is { Count: > 0 })
+            .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (candidates.Count == 0) return null;
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("可用技能目录（如用户任务匹配某技能的适用场景、但该技能没有被自动注入，可调用 declare_skill 工具并传入技能名显式加载；已注入的技能无需声明）：");
+        foreach (var skill in candidates)
+        {
+            sb.Append("\n- ").Append(skill.Name);
+            if (!string.IsNullOrWhiteSpace(skill.Manifest.Description))
+                sb.Append(" — 适用场景：").Append(skill.Manifest.Description.Trim());
+            if (skill.Manifest.Triggers is { Count: > 0 } triggers)
+            {
+                var keywords = triggers
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Select(t => t.Trim())
+                    .ToList();
+                if (keywords.Count > 0) sb.Append("；触发词：").Append(string.Join("/", keywords));
+            }
+        }
+        return ContextPlanner.FitInjectedText(sb.ToString());
     }
 
     /// <summary>
@@ -434,12 +510,18 @@ public sealed class SkillManager : ISkillManager
 
     /// <summary>
     /// YamlDotNet applies the naming convention instead of YamlMember aliases, so the
-    /// common kebab-case key is normalized to its camelCase property before binding.
-    /// Anchored to line starts (indentation allowed) to avoid rewriting text content.
+    /// common kebab-case keys are normalized to their camelCase properties before
+    /// binding. Anchored to line starts (indentation allowed) to avoid rewriting text.
     /// </summary>
-    private static string NormalizeKebabKeys(string yaml) =>
-        KebabAllowedTools.Replace(yaml, "$1allowedTools:");
+    private static string NormalizeKebabKeys(string yaml) => KebabKeys.Replace(
+        yaml,
+        static match => match.Groups[2].Value switch
+        {
+            "allowed-tools" => match.Groups[1].Value + "allowedTools:",
+            "always-listed" => match.Groups[1].Value + "alwaysListed:",
+            _ => match.Value,
+        });
 
-    private static readonly System.Text.RegularExpressions.Regex KebabAllowedTools =
-        new(@"^(\s*)allowed-tools\s*:", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex KebabKeys =
+        new(@"^(\s*)(allowed-tools|always-listed)\s*:", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
 }

@@ -1368,6 +1368,53 @@ public sealed class DaemonServerTests : IAsyncDisposable
         await Assert.ThrowsAnyAsync<Exception>(() => connection.ReadAsync());
     }
 
+    [Fact]
+    public async Task RecoverInterruptedTurns_AppendsNotice_ClearsJournal()
+    {
+        var workspaceRoot = CreateWorkspace("workspace");
+        var configStore = new ConfigStore(
+            Path.Combine(_tempDir, "config.json"),
+            Path.Combine(_tempDir, "state.json"));
+        var runtime = HaoyueRuntime.Create(
+            workspaceRoot,
+            configStore,
+            Path.Combine(_tempDir, "haoyue.db"),
+            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
+        var workspace = new WorkspaceManager().Detect(workspaceRoot);
+        var session = runtime.Sessions.Create(workspace);
+        runtime.Sessions.Append(session, ChatMessage.User("帮我整理周报"));
+
+        // Simulate a crash residue: the turn was in flight when the process died.
+        var journalFile = Path.Combine(_tempDir, "active-turns.json");
+        ActiveTurnJournal.Write(journalFile, new List<ActiveTurnRecord>
+        {
+            new(
+                session.Header.Id,
+                Haoyue.Runtime.Data.HaoyueDatabase.ScopeKey(workspace),
+                workspaceRoot, false, DateTimeOffset.UtcNow)
+        });
+
+        var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-state"));
+        var server = new DaemonServer(
+            runtime, (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            globalWorkspace, null, journalFile);
+        _asyncDisposables.Add(server);
+
+        await server.RecoverInterruptedTurnsAsync(CancellationToken.None);
+
+        var reloaded = runtime.Sessions.Load(workspace, session.Header.Id)!;
+        Assert.Contains(">>> [turn interrupted]", reloaded.Messages[^1].Text);
+        Assert.False(File.Exists(journalFile), "journal must be cleared after successful recovery");
+
+        // Unknown session ids in the residue must not throw; the journal still clears.
+        ActiveTurnJournal.Write(journalFile, new List<ActiveTurnRecord>
+        {
+            new("no-such-session", "workspace|X:\\gone", "X:\\gone", false, DateTimeOffset.UtcNow)
+        });
+        await server.RecoverInterruptedTurnsAsync(CancellationToken.None);
+        Assert.False(File.Exists(journalFile));
+    }
+
     private async Task<TestConnection> StartServerAsync(
         Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>> runTurn,
         string? workspace = null,

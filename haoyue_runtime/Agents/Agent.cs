@@ -98,6 +98,9 @@ public sealed partial class Agent(
         // recent user turns) so multi-turn tasks keep their skills; computed once per
         // turn and shared by the tool policy and the composed prompt.
         var skillTriggerContext = BuildSkillTriggerContext(session.Messages, turnMessageIndex, userInput);
+        // N5: model-pulled skills (declare_skill) never leak across turns — the shared
+        // manager (CLI) is reset here; isolated turn runtimes get a fresh manager anyway.
+        _skills?.ResetTurnDeclarations();
 
         var mutated = false;
         var repairAttempts = 0;

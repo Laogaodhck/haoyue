@@ -256,6 +256,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                      new KnowledgeSaveTool(Knowledge, prompts),
                      new KnowledgeForgetTool(Knowledge, prompts),
                      new DelegateTool(prompts, _services.GetRequiredService<IAgentDelegator>()),
+                     new DeclareSkillTool(_services.GetRequiredService<ISkillManager>(), prompts),
                  })
             Tools.Register(tool);
 

@@ -3,6 +3,7 @@ import {
   ArrowDown,
   Braces,
   Bug,
+  Check,
   ChevronDown,
   ChevronUp,
   Circle,
@@ -53,7 +54,7 @@ import { finalizeAssistantBubbles, markThreadInterrupted } from './conversation-
 import { isForbiddenProjectPath } from './project-paths'
 import { retryRuntimeConnection, RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
 import { ReasoningLevel } from './types'
-import type { ChatMessage, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, ThreadItem, ThreadStats, ToolActivity } from './types'
+import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, ThreadItem, ThreadStats, ToolActivity } from './types'
 import {
   formatPromptWithFiles,
   hydrateMessages,
@@ -488,6 +489,7 @@ async function migrateImplicitDocumentsProject(): Promise<void> {
 async function loadRuntimeState(): Promise<void> {
   try {
     await migrateStoredProjects()
+    void refreshEvolutionCandidates() // restore the candidate banner after reconnect
     const [projectResponse, modelResponse, workspaceResponse, modeResponse, catalogResponse, configStatusResponse] = await Promise.all([
       window.haoyue.daemon.request('project.list'),
       window.haoyue.daemon.request('model.list'),
@@ -1575,6 +1577,7 @@ const handleDaemonEvent = createDaemonEventHandler({
   activeThreadId,
   projects,
   handleScheduleUpdated,
+  handleEvolutionReflected,
   scrollToBottom,
   reloadThreadSession,
   rememberFinishedRequest,
@@ -1582,6 +1585,65 @@ const handleDaemonEvent = createDaemonEventHandler({
   scheduleQueuedDrain,
   reloadBackgroundThreadIfIdle
 })
+
+// ---------------------------------------------------------------- evolution engine (P3/P4)
+// 进化引擎：候选技能审批横幅 + 回合负反馈。候选产生于后台反思 turn，
+// 通过 evolution.reflected 广播或启动时 pending-list 恢复横幅状态。
+
+const evolutionCandidates = ref<EvolutionCandidate[]>([])
+const evolutionInFlight = ref(false)
+
+async function refreshEvolutionCandidates(): Promise<void> {
+  try {
+    const list = await window.haoyue.daemon.request('evolution.pending-list')
+    evolutionCandidates.value = Array.isArray(list)
+      ? list.filter((item): item is EvolutionCandidate =>
+        Boolean(item && typeof item.fingerprint === 'string' && typeof item.skillName === 'string'))
+      : []
+  } catch {
+    // daemon offline / old runtime without evolution support — banner stays hidden
+  }
+}
+
+async function handleEvolutionReflected(): Promise<void> {
+  await refreshEvolutionCandidates()
+  if (evolutionCandidates.value.length > 0) {
+    void window.haoyue.notify(
+      '进化引擎',
+      `反思完成：${evolutionCandidates.value.length} 个技能候选待审批`)
+  }
+}
+
+async function decideEvolution(candidate: EvolutionCandidate, adopt: boolean): Promise<void> {
+  if (evolutionInFlight.value) return
+  evolutionInFlight.value = true
+  try {
+    await window.haoyue.daemon.request('evolution.decide', {
+      fingerprint: candidate.fingerprint,
+      decision: adopt ? 'adopt' : 'reject'
+    })
+    evolutionCandidates.value = evolutionCandidates.value.filter(
+      (item) => item.fingerprint !== candidate.fingerprint)
+  } catch (reason) {
+    await window.haoyue.notify(
+      '候选审批失败',
+      reason instanceof Error ? reason.message : String(reason))
+    await refreshEvolutionCandidates()
+  } finally {
+    evolutionInFlight.value = false
+  }
+}
+
+/** P4: explicit negative feedback on a finished turn; journaled as a defect signal. */
+async function feedbackNegative(): Promise<void> {
+  const thread = activeThread.value
+  if (!thread?.sessionId) return
+  try {
+    await window.haoyue.daemon.request('feedback.turn', { sessionId: thread.sessionId, kind: 'negative' })
+  } catch {
+    // feedback is best-effort; never disturb the user over a failed journal write
+  }
+}
 
 async function stopTurn(): Promise<void> {
   const thread = activeThread.value
@@ -1808,7 +1870,8 @@ watch(theme, applyTheme)
                       @branch="branchFromMessage"
                       @edit="onEditUserMessage"
                       @regenerate="regenerateMessage"
-                      @continue-turn="continueAssistant" />
+                      @continue-turn="continueAssistant"
+                      @thumbs-down="feedbackNegative" />
                   </div>
                 </template>
                 <div class="virtual-pad" :style="{ height: `${virtualWindow.bottomPad}px` }" />
@@ -1823,7 +1886,8 @@ watch(theme, applyTheme)
                     @branch="branchFromMessage"
                     @edit="onEditUserMessage"
                     @regenerate="regenerateMessage"
-                    @continue-turn="continueAssistant" />
+                    @continue-turn="continueAssistant"
+                    @thumbs-down="feedbackNegative" />
                 </template>
               </template>
             </div>
@@ -1871,6 +1935,32 @@ watch(theme, applyTheme)
           </Transition>
 
           <footer class="composer-region">
+            <!-- Evolution engine (P3): candidate skills produced by reflection turns
+                 await human review here — adopting moves the draft into the live
+                 skills directory, rejecting discards it. -->
+            <div v-if="evolutionCandidates.length" class="evolution-banner" role="status">
+              <Telescope :size="14" aria-hidden="true" />
+              <div class="evolution-list">
+                <div v-for="candidate in evolutionCandidates" :key="candidate.fingerprint"
+                  class="evolution-candidate">
+                  <span class="evolution-skill">{{ candidate.skillName }}</span>
+                  <span class="evolution-summary" :title="candidate.summary">{{
+                    candidate.summary || '反思产出候选技能' }}</span>
+                  <div class="evolution-actions">
+                    <button type="button" class="undo-button" :disabled="evolutionInFlight"
+                      title="采纳后技能进入正式目录，下一次扫描即生效"
+                      @click="decideEvolution(candidate, true)">
+                      <Check :size="14" /> 采纳
+                    </button>
+                    <button type="button" class="pending-message-action" :disabled="evolutionInFlight"
+                      title="丢弃该候选草稿"
+                      @click="decideEvolution(candidate, false)">
+                      <X :size="14" /> 丢弃
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
             <!-- TurnScope: one-click revert of the latest turn's builtin file-tool changes.
                  The daemon keeps one undo ledger per session; agent.undo is one-shot. -->
             <div v-if="activeThread?.undoableFiles?.length && activeThread.sessionId && !activeThread.running"

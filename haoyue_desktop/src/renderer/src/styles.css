@@ -2006,6 +2006,63 @@ select:focus-visible {
   cursor: default;
 }
 
+/* Evolution engine banner: candidate skill drafts awaiting human review (P3). */
+.evolution-banner {
+  display: flex;
+  width: min(100%, 940px);
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 auto 8px;
+  padding: 9px 11px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.evolution-banner>svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.evolution-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.evolution-candidate {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.evolution-skill {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.evolution-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolution-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
 
 .pending-message-card {
   display: flex;

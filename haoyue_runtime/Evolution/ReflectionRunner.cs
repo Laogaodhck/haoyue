@@ -52,6 +52,7 @@ public sealed class ReflectionRunner
     private readonly ReflectionTurnRunner _turnRunner;
     private readonly string _labsRoot;
     private readonly string _candidatesRoot;
+    private readonly string _skillsRoot;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public ReflectionRunner(
@@ -63,7 +64,8 @@ public sealed class ReflectionRunner
         ReflectionTurnRunner? turnRunner = null,
         LocalModelCache? sharedLocalModels = null,
         string? labsRoot = null,
-        string? candidatesRoot = null)
+        string? candidatesRoot = null,
+        string? skillsRoot = null)
     {
         _runtime = runtime;
         _fileLocks = fileLocks;
@@ -74,6 +76,7 @@ public sealed class ReflectionRunner
         _turnRunner = turnRunner ?? RunIsolatedTurnAsync;
         _labsRoot = labsRoot ?? HaoyuePaths.LabsDir;
         _candidatesRoot = candidatesRoot ?? HaoyuePaths.SkillsCandidatesDir;
+        _skillsRoot = skillsRoot ?? HaoyuePaths.SkillsDir;
     }
 
     /// <summary>
@@ -211,6 +214,63 @@ public sealed class ReflectionRunner
         catch (IOException) { }
         Directory.CreateDirectory(_labsRoot);
     }
+
+    // ---------------------------------------------------------------- approval (P3)
+
+    /// <summary>One candidate awaiting human review.</summary>
+    public sealed record CandidateSummary(
+        string Fingerprint, string Kind, string SkillName, string? CandidateDir,
+        string? Summary, DateTimeOffset CreatedAt);
+
+    /// <summary>Lists recorded candidates whose directories still exist on disk.</summary>
+    public IReadOnlyList<CandidateSummary> ListCandidates()
+    {
+        return _store.List(EvolutionStatus.Candidate)
+            .Where(r => r.CandidateDir is not null && Directory.Exists(r.CandidateDir))
+            .Select(r => new CandidateSummary(
+                r.Fingerprint, r.Kind, SkillNameOf(r.CandidateDir!),
+                r.CandidateDir, r.Summary, r.CreatedAt))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Applies a human decision. Adopt moves the candidate directory into the live
+    /// skills root (SkillManager hot-loads it on the next scan); reject deletes the
+    /// draft. Both close the fingerprint so the defect is never re-processed.
+    /// </summary>
+    public EvolutionRecord Decide(string fingerprint, bool adopt)
+    {
+        var record = _store.Get(fingerprint)
+            ?? throw new InvalidOperationException("未找到该进化指纹的记录");
+        if (record.Status != EvolutionStatus.Candidate)
+            throw new InvalidOperationException($"该记录状态为 {record.Status}，不可审批");
+
+        var dir = record.CandidateDir;
+        if (dir is not null && Directory.Exists(dir))
+        {
+            if (adopt)
+            {
+                var skillName = SkillNameOf(dir);
+                var destination = Path.Combine(_skillsRoot, skillName);
+                if (Directory.Exists(destination))
+                    throw new InvalidOperationException($"技能目录已存在，请手动处理：{destination}");
+                Directory.CreateDirectory(_skillsRoot);
+                Directory.Move(dir, destination);
+            }
+            else
+            {
+                try { Directory.Delete(dir, recursive: true); }
+                catch (IOException) { /* keep the dir; status is still closed */ }
+            }
+        }
+
+        return _store.Decide(fingerprint, adopt ? EvolutionStatus.Adopted : EvolutionStatus.Rejected)!;
+    }
+
+    /// <summary>Candidate dirs are named "&lt;skillName&gt;-&lt;fingerprint8&gt;".</summary>
+    private static string SkillNameOf(string candidateDir) =>
+        Path.GetFileName(candidateDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        [..^9]; // strip "-" + 8 fingerprint chars
 
     /// <summary>Default turn host: an isolated runtime sharing daemon infrastructure.</summary>
     private async Task<AgentTurnResult> RunIsolatedTurnAsync(

@@ -589,6 +589,71 @@ public sealed class DaemonServer : IAsyncDisposable
                         break;
                     }
 
+                    case "evolution.pending-list":
+                    {
+                        var candidates = new JsonArray();
+                        foreach (var candidate in _reflection.ListCandidates())
+                            candidates.Add(new JsonObject
+                            {
+                                ["fingerprint"] = candidate.Fingerprint,
+                                ["kind"] = candidate.Kind,
+                                ["skillName"] = candidate.SkillName,
+                                ["candidateDir"] = candidate.CandidateDir,
+                                ["summary"] = candidate.Summary,
+                                ["createdAt"] = candidate.CreatedAt.ToString("O"),
+                            });
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", candidates.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "evolution.decide":
+                    {
+                        var parameters = Params(request);
+                        var fingerprint = parameters["fingerprint"]?.GetValue<string>()?.Trim() ?? "";
+                        var decision = parameters["decision"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "";
+                        if (fingerprint.Length == 0 || decision is not ("adopt" or "reject"))
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                "params.fingerprint 与 params.decision（adopt|reject）均为必填", context.ConnectionCt).ConfigureAwait(false);
+                            break;
+                        }
+                        try
+                        {
+                            var record = _reflection.Decide(fingerprint, decision == "adopt");
+                            var decided = new JsonObject
+                            {
+                                ["fingerprint"] = record.Fingerprint,
+                                ["status"] = record.Status,
+                                ["updatedAt"] = record.UpdatedAt.ToString("O"),
+                            };
+                            await WriteAsync(context.Writer, context.WriterGate, id, "result", decided.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt).ConfigureAwait(false);
+                        }
+                        break;
+                    }
+
+                    case "feedback.turn":
+                    {
+                        // P4: explicit user feedback on a finished turn. Negative feedback
+                        // is journaled and becomes a defect report for the next reflection.
+                        var parameters = Params(request);
+                        var sessionId = parameters["sessionId"]?.GetValue<string>()?.Trim() ?? "";
+                        if (sessionId.Length == 0)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.sessionId 为必填", context.ConnectionCt).ConfigureAwait(false);
+                            break;
+                        }
+                        var kind = parameters["kind"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "negative";
+                        var reason = parameters["reason"]?.GetValue<string>()?.Trim();
+                        _runtime.Events.Publish(new UserFeedbackEvent(sessionId, kind, reason));
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            new JsonObject { ["recorded"] = true }.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
                     case "workspace.init":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
                             _ => Task.FromResult(_admin.InitializeWorkspace()), context.ConnectionCt).ConfigureAwait(false);
@@ -1381,6 +1446,23 @@ public sealed class DaemonServer : IAsyncDisposable
                     .ConfigureAwait(false);
                 continue;
             }
+            if (evt is EvolutionReflectionCompletedEvent reflected)
+            {
+                // Surface reflection outcomes so the desktop can raise its candidate
+                // review banner even when the reflection ran unattended (cron/manual).
+                var reflectedDetails = new JsonObject
+                {
+                    ["sessionId"] = reflected.SessionId,
+                    ["processed"] = reflected.Processed,
+                    ["candidates"] = reflected.Candidates,
+                    ["noAction"] = reflected.NoAction,
+                    ["skipped"] = reflected.Skipped,
+                };
+                if (!string.IsNullOrWhiteSpace(reflected.Error)) reflectedDetails["error"] = reflected.Error;
+                await BroadcastAsync(0, "evolution.reflected", "进化引擎反思完成", ct, reflectedDetails)
+                    .ConfigureAwait(false);
+                continue;
+            }
             if (evt is not ScheduledTaskCompletedEvent schedule) continue;
             var details = new JsonObject
             {
@@ -1959,7 +2041,8 @@ public sealed class DaemonServer : IAsyncDisposable
             "session.list", "session.search", "session.get", "session.update", "session.archive", "session.delete",
             "session.resume", "session.new",
             "agent.interrupted",
-            "evolution.inspect", "evolution.reflect",
+            "evolution.inspect", "evolution.reflect", "evolution.pending-list", "evolution.decide",
+            "feedback.turn",
             "lock.list", "factory.reset", "shutdown", "events.recent"),
     }.ToJsonString();
 

@@ -20,6 +20,7 @@ export type DaemonEventName =
   | 'bye'
   | 'schedule.updated'
   | 'schedule.upcoming'
+  | 'evolution.reflected'
   | 'mcp.updated'
   | 'turn.interrupted'
 

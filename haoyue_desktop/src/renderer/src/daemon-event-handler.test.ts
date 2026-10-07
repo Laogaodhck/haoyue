@@ -7,12 +7,16 @@ import { extractModelError, stripModelErrorBlock } from './app-helpers'
 import type { DaemonMessage } from '../../shared/ipc'
 import type { ProjectItem, ThreadItem } from './types'
 
-function createContext(): DaemonEventContext & { handleScheduleUpdated: ReturnType<typeof vi.fn> } {
+function createContext(): DaemonEventContext & {
+  handleScheduleUpdated: ReturnType<typeof vi.fn>
+  handleEvolutionReflected: ReturnType<typeof vi.fn>
+} {
   return {
     threads: ref([]) as Ref<ThreadItem[]>,
     activeThreadId: ref(''),
     projects: ref([]) as Ref<ProjectItem[]>,
     handleScheduleUpdated: vi.fn<() => void>(),
+    handleEvolutionReflected: vi.fn<() => void>(),
     scrollToBottom: vi.fn<(smooth?: boolean, force?: boolean) => Promise<void>>().mockResolvedValue(undefined),
     reloadThreadSession: vi.fn<(thread: ThreadItem, project?: ProjectItem) => Promise<void>>().mockResolvedValue(undefined),
     rememberFinishedRequest: vi.fn<(thread: ThreadItem, requestId: number) => void>(),
@@ -30,6 +34,23 @@ function scheduleUpdated(status: string, extra?: Record<string, unknown>): Daemo
     details: { taskId: 'task-1', name: '晨报', status, ...extra }
   }
 }
+
+describe('daemon event handler — evolution reflection broadcast', () => {
+  it('routes evolution.reflected to the candidate refresh callback', () => {
+    const context = createContext()
+    const handler = createDaemonEventHandler(context)
+
+    const event: DaemonMessage = {
+      id: 0,
+      event: 'evolution.reflected',
+      data: '进化引擎反思完成',
+      details: { sessionId: 's9', processed: 1, candidates: 1, noAction: 0, skipped: 0 }
+    }
+
+    expect(() => handler(event)).not.toThrow()
+    expect(context.handleEvolutionReflected).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('daemon event handler — schedule notifications', () => {
   let notify: ReturnType<typeof vi.fn>

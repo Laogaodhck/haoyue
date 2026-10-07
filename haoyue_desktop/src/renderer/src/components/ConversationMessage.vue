@@ -13,6 +13,7 @@ import {
   Pencil,
   RefreshCw,
   Split,
+  ThumbsDown,
   Wrench
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref } from 'vue'
@@ -47,6 +48,8 @@ const emit = defineEmits<{
   regenerate: [message: ChatMessage]
   /** Ask the model to continue a cut-off answer. */
   continueTurn: []
+  /** Mark this answer as unsatisfactory (evolution-engine feedback signal, P4). */
+  thumbsDown: [message: ChatMessage]
 }>()
 
 const thinkingOpen = ref(false)
@@ -54,6 +57,7 @@ const systemOpen = ref(false)
 const errorOpen = ref(false)
 const preview = ref<{ src: string; name: string } | null>(null)
 const isCopied = ref(false)
+const isDisliked = ref(false)
 let copyTimer: ReturnType<typeof setTimeout> | undefined
 
 onBeforeUnmount(() => {
@@ -337,6 +341,17 @@ function openFileLocation(path?: string): void {
           >
             <Check v-if="isCopied" :size="13" class="action-icon success-icon" />
             <Copy v-else :size="13" class="action-icon" />
+          </button>
+          <button
+            type="button"
+            class="action-btn"
+            :class="{ success: isDisliked }"
+            :disabled="isDisliked"
+            :title="isDisliked ? '已记录反馈，将进入进化引擎反思' : '回答不满意？标记反馈给进化引擎'"
+            aria-label="标记不满意"
+            @click="emit('thumbsDown', message); isDisliked = true"
+          >
+            <ThumbsDown :size="13" class="action-icon" />
           </button>
           <button
             type="button"

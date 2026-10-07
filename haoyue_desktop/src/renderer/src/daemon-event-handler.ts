@@ -9,6 +9,7 @@ export interface DaemonEventContext {
   activeThreadId: Ref<string>
   projects: Ref<ProjectItem[]>
   handleScheduleUpdated: () => Promise<void> | void
+  handleEvolutionReflected: () => Promise<void> | void
   scrollToBottom: (smooth?: boolean, force?: boolean) => Promise<void>
   reloadThreadSession: (thread: ThreadItem, project?: ProjectItem) => Promise<void>
   rememberFinishedRequest: (thread: ThreadItem, requestId: number) => void
@@ -23,6 +24,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
     activeThreadId,
     projects,
     handleScheduleUpdated,
+    handleEvolutionReflected,
     scrollToBottom,
     reloadThreadSession,
     rememberFinishedRequest,
@@ -98,6 +100,12 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
       const sessionId = typeof event.details?.sessionId === 'string' ? event.details.sessionId : ''
       const thread = threads.value.find((item) => item.sessionId === sessionId)
       if (thread) markThreadInterrupted(thread, reloadThreadSession)
+      return
+    }
+    if (event.event === 'evolution.reflected') {
+      // A reflection pass finished (possibly unattended). Refresh the candidate
+      // review banner; notify only when new candidates actually await review.
+      void handleEvolutionReflected()
       return
     }
     if (event.event === 'schedule.updated') {

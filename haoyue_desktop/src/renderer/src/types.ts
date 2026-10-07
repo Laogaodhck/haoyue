@@ -146,4 +146,14 @@ export interface ThreadItem {
   undoableFiles?: string[]
 }
 
+/** One evolution-engine skill candidate awaiting human review (P3). */
+export interface EvolutionCandidate {
+  fingerprint: string
+  kind: string
+  skillName: string
+  candidateDir?: string
+  summary?: string
+  createdAt?: string
+}
+
 

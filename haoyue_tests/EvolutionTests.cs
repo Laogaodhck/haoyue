@@ -47,10 +47,10 @@ public sealed class EvolutionTests : IDisposable
         Append(new TurnCompletedEvent(sessionId, false, null), start.AddMinutes(5));
     }
 
-    private ReflectionRunner NewRunner(EvolutionStore store, ReflectionTurnRunner? runner = null) => new(
+    private ReflectionRunner NewRunner(EvolutionStore store, ReflectionTurnRunner? runner = null, string? skillsRoot = null) => new(
         _runtime, new FileLockCoordinator(), new LlmHttpFactory(),
         new CircuitBreaker(new RetryConfig()), store, runner,
-        labsRoot: _labs, candidatesRoot: _candidates);
+        labsRoot: _labs, candidatesRoot: _candidates, skillsRoot: skillsRoot);
 
     // ---------------------------------------------------------------- store
 
@@ -262,6 +262,128 @@ public sealed class EvolutionTests : IDisposable
     public void ReflectionEvent_IsJournaled()
     {
         Assert.True(EventJournal.IsPersistent(new EvolutionReflectionCompletedEvent("s1", 1, 1, 0, 0)));
+    }
+
+    // ---------------------------------------------------------------- approval (P3)
+
+    private async Task<string> SeedCandidateAsync(string skillName = "fix-bash-retry")
+    {
+        SeedBashFailureCluster();
+        var store = NewStore();
+        var runner = NewRunner(store, (workspace, session, prompt, ct) =>
+        {
+            var draft = Path.Combine(_labs, skillName);
+            Directory.CreateDirectory(draft);
+            File.WriteAllText(Path.Combine(draft, "skill.yaml"),
+                $"name: {skillName}\ndescription: \"x\"\ntriggers:\n  - \"bash 失败\"\nalways-listed: false\n");
+            File.WriteAllText(Path.Combine(draft, "prompt.txt"), "内容");
+            File.WriteAllText(Path.Combine(draft, "rationale.md"), "缺陷来源。");
+            return Task.FromResult(new AgentTurnResult(
+                $"```json\n{{\"action\":\"new-skill\",\"skillName\":\"{skillName}\",\"summary\":\"新增技能\"}}\n```",
+                false, null));
+        });
+        await runner.RunAsync(CancellationToken.None);
+        return store.List(EvolutionStatus.Candidate).Single().Fingerprint;
+    }
+
+    [Fact]
+    public async Task Decide_Reject_DeletesDraft_AndClosesFingerprint()
+    {
+        var fingerprint = await SeedCandidateAsync();
+        var runner = NewRunner(NewStore());
+        var dir = runner.ListCandidates().Single().CandidateDir!;
+        Assert.True(Directory.Exists(dir));
+
+        var record = runner.Decide(fingerprint, adopt: false);
+
+        Assert.Equal(EvolutionStatus.Rejected, record.Status);
+        Assert.False(Directory.Exists(dir));
+        Assert.Empty(runner.ListCandidates());
+        Assert.Throws<InvalidOperationException>(() => runner.Decide(fingerprint, adopt: true));
+    }
+
+    [Fact]
+    public async Task Decide_Adopt_MovesDraftIntoSkillsRoot()
+    {
+        var fingerprint = await SeedCandidateAsync("my-evolved-skill");
+        var skillsRoot = Path.Combine(_dir, "skills-root");
+        var runner = NewRunner(NewStore(), skillsRoot: skillsRoot);
+
+        var record = runner.Decide(fingerprint, adopt: true);
+
+        Assert.Equal(EvolutionStatus.Adopted, record.Status);
+        Assert.True(Directory.Exists(Path.Combine(skillsRoot, "my-evolved-skill")));
+        Assert.True(File.Exists(Path.Combine(skillsRoot, "my-evolved-skill", "skill.yaml")));
+        Assert.Empty(runner.ListCandidates());
+    }
+
+    [Fact]
+    public async Task Decide_Adopt_IntoExistingSkillDirectory_FailsWithoutDataLoss()
+    {
+        var fingerprint = await SeedCandidateAsync("existing-skill");
+        var skillsRoot = Path.Combine(_dir, "skills-root");
+        Directory.CreateDirectory(Path.Combine(skillsRoot, "existing-skill"));
+        File.WriteAllText(Path.Combine(skillsRoot, "existing-skill", "prompt.txt"), "原有技能");
+        var runner = NewRunner(NewStore(), skillsRoot: skillsRoot);
+        var candidateDir = runner.ListCandidates().Single().CandidateDir!;
+
+        Assert.Throws<InvalidOperationException>(() => runner.Decide(fingerprint, adopt: true));
+
+        // Candidate draft must survive a failed adoption.
+        Assert.True(Directory.Exists(candidateDir));
+        Assert.Equal(EvolutionStatus.Candidate, NewStore().Get(fingerprint)!.Status);
+    }
+
+    // ---------------------------------------------------------------- feedback (P4)
+
+    [Fact]
+    public void Aggregate_NegativeFeedback_BecomesItsOwnDefectReport()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-5);
+        Append(new UserFeedbackEvent("s1", "negative", "方向错了"), start);
+        Append(new UserFeedbackEvent("s1", "negative", "又错了"), start.AddMinutes(1));
+        Append(new UserFeedbackEvent("s1", "positive"), start.AddMinutes(2)); // not a defect
+
+        var reports = new DefectAggregator(_runtime.Database).Aggregate();
+
+        Assert.Equal(2, reports.Count);
+        Assert.All(reports, r =>
+        {
+            Assert.Equal(DefectKind.UserNegativeFeedback, r.Kind);
+            Assert.Equal("s1", r.SessionId);
+            Assert.Equal(1, r.Occurrences);
+        });
+        Assert.NotEqual(reports[0].Fingerprint, reports[1].Fingerprint); // distinct per event
+        Assert.Contains("方向错了", reports[0].ErrorSummary);
+        Assert.DoesNotContain("positive", string.Join("|", reports.Select(r => r.ErrorSummary)));
+    }
+
+    [Fact]
+    public async Task NegativeFeedback_Defect_IsReflectedOnAndClosedByNoAction()
+    {
+        Append(new UserFeedbackEvent("s1", "negative", "答非所问"), DateTimeOffset.UtcNow.AddMinutes(-5));
+        var store = NewStore();
+        var runner = NewRunner(store, (workspace, session, prompt, ct) =>
+        {
+            Assert.Contains("答非所问", prompt); // feedback reason reaches the reflection prompt
+            return Task.FromResult(new AgentTurnResult(
+                "```json\n{\"action\":\"no-action\",\"summary\":\"一次性失误\"}\n```", false, null));
+        });
+
+        var result = await runner.RunAsync(CancellationToken.None);
+
+        Assert.Equal(1, result.NoAction);
+        Assert.Empty(await Task.FromResult(runner.ListCandidates()));
+        // The record's session id is the reflection turn itself (for aggregator
+        // exclusion); the defect's origin session (s1) only appears in the prompt.
+        var record = store.List(EvolutionStatus.NoAction).Single();
+        Assert.Equal(result.SessionId, record.SessionId);
+    }
+
+    [Fact]
+    public void FeedbackEvent_IsJournaled()
+    {
+        Assert.True(EventJournal.IsPersistent(new UserFeedbackEvent("s1", "negative")));
     }
 
     public void Dispose()

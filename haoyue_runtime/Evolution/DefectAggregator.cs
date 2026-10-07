@@ -18,6 +18,9 @@ public enum DefectKind
     /// <summary>The agent tried to load a skill that does not exist, or repeatedly produced
     /// malformed tool arguments — a capability gap rather than a one-off mistake.</summary>
     CapabilityGap,
+    /// <summary>The user explicitly marked a finished turn as unsatisfactory (P4 thumbs-down).
+    /// Each feedback event becomes its own report so reflection can study the session.</summary>
+    UserNegativeFeedback,
 }
 
 /// <summary>
@@ -77,6 +80,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
         var verificationRuns = new List<List<(DateTimeOffset Ts, VerificationCompletedEvent Event)>>();
         var currentVerificationRun = new List<(DateTimeOffset Ts, VerificationCompletedEvent Event)>();
         var capabilityGaps = new Dictionary<string, List<(DateTimeOffset Ts, string? Session)>>();
+        var feedbackReports = new List<DefectReport>();
 
         foreach (var persisted in journal)
         {
@@ -137,6 +141,26 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                         currentVerificationRun.Add((ts, verification));
                     }
                     break;
+
+                case nameof(UserFeedbackEvent):
+                    // P4: one thumbs-down is one defect report — no threshold. The
+                    // fingerprint embeds the journal timestamp so repeated feedback on
+                    // the same session stays distinct; reflection reads the transcript.
+                    if (TryDeserialize<UserFeedbackEvent>(persisted.Payload) is not { } feedback) break;
+                    if (!string.Equals(feedback.Kind, "negative", StringComparison.OrdinalIgnoreCase)) break;
+                    feedbackReports.Add(new DefectReport(
+                        Fingerprint(DefectKind.UserNegativeFeedback, feedback.SessionId,
+                            persisted.Timestamp),
+                        DefectKind.UserNegativeFeedback,
+                        ts,
+                        ts,
+                        1,
+                        null,
+                        string.IsNullOrWhiteSpace(feedback.Reason)
+                            ? "用户标记该回合不满意"
+                            : $"用户标记该回合不满意：{feedback.Reason.Trim()}",
+                        feedback.SessionId));
+                    break;
             }
         }
 
@@ -148,6 +172,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
         reports.AddRange(BuildToolClusters(toolFailures));
         reports.AddRange(BuildVerificationStruggles(verificationRuns));
         reports.AddRange(BuildCapabilityGaps(capabilityGaps));
+        reports.AddRange(feedbackReports);
         return reports.OrderBy(r => r.FirstSeen).ToList();
     }
 

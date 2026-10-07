@@ -129,3 +129,9 @@ public sealed record EvolutionReflectionCompletedEvent(
     int Skipped,
     string? Error = null) : RuntimeEvent;
 
+/// <summary>Explicit user feedback on a finished turn (P4 thumbs-down). The defect
+/// aggregator turns each negative feedback into its own defect report so the next
+/// reflection pass can analyze the session transcript.</summary>
+public sealed record UserFeedbackEvent(
+    string SessionId, string Kind, string? Reason = null) : RuntimeEvent;
+

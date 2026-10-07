@@ -18,7 +18,7 @@ const levels = [
   { value: ReasoningLevel.High, label: '高(high)', extended: false },
   { value: ReasoningLevel.Max, label: '最大(max)', extended: false },
   { value: ReasoningLevel.XHigh, label: '极高(xhigh)', extended: true },
-  { value: ReasoningLevel.Ultra, label: '超级(ultra)', extended: true }
+  { value: ReasoningLevel.Ultra, label: '超级（ultra）', extended: true }
 ] as const
 
 const labels: Record<ReasoningLevel, string> = {
@@ -28,7 +28,7 @@ const labels: Record<ReasoningLevel, string> = {
   [ReasoningLevel.High]: '高(high)',
   [ReasoningLevel.Max]: '最大(max)',
   [ReasoningLevel.XHigh]: '极高(xhigh)',
-  [ReasoningLevel.Ultra]: '超级(ultra)'
+  [ReasoningLevel.Ultra]: '超级（ultra）'
 }
 
 const root = ref<HTMLElement | null>(null)
@@ -185,7 +185,7 @@ onBeforeUnmount(removeListeners)
 
           <p class="reasoning-hint">
             <Info :size="14" />
-            <span>极高(xhigh)和超级(ultra)为扩展模式，部分模型可能不支持，请求时可能自动转换为最大(max)模式。</span>
+            <span>极高（xhigh）与超级（ultra）为扩展模式，部分模型可能不支持，请求时可能自动转换为最大（max）模式。</span>
           </p>
         </section>
       </Transition>

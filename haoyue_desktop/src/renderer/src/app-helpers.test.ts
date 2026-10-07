@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyModelError, extractModelError, formatTokenCount, normalizePath, pathName, samePath, stripModelErrorBlock } from './app-helpers'
+import { classifyModelError, extractModelError, formatTokenCount, messageMatches, normalizePath, pathName, samePath, stripModelErrorBlock } from './app-helpers'
 
 describe('formatTokenCount', () => {
   it('formats millions with M suffix correctly without unnecessary trailing zeros', () => {
@@ -151,5 +151,28 @@ describe('extractModelError / stripModelErrorBlock', () => {
   it('keeps earlier error blocks when a newer turn appended one', () => {
     const doubled = block + '\n\n后续正文\n\n模型调用失败：\n```text\n    boom\n```'
     expect(stripModelErrorBlock(doubled)).toBe('半截回答\n\n后续正文')
+  })
+})
+
+describe('messageMatches', () => {
+  const base = { id: 'm1', role: 'assistant' as const, content: '', createdAt: 1 }
+
+  it('searches the answer text', () => {
+    expect(messageMatches({ ...base, content: '读取了 src/main.ts' }, 'main.ts')).toBe(true)
+  })
+
+  it('also searches thinking content (H10)', () => {
+    expect(messageMatches({ ...base, thinking: '先查 ContextPlanner 的预算逻辑' }, '预算')).toBe(true)
+  })
+
+  it('also searches tool names and details (H10)', () => {
+    expect(messageMatches({
+      ...base,
+      tools: [{ id: 't1', name: 'read_file', detail: 'haoyue_runtime/Agents/Agent.cs', state: 'done' }]
+    }, 'agent.cs')).toBe(true)
+    expect(messageMatches({
+      ...base,
+      tools: [{ id: 't1', name: 'bash', detail: 'dotnet test', state: 'done' }]
+    }, 'read_file')).toBe(false)
   })
 })

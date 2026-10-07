@@ -52,9 +52,24 @@ export function createThreadActions(context: ThreadActionsContext) {
     selectedProjectId.value = projectId ?? ''
   }
 
+  /**
+   * H3: a silently swallowed action reads as a broken button. When any target task
+   * is still running, surface one actionable notification instead of returning quietly.
+   */
+  function guardNotRunning(targets: ThreadItem[], action: string): boolean {
+    const running = targets.filter((thread) => thread.running)
+    if (running.length === 0) return true
+    const subject = running.length === 1
+      ? `“${running[0]!.title}”`
+      : `${running.length} 个运行中的任务`
+    void window.haoyue?.notify?.('操作无法执行', `${subject}正在运行中，请先停止后再${action}。`)
+    return false
+  }
+
   async function archiveTask(thread: ThreadItem): Promise<void> {
     const project = projects.value.find((item) => item.id === thread.projectId)
-    if ((thread.projectId && !project) || thread.running) return
+    if (thread.projectId && !project) return
+    if (!guardNotRunning([thread], '归档')) return
     if (thread.sessionId) {
       await window.haoyue.daemon.request('session.archive', {
         id: thread.sessionId,
@@ -71,7 +86,8 @@ export function createThreadActions(context: ThreadActionsContext) {
 
   async function restoreTask(thread: ThreadItem): Promise<void> {
     const project = projects.value.find((item) => item.id === thread.projectId)
-    if ((thread.projectId && !project) || !thread.sessionId || thread.running) return
+    if ((thread.projectId && !project) || !thread.sessionId) return
+    if (!guardNotRunning([thread], '恢复')) return
     await window.haoyue.daemon.request('session.archive', {
       id: thread.sessionId,
       ...sessionScope(thread, project),
@@ -101,7 +117,7 @@ async function applyBatch(targets: ThreadItem[], apply: (thread: ThreadItem) => 
 async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     if (!project.loaded) await refreshProjectSessions(project).catch(() => undefined)
     const targets = threads.value.filter((thread) => thread.projectId === project.id && !thread.archived)
-    if (targets.length === 0 || targets.some((thread) => thread.running)) return
+    if (targets.length === 0 || !guardNotRunning(targets, '批量归档')) return
     if (!await confirmAction({
       title: '归档项目任务',
       message: `归档项目“${project.name}”的全部 ${targets.length} 个任务？`,
@@ -126,7 +142,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
 
   async function archiveGlobalTasks(): Promise<void> {
     const targets = threads.value.filter((thread) => !thread.projectId && !thread.archived)
-    if (targets.length === 0 || targets.some((thread) => thread.running)) return
+    if (targets.length === 0 || !guardNotRunning(targets, '批量归档')) return
     if (!await confirmAction({
       title: '归档任务',
       message: `归档全部 ${targets.length} 个任务？`,
@@ -151,7 +167,8 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
 
   async function deleteTask(thread: ThreadItem): Promise<void> {
     const project = projects.value.find((item) => item.id === thread.projectId)
-    if ((thread.projectId && !project) || thread.running) return
+    if (thread.projectId && !project) return
+    if (!guardNotRunning([thread], '删除')) return
     if (!await confirmAction({
       title: '删除任务',
       message: `永久删除任务“${thread.title}”？此操作无法撤销。`,
@@ -171,7 +188,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
 
   async function deleteGlobalTasks(): Promise<void> {
     const targets = threads.value.filter((thread) => !thread.projectId)
-    if (targets.length === 0 || targets.some((thread) => thread.running)) return
+    if (targets.length === 0 || !guardNotRunning(targets, '批量删除')) return
     if (!await confirmAction({
       title: '删除全部任务',
       message: `永久删除全部 ${targets.length} 个任务？此操作无法撤销。`,
@@ -193,7 +210,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
   async function deleteProjectTasks(project: ProjectItem): Promise<void> {
     if (!project.loaded) await refreshProjectSessions(project).catch(() => undefined)
     const targets = threads.value.filter((thread) => thread.projectId === project.id)
-    if (targets.length === 0 || targets.some((thread) => thread.running)) return
+    if (targets.length === 0 || !guardNotRunning(targets, '批量删除')) return
     if (!await confirmAction({
       title: '删除项目全部任务',
       message: `永久删除项目“${project.name}”的全部 ${targets.length} 个任务？此操作无法撤销。`,
@@ -217,7 +234,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
 
   async function deleteArchivedTasks(): Promise<void> {
     const targets = threads.value.filter((thread) => thread.archived)
-    if (targets.length === 0 || targets.some((thread) => thread.running)) return
+    if (targets.length === 0 || !guardNotRunning(targets, '批量删除')) return
     if (!await confirmAction({
       title: '清空已归档任务',
       message: `永久删除全部 ${targets.length} 个已归档任务？此操作无法撤销。`,
@@ -245,7 +262,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
   }
 
   async function deleteProject(project: ProjectItem): Promise<void> {
-    if (threads.value.some((thread) => thread.projectId === project.id && thread.running)) return
+    if (!guardNotRunning(threads.value.filter((thread) => thread.projectId === project.id), '删除项目')) return
     if (!daemonState.value.connected) {
       await reconnectDaemon()
       if (!daemonState.value.connected) return
@@ -257,7 +274,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
       return
     }
     const targets = threads.value.filter((thread) => thread.projectId === project.id)
-    if (targets.some((thread) => thread.running)) return
+    if (!guardNotRunning(targets, '删除项目')) return
     if (!await confirmAction({
       title: '删除项目',
       message: `删除项目“${project.name}”并永久删除其下全部 ${targets.length} 个会话？本地项目文件不会删除，此操作无法撤销。`,

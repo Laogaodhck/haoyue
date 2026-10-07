@@ -885,7 +885,14 @@ function applyInferencePreset(preset: InferencePreset): void {
   notice.value = `已应用预设「${preset.name}」，保存后生效`
 }
 
-function removeInferencePreset(preset: InferencePreset): void {
+async function removeInferencePreset(preset: InferencePreset): Promise<void> {
+  // H21: preset deletion is irreversible (name can be recreated, tuned values cannot).
+  if (!await confirmAction({
+    title: '删除推理预设',
+    message: `删除预设「${preset.name}」？此操作无法撤销。`,
+    confirmLabel: '删除',
+    danger: true
+  })) return
   inferencePresets.value = inferencePresets.value.filter((entry) => entry !== preset)
   persistInferencePresets()
 }

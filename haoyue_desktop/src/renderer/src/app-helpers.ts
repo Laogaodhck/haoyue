@@ -244,7 +244,13 @@ export function sessionScope(thread: ThreadItem, project?: ProjectItem): Record<
 export function messageMatches(message: ChatMessage, query: string): boolean {
   const normalized = query.trim().toLocaleLowerCase()
   if (!normalized) return true
-  return message.content.toLocaleLowerCase().includes(normalized)
+  // H10: the search covers the full turn — thinking and tool results carry most of
+  // the facts in a coding session; searching the answer text only hides them.
+  if (message.content.toLocaleLowerCase().includes(normalized)) return true
+  if (message.thinking?.toLocaleLowerCase().includes(normalized)) return true
+  return (message.tools ?? []).some((tool) =>
+    tool.name.toLocaleLowerCase().includes(normalized)
+    || (tool.detail ?? '').toLocaleLowerCase().includes(normalized))
 }
 
 export function phaseLabel(status: string): string {

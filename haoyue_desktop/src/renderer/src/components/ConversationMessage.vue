@@ -68,7 +68,7 @@ async function copyContent(): Promise<void> {
     if (copyTimer) clearTimeout(copyTimer)
     copyTimer = setTimeout(() => {
       isCopied.value = false
-    }, 2000)
+    }, 1500) // H20: unified copy feedback duration (MarkdownMessage uses the same)
   } catch (err) {
     console.error('Failed to copy to clipboard', err)
   }
@@ -154,7 +154,7 @@ function openFileLocation(path?: string): void {
 </script>
 
 <template>
-  <article v-if="!message.content?.startsWith('>>> [output truncated]')" class="message" :class="[`message-${message.role}`, { dimmed }]">
+  <article :data-message-id="message.id" v-if="!message.content?.startsWith('>>> [output truncated]')" class="message" :class="[`message-${message.role}`, { dimmed }]">
     <!-- user: either a real message or a system-injected card -->
     <template v-if="message.role === 'user'">
       <div v-if="systemKind" class="system-card" :class="`system-${systemKind}`">
@@ -324,7 +324,7 @@ function openFileLocation(path?: string): void {
       <footer
         v-if="showFooter && !streaming && message.content"
         class="assistant-footer"
-        :class="{ active: isCopied }"
+        :class="{ active: isCopied, always: showFooter }"
       >
         <div class="assistant-actions">
           <button
@@ -497,6 +497,8 @@ function openFileLocation(path?: string): void {
 .assistant-message:hover .assistant-footer,
 .assistant-footer:focus-within,
 .assistant-footer.active,
+/* H7: the last bubble of the finished turn keeps its actions visible without hover. */
+.assistant-footer.always,
 .message:hover .user-footer,
 .user-message-stack:hover .user-footer,
 .user-footer:focus-within,

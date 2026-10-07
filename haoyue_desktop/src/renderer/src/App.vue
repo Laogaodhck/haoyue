@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import {
+  ArrowDown,
   Braces,
   Bug,
+  ChevronDown,
+  ChevronUp,
   Circle,
   CornerDownLeft,
   Folder,
@@ -152,8 +155,79 @@ const conversationQuery = ref('')
 const messageHeights = new Map<string, number>()
 const conversationScrollTop = ref(0)
 const conversationViewportHeight = ref(600)
-/** Per-task composer drafts, kept across task switches. */
-const composerDrafts = new Map<string, string>()
+/** Per-task composer drafts (text + attachments), kept across task switches (H5). */
+interface ComposerDraft { text: string; images: ImageAttachment[]; files: FileAttachment[] }
+const composerDrafts = new Map<string, ComposerDraft>()
+
+// ---------------------------------------------------------------- H9/H10/H11/H19/H25
+const conversationSearchInput = ref<HTMLInputElement | null>(null)
+const sidebarPanel = ref<InstanceType<typeof Sidebar> | null>(null)
+const queuedHintDismissed = ref(false)
+
+/** H10: match count + prev/next navigation across content/thinking/tool results. */
+const searchMatches = computed(() => {
+  const query = conversationQuery.value.trim()
+  if (!query || !activeThread.value) return []
+  return activeThread.value.messages.filter((message) => messageMatches(message, query))
+})
+const searchCursor = ref(0)
+watch(() => conversationQuery.value, () => { searchCursor.value = 0 })
+
+function jumpSearch(delta: number): void {
+  const matches = searchMatches.value
+  if (matches.length === 0) return
+  searchCursor.value = (searchCursor.value + delta + matches.length) % matches.length
+  const target = matches[searchCursor.value]
+  if (!target) return
+  document.querySelector(`[data-message-id="${CSS.escape(target.id)}"]`)
+    ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
+/** H9: floating "back to latest" when the user scrolled up during streaming. */
+async function jumpToLatest(): Promise<void> {
+  autoFollowConversation.value = true
+  await scrollToBottom(true, true)
+}
+
+/** H19: long phases (compaction/verify) show elapsed seconds so they don't read as frozen. */
+const phaseStartedAt = ref(0)
+const phaseElapsedSeconds = ref(0)
+let phaseTimer: ReturnType<typeof setInterval> | undefined
+watch(() => activeThread.value?.phase, (phase) => {
+  if (phaseTimer) { clearInterval(phaseTimer); phaseTimer = undefined }
+  if (!phase) { phaseStartedAt.value = 0; phaseElapsedSeconds.value = 0; return }
+  phaseStartedAt.value = Date.now()
+  phaseElapsedSeconds.value = 0
+  phaseTimer = setInterval(() => {
+    phaseElapsedSeconds.value = Math.floor((Date.now() - phaseStartedAt.value) / 1000)
+  }, 1000)
+})
+
+/** H11: global keyboard flow — Ctrl+K task search, Ctrl+F conversation search, Ctrl+. stop. */
+function handleGlobalShortcuts(event: KeyboardEvent): void {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+  const key = event.key.toLowerCase()
+  if (key === 'k') {
+    event.preventDefault()
+    sidebarOpen.value = true
+    void nextTick(() => sidebarPanel.value?.focusSearch())
+  } else if (key === 'f') {
+    event.preventDefault()
+    void nextTick(() => conversationSearchInput.value?.focus())
+  } else if (key === '.') {
+    if (activeThread.value?.running) {
+      event.preventDefault()
+      stopTurn()
+    }
+  }
+}
+
+function saveComposerDraft(threadId?: string): void {
+  if (threadId && composer.value) {
+    const state = composer.value.getState()
+    composerDrafts.set(threadId, { text: state.value, images: state.images, files: state.files })
+  }
+}
 const conversationSelectionToken = { value: 0 }
 
 const activeThread = computed(() => threads.value.find((thread) => thread.id === activeThreadId.value))
@@ -176,8 +250,12 @@ const globalTaskActive = computed(() => activeThread.value ? !activeThread.value
 const composerCaption = computed(() => {
 
   if (conversationLoading.value) return '正在读取会话历史…'
+  // H24: surface the offline state before the user hits send, not after.
+  if (!daemonState.value.connected) return reconnecting.value ? '正在重连 Haoyue Runtime…' : 'Haoyue Runtime 未连接，请点击右上角按钮重连后再发送。'
   if (!activeThread.value) return '选择一个任务，或新建任务开始。'
   if (activeThread.value.archived) return '此任务已归档，发送消息后将自动恢复并继续对话。'
+  // H13: an empty task has no stats yet — zero noise instead of "0 轮 · 0 步 | 缓存命中 — |…"。
+  if (activeThread.value.messages.length === 0) return '新任务：直接输入开始对话。'
   const stats = activeThread.value.stats
   const number = (value?: number): string =>
     typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '—'
@@ -488,11 +566,22 @@ async function handleRebuildConfig(): Promise<void> {
   }
 }
 
+// H24: reconnect success deserves its own feedback — previously the UI just silently
+// returned to normal and users could not tell whether their running tasks survived.
+let hasBeenConnected = false
 function handleDaemonState(state: DaemonState): void {
+  const wasConnected = daemonState.value.connected
   daemonState.value = state
   if (state.connected) {
     automaticReconnectPaused = false
     reconnectPrompt.value = null
+    if (wasConnected === false && hasBeenConnected) {
+      const runningCount = threads.value.filter((thread) => thread.running).length
+      void window.haoyue?.notify?.(
+        '已重新连接',
+        runningCount > 0 ? `连接已恢复，${runningCount} 个运行中的任务已恢复跟踪。` : '连接已恢复。')
+    }
+    hasBeenConnected = true
     return
   }
   if (conversationLoading.value) {
@@ -562,7 +651,8 @@ async function openWorkspace(): Promise<void> {
   const path = await window.haoyue.selectWorkspace()
   if (!path) return
   if (isForbiddenProjectPath(path, appInfo.value.userProfilePath)) {
-    window.alert('不能把用户主目录或 Haoyue 数据目录添加为项目，请选择具体的项目文件夹。')
+    // H14: window.alert is disabled in this Electron build — use the notification channel.
+    void window.haoyue?.notify?.('无法添加项目', '不能把用户主目录或 Haoyue 数据目录添加为项目，请选择具体的项目文件夹。')
     return
   }
   const project = await saveProject(ensureProject(path))
@@ -646,7 +736,7 @@ function newTask(projectId?: string): void {
     return
   }
   // 先把当前输入框内容归档为旧任务草稿，再清空输入框，避免文字归属到新任务。
-  if (current && composer.value) composerDrafts.set(current.id, composer.value.getValue())
+  saveComposerDraft(current?.id)
   composer.value?.setValue('')
   const thread: ThreadItem = {
     id: makeId(),
@@ -882,8 +972,7 @@ async function reloadThreadSession(thread: ThreadItem, project?: ProjectItem): P
 async function selectThread(id: string): Promise<void> {
   const thread = threads.value.find((item) => item.id === id)
   if (!thread) return
-  if (activeThread.value && composer.value)
-    composerDrafts.set(activeThread.value.id, composer.value.getValue())
+  if (activeThread.value) saveComposerDraft(activeThread.value.id)
   const project = projects.value.find((item) => item.id === thread.projectId)
   if (thread.projectId && !project) return
   const selectionToken = ++conversationSelectionToken.value
@@ -935,8 +1024,10 @@ async function selectThread(id: string): Promise<void> {
   }
   if (selectionToken !== conversationSelectionToken.value) return
   autoFollowConversation.value = true
-  // 无条件按目标任务的草稿回填（无草稿则清空），避免上一个任务的输入串扰到当前任务。
-  composer.value?.setValue(composerDrafts.get(thread.id) ?? '')
+  // 无条件按目标任务的草稿回填（无草稿则清空），附件与文字一起恢复，避免上一个任务
+  // 的输入串扰到当前任务，也不再出现「切个任务附件就没了」的静默丢失（H5）。
+  const draft = composerDrafts.get(thread.id)
+  composer.value?.populate(draft?.text ?? '', draft?.images, draft?.files)
   await scrollToBottom(false, true)
 }
 
@@ -1095,10 +1186,19 @@ async function regenerateMessage(message: ChatMessage): Promise<void> {
 }
 
 // 归档任务收到新消息时自动恢复会话（等价于手动「恢复任务」），失败时返回 false 并中止发送。
+// H6：首次恢复弹轻量确认（归档语义不再被无感破坏）；用户确认过一次后记住选择，
+// 之后的发送直接恢复，不再重复打扰（localStorage: haoyue.autoResumeArchived）。
+const AUTO_RESUME_KEY = 'haoyue.autoResumeArchived'
 async function resumeThreadIfArchived(thread: ThreadItem): Promise<boolean> {
   if (!thread.archived) return true
   const project = projects.value.find((item) => item.id === thread.projectId)
   if ((thread.projectId && !project) || !thread.sessionId) return false
+  if (localStorage.getItem(AUTO_RESUME_KEY) !== '1' && !await confirmAction({
+    title: '恢复已归档任务',
+    message: '该任务已归档。发送消息将自动恢复任务并继续对话，是否继续？',
+    confirmLabel: '恢复并继续'
+  })) return false
+  localStorage.setItem(AUTO_RESUME_KEY, '1')
   try {
     await window.haoyue.daemon.request('session.archive', {
       id: thread.sessionId,
@@ -1350,6 +1450,25 @@ async function saveTaskTitle(title: string): Promise<void> {
   taskSettingsThreadId.value = ''
 }
 
+// H4: inline rename from the sidebar — optimistic update with rollback on failure.
+async function renameTaskInline(thread: ThreadItem, title: string): Promise<void> {
+  const project = projects.value.find((item) => item.id === thread.projectId)
+  if (thread.projectId && !project) return
+  const previous = thread.title
+  thread.title = title
+  if (!thread.sessionId) return
+  try {
+    await window.haoyue.daemon.request('session.update', {
+      id: thread.sessionId,
+      ...sessionScope(thread, project),
+      title
+    })
+  } catch (error) {
+    thread.title = previous
+    void window.haoyue?.notify?.('重命名失败', error instanceof Error ? error.message : String(error))
+  }
+}
+
 const {
   chooseAfterRemoval,
   archiveTask,
@@ -1496,6 +1615,7 @@ onMounted(async () => {
   await runReconnectCycle(true)
   measureConversationViewport()
   window.addEventListener('resize', measureConversationViewport)
+  window.addEventListener('keydown', handleGlobalShortcuts)
   if (!daemonState.value.connected) projects.value.forEach((project) => { project.loaded = true })
   if (activeThread.value) composer.value?.focus()
 })
@@ -1503,6 +1623,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   appReadyForRecovery = false
   window.removeEventListener('resize', measureConversationViewport)
+  window.removeEventListener('keydown', handleGlobalShortcuts)
+  if (phaseTimer) clearInterval(phaseTimer)
   unsubscribeEvent?.()
   unsubscribeState?.()
 })
@@ -1521,9 +1643,10 @@ watch(theme, applyTheme)
 
     <div class="app-body" v-show="activePage === 'main'" :class="{ 'sidebar-collapsed': !sidebarOpen }">
       <Transition name="sidebar-slide">
-        <Sidebar v-if="sidebarOpen" :projects="projects" :threads="threads" :active-thread-id="activeThreadId"
+        <Sidebar v-if="sidebarOpen" ref="sidebarPanel" :projects="projects" :threads="threads" :active-thread-id="activeThreadId"
           :active-project-id="selectedProjectId" :version="appInfo.version" @new-task="newTask"
           @open-workspace="openWorkspace" @select-thread="selectThread" @task-settings="openTaskSettings"
+          @rename-task="renameTaskInline"
           @archive-task="archiveTask" @restore-task="restoreTask" @delete-task="deleteTask"
           @delete-project="deleteProject" @archive-project-tasks="archiveProjectTasks"
           @initialize-project-workspace="initializeProjectWorkspace" @open-project-properties="openProjectProperties"
@@ -1544,13 +1667,26 @@ watch(theme, applyTheme)
               <strong>{{ conversationTitle }}</strong>
               <!--  <small v-if="activeThread">{{ activeProject?.name || '任务' }}</small>-->
               <span v-if="activeThread?.running && activeThread?.phase" class="task-phase-chip">
-                <span class="phase-dot" />{{ activeThread.phase }}
+                <span class="phase-dot" />{{ activeThread.phase }}<template v-if="phaseElapsedSeconds > 0"> · 已进行 {{ phaseElapsedSeconds }} 秒</template>
               </span>
             </div>
             <div class="conversation-actions">
               <label class="conversation-search" :class="{ active: Boolean(conversationQuery.trim()) }">
                 <Search :size="15" />
-                <input v-model="conversationQuery" placeholder="搜索对话" aria-label="搜索对话" />
+                <input ref="conversationSearchInput" v-model="conversationQuery"
+                  placeholder="搜索对话（含思考与工具结果）" aria-label="搜索对话" />
+                <span v-if="conversationQuery.trim() && searchMatches.length" class="search-count">
+                  {{ searchCursor + 1 }}/{{ searchMatches.length }}
+                </span>
+                <button v-if="conversationQuery.trim() && searchMatches.length" type="button"
+                  class="conversation-search-clear" title="上一个匹配（无高亮跳转时请上下滚动）"
+                  @click="jumpSearch(-1)">
+                  <ChevronUp :size="13" />
+                </button>
+                <button v-if="conversationQuery.trim() && searchMatches.length" type="button"
+                  class="conversation-search-clear" title="下一个匹配" @click="jumpSearch(1)">
+                  <ChevronDown :size="13" />
+                </button>
                 <button v-if="conversationQuery" type="button" class="conversation-search-clear" title="清除搜索"
                   @click="conversationQuery = ''">
                   <X :size="13" />
@@ -1635,15 +1771,30 @@ watch(theme, applyTheme)
               </template>
             </div>
             <div v-else-if="activeThread" class="empty-state">
-              <h1>今天从哪里开始？</h1>
-              <p>{{ activeProject?.name || '任务 · 无工作目录' }}</p>
-              <div v-if="!activeThread?.archived" class="starter-prompts" aria-label="快速开始">
-                <button v-for="prompt in starterPrompts" :key="prompt.label" type="button" class="starter-prompt-card"
-                  :data-tone="prompt.tone" @click="useStarterPrompt(prompt.label)">
-                  <component :is="prompt.icon" :size="20" aria-hidden="true" />
-                  <span>{{ prompt.label }}</span>
+              <template v-if="models.length === 0">
+                <!-- H23: first-run onboarding — previously new users hit an error and had
+                     to discover the settings dialog on their own. -->
+                <h1>三步开始使用 Haoyue</h1>
+                <ol class="onboarding-steps">
+                  <li><span class="step-no">1</span>在设置中添加并启用一个模型服务商</li>
+                  <li><span class="step-no">2</span>选择或新建一个任务</li>
+                  <li><span class="step-no">3</span>输入问题、附加文件或截图开始对话</li>
+                </ol>
+                <button class="primary-button empty-state-action" @click="openSettings('models')">
+                  前往设置添加模型
                 </button>
-              </div>
+              </template>
+              <template v-else>
+                <h1>今天从哪里开始？</h1>
+                <p>{{ activeProject?.name || '任务 · 无工作目录' }}</p>
+                <div v-if="!activeThread?.archived" class="starter-prompts" aria-label="快速开始">
+                  <button v-for="prompt in starterPrompts" :key="prompt.label" type="button" class="starter-prompt-card"
+                    :data-tone="prompt.tone" @click="useStarterPrompt(prompt.label)">
+                    <component :is="prompt.icon" :size="20" aria-hidden="true" />
+                    <span>{{ prompt.label }}</span>
+                  </button>
+                </div>
+              </template>
             </div>
             <div v-else class="empty-state no-task-state">
               <h1>还没有任务</h1>
@@ -1654,8 +1805,21 @@ watch(theme, applyTheme)
             </div>
           </section>
 
+          <Transition name="scrim-fade">
+            <button v-if="!autoFollowConversation && activeThread?.messages.length" class="scroll-bottom-button"
+              title="滚动到最新消息" @click="jumpToLatest">
+              <ArrowDown :size="14" />
+              <span>回到最新</span>
+            </button>
+          </Transition>
+
           <footer class="composer-region">
             <div v-if="activeThread?.queuedMessages?.length" class="pending-message-stack" aria-label="等待发送的消息">
+              <button v-if="!queuedHintDismissed" type="button" class="pending-message-hint"
+                title="点击不再显示" @click="queuedHintDismissed = true">
+                排队中的消息会在当前回合结束后自动发送；想立即让 AI 看到，点消息右侧的「引导」插话。
+                <X :size="12" aria-hidden="true" />
+              </button>
               <div v-for="queued in activeThread.queuedMessages" :key="queued.id" class="pending-message-card">
                 <div class="pending-message-main">
                   <CornerDownLeft :size="15" aria-hidden="true" />

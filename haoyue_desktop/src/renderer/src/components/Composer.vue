@@ -44,10 +44,10 @@ const optimizing = ref(false)
 const previewImage = ref<ImageAttachment | null>(null)
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const modeOptions = [
-  { value: 'edit', label: 'Edit', description: '可读取并修改文件' },
-  { value: 'plan', label: 'Plan', description: '先分析并制定计划' },
-  { value: 'readonly', label: 'Read', description: '仅分析，不修改文件' },
-  { value: 'auto', label: 'Auto', description: '根据任务自动选择' }
+  { value: 'edit', label: '编辑', description: '可读取并修改文件' },
+  { value: 'plan', label: '计划', description: '先分析并制定计划' },
+  { value: 'readonly', label: '只读', description: '仅分析，不修改文件' },
+  { value: 'auto', label: '自动', description: '根据任务自动选择' }
 ]
 
 function imageUrl(image: ImageAttachment): string {
@@ -406,6 +406,11 @@ function getValue(): string {
   return value.value
 }
 
+/** Full composer snapshot (text + attachments) for per-task draft persistence (H5). */
+function getState(): { value: string; images: ImageAttachment[]; files: FileAttachment[] } {
+  return { value: value.value, images: [...images.value], files: [...attachedFiles.value] }
+}
+
 function populate(nextValue: string, nextImages?: ImageAttachment[], nextFiles?: FileAttachment[]): void {
   value.value = nextValue
   images.value = nextImages ? [...nextImages] : []
@@ -416,7 +421,7 @@ function populate(nextValue: string, nextImages?: ImageAttachment[], nextFiles?:
   })
 }
 
-defineExpose({ focus, setValue, getValue, populate })
+defineExpose({ focus, setValue, getValue, getState, populate })
 watch(value, resize)
 watch(() => props.taskId, () => {
   images.value = []

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { basename, extname, join, resolve } from 'node:path'
 import { release } from 'node:os'
@@ -18,6 +18,8 @@ import {
 } from './computer-overlay.js'
 
 const daemon = new DaemonClient()
+// H26: one-time "minimize to tray or quit" explanation, remembered via a flag file.
+const trayFlagPath = (): string => join(app.getPath('userData'), 'tray-close-explained')
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
@@ -317,6 +319,24 @@ function createWindow(): void {
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault()
+      // H26: first close asks explicitly whether to keep the app in the tray — without
+      // it users see the window vanish and assume the app "ghost"ed (kept running).
+      if (!existsSync(trayFlagPath())) {
+        const choice = dialog.showMessageBoxSync(mainWindow!, {
+          type: 'question',
+          buttons: ['最小化到托盘', '退出应用'],
+          defaultId: 0,
+          cancelId: 0,
+          message: '关闭窗口后要继续运行吗？',
+          detail: '最小化到托盘会保留 Haoyue Runtime 与正在运行的任务，可从系统托盘重新打开窗口。'
+        })
+        if (choice === 1) {
+          isQuitting = true
+          app.quit()
+          return
+        }
+        try { writeFileSync(trayFlagPath(), '1') } catch { /* non-fatal */ }
+      }
       mainWindow?.hide()
     }
   })
@@ -344,7 +364,7 @@ function registerIpc(): void {
 
   ipcMain.handle('app:select-workspace', async () => {
     const options: Electron.OpenDialogOptions = {
-      title: 'Open workspace',
+      title: '选择项目文件夹',
       properties: ['openDirectory', 'createDirectory']
     }
     const result = mainWindow

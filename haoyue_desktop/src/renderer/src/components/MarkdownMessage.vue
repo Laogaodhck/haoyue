@@ -156,7 +156,7 @@ async function handleClick(event: MouseEvent): Promise<void> {
   await navigator.clipboard.writeText(decodeURIComponent(target.dataset.code))
   const previous = target.textContent
   target.textContent = '已复制'
-  window.setTimeout(() => { target.textContent = previous }, 1200)
+  window.setTimeout(() => { target.textContent = previous }, 1500) // H20: unified feedback duration
 }
 </script>
 

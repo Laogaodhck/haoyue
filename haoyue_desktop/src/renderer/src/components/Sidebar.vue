@@ -20,7 +20,7 @@ import {
   Trash2,
   Users
 } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logoUrl from '../../../../resources/logo.png?url'
 import type { ProjectItem, ThreadItem } from '../types'
 
@@ -37,6 +37,7 @@ const emit = defineEmits<{
   openWorkspace: []
   selectThread: [id: string]
   taskSettings: [thread: ThreadItem]
+  renameTask: [thread: ThreadItem, title: string]
   archiveTask: [thread: ThreadItem]
   restoreTask: [thread: ThreadItem]
   deleteTask: [thread: ThreadItem]
@@ -58,11 +59,41 @@ const emit = defineEmits<{
 
 const searching = ref(false)
 const query = ref('')
+const searchInput = ref<HTMLInputElement | null>(null)
+
+// H11: autofocus inside a Transition is unreliable — focus programmatically instead.
+function focusSearch(): void {
+  searching.value = true
+  void nextTick(() => searchInput.value?.focus())
+}
+
+defineExpose({ focusSearch })
 const taskSectionExpanded = ref(true)
 const expandedProjects = ref(new Set<string>())
 const menuKey = ref('')
 const menuPlacement = ref<'up' | 'down'>('down')
 const knownThreadIds = new Set<string>()
+
+// H4: inline rename — the 3-step heavy dialog is overkill for the highest-frequency
+// lightweight action. Double-click / F2 turns the row into an input; commit on
+// Enter/blur, cancel on Escape, rollback on save failure (handled by the parent).
+const renamingThreadId = ref('')
+const renameValue = ref('')
+const renameInput = ref<HTMLInputElement | null>(null)
+
+function startRename(thread: ThreadItem): void {
+  renamingThreadId.value = thread.id
+  renameValue.value = thread.title
+  void nextTick(() => renameInput.value?.focus())
+}
+
+function commitRename(thread: ThreadItem): void {
+  if (renamingThreadId.value !== thread.id) return
+  renamingThreadId.value = ''
+  const title = renameValue.value.trim()
+  if (!title || title === thread.title) return
+  emit('renameTask', thread, title)
+}
 
 watch(() => props.projects, (items) => {
   const next = new Set(expandedProjects.value)
@@ -189,7 +220,7 @@ onBeforeUnmount(() => {
     <Transition name="collapse">
       <div v-if="searching" class="sidebar-search">
         <Search :size="15" />
-        <input v-model="query" autofocus placeholder="搜索任务" />
+        <input ref="searchInput" v-model="query" placeholder="搜索任务（Ctrl+K）" />
       </div>
     </Transition>
 
@@ -261,10 +292,17 @@ onBeforeUnmount(() => {
         <div v-if="taskSectionExpanded" class="task-list">
           <div v-for="thread in visibleGlobalThreads" :key="thread.id" class="thread-heading-row"
             :class="{ active: thread.id === activeThreadId }">
-            <button class="thread-row" @click="emit('selectThread', thread.id)">
+            <button v-if="renamingThreadId !== thread.id" class="thread-row"
+              @click="emit('selectThread', thread.id)" @dblclick.prevent="startRename(thread)"
+              @keydown.f2.prevent="startRename(thread)">
               <span>{{ thread.title }}</span>
               <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
             </button>
+            <div v-else class="thread-rename-box">
+              <input ref="renameInput" v-model="renameValue" aria-label="重命名任务"
+                @keydown.enter.prevent="commitRename(thread)" @keydown.esc.prevent="renamingThreadId = ''"
+                @blur="commitRename(thread)" />
+            </div>
             <button class="icon-button compact row-menu-button" :aria-label="`${thread.title} 任务菜单`"
               @click.stop="toggleMenu(`thread:${thread.id}`, $event)">
               <MoreHorizontal :size="15" />
@@ -272,6 +310,9 @@ onBeforeUnmount(() => {
             <Transition name="context-menu">
               <div v-if="menuKey === `thread:${thread.id}`" class="sidebar-context-menu task-menu"
                 :class="{ 'menu-up': menuPlacement === 'up' }">
+                <button @click="runAction(() => startRename(thread))">
+                  <SquarePen :size="15" />重命名
+                </button>
                 <button @click="runAction(() => emit('taskSettings', thread))">
                   <SlidersHorizontal :size="15" />任务设置
                 </button>
@@ -301,7 +342,9 @@ onBeforeUnmount(() => {
             <button class="project-row" :title="project.path" @click="toggleProject(project)">
               <Folder :size="18" />
               <span>{{ project.name }}</span>
-              <LoaderCircle v-if="!expandedProjects.has(project.id) && projectHasRunningTask(project.id)"
+              <!-- H15: running spinner must not depend on the collapsed state — a running
+                   project reads as "idle" when expanded. -->
+              <LoaderCircle v-if="projectHasRunningTask(project.id)"
                 class="thread-running-spinner" :size="15" aria-label="项目中有任务正在运行" />
             </button>
             <button class="icon-button compact row-menu-button" :aria-label="`${project.name} 项目菜单`"
@@ -337,10 +380,17 @@ onBeforeUnmount(() => {
             <div v-if="expandedProjects.has(project.id)" class="project-tasks">
               <div v-for="thread in visibleThreads(project.id)" :key="thread.id" class="thread-heading-row"
                 :class="{ active: thread.id === activeThreadId }">
-                <button class="thread-row" @click="emit('selectThread', thread.id)">
+                <button v-if="renamingThreadId !== thread.id" class="thread-row"
+                  @click="emit('selectThread', thread.id)" @dblclick.prevent="startRename(thread)"
+                  @keydown.f2.prevent="startRename(thread)">
                   <span>{{ thread.title }}</span>
                   <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
                 </button>
+                <div v-else class="thread-rename-box">
+                  <input ref="renameInput" v-model="renameValue" aria-label="重命名任务"
+                    @keydown.enter.prevent="commitRename(thread)" @keydown.esc.prevent="renamingThreadId = ''"
+                    @blur="commitRename(thread)" />
+                </div>
                 <button class="icon-button compact row-menu-button" :aria-label="`${thread.title} 任务菜单`"
                   @click.stop="toggleMenu(`thread:${thread.id}`, $event)">
                   <MoreHorizontal :size="15" />
@@ -348,6 +398,9 @@ onBeforeUnmount(() => {
                 <Transition name="context-menu">
                   <div v-if="menuKey === `thread:${thread.id}`" class="sidebar-context-menu task-menu"
                     :class="{ 'menu-up': menuPlacement === 'up' }">
+                    <button @click="runAction(() => startRename(thread))">
+                      <SquarePen :size="15" />重命名
+                    </button>
                     <button @click="runAction(() => emit('taskSettings', thread))">
                       <SlidersHorizontal :size="15" />任务设置
                     </button>

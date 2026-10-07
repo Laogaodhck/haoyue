@@ -455,6 +455,27 @@ select:focus-visible {
   border-radius: 6px;
 }
 
+/* H4: inline task rename input — visually continuous with the row it replaces. */
+.thread-rename-box {
+  min-width: 0;
+  flex: 1;
+}
+
+.thread-rename-box input {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 9px;
+  border: 1px solid var(--accent, #2563eb);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.thread-rename-box input:focus {
+  outline: none;
+}
+
 .nav-item:hover,
 .project-row:hover,
 .thread-row:hover {
@@ -6096,4 +6117,89 @@ select:focus-visible {
 .inference-preset-save input {
   flex: 1;
   min-width: 0;
+}
+
+/* ---- H9/H10/H19/H23/H25 interaction polish ---- */
+.search-count {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+  font-size: 11px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.scroll-bottom-button {
+  position: absolute;
+  right: 26px;
+  bottom: 158px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 14%);
+}
+
+.scroll-bottom-button:hover {
+  background: var(--surface-hover);
+}
+
+.pending-message-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pending-message-hint:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0 18px;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.onboarding-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.onboarding-steps .step-no {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--accent);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+  font-size: 12px;
+  font-weight: 600;
 }

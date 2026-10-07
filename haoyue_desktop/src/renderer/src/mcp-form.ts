@@ -26,6 +26,8 @@ export interface McpServerSummary {
   connecting?: boolean
   toolCount: number
   error?: string
+  /** B3: prompts skipped by the per-server/global registration caps. */
+  warnings?: string[]
 }
 
 export interface McpOption {

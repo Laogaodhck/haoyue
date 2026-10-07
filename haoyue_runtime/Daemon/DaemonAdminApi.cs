@@ -1646,6 +1646,7 @@ internal sealed class DaemonAdminApi(
         ["connecting"] = status?.Connecting ?? false,
         ["toolCount"] = status?.ToolCount ?? 0,
         ["error"] = status?.Error,
+        ["warnings"] = status?.Warnings is { Count: > 0 } w ? new JsonArray(w.Select(x => (JsonNode)x).ToArray()) : null,
     };
 
     private McpConfig LoadWorkspaceMcpConfig()

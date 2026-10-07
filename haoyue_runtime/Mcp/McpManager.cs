@@ -14,6 +14,10 @@ public sealed record McpServerStatus(string Name, string Transport, bool Connect
 {
     /// <summary>True while a background reconnect for this server is still running.</summary>
     public bool Connecting { get; init; }
+
+    /// <summary>B3: prompts/resources skipped by the registration caps, so drops are
+    /// visible in mcp.list instead of silently disappearing from the system prompt.</summary>
+    public IReadOnlyList<string>? Warnings { get; init; }
 }
 
 public interface IMcpManager : IAsyncDisposable
@@ -45,12 +49,24 @@ public sealed class McpManager(
     /// </summary>
     private const int MaxResourcesPerServer = 16;
 
+    /// <summary>B3: prompt contributions per server are capped the same way — a server
+    /// exposing hundreds of prompts would otherwise flood the system prompt and eat
+    /// the conversation-history budget before B1's total enforcement kicks in.</summary>
+    private const int MaxPromptsPerServer = 24;
+
+    /// <summary>B3: hard global cap across all servers. Combined with the 10k-token
+    /// per-fragment fit this bounds worst-case injected MCP prompt text.</summary>
+    private const int MaxPromptContributionsTotal = 48;
+
     private readonly Func<string, McpServerConfig, IMcpTransport> _transportFactory = transportFactory ?? CreateTransport;
     private readonly List<McpClient> _clients = [];
     private readonly List<IDisposable> _registrations = [];
     private readonly List<McpServerStatus> _status = [];
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
     private readonly Lock _statusGate = new();
+
+    /// <summary>B3: prompt contributions registered across all servers this reload.</summary>
+    private int _promptContributionCount;
 
     public IReadOnlyList<McpServerStatus> Status
     {
@@ -109,6 +125,7 @@ public sealed class McpManager(
         {
             await ResetConnectionsAsync().ConfigureAwait(false);
             lock (_statusGate) _status.Clear();
+            _promptContributionCount = 0;
 
             foreach (var (name, server) in LoadServerConfigs(workspace))
             {
@@ -188,8 +205,20 @@ public sealed class McpManager(
             // server never breaks prompt composition; text is fitted to the
             // injected-fragment token budget.
             var prompts = await client.ListPromptsAsync(ct).ConfigureAwait(false);
+            var serverPromptCount = 0;
+            var warnings = new List<string>();
             foreach (var prompt in prompts)
             {
+                if (serverPromptCount >= MaxPromptsPerServer || _promptContributionCount >= MaxPromptContributionsTotal)
+                {
+                    // B3: over the cap — skipped in the registry, visible in the status
+                    // warnings, so users can see why a prompt never shows up.
+                    warnings.Add(
+                        $"prompt '{prompt.Name}' 超出注册限额（每服务器 {MaxPromptsPerServer}，全局 {MaxPromptContributionsTotal}），未注入系统提示");
+                    continue;
+                }
+                serverPromptCount++;
+                _promptContributionCount++;
                 var promptName = prompt.Name;
                 _registrations.Add(promptRegistry.Register(new PromptContribution(
                     $"mcp:{name}:{promptName}", PromptSlot.Tool,
@@ -224,7 +253,10 @@ public sealed class McpManager(
                     }, DegradeRank: 20)));
             }
 
-            return new McpServerStatus(name, server.Transport, true, tools.Count, null);
+            return new McpServerStatus(name, server.Transport, true, tools.Count, null)
+            {
+                Warnings = warnings.Count > 0 ? warnings : null,
+            };
         }
         catch
         {

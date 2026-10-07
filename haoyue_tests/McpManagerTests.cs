@@ -286,4 +286,75 @@ public class McpManagerTests : IDisposable
         Assert.False(disabled.Connecting);
         Assert.Equal("disabled", disabled.Error);
     }
+
+    [Fact]
+    public async Task ConnectAllAsync_CapsPromptsPerServer_AndReportsWarnings()
+    {
+        var workspace = new WorkspaceInfo { Root = Path.Combine(_dir, "cap-ws"), ProjectKinds = [] };
+        Directory.CreateDirectory(workspace.Root);
+
+        var transport = new FakeMcpTransport { Responder = PromptListResponder(30) };
+        var (manager, prompts) = CreateManager(transport);
+        await using var _ = manager;
+
+        var statuses = await manager.ConnectAllAsync(workspace, CancellationToken.None);
+
+        // B3 per-server cap: only the first 24 prompts become contributions, and the
+        // truncated remainder is reported on the status instead of vanishing silently.
+        Assert.Equal(24, prompts.All.Count(c => c.Id.StartsWith("mcp:demo:", StringComparison.Ordinal)));
+        var status = statuses.Single(s => s.Name == "demo");
+        Assert.True(status.Connected, $"error: {status.Error}");
+        Assert.NotNull(status.Warnings);
+        Assert.Equal(6, status.Warnings.Count);
+        Assert.Contains(status.Warnings, w => w.Contains("prompt 'p25'"));
+    }
+
+    [Fact]
+    public async Task ConnectAllAsync_EnforcesGlobalPromptCapAcrossServers()
+    {
+        var workspace = new WorkspaceInfo { Root = Path.Combine(_dir, "global-cap-ws"), ProjectKinds = [] };
+        Directory.CreateDirectory(workspace.Root);
+
+        var configStore = new ConfigStore(
+            Path.Combine(_dir, $"{Guid.NewGuid():N}-config.json"),
+            Path.Combine(_dir, $"{Guid.NewGuid():N}-state.json"));
+        foreach (var name in (string[])["alpha", "beta"])
+            configStore.Config.Mcp.Servers[name] = new McpServerConfig
+            {
+                Transport = "stdio",
+                Command = "fake-command",
+                Enabled = true,
+            };
+
+        var promptRegistry = new PromptRegistry();
+        var manager = new McpManager(configStore, new ToolRegistry(), promptRegistry,
+            transportFactory: (_, _) => new FakeMcpTransport { Responder = PromptListResponder(30) });
+        await using var _ = manager;
+
+        var statuses = await manager.ConnectAllAsync(workspace, CancellationToken.None);
+
+        // B3 global cap: 24 from the first server, only 24 more from the second
+        // (total 48) — the rest of beta's list is truncated with warnings.
+        Assert.Equal(48, promptRegistry.All.Count(c => c.Id.StartsWith("mcp:", StringComparison.Ordinal)));
+        var beta = statuses.Single(s => s.Name == "beta");
+        Assert.NotNull(beta.Warnings);
+        Assert.True(beta.Warnings.Count > 0);
+    }
+
+    private static Func<JsonObject, JsonObject> PromptListResponder(int promptCount) => message =>
+    {
+        var method = message["method"]?.GetValue<string>();
+        return method switch
+        {
+            "initialize" => InitializeResult,
+            "tools/list" => new JsonObject { ["tools"] = new JsonArray() },
+            "prompts/list" => new JsonObject
+            {
+                ["prompts"] = new JsonArray(Enumerable.Range(1, promptCount)
+                    .Select(i => (JsonNode)new JsonObject { ["name"] = $"p{i}" })
+                    .ToArray()),
+            },
+            _ => MethodNotFound,
+        };
+    };
 }

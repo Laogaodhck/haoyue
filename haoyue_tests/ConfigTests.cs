@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 
 namespace Haoyue.Tests;
@@ -217,5 +218,53 @@ public sealed class ConfigTests : IDisposable
         {
             Environment.SetEnvironmentVariable("HAOYUE_TEST_KEY", null);
         }
+    }
+
+    [Fact]
+    public void CaptureDirtyPatch_IncludesOnlyChangedLeaves()
+    {
+        var store = NewStore();
+        var providerId = "p-" + Guid.NewGuid().ToString("N");
+        store.Config.Providers = [new ProviderConfig { Id = providerId, Kind = "openai" }];
+        store.Config.Agent.Mode = "edit";
+        store.Save(); // baseline established
+
+        // Unchanged → null, so a delegated save has nothing to send.
+        Assert.Null(store.CaptureDirtyPatch());
+
+        store.Config.Agent.Mode = "auto";
+        store.Config.Provider = providerId;
+        var patch = store.CaptureDirtyPatch();
+        Assert.NotNull(patch);
+        // Nested change stays nested; untouched siblings (e.g. agent.maxSteps) stay out.
+        var agent = Assert.IsType<JsonObject>(patch["agent"]);
+        Assert.Equal("auto", agent["mode"]?.GetValue<string>());
+        Assert.Null(agent["maxSteps"]);
+        Assert.Equal(providerId, patch["provider"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public void ApplyPatch_DeepMergesWithoutClobberingSiblings()
+    {
+        var store = NewStore();
+        store.Config.Agent.Mode = "plan";
+        store.Config.Agent.MaxSteps = 20;
+        store.Save();
+
+        // A delegated patch from the other process carries only its own edits.
+        store.ApplyPatch(new JsonObject
+        {
+            ["agent"] = new JsonObject { ["mode"] = "edit" },
+            ["temperature"] = 0.5,
+        });
+
+        Assert.Equal("edit", store.Config.Agent.Mode);
+        Assert.Equal(20, store.Config.Agent.MaxSteps); // sibling survives the merge
+        Assert.Equal(0.5, store.Config.Temperature);
+
+        // And the patch landed on disk too.
+        var reloaded = NewStore();
+        Assert.Equal("edit", reloaded.Config.Agent.Mode);
+        Assert.Equal(20, reloaded.Config.Agent.MaxSteps);
     }
 }

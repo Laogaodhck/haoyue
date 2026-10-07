@@ -14,6 +14,14 @@ public interface IConfigStore
     void Save();
     void SaveState();
     void Reload();
+    /// <summary>
+    /// Computes a recursive JSON patch of the top-level/nested properties this process
+    /// changed relative to the load-time baseline. Returns null when nothing differs
+    /// (or there is no baseline), so callers can skip persistence entirely.
+    /// </summary>
+    JsonObject? CaptureDirtyPatch();
+    /// <summary>Deep-merges the given patch into the in-memory config and persists it.</summary>
+    void ApplyPatch(JsonObject patch);
     /// <summary>Restores the in-memory objects and on-disk files to factory defaults.</summary>
     void Reset();
 }
@@ -83,6 +91,79 @@ public sealed class ConfigStore : IConfigStore
             WriteAtomic(_stateFile, json);
             State = merged;
             _stateBaseline = json;
+        }
+    }
+
+    /// <summary>
+    /// Recursive diff of the in-memory config against the load-time baseline: only
+    /// changed leaves are included, so a delegated save (A4 daemon single-writer)
+    /// carries exactly what this process edited and a sibling edit by the other
+    /// writer survives the merge on the receiving side.
+    /// </summary>
+    public JsonObject? CaptureDirtyPatch()
+    {
+        lock (_gate)
+        {
+            if (_configBaseline is null) return null;
+            try
+            {
+                var baseline = JsonNode.Parse(_configBaseline) as JsonObject;
+                var current = JsonNode.Parse(
+                    JsonSerializer.Serialize(Config, HaoyueJsonContext.Default.HaoyueConfig)) as JsonObject;
+                var patch = DiffNodes(baseline, current);
+                return patch.Count == 0 ? null : patch;
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>Deep-merges the patch into the in-memory config, then saves (the save
+    /// itself re-merges against disk so unrelated concurrent changes stay intact).</summary>
+    public void ApplyPatch(JsonObject patch)
+    {
+        lock (_gate)
+        {
+            var currentObj = JsonNode.Parse(
+                JsonSerializer.Serialize(Config, HaoyueJsonContext.Default.HaoyueConfig)) as JsonObject;
+            if (currentObj is null) return;
+            MergePatch(currentObj, patch);
+            Config = currentObj.Deserialize(HaoyueJsonContext.Default.HaoyueConfig) ?? Config;
+        }
+        Save();
+    }
+
+    private static JsonObject DiffNodes(JsonObject? baseline, JsonObject? current)
+    {
+        var patch = new JsonObject();
+        if (current is null) return patch;
+        foreach (var (name, value) in current)
+        {
+            JsonNode? baseVal = baseline is not null && baseline.TryGetPropertyValue(name, out var bv) ? bv : null;
+            if (JsonNode.DeepEquals(value, baseVal)) continue;
+            if (value is JsonObject curObj && baseVal is JsonObject baseObj)
+            {
+                var nested = DiffNodes(baseObj, curObj);
+                if (nested.Count > 0) patch[name] = nested;
+            }
+            else
+            {
+                patch[name] = value is null ? null : JsonNode.Parse(value.ToJsonString());
+            }
+        }
+        return patch;
+    }
+
+    private static void MergePatch(JsonObject target, JsonObject patch)
+    {
+        foreach (var (name, value) in patch)
+        {
+            if (value is JsonObject patchObj && target[name] is JsonObject targetObj)
+                MergePatch(targetObj, patchObj);
+            else
+                target[name] = value is null ? null : JsonNode.Parse(value.ToJsonString());
         }
     }
 

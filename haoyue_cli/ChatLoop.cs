@@ -2,6 +2,7 @@ using Haoyue.Cli.Ui;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Sessions;
@@ -285,7 +286,8 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
                     {
                         runtime.ConfigStore.Config.Provider = model.Provider.Id;
                         runtime.ConfigStore.Config.Model = model.Model.Id;
-                        runtime.ConfigStore.Save();
+                        if (!DaemonConfigBridge.TryDelegateSave(runtime.ConfigStore))
+                            runtime.ConfigStore.Save();
                         renderer.WriteLine($"model → {model.Ref}".Style(Ansi.Green));
                     }
                 }
@@ -305,7 +307,8 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
                         runtime.Workspace.Config.Mode = targetMode.ToString().ToLowerInvariant();
                     }
                     runtime.ConfigStore.Config.Agent.Mode = targetMode.ToString().ToLowerInvariant();
-                    runtime.ConfigStore.Save();
+                    if (!DaemonConfigBridge.TryDelegateSave(runtime.ConfigStore))
+                        runtime.ConfigStore.Save();
                     renderer.WriteLine($"mode → {targetMode.ToDisplayString()}".Style(Ansi.Green));
                 }
                 else

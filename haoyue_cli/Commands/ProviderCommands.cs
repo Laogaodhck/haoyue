@@ -1,6 +1,7 @@
 using System.CommandLine;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Providers;
 using Spectre.Console;
 
@@ -158,7 +159,8 @@ public static class ProviderCommands
             // Copy-on-Write: swap the list reference instead of mutating it, mirroring the
             // daemon path so a concurrently enumerating reader can never observe a torn list.
             config.Providers = [.. config.Providers, provider];
-            rt.ConfigStore.Save();
+            if (!DaemonConfigBridge.TryDelegateSave(rt.ConfigStore))
+                rt.ConfigStore.Save();
 
             AnsiConsole.MarkupLine($"[green]Added provider '{Markup.Escape(provider.Id)}'[/] with {provider.Models.Count} model(s).");
             if (provider.Models.Count == 0)
@@ -203,7 +205,8 @@ public static class ProviderCommands
             config.Providers = config.Providers
                 .Where(item => !item.Id.Equals(provider.Id, StringComparison.OrdinalIgnoreCase))
                 .ToList();
-            rt.ConfigStore.Save();
+            if (!DaemonConfigBridge.TryDelegateSave(rt.ConfigStore))
+                rt.ConfigStore.Save();
             AnsiConsole.MarkupLine($"[green]Removed '{Markup.Escape(provider.Id)}'.[/]");
             return 0;
         });
@@ -244,7 +247,8 @@ public static class ProviderCommands
             if (parse.GetValue(proxyOption) is { } proxy) provider.Proxy = proxy;
             if (parse.GetValue(modelsDirectoryOption) is { } modelsDirectory) provider.ModelsDirectory = modelsDirectory;
 
-            rt.ConfigStore.Save();
+            if (!DaemonConfigBridge.TryDelegateSave(rt.ConfigStore))
+                rt.ConfigStore.Save();
             AnsiConsole.MarkupLine($"[green]Updated '{Markup.Escape(provider.Id)}'.[/]");
             return 0;
         });
@@ -307,7 +311,8 @@ public static class ProviderCommands
             if (config.Model is not null &&
                 !provider.Models.Any(m => m.Id.Equals(config.Model, StringComparison.OrdinalIgnoreCase)))
                 config.Model = provider.Models.FirstOrDefault()?.Id;
-            rt.ConfigStore.Save();
+            if (!DaemonConfigBridge.TryDelegateSave(rt.ConfigStore))
+                rt.ConfigStore.Save();
 
             AnsiConsole.MarkupLine($"[green]Active provider → '{Markup.Escape(provider.Id)}'[/]"
                 + (config.Model is null ? " [yellow](no model selected — run 'haoyue model use')[/]" : $" model [cyan]{Markup.Escape(config.Model)}[/]"));

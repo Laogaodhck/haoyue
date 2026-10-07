@@ -840,6 +840,33 @@ public sealed class DaemonServer : IAsyncDisposable
                         break;
                     }
 
+                    case "config.save":
+                    {
+                        // A4 single-writer: a CLI process with the daemon online delegates
+                        // its config change here instead of writing ~/.haoyue/config.json
+                        // itself. The payload is a recursive dirty patch (only what the
+                        // CLI actually edited) deep-merged by ConfigStore.ApplyPatch, so
+                        // concurrent daemon-side admin edits never get clobbered.
+                        if (request["params"]?["fields"] is not JsonObject fields || fields.Count == 0)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                "params.fields must be a non-empty JSON patch object", context.ConnectionCt).ConfigureAwait(false);
+                            break;
+                        }
+                        await _adminGate.WaitAsync(context.ConnectionCt).ConfigureAwait(false);
+                        try
+                        {
+                            _runtime.ConfigStore.ApplyPatch(fields);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                                "saved", context.ConnectionCt).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            _adminGate.Release();
+                        }
+                        break;
+                    }
+
                     case "config.status":
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", _admin.GetConfigStatus(), context.ConnectionCt).ConfigureAwait(false);
                         break;

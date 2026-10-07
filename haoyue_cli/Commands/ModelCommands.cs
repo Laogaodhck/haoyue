@@ -1,5 +1,6 @@
 using System.CommandLine;
 using Haoyue.Runtime;
+using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Providers;
 using Spectre.Console;
 
@@ -92,7 +93,8 @@ public static class ModelCommands
             }
             rt.ConfigStore.Config.Provider = model.Provider.Id;
             rt.ConfigStore.Config.Model = model.Model.Id;
-            rt.ConfigStore.Save();
+            if (!DaemonConfigBridge.TryDelegateSave(rt.ConfigStore))
+                rt.ConfigStore.Save();
             AnsiConsole.MarkupLine($"[green]Active model → {Markup.Escape(model.Ref)}[/]");
             return 0;
         });

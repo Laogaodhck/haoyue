@@ -149,7 +149,8 @@ public static class SwitchCommand
 
             config.Provider = providerId;
             config.Model = modelId;
-            rt.ConfigStore.Save();
+            if (!DaemonConfigBridge.TryDelegateSave(rt.ConfigStore))
+                rt.ConfigStore.Save();
 
             AnsiConsole.MarkupLine($"[green]Switched to {Markup.Escape(providerId)}/{Markup.Escape(modelId)}[/]");
             return 0;

@@ -201,7 +201,7 @@ public sealed class McpManager(
                         // boundary so it is treated as data, not instructions.
                         return ContextPlanner.WrapUntrustedSource(
                             ContextPlanner.FitInjectedText(text), $"MCP server '{name}' prompt '{promptName}'");
-                    })));
+                    }, DegradeRank: 20)));
             }
 
             // Auto-discover resources and expose their text contents as context
@@ -221,7 +221,7 @@ public sealed class McpManager(
                         if (text is null) return null;
                         return ContextPlanner.WrapUntrustedSource(
                             ContextPlanner.FitInjectedText(text), $"MCP server '{name}' resource '{uri}'");
-                    })));
+                    }, DegradeRank: 20)));
             }
 
             return new McpServerStatus(name, server.Transport, true, tools.Count, null);

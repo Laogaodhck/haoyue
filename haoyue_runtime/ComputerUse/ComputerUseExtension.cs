@@ -42,7 +42,7 @@ public sealed class ComputerUseExtension : IRuntimeExtension
         var prompts = runtime.Prompts;
         _promptRegistration = runtime.PromptRegistry.Register(new PromptContribution(
             "computer_use", PromptSlot.Memory, (_, _) =>
-                ValueTask.FromResult<string?>(prompts.TryGet("builtin/computer"))));
+                ValueTask.FromResult<string?>(prompts.TryGet("builtin/computer")), DegradeRank: 40));
 
         registry.Register(new ComputerInspectTool(runtime.Prompts, _activeDriver));
         registry.Register(new ComputerTool(runtime.Prompts, _activeDriver, config));

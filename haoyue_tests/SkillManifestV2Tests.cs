@@ -277,7 +277,8 @@ public sealed class SkillManifestV2Tests : IDisposable
         var manager = NewManager(out var registry);
         manager.Attach(Workspace);
 
-        var contribution = registry.All.Single(c => c.Id == "skills");
+        var contribution = registry.All.Single(c => c.Id == "skill-bodies");
+        var catalog = registry.All.Single(c => c.Id == "skill-catalog");
 
         var hit = contribution.Resolver(new PromptRenderContext
         {
@@ -294,6 +295,17 @@ public sealed class SkillManifestV2Tests : IDisposable
         }, CancellationToken.None).AsTask().GetAwaiter().GetResult();
         Assert.Contains("常驻内容", miss);
         Assert.DoesNotContain("部署内容", miss);
+
+        // The catalog is a separate, low-degrade-rank contribution so discovery survives
+        // budget enforcement that drops skill bodies. It lists trigger-gated always-listed
+        // skills only; the "always" skill has no triggers so it is injected unconditionally.
+        var catalogText = catalog.Resolver(new PromptRenderContext
+        {
+            Variables = new Dictionary<string, string>(),
+            WorkspaceRoot = Workspace.Root,
+        }, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        Assert.Contains("deploy", catalogText);
+        Assert.DoesNotContain("常驻内容", catalogText);
     }
 
     [Fact]
@@ -350,7 +362,7 @@ public sealed class SkillManifestV2Tests : IDisposable
         manager.Attach(Workspace);
 
         // 关键词未命中时 deploy 不注入。
-        var contribution = registry.All.Single(c => c.Id == "skills");
+        var contribution = registry.All.Single(c => c.Id == "skill-bodies");
         string? Resolve(string userMessage) => contribution.Resolver(new PromptRenderContext
         {
             Variables = new Dictionary<string, string> { ["user_message"] = userMessage },

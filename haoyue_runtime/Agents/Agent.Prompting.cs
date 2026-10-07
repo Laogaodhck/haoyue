@@ -39,7 +39,11 @@ public sealed partial class Agent
             autoVerify,
             personality);
         if (!string.IsNullOrWhiteSpace(agentsMd))
-            variables["agents_md"] = ContextPlanner.FitInjectedText(agentsMd);
+            // Fit first (budget covers the payload), then wrap: the provenance envelope
+            // pins AGENTS.md below direct user/system instructions even if the file
+            // itself contains text that claims higher authority.
+            variables["agents_md"] = ContextPlanner.WrapWorkspaceInstructions(
+                ContextPlanner.FitInjectedText(agentsMd));
         // Skill triggers evaluate against a stickiness window (current input + recent
         // user turns): follow-ups like "继续" keep previously triggered skills injected
         // instead of silently dropping them mid-task. The value is constant within a

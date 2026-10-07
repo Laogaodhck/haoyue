@@ -143,4 +143,71 @@ public sealed class PromptTests : IDisposable
         Assert.Contains("middle section trimmed", fit);
         Assert.StartsWith(new string('a', 200), fit);
     }
+
+    [Fact]
+    public async Task Composer_EnforcesSystemPromptBudget_ByDegradeRank()
+    {
+        using var provider = new FilePromptProvider([MakeRoot("empty-budget")]);
+        var registry = new PromptRegistry();
+        static string Big(char filler, int tokens) => new(filler, tokens * 4); // Latin ≈ 4 chars/token
+
+        registry.Register(new PromptContribution("sys", PromptSlot.System,
+            (_, _) => ValueTask.FromResult<string?>("SYSTEM " + Big('a', 14_000))));
+        registry.Register(new PromptContribution("mem-high", PromptSlot.Memory,
+            (_, _) => ValueTask.FromResult<string?>(Big('d', 5_000)), DegradeRank: 40));
+        registry.Register(new PromptContribution("skill-body", PromptSlot.Skill,
+            (_, _) => ValueTask.FromResult<string?>(Big('c', 5_000)), DegradeRank: 30));
+        registry.Register(new PromptContribution("mcp", PromptSlot.Tool,
+            (_, _) => ValueTask.FromResult<string?>(Big('b', 5_000)), DegradeRank: 20));
+        registry.Register(new PromptContribution("mem-low", PromptSlot.Memory,
+            (_, _) => ValueTask.FromResult<string?>(Big('e', 1_000)), DegradeRank: 10));
+
+        var composer = new PromptComposer(provider, registry);
+        var result = await composer.ComposeAsync(new PromptRenderContext { Variables = new Dictionary<string, string>() });
+
+        // Total ≈ 30k tokens > 24k: mem-high (40) and skill-body (30) degrade first,
+        // the remainder fits and stays.
+        Assert.Contains("SYSTEM ", result);
+        Assert.Contains(Big('b', 5_000), result);   // mcp kept
+        Assert.Contains(Big('e', 1_000), result);   // mem-low kept
+        Assert.DoesNotContain(Big('d', 5_000), result); // mem-high dropped
+        Assert.DoesNotContain(Big('c', 5_000), result); // skill-body dropped
+        Assert.Contains(">>> [prompt budget]", result);
+        Assert.Contains("mem-high, skill-body", result);
+        Assert.Contains("declare_skill", result);
+        Assert.True(ContextPlanner.EstimateTokens(result) <= ContextPlanner.MaxSystemPromptTokens + 200);
+    }
+
+    [Fact]
+    public async Task Composer_SystemAndDeveloperSlots_AreNeverDropped()
+    {
+        using var provider = new FilePromptProvider([MakeRoot("empty-protected")]);
+        var registry = new PromptRegistry();
+        static string Big(char filler, int tokens) => new(filler, tokens * 4);
+
+        registry.Register(new PromptContribution("sys", PromptSlot.System,
+            (_, _) => ValueTask.FromResult<string?>("SYSTEM " + Big('a', 20_000))));
+        registry.Register(new PromptContribution("dev", PromptSlot.Developer,
+            (_, _) => ValueTask.FromResult<string?>("DEVELOPER " + Big('f', 6_000))));
+
+        var composer = new PromptComposer(provider, registry);
+        var result = await composer.ComposeAsync(new PromptRenderContext { Variables = new Dictionary<string, string>() });
+
+        // Over budget but everything is protected: nothing is dropped, no notice.
+        Assert.Contains("SYSTEM ", result);
+        Assert.Contains("DEVELOPER ", result);
+        Assert.DoesNotContain(">>> [prompt budget]", result);
+    }
+
+    [Fact]
+    public void WrapWorkspaceInstructions_MarksProvenance_AndPinsPrecedence()
+    {
+        var wrapped = ContextPlanner.WrapWorkspaceInstructions("use pnpm, never npm");
+
+        Assert.Contains("<<<WORKSPACE INSTRUCTIONS BEGIN>>>", wrapped);
+        Assert.Contains("<<<WORKSPACE INSTRUCTIONS END>>>", wrapped);
+        Assert.Contains("use pnpm, never npm", wrapped);
+        Assert.Contains("user instructions always take precedence", wrapped);
+        Assert.Contains("override system rules", wrapped);
+    }
 }

@@ -115,25 +115,31 @@ public sealed class SkillManager : ISkillManager
         _configStore = configStore;
         _globalSkillsDir = globalSkillsDir ?? HaoyuePaths.SkillsDir;
         _prompts = prompts ?? new FilePromptProvider();
-        // One dynamic contribution: enumerates enabled skills at compose time (hot reload for free).
-        // Manifest-v2 triggers gate injection on the turn's user message; parameters
-        // render as a collect-before-use appendix after the skill prompt.
-        promptRegistry.Register(new PromptContribution("skills", PromptSlot.Skill, (ctx, _) =>
+        // Two dynamic contributions: the catalog (low degrade rank — it is the model's
+        // discovery path and lets declare_skill recover dropped bodies) and the injected
+        // skill bodies (degraded first among mid-priority content when the assembled
+        // system prompt exceeds its token budget). Enumerated at compose time, so hot
+        // reload stays free; manifest-v2 triggers gate bodies on the turn's user message.
+        promptRegistry.Register(new PromptContribution("skill-catalog", PromptSlot.Skill, DegradeRank: 10, Resolver: (ctx, _) =>
+        {
+            if (_workspace is null || !string.Equals(_workspace.Root, ctx.WorkspaceRoot, StringComparison.OrdinalIgnoreCase))
+                return ValueTask.FromResult<string?>(null);
+            return ValueTask.FromResult<string?>(RenderSkillCatalog(_workspace));
+        }));
+        promptRegistry.Register(new PromptContribution("skill-bodies", PromptSlot.Skill, DegradeRank: 30, Resolver: (ctx, _) =>
         {
             if (_workspace is null || !string.Equals(_workspace.Root, ctx.WorkspaceRoot, StringComparison.OrdinalIgnoreCase))
                 return ValueTask.FromResult<string?>(null);
 
             var userMessage = ctx.Variables.TryGetValue("user_message", out var value) ? value : null;
-            // N5 stage 1: the catalog tells the model which trigger-gated skills exist
-            // so declare_skill can recover keyword misses; injected prompts follow.
-            var parts = new List<string>();
-            var catalog = RenderSkillCatalog(_workspace);
-            if (catalog is not null) parts.Add(catalog);
-            parts.AddRange(SelectInjectedSkills(_workspace, userMessage, _turnDeclared)
+            // N5 stage 1: declared skills merge into the injection set so the model can
+            // pull trigger-missed skills on demand.
+            var bodies = SelectInjectedSkills(_workspace, userMessage, _turnDeclared)
                 .Where(s => File.Exists(s.PromptFile))
                 .Select(s => RenderSkillPrompt(s))
-                .Where(text => text.Length > 0));
-            return ValueTask.FromResult<string?>(parts.Count == 0 ? null : string.Join("\n\n", parts));
+                .Where(text => text.Length > 0)
+                .ToList();
+            return ValueTask.FromResult<string?>(bodies.Count == 0 ? null : string.Join("\n\n", bodies));
         }));
     }
 

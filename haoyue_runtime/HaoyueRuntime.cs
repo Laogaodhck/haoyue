@@ -210,7 +210,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
 
         // Repository instructions (AGENTS.md) are injected as bounded, user-authored context.
         // The global RulesEnabled switch lets users turn rule-file injection off entirely.
-        registry.Register(new PromptContribution("agents-md", PromptSlot.Workspace, (ctx, _) =>
+        registry.Register(new PromptContribution("agents-md", PromptSlot.Workspace, DegradeRank: 10, Resolver: (ctx, _) =>
         {
             if (!configStore.Config.Agent.RulesEnabled) return ValueTask.FromResult<string?>(null);
             if (!ctx.Variables.TryGetValue("agents_md", out var agentsMd) || string.IsNullOrWhiteSpace(agentsMd))
@@ -220,7 +220,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
 
         // Workspace memory (MEMORY.md), injected through the builtin/memory template.
         // Manual mode appends a read-only contract so the user stays the sole editor.
-        registry.Register(new PromptContribution("memory", PromptSlot.Memory, (ctx, _) =>
+        registry.Register(new PromptContribution("memory", PromptSlot.Memory, DegradeRank: 10, Resolver: (ctx, _) =>
         {
             if (!ctx.Variables.TryGetValue("memory", out var memory) || string.IsNullOrWhiteSpace(memory))
                 return ValueTask.FromResult<string?>(null);
@@ -233,7 +233,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
         // Knowledge base contract — the tools are self-describing, but the model also
         // needs the behavioral rules: when to consult and when to persist.
         registry.Register(new PromptContribution("knowledge", PromptSlot.Memory, (_, _) =>
-            ValueTask.FromResult<string?>(prompts.TryGet("builtin/knowledge"))));
+            ValueTask.FromResult<string?>(prompts.TryGet("builtin/knowledge")), DegradeRank: 40));
     }
 
     private void RegisterBuiltinTools()

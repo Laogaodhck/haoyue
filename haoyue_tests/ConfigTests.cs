@@ -73,6 +73,56 @@ public sealed class ConfigTests : IDisposable
     }
 
     [Fact]
+    public void Save_PreservesUnchangedFieldsWrittenConcurrentlyByAnotherProcess()
+    {
+        // Simulates CLI (storeA) and daemon (storeB) editing different fields of the
+        // shared config.json: the last saver must not clobber the other writer's field.
+        var storeA = NewStore();
+        var storeB = NewStore();
+        storeA.Config.Model = "model-a";
+        storeA.Save();
+
+        storeB.Reload(); // baseline = disk content written by A
+        storeB.Config.Agent.MaxSteps = 77;
+        storeB.Save();
+
+        storeA.Save(); // A changed nothing locally → B's MaxSteps must survive
+
+        var verifier = NewStore();
+        Assert.Equal("model-a", verifier.Config.Model);
+        Assert.Equal(77, verifier.Config.Agent.MaxSteps);
+    }
+
+    [Fact]
+    public void Save_LocallyChangedFields_WinOverConcurrentWriter()
+    {
+        var storeA = NewStore();
+        var storeB = NewStore();
+        storeB.Config.Model = "model-b";
+        storeB.Save();
+
+        storeA.Reload(); // A sees model-b as its baseline
+        storeA.Config.Model = "model-a2"; // A changed the same field → A wins
+        storeA.Config.Agent.MaxSteps = 55;
+        storeA.Save();
+
+        var verifier = NewStore();
+        Assert.Equal("model-a2", verifier.Config.Model);
+        Assert.Equal(55, verifier.Config.Agent.MaxSteps);
+    }
+
+    [Fact]
+    public void Save_LeavesNoTempFileResidue()
+    {
+        var store = NewStore();
+        store.Config.Model = "x";
+        store.Save();
+        store.SaveState();
+
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp", SearchOption.TopDirectoryOnly));
+    }
+
+    [Fact]
     public void Routing_DeepSeekOptimization_RoundTrips()
     {
         var store = NewStore();

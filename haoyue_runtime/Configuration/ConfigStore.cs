@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Haoyue.Runtime.Configuration;
 
@@ -28,6 +29,12 @@ public sealed class ConfigStore : IConfigStore
     private readonly string _configFile;
     private readonly string _stateFile;
 
+    // On-disk snapshots of the values this process last loaded/saved. They let Save()
+    // diff "what we changed" against "what the other writer changed" so a concurrent
+    // CLI/daemon pair no longer clobbers each other with stale full-file rewrites.
+    private string? _configBaseline;
+    private string? _stateBaseline;
+
     public HaoyueConfig Config { get; private set; }
     public RuntimeState State { get; private set; }
     public bool HasAnomaly { get; private set; }
@@ -56,8 +63,12 @@ public sealed class ConfigStore : IConfigStore
         lock (_gate)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_configFile)!);
-            var json = JsonSerializer.Serialize(Config, HaoyueJsonContext.Default.HaoyueConfig);
-            File.WriteAllText(_configFile, json);
+            var merged = MergeWithDisk(_configFile, _configBaseline, Config,
+                HaoyueJsonContext.Default.HaoyueConfig);
+            var json = JsonSerializer.Serialize(merged, HaoyueJsonContext.Default.HaoyueConfig);
+            WriteAtomic(_configFile, json);
+            Config = merged;
+            _configBaseline = json;
         }
     }
 
@@ -66,8 +77,72 @@ public sealed class ConfigStore : IConfigStore
         lock (_gate)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_stateFile)!);
-            var json = JsonSerializer.Serialize(State, HaoyueJsonContext.Default.RuntimeState);
-            File.WriteAllText(_stateFile, json);
+            var merged = MergeWithDisk(_stateFile, _stateBaseline, State,
+                HaoyueJsonContext.Default.RuntimeState);
+            var json = JsonSerializer.Serialize(merged, HaoyueJsonContext.Default.RuntimeState);
+            WriteAtomic(_stateFile, json);
+            State = merged;
+            _stateBaseline = json;
+        }
+    }
+
+    /// <summary>
+    /// Merges the in-memory value with the on-disk file before saving (field-level
+    /// conflict resolution against a second writer, e.g. CLI while the daemon runs).
+    /// Top-level properties this process did NOT change relative to the baseline are
+    /// taken from disk — preserving the other writer's concurrent update — while
+    /// changed properties keep the in-memory value. The merged result becomes the new
+    /// in-memory state so both sides converge instead of last-writer-wins per file.
+    /// Falls back to the in-memory value when there is no baseline or the disk file
+    /// is unreadable (first run, corruption, IO error) — identical to legacy behavior.
+    /// </summary>
+    private static T MergeWithDisk<T>(string file, string? baselineJson, T current,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo) where T : class
+    {
+        try
+        {
+            if (baselineJson is null || !File.Exists(file)) return current;
+            var diskText = File.ReadAllText(file);
+            if (string.IsNullOrWhiteSpace(diskText)) return current;
+
+            var baseline = JsonNode.Parse(baselineJson) as JsonObject;
+            var disk = JsonNode.Parse(diskText) as JsonObject;
+            var currentObj = JsonNode.Parse(JsonSerializer.Serialize(current, typeInfo)) as JsonObject;
+            if (baseline is null || disk is null || currentObj is null) return current;
+
+            foreach (var (name, value) in currentObj)
+            {
+                var baseVal = baseline.TryGetPropertyValue(name, out var bv) ? bv : null;
+                var locallyChanged = !JsonNode.DeepEquals(value, baseVal);
+                if (locallyChanged)
+                    disk[name] = value is null ? null : JsonNode.Parse(value.ToJsonString());
+                // Unchanged locally → leave the disk value so the other writer's
+                // concurrent update to this property survives.
+            }
+
+            return disk.Deserialize(typeInfo) ?? current;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return current;
+        }
+    }
+
+    /// <summary>Temp file in the target directory + rename, so readers never observe a
+    /// half-written JSON file and a crash cannot truncate the previous good state.</summary>
+    private static void WriteAtomic(string file, string contents)
+    {
+        var temp = Path.Combine(
+            Path.GetDirectoryName(file)!,
+            $".{Path.GetFileName(file)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(temp, contents);
+            File.Move(temp, file, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch (IOException) { }
         }
     }
 
@@ -82,6 +157,8 @@ public sealed class ConfigStore : IConfigStore
             State = new RuntimeState();
             DeleteIfExists(_configFile);
             DeleteIfExists(_stateFile);
+            _configBaseline = null;
+            _stateBaseline = null;
         }
 
         Save();
@@ -108,6 +185,7 @@ public sealed class ConfigStore : IConfigStore
                             MigrateLegacyProfiles(loaded, _configFile);
                         HasAnomaly = false;
                         AnomalyDetail = null;
+                        _configBaseline = text;
                         return loaded;
                     }
                     HandleAnomaly("配置文件反序列化结果为空");
@@ -196,21 +274,20 @@ public sealed class ConfigStore : IConfigStore
         }
     }
 
-    private RuntimeState LoadState() =>
-        (File.Exists(_stateFile) ? TryDeserialize(_stateFile, HaoyueJsonContext.Default.RuntimeState) : null)
-        ?? new RuntimeState();
-
-    private static T? TryDeserialize<T>(string file, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)
-        where T : class
+    private RuntimeState LoadState()
     {
+        if (!File.Exists(_stateFile)) return new RuntimeState();
         try
         {
-            return JsonSerializer.Deserialize(File.ReadAllText(file), typeInfo);
+            var text = File.ReadAllText(_stateFile);
+            var state = JsonSerializer.Deserialize(text, HaoyueJsonContext.Default.RuntimeState);
+            if (state is not null) _stateBaseline = text;
+            return state ?? new RuntimeState();
         }
         catch (JsonException)
         {
             // Corrupt file: keep it on disk for the user to inspect, fall back to defaults.
-            return null;
+            return new RuntimeState();
         }
     }
 

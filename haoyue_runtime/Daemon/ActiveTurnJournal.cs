@@ -29,9 +29,19 @@ internal static class ActiveTurnJournal
                 return;
             }
             var payload = JsonSerializer.Serialize(records, HaoyueJsonContext.Compact.ListActiveTurnRecord);
-            var temp = path + ".tmp";
-            File.WriteAllText(temp, payload);
-            File.Move(temp, path, overwrite: true);
+            // Unique temp name per call: concurrent turns (turn start on the dispatch
+            // thread, turn end on a continuation) must not race on a shared .tmp file.
+            var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                File.WriteAllText(temp, payload);
+                File.Move(temp, path, overwrite: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                try { File.Delete(temp); } catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+                throw;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

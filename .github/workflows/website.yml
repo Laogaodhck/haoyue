@@ -1,0 +1,47 @@
+name: Website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "haoyue_website/**"
+      - ".github/workflows/website.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build & deploy docs to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: haoyue_website/package-lock.json
+      - name: Install
+        working-directory: haoyue_website
+        run: npm ci
+      - name: Build
+        working-directory: haoyue_website
+        env:
+          # Project site under /haoyue/ — config.mts reads PAGES_BASE.
+          PAGES_BASE: /haoyue/
+        run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: haoyue_website/.vitepress/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4

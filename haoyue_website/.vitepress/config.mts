@@ -1,15 +1,20 @@
 import { defineConfig } from 'vitepress'
 
+// PAGES_BASE lets CI deploy to a GitHub Pages project site (e.g. "/haoyue/");
+// unset means serve from the domain root, which keeps local dev unchanged.
+const base = process.env.PAGES_BASE || '/'
+
 export default defineConfig({
   title: 'Haoyue',
   description: '本地优先、开源、可扩展的通用 AI Agent Runtime',
+  base,
   cleanUrls: true,
 
   head: [
-    ['link', { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' }],
-    ['link', { rel: 'shortcut icon', href: '/favicon.ico' }],
-    ['link', { rel: 'icon', type: 'image/png', href: '/logo.png' }],
-    ['link', { rel: 'apple-touch-icon', href: '/logo.png' }]
+    ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
+    ['link', { rel: 'shortcut icon', href: `${base}favicon.ico` }],
+    ['link', { rel: 'icon', type: 'image/png', href: `${base}logo.png` }],
+    ['link', { rel: 'apple-touch-icon', href: `${base}logo.png` }]
   ],
 
   locales: {

@@ -4,6 +4,12 @@
 - 背景：针对「从事件驱动转向 Workflow Graph 编排，引入 Orchestrator/Graph Engine，为每个步骤绑定 Try/Catch/Finally，实现原子性与可追溯失败回滚」的提案做架构裁决，并给出可落地的替代设计。
 - 结论先行：**前瞻式 Workflow Graph 引擎不引入**（提案核心前提与现状不符，且与 Agent 动态决策本质冲突）；**采纳其可取内核**——以 per-turn 的 `TurnExecutionScope`（补偿注册 + 步骤账本）实现提案承诺的三项收益：步骤级错误处理绑定、受控子集原子性、可追溯失败回滚。本设计即前一份评审报告中 T2/T3 的实现形态升级。
 
+> **✅ 实施状态（2026-10-07 当日收口）**：第三节设计已全部落地——
+> - **第一批 + 第二批**（`2d906db`）：TurnExecutionScope 结构（步骤账本 + LIFO 文件补偿栈，50 项/20MB 预算超限降级）、RunTurnAsync 收尾 finally 化（N14 语义不变）、write/edit 注册旧内容补偿、bash/MCP 诚实标记 `Compensable: false`、`agent.undo` RPC（一次性消费账本逆序恢复，撤销记录 `>>> [undo]` 落盘）、ActiveTurnRecord.Steps 崩溃对账 + 恢复提示升级、TurnCompletedEvent 携带 UndoableFiles；
+> - **第三批**（`ab9ab99`）：桌面撤销横幅（回合结束 + 存在可撤销文件时展示，点击调 `agent.undo` 后刷新）；
+> - **两处落地偏差**：① RPC 命名为 `agent.undo`（与既有 `agent.*` 命名族一致，非 3.4 草案的 `turn.undo`）；② 3.4 的 `agent.autoCompensate` 配置**未实施**——默认不自动补偿已满足"半自动、不静默"目标，自动执行留作按需增强。
+> - 回归：.NET 371→375 / CLI 13 / 桌面 vitest 104 全绿，typecheck 0 错误。
+
 ---
 
 ## 一、事实核查：提案前提与现状的偏差
@@ -86,10 +92,10 @@ public sealed class TurnExecutionScope
 | T3 崩溃对账清单 | **升级为本设计的 3.5**（步骤清单替代纯文件清单） |
 | Saga / Workflow Graph | 裁决不做（本文第二节） |
 
-## 五、实施顺序建议
+## 五、实施顺序建议（✅ 三批均已按此完成）
 
-1. **第一批**：TurnExecutionScope 结构 + RunTurnAsync finally 化 + write/edit 补偿注册 + `turn.undo` RPC（依赖 T1 先行或同批）；
-2. **第二批**：ActiveTurnRecord 步骤扩展 + 恢复对账提示 + TurnCompleted 摘要；
-3. **第三批**：`autoCompensate` 配置 + UI 撤销入口（桌面端）。
+1. **第一批**：✅ TurnExecutionScope 结构 + RunTurnAsync finally 化 + write/edit 补偿注册 + `turn.undo` RPC（落地命名 `agent.undo`，`2d906db`）；
+2. **第二批**：✅ ActiveTurnRecord 步骤扩展 + 恢复对账提示 + TurnCompleted 摘要（`2d906db`）；
+3. **第三批**：⏸ `autoCompensate` 配置（未实施，默认不自动补偿已满足目标）+ ✅ UI 撤销入口（`ab9ab99`）。
 
-测试要点：补偿逆序与单项失败续行、取消路径 finally 收尾、N14 终态事件回归、journal 步骤扩展的 source-gen 序列化、崩溃恢复清单渲染。
+测试要点全部覆盖：补偿逆序与单项失败续行、取消路径 finally 收尾、N14 终态事件回归、journal 步骤扩展的 source-gen 序列化、崩溃恢复清单渲染（.NET 375 全绿含 TurnScopeTests 6 用例）。

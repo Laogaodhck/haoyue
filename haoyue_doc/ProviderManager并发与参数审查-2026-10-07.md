@@ -104,9 +104,9 @@
 
 ---
 
-## 四、修复实施记录（2026-10-07 同日完成）
+## 四、修复实施记录（2026-10-07 同日完成）✅ 全部收口
 
-按「C1 → P1+C3 → C2+P2 → 其余」优先级全部实施，改动如下：
+按「C1 → P1+C3 → C2+P2 → 其余」优先级全部实施，改动如下（主提交 `a516246`，遗留处置 `e0daee8`）：
 
 | 编号 | 修复内容 | 位置 |
 |---|---|---|
@@ -127,3 +127,5 @@
 **行为变化说明**：所有候选熔断中时，此前仍会逐个硬试（长时间挂起后失败），现在快速报「circuit open (cooling down)」，冷却期满后自动放行单探针——对单模型配置的用户是更快的明确报错而非 2 分钟无响应悬挂。
 
 **遗留处置（同日第二轮）**：原两项遗留均已消解——① CLI 侧 `ProviderCommands.cs` 的 add/remove 也改为 Copy-on-Write，与 daemon 路径一致；② `ChainBudgetSeconds` 的 clamp 下限从 10s 降为 0.5s（仅防 0/负数误配，显式小预算被尊重），使超预算路径可直接单测——新增 `StreamAsync_ChainBudgetExhausted_SkipsRemainingCandidates`（活动模型每次尝试 400ms，0.5s 预算耗尽后后备候选 0 次调用、聚合错误含 "failover chain budget exhausted"），并为 `StubLlmClient` 增加 `delayMs` 延迟能力。ProviderTests 55 → 56 全绿。
+
+**✅ 收口确认（2026-10-07）**：第一至三节全部发现（P1~P5、C1~C7）均已按第四节记录实施完毕，含两轮遗留处置，无待办；后续 ProviderManager 相关改动见当日 NLP/架构评审系列修复（`41ad868` 起的 NLP 链路修复未触及本模块核心语义）。

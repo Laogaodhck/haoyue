@@ -27,6 +27,7 @@ public static class EventJournal
         nameof(VerificationStartedEvent), nameof(VerificationCompletedEvent),
         nameof(PlanUpdatedEvent),
         nameof(ScheduledTaskUpcomingEvent), nameof(ScheduledTaskCompletedEvent),
+        nameof(EvolutionReflectionCompletedEvent),
         nameof(WarningEvent), nameof(ErrorEvent),
     ];
 

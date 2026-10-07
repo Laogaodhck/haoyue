@@ -60,12 +60,19 @@ public sealed class DefectAggregator(HaoyueDatabase database)
 
     private static readonly JsonSerializerOptions PayloadOptions = new();
 
-    /// <summary>Scans the most recent journal rows and returns aggregated defects, oldest first.</summary>
-    public IReadOnlyList<DefectReport> Aggregate(int limit = DefaultScanLimit)
+    /// <summary>Scans the most recent journal rows and returns aggregated defects, oldest first.
+    /// <paramref name="excludeSessions"/> lists reflection-turn session ids (from the evolution
+    /// decision log) so the engine never aggregates its own failures. Note: session attribution
+    /// brackets events between TurnStarted/TurnCompleted, which is unreliable when concurrent
+    /// turns interleave their events — acceptable for defect aggregation purposes.</summary>
+    public IReadOnlyList<DefectReport> Aggregate(
+        int limit = DefaultScanLimit,
+        IReadOnlyCollection<string>? excludeSessions = null)
     {
         var journal = database.RecentEvents(Math.Clamp(limit, 1, EventJournal.RetainedEvents));
 
         var currentSession = (string?)null;
+        var sessionExcluded = false;
         var toolFailures = new Dictionary<ClusterKey, List<(DateTimeOffset Ts, string? Session)>>();
         var verificationRuns = new List<List<(DateTimeOffset Ts, VerificationCompletedEvent Event)>>();
         var currentVerificationRun = new List<(DateTimeOffset Ts, VerificationCompletedEvent Event)>();
@@ -79,9 +86,17 @@ public sealed class DefectAggregator(HaoyueDatabase database)
             {
                 case nameof(TurnStartedEvent):
                     currentSession = TryDeserialize<TurnStartedEvent>(persisted.Payload)?.SessionId;
+                    sessionExcluded = currentSession is not null
+                        && excludeSessions?.Contains(currentSession) == true;
+                    break;
+
+                case nameof(TurnCompletedEvent):
+                    currentSession = null;
+                    sessionExcluded = false;
                     break;
 
                 case nameof(ToolCallCompletedEvent):
+                    if (sessionExcluded) break;
                     var tool = TryDeserialize<ToolCallCompletedEvent>(persisted.Payload);
                     if (tool is null || tool.Success) break;
                     var error = NormalizeError(tool.ResultSummary);
@@ -103,6 +118,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     break;
 
                 case nameof(VerificationCompletedEvent):
+                    if (sessionExcluded) break;
                     var verification = TryDeserialize<VerificationCompletedEvent>(persisted.Payload);
                     if (verification is null) break;
                     if (verification.Success)

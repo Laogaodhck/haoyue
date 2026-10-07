@@ -61,6 +61,9 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly CircuitBreaker _sharedBreaker;
     private readonly LocalModelCache _sharedLocalModels = new();
     private readonly ScheduleService _scheduler;
+    private readonly EvolutionStore _evolution;
+    private readonly ReflectionRunner _reflection;
+    private readonly SemaphoreSlim _reflectionGate = new(1, 1);
     private readonly IEventSubscription _runtimeEvents;
     private readonly Task _scheduleEventsTask;
 
@@ -177,6 +180,13 @@ public sealed class DaemonServer : IAsyncDisposable
             runtime.Schedules, runtime, _fileLocks, _sharedHttp, _sharedBreaker,
             runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct),
             sharedLocalModels: _sharedLocalModels);
+        // Evolution engine: reflection reuses the daemon's shared turn pathway so
+        // tests can stub it exactly like scheduled turns.
+        _evolution = new EvolutionStore(runtime.Database);
+        _reflection = new ReflectionRunner(
+            runtime, _fileLocks, _sharedHttp, _sharedBreaker, _evolution,
+            runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct),
+            _sharedLocalModels);
         _runtimeEvents = _runtime.Events.Subscribe();
         _scheduleEventsTask = BroadcastScheduleEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
         _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token);
@@ -529,7 +539,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var limit = Params(request)["limit"]?.GetValue<int>() ?? DefectAggregator.DefaultScanLimit;
                         var aggregator = new DefectAggregator(_runtime.Database);
                         var reports = new JsonArray();
-                        foreach (var report in aggregator.Aggregate(limit))
+                        foreach (var report in aggregator.Aggregate(limit, _evolution.ReflectionSessionIds()))
                             reports.Add(new JsonObject
                             {
                                 ["fingerprint"] = report.Fingerprint,
@@ -548,6 +558,34 @@ public sealed class DaemonServer : IAsyncDisposable
                             ["reports"] = reports,
                         };
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", result.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "evolution.reflect":
+                    {
+                        // Evolution engine E2+E3: fire-and-forget reflection pass.
+                        // The turn runs in the background (it is a full agent turn);
+                        // completion arrives as an EvolutionReflectionCompletedEvent.
+                        if (!_reflectionGate.Wait(0))
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "反思 turn 已在进行中", context.ConnectionCt).ConfigureAwait(false);
+                            break;
+                        }
+                        try
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                                new JsonObject { ["started"] = true }.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        }
+                        catch
+                        {
+                            _reflectionGate.Release();
+                            throw;
+                        }
+                        _ = Task.Run(async () =>
+                        {
+                            try { await _reflection.RunAsync(_shutdown.Token).ConfigureAwait(false); }
+                            finally { _reflectionGate.Release(); }
+                        }, _shutdown.Token);
                         break;
                     }
 
@@ -1921,7 +1959,7 @@ public sealed class DaemonServer : IAsyncDisposable
             "session.list", "session.search", "session.get", "session.update", "session.archive", "session.delete",
             "session.resume", "session.new",
             "agent.interrupted",
-            "evolution.inspect",
+            "evolution.inspect", "evolution.reflect",
             "lock.list", "factory.reset", "shutdown", "events.recent"),
     }.ToJsonString();
 

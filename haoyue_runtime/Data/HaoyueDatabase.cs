@@ -247,6 +247,19 @@ public sealed class HaoyueDatabase
                 type TEXT NOT NULL,
                 payload TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS evolution_log (
+                fingerprint TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                candidate_dir TEXT NULL,
+                session_id TEXT NULL,
+                summary TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_evolution_status ON evolution_log(status);
             """;
         command.ExecuteNonQuery();
 

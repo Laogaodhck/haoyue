@@ -15,6 +15,11 @@ public static class HaoyuePaths
     public static string UsageFile => Path.Combine(Home, "usage.jsonl");
     public static string LogsDir => Path.Combine(Home, "logs");
     public static string SkillsDir => Path.Combine(Home, "skills");
+    /// <summary>Candidate skill drafts produced by the evolution engine. Deliberately NOT
+    /// a skill scan root: drafts stay inert until a human adopts them into SkillsDir.</summary>
+    public static string SkillsCandidatesDir => Path.Combine(Home, "skills-candidates");
+    /// <summary>Scratch space for evolution reflection turns (MRE files and skill drafts).</summary>
+    public static string LabsDir => Path.Combine(Home, "labs");
     public static string PromptsDir => Path.Combine(Home, "prompts");
     public static string SessionsDir => Path.Combine(Home, "sessions");
     /// <summary>Handshake token the daemon shares with its local clients.</summary>

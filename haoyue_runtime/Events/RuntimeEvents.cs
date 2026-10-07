@@ -118,3 +118,14 @@ public sealed record WarningEvent(string Message) : RuntimeEvent;
 
 public sealed record ErrorEvent(string Message, string? Detail = null) : RuntimeEvent;
 
+// ---------------------------------------------------------------- evolution
+
+/// <summary>Emitted after an evolution reflection turn finishes (engine stage E2).</summary>
+public sealed record EvolutionReflectionCompletedEvent(
+    string SessionId,
+    int Processed,
+    int Candidates,
+    int NoAction,
+    int Skipped,
+    string? Error = null) : RuntimeEvent;
+

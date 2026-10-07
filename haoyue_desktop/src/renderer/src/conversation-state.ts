@@ -1,4 +1,4 @@
-import type { ChatMessage } from './types'
+import type { ChatMessage, ProjectItem, ThreadItem } from './types'
 
 export type TerminalKind = 'done' | 'cancelled' | 'error'
 
@@ -20,4 +20,30 @@ export function finalizeAssistantBubbles(
     if (item.state !== 'thinking' && item.state !== 'streaming') continue
     item.state = terminalState
   }
+}
+
+/**
+ * N17: a daemon crash can kill a turn mid-flight while the client keeps its stale
+ * "running" state, which would leave the spinner (and guards built on it) stuck
+ * forever. Clears the in-flight state, badges the half-finished assistant bubble,
+ * and drops the loaded-session flag so the interruption notice appended by the
+ * daemon gets pulled on the next reload.
+ */
+export function markThreadInterrupted(
+  thread: ThreadItem,
+  reload?: (thread: ThreadItem, project?: ProjectItem) => Promise<void> | void
+): void {
+  thread.running = false
+  thread.queueDraining = false
+  thread.assistantId = undefined
+  for (let i = thread.messages.length - 1; i >= 0; i--) {
+    const message = thread.messages[i]
+    if (message?.role === 'assistant') {
+      message.interrupted = true
+      message.state = 'done'
+      break
+    }
+  }
+  thread.sessionLoaded = false
+  void reload?.(thread)
 }

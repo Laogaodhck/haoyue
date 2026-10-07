@@ -21,6 +21,7 @@ export type DaemonEventName =
   | 'schedule.updated'
   | 'schedule.upcoming'
   | 'mcp.updated'
+  | 'turn.interrupted'
 
 export interface DaemonMessage {
   id: number

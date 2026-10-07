@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import type { DaemonMessage } from '../../shared/ipc'
 import type { ChatMessage, ProjectItem, ThreadItem } from './types'
-import { finalizeAssistantBubbles } from './conversation-state'
+import { finalizeAssistantBubbles, markThreadInterrupted } from './conversation-state'
 import { makeId, phaseLabel } from './app-helpers'
 
 export interface DaemonEventContext {
@@ -79,6 +79,15 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
 
   return function handleDaemonEvent(event: DaemonMessage): void {
     if (event.event === 'schedule.upcoming') return
+    if (event.event === 'turn.interrupted') {
+      // N17: the daemon recovered a session whose turn was killed mid-flight by a
+      // crash. Clear the stale running state (otherwise the spinner sticks forever)
+      // and badge the half-finished assistant bubble.
+      const sessionId = typeof event.details?.sessionId === 'string' ? event.details.sessionId : ''
+      const thread = threads.value.find((item) => item.sessionId === sessionId)
+      if (thread) markThreadInterrupted(thread, reloadThreadSession)
+      return
+    }
     if (event.event === 'schedule.updated') {
       void handleScheduleUpdated()
       // Outcomes reach the desktop as events, but nobody watches the schedule page

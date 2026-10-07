@@ -48,7 +48,7 @@ import TaskSettingsDialog from './components/TaskSettingsDialog.vue'
 import TaskStepList from './components/TaskStepList.vue'
 import { computeTurnTaskSteps, type TaskStep } from './task-planner'
 import { confirmAction } from './confirmation'
-import { finalizeAssistantBubbles } from './conversation-state'
+import { finalizeAssistantBubbles, markThreadInterrupted } from './conversation-state'
 import { isForbiddenProjectPath } from './project-paths'
 import { retryRuntimeConnection, RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
 import { ReasoningLevel } from './types'
@@ -534,6 +534,7 @@ async function loadRuntimeState(): Promise<void> {
     mode.value = modeResponse.data
     await refreshAllProjectSessions()
     await migrateImplicitDocumentsProject()
+    await reconcileInterruptedTurns()
 
     if (!activeThread.value) {
       const recent = threads.value
@@ -550,6 +551,35 @@ async function loadRuntimeState(): Promise<void> {
   } catch {
     models.value = []
     modelCatalog.value = []
+  }
+}
+
+// N17: after a daemon crash + restart, the startup recovery appends interruption
+// notices and records the recovered session ids. The client may reconnect long
+// after that broadcast window, so it pulls the list via agent.interrupted and
+// clears the stale "running" state that would otherwise stick forever.
+async function reconcileInterruptedTurns(): Promise<void> {
+  if (!daemonState.value.connected) return
+  let sessionIds: string[] = []
+  try {
+    const response = await window.haoyue.daemon.request('agent.interrupted')
+    sessionIds = JSON.parse(response.data) as string[]
+  } catch {
+    return
+  }
+  if (!Array.isArray(sessionIds) || sessionIds.length === 0) return
+  const interruptedIds = new Set(sessionIds)
+  const hits = threads.value.filter((thread) => thread.sessionId && interruptedIds.has(thread.sessionId))
+  if (hits.length === 0) return
+  for (const thread of hits) markThreadInterrupted(thread)
+  void window.haoyue?.notify?.(
+    '回合被中断',
+    hits.length === 1
+      ? `「${hits[0]!.title}」的回合因 Runtime 重启而中断，可重新发送消息继续。`
+      : `${hits.length} 个任务的回合因 Runtime 重启而中断，可重新发送消息继续。`)
+  const active = activeThread.value
+  if (active?.sessionId && interruptedIds.has(active.sessionId)) {
+    await selectThread(active.id)
   }
 }
 

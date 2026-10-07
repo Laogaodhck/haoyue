@@ -189,3 +189,51 @@ describe('daemon event handler — stream batching', () => {
     expect(assistant.content.match(/模型调用失败：/g)).toHaveLength(1)
   })
 })
+
+describe('daemon event handler — turn.interrupted (N17)', () => {
+  beforeEach(() => {
+    ;(globalThis as unknown as { window: unknown }).window = {
+      haoyue: { notify: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) }
+    }
+  })
+
+  function interruptedEvent(sessionId: string): DaemonMessage {
+    return { id: 0, event: 'turn.interrupted', data: '', details: { sessionId, reason: 'daemon_crash' } }
+  }
+
+  function runningThread(): ThreadItem {
+    const thread: ThreadItem = {
+      id: 't1', title: '任务', updatedAt: Date.now(), messages: [],
+      sessionId: 's1', running: true, assistantId: 'a1'
+    }
+    thread.messages.push({ id: 'a1', role: 'assistant', content: '半截回答', state: 'streaming', createdAt: 1 })
+    return thread
+  }
+
+  it('clears stale running state, badges the partial bubble and reloads', () => {
+    const context = createContext()
+    const thread = runningThread()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(interruptedEvent('s1'))
+
+    expect(thread.running).toBe(false)
+    expect(thread.assistantId).toBeUndefined()
+    expect(thread.sessionLoaded).toBe(false)
+    expect(thread.messages[0]!.interrupted).toBe(true)
+    expect(thread.messages[0]!.state).toBe('done')
+    expect(context.reloadThreadSession).toHaveBeenCalledWith(thread)
+  })
+
+  it('ignores session ids it does not know', () => {
+    const context = createContext()
+    const thread = runningThread()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    expect(() => handler(interruptedEvent('unknown'))).not.toThrow()
+    expect(thread.running).toBe(true)
+    expect(context.reloadThreadSession).not.toHaveBeenCalled()
+  })
+})

@@ -83,8 +83,21 @@ public static class ContextPlanner
     public static int EstimateTokens(ChatMessage message) =>
         EstimateTokens(message.Text)
         + (message.ToolCalls?.Sum(c => EstimateTokens(c.ArgumentsJson) + EstimateTokens(c.Name)) ?? 0)
-        + (message.Images?.Count * 1_200 ?? 0)
+        + (message.Images?.Sum(EstimateImageTokens) ?? 0)
         + PerMessageOverheadTokens;
+
+    /// <summary>
+    /// Image token estimate derived from the encoded payload size (dimensions are not on
+    /// the wire): base64 bytes correlate with resolution at roughly 1 token per 750 bytes,
+    /// floored at 300. The previous flat 1_200-token guess underestimated high-resolution
+    /// screenshots by 2-6x and let vision history silently overflow the window.
+    /// </summary>
+    internal static int EstimateImageTokens(ChatImageAttachment image)
+    {
+        if (string.IsNullOrEmpty(image.Data)) return 300;
+        var bytes = image.Data.Length * 3 / 4; // base64 → raw bytes
+        return Math.Max(300, (int)(bytes / 750));
+    }
 
     /// <summary>
     /// Truncates a single injected text fragment to <paramref name="maxTokens"/>, keeping
@@ -131,7 +144,11 @@ public static class ContextPlanner
     /// <summary>Character budget for a single tool result, scaled to the context window.</summary>
     public static int ToolOutputBudget(ModelConfig model, AgentConfig agent)
     {
-        var byWindow = (int)(model.ContextWindow * CharsPerToken * 0.05); // ≤5% of the window per tool call
+        // Mixed-script safe ratio: tool results are frequently CJK for Chinese users, where
+        // 4 chars/token underestimates real token usage by ~2.7x and lets the budgeted
+        // output silently cost far more than its window share. The midpoint of the Latin
+        // (4.0) and CJK (1.5) ratios keeps Latin budgets generous while capping CJK overflow.
+        var byWindow = (int)(model.ContextWindow * (CharsPerToken + CjkCharsPerToken) / 2 * 0.05); // ≤5% of the window per tool call
         return Math.Clamp(byWindow, 4_000, agent.MaxToolOutputChars);
     }
 
@@ -204,8 +221,48 @@ public static class ContextPlanner
             result.Insert(0, ChatMessage.User(
                 "[Earlier conversation history was trimmed to fit the model's context window.]"));
 
+        // Last resort: the floor messages (or a single huge paste) alone can still exceed
+        // the budget — dropping more is impossible and sending the request is guaranteed
+        // to fail with an unretryable provider 400. Shrink individual oversized messages
+        // head+tail so the request always fits.
+        if (total > budget)
+        {
+            for (var i = 0; i < result.Count && total > budget; i++)
+            {
+                var message = result[i];
+                var messageTokens = EstimateTokens(message);
+                // Only shrink messages that dominate the remaining budget; small ones
+                // cannot move the needle and must not lose content.
+                if (messageTokens <= Math.Max(256, budget / 4)) continue;
+                var perMessageBudget = Math.Max(256, budget / Math.Max(result.Count, 1));
+                var fitted = FitInjectedText(message.Text, perMessageBudget);
+                if (fitted == message.Text) continue;
+                total -= messageTokens - (EstimateTokens(fitted) + PerMessageOverheadTokens);
+                result[i] = WithText(message, fitted);
+            }
+        }
+
         return result;
     }
+
+    /// <summary>Clone of <paramref name="message"/> with replaced text (session history
+    /// must never be mutated in place — the truncated copy lives only in the request).</summary>
+    private static ChatMessage WithText(ChatMessage message, string text) => new()
+    {
+        Role = message.Role,
+        Text = text,
+        Images = message.Images,
+        Thinking = message.Thinking,
+        ModelRef = message.ModelRef,
+        ViewedImages = message.ViewedImages,
+        ToolCalls = message.ToolCalls,
+        ToolCallId = message.ToolCallId,
+        ToolName = message.ToolName,
+        ToolSuccess = message.ToolSuccess,
+        ToolDiff = message.ToolDiff,
+        ToolFilePath = message.ToolFilePath,
+        Timestamp = message.Timestamp,
+    };
 
     /// <summary>
     /// Repairs interrupted or legacy history before it is sent to a provider. Every assistant

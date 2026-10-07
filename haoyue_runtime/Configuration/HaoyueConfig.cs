@@ -148,6 +148,12 @@ public sealed class RetryConfig
     public int MaxAttempts { get; set; } = 3;
     public double BaseDelaySeconds { get; set; } = 1.0;
     public double MaxDelaySeconds { get; set; } = 20.0;
+    /// <summary>
+    /// Extra attempts granted to each fallback candidate (the active model always gets
+    /// MaxAttempts). Default 0 = single shot; raise to 1-2 when fallback providers hit
+    /// transient 429s that an immediate retry would clear.
+    /// </summary>
+    public int FallbackRetryAttempts { get; set; }
     /// <summary>Consecutive failures before a model's circuit opens.</summary>
     public int CircuitBreakThreshold { get; set; } = 4;
     public double CircuitCooldownSeconds { get; set; } = 60.0;

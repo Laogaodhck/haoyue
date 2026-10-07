@@ -449,8 +449,33 @@ public sealed class OpenAiCompatibleClient(ILlmHttpFactory httpFactory) : ILlmCl
 
         var detail = ExtractErrorMessage(body);
         var retryable = status is 408 or 409 or 429 or >= 500;
-        return new LlmException($"{providerId} returned HTTP {status}: {detail}", status, retryable);
+        // Honor an explicit Retry-After (429/503) instead of guessing with backoff.
+        TimeSpan? retryAfter = response.Headers.RetryAfter?.Delta;
+        if (retryAfter is null && response.Headers.RetryAfter?.Date is { } retryDate)
+            retryAfter = retryDate - DateTimeOffset.UtcNow;
+        if (retryAfter is { } ra && ra < TimeSpan.Zero) retryAfter = TimeSpan.Zero;
+        return new LlmException($"{providerId} HTTP {status}（{StatusHint(status)}）：{detail}", status, retryable)
+        {
+            RetryAfter = retryAfter,
+        };
     }
+
+    /// <summary>Short Chinese hint per HTTP status so failures are readable without opening the details.</summary>
+    internal static string StatusHint(int status) => status switch
+    {
+        400 => "请求格式错误",
+        401 => "认证失败：API 密钥缺失或无效",
+        402 => "账户余额不足",
+        403 => "无访问权限",
+        404 => "接口或模型不存在",
+        408 => "请求超时",
+        409 => "请求冲突",
+        413 => "请求体过大",
+        422 => "参数校验失败",
+        429 => "请求过于频繁或配额不足",
+        >= 500 => "服务端错误",
+        _ => "请求失败",
+    };
 
     internal static string ExtractErrorMessage(string body)
     {

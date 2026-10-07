@@ -24,7 +24,8 @@ public static class PromptVariables
         var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["cwd"] = hasWorkspace ? workspace!.Root : Directory.GetCurrentDirectory(),
-            ["datetime"] = DateTimeOffset.Now.ToString("yyyy-MM-dd zzz"),
+            // Weekday + time-of-day so "现在几点""今天周几" questions are answerable.
+            ["datetime"] = DateTimeOffset.Now.ToString("yyyy-MM-dd ddd HH:mm zzz"),
             ["os"] = RuntimeInformation.OSDescription,
             ["platform"] = RuntimeInformation.RuntimeIdentifier,
             ["workspace"] = hasWorkspace ? workspace!.Root : "",

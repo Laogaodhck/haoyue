@@ -140,8 +140,17 @@ public static class ToolSchema
         };
     }
 
-    public static JsonObject String(string description) =>
-        new() { ["type"] = "string", ["description"] = description };
+    public static JsonObject String(string description, params string[] allowedValues)
+    {
+        var schema = new JsonObject { ["type"] = "string", ["description"] = description };
+        if (allowedValues is { Length: > 0 })
+        {
+            var values = new JsonArray();
+            foreach (var value in allowedValues) values.Add((JsonNode)value);
+            schema["enum"] = values;
+        }
+        return schema;
+    }
 
     public static JsonObject Integer(string description) =>
         new() { ["type"] = "integer", ["description"] = description };

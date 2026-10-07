@@ -58,10 +58,18 @@ public sealed class AnthropicClient(ILlmHttpFactory httpFactory) : ILlmClient
                 var status = (int)response.StatusCode;
                 var body = "";
                 try { body = await response.Content.ReadAsStringAsync(headerCts.Token).ConfigureAwait(false); } catch { }
+                // Honor an explicit Retry-After (429/529/503) instead of guessing with backoff.
+                TimeSpan? retryAfter = response.Headers.RetryAfter?.Delta;
+                if (retryAfter is null && response.Headers.RetryAfter?.Date is { } retryDate)
+                    retryAfter = retryDate - DateTimeOffset.UtcNow;
+                if (retryAfter is { } ra && ra < TimeSpan.Zero) retryAfter = TimeSpan.Zero;
                 throw new LlmException(
-                    $"{request.Provider.Id} returned HTTP {status}: {OpenAiCompatibleClient.ExtractErrorMessage(body)}",
+                    $"{request.Provider.Id} HTTP {status}（{OpenAiCompatibleClient.StatusHint(status)}）：{OpenAiCompatibleClient.ExtractErrorMessage(body)}",
                     status,
-                    retryable: status is 408 or 409 or 429 or 529 or >= 500);
+                    retryable: status is 408 or 409 or 429 or 529 or >= 500)
+                {
+                    RetryAfter = retryAfter,
+                };
             }
 
             // Compatible gateways do not always honour stream=false. If one answers with

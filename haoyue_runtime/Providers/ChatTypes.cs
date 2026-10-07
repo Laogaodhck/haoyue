@@ -129,4 +129,7 @@ public sealed class LlmException(string message, int? statusCode = null, bool re
 {
     public int? StatusCode { get; } = statusCode;
     public bool Retryable { get; } = retryable;
+
+    /// <summary>Retry-After hint from the provider (429/503), honored over the local backoff guess.</summary>
+    public TimeSpan? RetryAfter { get; init; }
 }

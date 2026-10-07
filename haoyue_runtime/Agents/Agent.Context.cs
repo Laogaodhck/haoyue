@@ -103,7 +103,14 @@ public sealed partial class Agent
             events.Publish(new WarningEvent("Compaction prompt 'builtin/summarize' is missing; falling back to plain history trimming."));
             return null;
         }
-        var input = ContextPlanner.FitToWindow(WithoutImages(old), model.Model, instruction);
+        var withoutImages = WithoutImages(old);
+        var input = ContextPlanner.FitToWindow(withoutImages, model.Model, instruction);
+        // The summarize input itself goes through a window fit: when the oldest portion
+        // does not fit, it is dropped BEFORE being summarized — those facts would vanish
+        // silently. Never hide that from the user.
+        if (input.Count < withoutImages.Count)
+            events.Publish(new WarningEvent(
+                $"上下文压缩：最早期 {withoutImages.Count - input.Count} 条消息超出摘要输入预算，未纳入本次总结，相关信息可能缺失。"));
         var completion = await CollectCompletionAsync(
             candidate => new LlmRequest
             {

@@ -31,7 +31,9 @@ public sealed class WebSearchTool(IPromptProvider prompts) : BuiltinTool(prompts
 
     public override JsonObject ParameterSchema => ToolSchema.Object(
         ("query", ToolSchema.String("Search query"), true),
-        ("engine", ToolSchema.String("Search engine: auto, google, bing, or baidu. Default auto."), false),
+        // enum constraint: the model sees the valid values up front instead of
+        // burning a round trip on an execution-time validation error.
+        ("engine", ToolSchema.String("Search engine: auto, google, bing, or baidu. Default auto.", "auto", "google", "bing", "baidu"), false),
         ("max_results", ToolSchema.Integer("Maximum results to return, default 8"), false));
 
     public override async Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)

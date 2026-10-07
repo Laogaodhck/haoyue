@@ -164,9 +164,13 @@ public sealed class ProviderManager(
                 eventBus.Publish(new ProviderSwitchedEvent(
                     candidates[candidateIndex - 1].Ref, model.Ref, lastError?.Message ?? "failover"));
 
-            // Fallback candidates get a single shot: retrying each of them the full
-            // MaxAttempts times multiplies the wait without meaningfully improving the odds.
-            var candidateAttempts = candidateIndex == 0 ? maxAttempts : 1;
+            // The active model gets the full MaxAttempts; fallback candidates get a single
+            // attempt by default (retrying each of them the full MaxAttempts times multiplies
+            // the wait without meaningfully improving the odds), configurable via
+            // retry.fallbackRetryAttempts for providers whose transient 429s need one retry.
+            var candidateAttempts = candidateIndex == 0
+                ? maxAttempts
+                : 1 + Math.Clamp(retry.FallbackRetryAttempts, 0, 5);
 
             for (var attempt = 1; attempt <= candidateAttempts; attempt++)
             {
@@ -220,6 +224,9 @@ public sealed class ProviderManager(
                             if (attempt < candidateAttempts)
                             {
                                 var delay = BackoffDelay(attempt, retry);
+                                // An explicit Retry-After hint from the provider outruns
+                                // our own backoff guess.
+                                if (ex.RetryAfter is { } hint && hint > delay) delay = hint;
                                 // Never sleep past the chain budget: cap the backoff to the
                                 // remaining wall-clock time and bail out if it is spent.
                                 var remaining = chainDeadline - DateTimeOffset.UtcNow;

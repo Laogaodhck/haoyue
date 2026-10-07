@@ -75,6 +75,16 @@ public sealed partial class Agent(
         IReadOnlyList<ChatImageAttachment>? images = null,
         AgentSteeringQueue? steering = null)
     {
+        // Empty input would burn a model round on a guaranteed-empty answer. Text OR
+        // images must be present; the desktop and CLI frontends never send both empty,
+        // but scheduled tasks and API callers can.
+        if (string.IsNullOrWhiteSpace(userInput) && images is not { Count: > 0 })
+        {
+            const string message = "输入为空：请提供有效的问题或指令后再发送。";
+            events.Publish(new ErrorEvent("Empty input", message));
+            return new AgentTurnResult("", false, message);
+        }
+
         var agentConfig = configStore.Config.Agent;
         events.Publish(new TurnStartedEvent(session.Header.Id, userInput));
         // Neutralize user text that mimics the runtime-notice prefix before it enters
@@ -94,6 +104,10 @@ public sealed partial class Agent(
         var finalText = "";
         string? error = null;
         var cancelled = false;
+        // Vision relevance is tracked incrementally (see turnHasImagesFlag) instead of
+        // rescanning history: after a compaction the scan range becomes ambiguous, and
+        // images from earlier turns must not drag a text-only turn onto a vision model.
+        var turnHasImagesFlag = images is { Count: > 0 };
         // Declared outside the try so the terminal WorkflowEvent below the catch blocks
         // can always publish the step number, even when a catch path is taken.
         var step = 0;
@@ -105,6 +119,7 @@ public sealed partial class Agent(
         void HandleToolResult(ToolCallRequest call, ToolExecution execution)
         {
             mutated |= execution.ToolMutated;
+            turnHasImagesFlag |= execution.Message.Images is { Count: > 0 };
             sessionStore.Append(session, execution.Message);
             if (execution.Message.ToolSuccess)
             {
@@ -112,8 +127,7 @@ public sealed partial class Agent(
                 failureSignature = "";
                 return;
             }
-            var signature = $"{call.Name}|{ToolArguments.Sanitize(call.ArgumentsJson)}";
-            if (signature == failureSignature) consecutiveFailures++;
+            var signature = $"{call.Name}|{ToolArguments.Sanitize(call.ArgumentsJson)}";            if (signature == failureSignature) consecutiveFailures++;
             else
             {
                 failureSignature = signature;
@@ -171,15 +185,15 @@ public sealed partial class Agent(
                     }
                 }
                 ct.ThrowIfCancellationRequested();
-                PublishSteering(AppendSteering(session, steering));
+                var preSteering = AppendSteering(session, steering);
+                turnHasImagesFlag |= preSteering.Any(message => message.Images is { Count: > 0 });
+                PublishSteering(preSteering);
 
-                // Only messages appended by this turn decide whether vision is needed: the current
-                // input, steering guidance that arrives mid-turn (possibly with a screenshot), and
-                // tool results such as capture_screen. Attachments from earlier turns must not drag
-                // a text-only turn onto a vision model or re-upload images on every follow-up.
-                var turnHasImages = session.Messages
-                    .Skip(turnMessageIndex)
-                    .Any(message => message.Images is { Count: > 0 });
+                // Vision relevance: only what this turn produced decides whether vision is
+                // needed — the current input, mid-turn steering (possibly with a screenshot)
+                // and tool results such as capture_screen. Images from earlier turns must
+                // not drag a text-only turn onto a vision model or re-upload on follow-ups.
+                var turnHasImages = turnHasImagesFlag;
                 var model = turnHasImages
                     ? providerManager.BuildCandidates(workspace.Config)
                         .FirstOrDefault(candidate => candidate.Model.Capabilities.Vision)
@@ -215,10 +229,6 @@ public sealed partial class Agent(
                 {
                     PublishWorkflow(step, "compact", "压缩记忆");
                     await CompactContextAsync(session, workspace, model, source, systemPrompt, ct).ConfigureAwait(false);
-                    // 压缩会 Clear 并重建历史，压缩前记录的 turnMessageIndex 不再指向本回合的
-                    // 消息。归零让后续步骤扫描全部保留消息，避免本回合的图像（含最近保留窗里的
-                    // 图片）被静默剥离、回合被错误切到纯文本模型。
-                    turnMessageIndex = 0;
                     compactedThisTurn = true;
                     source = requiresVision ? session.Messages : WithoutImages(session.Messages);
                     history = ContextPlanner.FitToWindow(source, model.Model, systemPrompt);
@@ -257,6 +267,7 @@ public sealed partial class Agent(
                 // current completion and continue with a fresh model step; the in-flight
                 // request is never cancelled or rewritten.
                 var guidance = AppendSteering(session, steering);
+                turnHasImagesFlag |= guidance.Any(message => message.Images is { Count: > 0 });
 
                 // StreamOnceAsync preserves partial text on cancellation. Stop the turn after
                 // persisting that text instead of reporting the cancelled request as completed.
@@ -342,6 +353,16 @@ public sealed partial class Agent(
                     events.Publish(new WarningEvent("模型返回了空回答，已请求重新生成。"));
                     PublishSteering(guidance);
                     continue;
+                }
+                if (completion.Text.Length == 0 && emptyAnswerNudged)
+                {
+                    // Second empty answer: end explicitly. Returning the previous step's
+                    // text as the "final answer" misleads users into reading stale middle
+                    // output as a conclusion.
+                    events.Publish(new WarningEvent(
+                        "模型连续两次返回空回答，回合已结束；上方内容为此前的中间输出，不代表最终结论。可直接重试本任务。"));
+                    finalText = "";
+                    break;
                 }
 
                 // Model believes it is done. If it changed files, prove the project still builds.

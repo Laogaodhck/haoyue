@@ -17,8 +17,30 @@ public abstract class BuiltinTool(IPromptProvider prompts) : ITool
     public virtual bool RequiresVision => false;
     public virtual string StatusLabel => "Working";
 
-    /// <summary>Tool descriptions live in prompts/tool/&lt;name&gt;.txt (hot-reloadable).</summary>
-    public string Description => prompts.TryGet($"tool/{Name}") ?? $"The {Name} tool.";
+    /// <summary>Tools whose description file was already reported missing (warn once per tool).</summary>
+    private static readonly HashSet<string> MissingDescriptionWarned = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Tool descriptions live in prompts/tool/&lt;name&gt;.txt (hot-reloadable). A missing
+    /// file silently degrades to a content-free one-liner — the model then picks tools
+    /// mostly by name, so warn once loudly instead of failing quietly.
+    /// </summary>
+    public string Description
+    {
+        get
+        {
+            var description = prompts.TryGet($"tool/{Name}");
+            if (description is not null) return description;
+            lock (MissingDescriptionWarned)
+            {
+                if (MissingDescriptionWarned.Add(Name))
+                    Console.Error.WriteLine(
+                        $"[haoyue] warning: tool description 'prompts/tool/{Name}.txt' is missing; " +
+                        "falling back to a generic one-liner. Tool-selection accuracy will suffer.");
+            }
+            return $"The {Name} tool.";
+        }
+    }
 
     /// <summary>How long a mutating tool waits for the central file write lock before failing.</summary>
     protected static readonly TimeSpan FileWriteLockTimeout = TimeSpan.FromSeconds(30);

@@ -46,6 +46,28 @@ public abstract class BuiltinTool(IPromptProvider prompts) : ITool
     protected static readonly TimeSpan FileWriteLockTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Atomic file replacement: write a unique temp file in the target directory, then
+    /// rename over the destination. A crash, IO error or cancellation mid-write can
+    /// never leave a half-written target file behind — the worst case is an orphan
+    /// temp file, which the finally block removes.
+    /// </summary>
+    protected static async Task WriteAtomicAsync(string path, string content, CancellationToken ct)
+    {
+        var temp = Path.Combine(
+            Path.GetDirectoryName(path) ?? ".",
+            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await File.WriteAllTextAsync(temp, content, ct).ConfigureAwait(false);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>
     /// Runs a mutating tool body under the central file write lock when a coordinator is
     /// present (daemon / concurrent turns). The mutation itself re-reads the file inside
     /// the lock, so edits always apply to the latest on-disk content. Without a
@@ -182,7 +204,7 @@ public sealed class WriteFileTool(IPromptProvider prompts) : BuiltinTool(prompts
         var oldText = existed ? await File.ReadAllTextAsync(path, ct).ConfigureAwait(false) : "";
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, content, ct).ConfigureAwait(false);
+        await WriteAtomicAsync(path, content, ct).ConfigureAwait(false);
 
         var relative = Path.GetRelativePath(context.Workspace.Root, path);
         var lineCount = content.Count(c => c == '\n') + 1;
@@ -241,7 +263,7 @@ public sealed class EditFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
         var updated = replaceAll
             ? text.Replace(effectiveOld, effectiveNew)
             : ReplaceFirst(text, effectiveOld, effectiveNew);
-        await File.WriteAllTextAsync(path, updated, ct).ConfigureAwait(false);
+        await WriteAtomicAsync(path, updated, ct).ConfigureAwait(false);
 
         var relative = Path.GetRelativePath(context.Workspace.Root, path);
         var diff = DiffUtil.Unified(text, updated, relative);

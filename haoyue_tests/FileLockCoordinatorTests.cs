@@ -172,6 +172,45 @@ public sealed class FileLockCoordinatorTests : IDisposable
         Assert.Equal("second-edited", await File.ReadAllTextAsync(FilePath(_dir)));
     }
 
+    [Fact]
+    public async Task WriteFileTool_AtomicWrite_LeavesNoTempResidue()
+    {
+        var tool = new WriteFileTool(new NullPrompts());
+
+        var result = await tool.ExecuteAsync(new JsonObject
+        {
+            ["path"] = "atomic.txt",
+            ["content"] = "final content",
+        }, Context(_dir, new FileLockCoordinator(), "task-1"), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("final content", await File.ReadAllTextAsync(Path.Combine(_dir, "atomic.txt")));
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task EditFileTool_CancellationDuringWrite_LeavesTargetIntact()
+    {
+        var target = Path.Combine(_dir, "cancel.txt");
+        await File.WriteAllTextAsync(target, "original");
+        var tool = new EditFileTool(new NullPrompts());
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            tool.ExecuteAsync(new JsonObject
+            {
+                ["path"] = "cancel.txt",
+                ["old_string"] = "original",
+                ["new_string"] = "changed",
+            }, Context(_dir, new FileLockCoordinator(), "task-1"), cts.Token));
+
+        // The atomic write path never touches the target before the rename succeeds.
+        Assert.Equal("original", await File.ReadAllTextAsync(target));
+        Assert.Empty(Directory.GetFiles(_dir, "*.tmp", SearchOption.AllDirectories));
+    }
+
     private static ToolContext Context(string dir, IFileLockCoordinator coordinator, string owner) => new()
     {
         Workspace = new WorkspaceInfo { Root = dir, ProjectKinds = [] },

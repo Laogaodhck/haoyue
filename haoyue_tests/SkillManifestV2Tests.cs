@@ -295,4 +295,80 @@ public sealed class SkillManifestV2Tests : IDisposable
         Assert.Contains("常驻内容", miss);
         Assert.DoesNotContain("部署内容", miss);
     }
+
+    [Fact]
+    public void Catalog_ListsTriggerGatedSkills_AndRespectsAlwaysListedFlag()
+    {
+        WriteSkill("deploy", """
+            name: deploy
+            description: 部署技能
+            triggers:
+              - 部署
+            """);
+        WriteSkill("secret", """
+            name: secret
+            description: 内部技能
+            always-listed: false
+            triggers:
+              - 内部
+            """);
+        WriteSkill("always-on", """
+            name: always-on
+            description: 常驻技能
+            """, prompt: "常驻内容");
+
+        var manager = NewManager(out _);
+        var catalog = manager.RenderSkillCatalog(Workspace);
+
+        Assert.NotNull(catalog);
+        Assert.Contains("deploy", catalog);
+        Assert.Contains("部署技能", catalog);
+        // always-listed: false 与常驻技能不出现在目录中。
+        Assert.DoesNotContain("secret", catalog);
+        Assert.DoesNotContain("always-on", catalog);
+        Assert.Contains("declare_skill", catalog);
+    }
+
+    [Fact]
+    public void DeclareForTurn_InjectsListedSkill_AndRejectsUnknownOrHidden()
+    {
+        WriteSkill("deploy", """
+            name: deploy
+            description: 部署技能
+            triggers:
+              - 部署
+            """, prompt: "部署内容");
+        WriteSkill("secret", """
+            name: secret
+            description: 内部技能
+            always-listed: false
+            triggers:
+              - 内部
+            """, prompt: "内部内容");
+
+        var manager = NewManager(out var registry);
+        manager.Attach(Workspace);
+
+        // 关键词未命中时 deploy 不注入。
+        var contribution = registry.All.Single(c => c.Id == "skills");
+        string? Resolve(string userMessage) => contribution.Resolver(new PromptRenderContext
+        {
+            Variables = new Dictionary<string, string> { ["user_message"] = userMessage },
+            WorkspaceRoot = Workspace.Root,
+        }, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        Assert.DoesNotContain("部署内容", Resolve("帮我看看这个报错"));
+
+        // 模型声明后注入（下一 step 生效），并进入工具权威。
+        Assert.True(manager.DeclareForTurn(Workspace, "deploy"));
+        Assert.Contains("部署内容", Resolve("帮我看看这个报错"));
+
+        // 未知/隐藏/已禁用技能拒绝声明。
+        Assert.False(manager.DeclareForTurn(Workspace, "no-such-skill"));
+        Assert.False(manager.DeclareForTurn(Workspace, "secret"));
+        Assert.False(manager.DeclareForTurn(Workspace, ""));
+
+        // 回合边界：重置后声明集合清空。
+        manager.ResetTurnDeclarations();
+        Assert.DoesNotContain("部署内容", Resolve("帮我看看这个报错"));
+    }
 }

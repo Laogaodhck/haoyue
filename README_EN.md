@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="haoyue_website/public/logo.png" alt="Haoyue Logo" width="60">
+  <img src="haoyue_website/public/logo.png" alt="Haoyue Logo" width="64">
 </p>
 
 <h1 align="center">Haoyue</h1>
@@ -12,195 +12,182 @@
 [![GitHub Stars](https://img.shields.io/github/stars/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/issues)
-[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/Laogaodhck/haoyue.svg)](https://github.com/Laogaodhck/haoyue/pulls)
 
-**Modern, High-Performance AI Agent**
+**A self-reflecting, local-first AI Agent platform**
 
-Haoyue (Chinese: 浩玥) is a high-performance AI agent built on .NET 10.0, featuring clean architecture and event-driven design. It ships with an out-of-the-box terminal CLI and desktop app, providing a complete platform for building AI-powered coding assistants with support for multiple LLM providers, tool execution, a knowledge base, session management, and a smooth interaction experience.
+Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sourced runtime with terminal CLI and desktop app frontends. Beyond full agent capabilities (multi-provider LLMs, tool execution, skills, MCP, knowledge base), Haoyue ships an uncommon **meta-cognitive layer**: it aggregates failure signals automatically, drives reflection turns that produce skill drafts, and activates them through human approval — the agent keeps getting better as you use it.
 
-[🌐 Official Website & Docs](https://github.com/Laogaodhck/haoyue) •
-[中文](README.md) •
-[Getting Started](#-installation) •
-[Features](#-features)
+[Quick Start](#-quick-start) •
+[Features](#-features) •
+[Architecture](#️-architecture) •
+[Evolution Engine](#-evolution-engine) •
+[中文](README.md)
 
 </div>
 
+---
+
 ## ✨ Features
 
-### 🚀 Runtime First Architecture
+### 🏗️ Runtime First Architecture
 
-- **Clean Architecture**: Separation of concerns with `haoyue_runtime` as the core, and `haoyue_cli` (terminal) and `haoyue_desktop` (desktop) as frontends
-- **Resident Daemon**: the daemon exposes JSON-RPC over Named Pipe / Unix Socket; the desktop app and CLI share the same runtime. On startup it generates a random handshake token (`~/.haoyue/daemon.token`, readable only by the current user); every client must present the token as its first message or the connection is rejected and closed
-- **Plugin System**: Tools, Skills, Prompts, and MCP (Model Context Protocol) — a four-layer extension mechanism
-- **Event-Driven**: Decoupled rendering and business logic via event bus
+- **Clean Architecture**: `haoyue_runtime` is the core; CLI and desktop are two of its frontends, with strict separation of concerns
+- **Resident Daemon**: the daemon exposes JSON-RPC over Named Pipe / Unix Socket; the desktop app and CLI share the same runtime, HTTP connection pool, circuit breaker, and file-lock coordinator
+- **Secure Access**: a random handshake token is generated at startup (`~/.haoyue/daemon.token`, readable only by the current user); clients must present the token as their first message or the connection is rejected immediately
+- **Event Sourcing**: key events (turns, tool calls, usage, diagnostics, evolution signals) are persisted to a SQLite event log (last 5,000 entries); `events.recent` replays them — nothing is lost across restarts
+- **Four-Layer Extensions**: Tools, Skills, Prompts, and MCP (Model Context Protocol)
 
-### 🤖 Multi-Provider Support
+### 🤖 Multi-Provider & Models
 
-- **OpenAI Compatible**: GPT-5.5, GPT-5.5-mini, and all OpenAI-compatible APIs
-- **Anthropic**: Claude Opus, Claude Sonnet, Claude Haiku
-- **Google**: Gemini Pro, Gemini Flash
-- **Local Models**: Ollama, LM Studio, or run GGUF models directly in-process (no server required)
-- **Routing**: Fast, Balanced, Quality, Cheap, Offline strategies
-- **Failover**: Automatic retry with exponential backoff and circuit breaker
+- **OpenAI-compatible / Anthropic / Google**: mainstream cloud models out of the box
+- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, KV cache quantization, Flash Attention, and cross-request KV prefix reuse
+- **Smart Routing**: fast, balanced, quality, budget, and offline strategies; automatic retry with exponential backoff and circuit-breaker failover
+- **Usage Analytics**: token counts, cost, and model distribution with desktop charts
 
-### 🛠️ Tool Ecosystem
+### 🛠️ Tool & Skill Ecosystem
 
-- **Files & Execution**: File read/write/edit with precise diff application, grep/glob search, bash execution
-- **Networking**: Web search (web_search) and web fetch (web_fetch)
-- **Task Planning**: Built-in plan tool maintaining a task list with multi-step progress tracking
-- **Screen Capture**: Screenshot tool that hands screen content to the model for analysis
-- **MCP Support**: stdio and SSE transports with automatic tool/prompt/resource discovery; prompt and resource contents are injected into context (trimmed to the injection token budget, degrading gracefully on read failure)
-- **Skills**: Directory-based skill system; manifest v2 adds trigger keywords, tool allow-lists, and parameter collection
+- **Built-in Tools**: file read/write/edit (precise diff application), grep/glob, bash, web search & fetch, task planning, screen capture
+- **MCP**: stdio and SSE transports with automatic discovery of tools/prompts/resources; prompt injection is capped at 24 per server and 48 total, with the truncation reason visible in MCP status
+- **Skill System**: directory-based skills (`skill.yaml` + `prompt.txt`); manifest v2 supports trigger keywords, tool whitelists, and parameter collection; skills hot-reload on change, no restart needed
 
 ### 🧠 Knowledge Base & Memory
 
-- **Automatic Curation**: The agent saves, searches, and forgets knowledge in conversation (knowledge_save / knowledge_search / knowledge_forget)
-- **Fault-Tolerant Retrieval**: Synonym expansion, full/half-width normalization, CJK bigram tokenization, and edit-distance fallback — typos, mixed CJK/Latin input, and full-width text still hit
-- **Custom Synonyms**: A user-editable synonym table (`~/.haoyue/knowledge/synonyms.txt`) with hot reload, tailored for vertical-domain jargon
-- **Rules & Memory**: AGENTS.md workspace rules injected automatically (toggleable); MEMORY.md long-term memory in auto or manual mode
-- **Visual Maintenance**: The desktop knowledge base page supports entry CRUD, document import, and live search
+- **Automatic Capture**: knowledge is saved / searched / forgotten automatically during conversations
+- **Fault-Tolerant Retrieval**: synonym expansion, full/half-width normalization, CJK bigram tokenization, and edit-distance fallback — typos and mixed Chinese/English queries still hit; custom synonym lists hot-reload
+- **Rules & Memory**: AGENTS.md workspace rules injected automatically (with a provenance envelope and pinned priority), MEMORY.md long-term memory with automatic / manual management
+
+### 🔒 Reliability & Safety (under the meta layer)
+
+- **Atomic Writes**: config and state writes go through a same-directory temp file + atomic swap — a crash never leaves a half-written file; field-level reload-merge before each save keeps concurrent multi-client edits to their own changes
+- **Single-Writer Convergence**: CLI config writes are delegated to the online daemon (`config.save`) and only fall back to local writes when offline — multi-writer races are eliminated
+- **Prompt Budget**: when injected context exceeds a 24k token total budget, contributions are dropped in inverse degrade-rank order (knowledge → skill bodies → MCP → catalogs/memory) while System/Developer messages are never dropped; every drop is announced in the session
+- **Turn Rollback (TurnScope)**: each turn keeps a step ledger and a compensation stack, so `write`/`edit` file changes can be reverted in one click (`agent.undo`); the desktop shows an undo banner after each turn; on daemon crash, startup reconciliation surfaces the restorable files of unfinished turns
 
 ### 🖥️ Desktop App
 
-- **Modern UI**: Electron + Vue 3 + TypeScript with streaming markdown, image preview, and reasoning depth control
-- **Expert System**: Built-in domain experts with one-click role presets
-- **Visual Configuration**: Providers, models, profiles, and MCP servers fully managed in the UI
-- **Local Inference Tuning**: configure CUDA inference parameters in Advanced Settings — GPU layer offload, context length, KV cache quantization (q8_0/q4_0), and Flash Attention; changes take effect on the next local model request
-- **Task Management**: Scheduled tasks and archived runs, with instant desktop notifications and webhook callbacks on failure
-- **Usage Analytics**: Token usage trends and model distribution charts
+- **Modern UI**: Electron + Vue 3 + TypeScript, streaming Markdown, image preview, reasoning depth control
+- **Expert System**: built-in domain expert catalog with one-click role presets
+- **Visual Configuration**: providers, models, profiles, MCP servers, and local inference acceleration — all GUI-managed
+- **Scheduled Tasks**: cron-driven scheduling turns with instant desktop notifications on failure and Webhook callbacks
+- **Turn Undo & Feedback**: one-click revert of file changes; thumbs-down any assistant answer with a reason — the feedback feeds straight into the evolution signals
 
 ### 💻 Modern Terminal Experience
 
-- **Game-style Rendering**: 30-60 FPS refresh with double buffering
-- **Streaming Output**: Real-time token streaming with thinking/reasoning display
-- **Live UI**: Spinner, progress bars, tool status, and markdown rendering
-- **Incremental Updates**: No flickering, no scrolling, smooth animations
+- **Game-Style Rendering**: 30-60 FPS double buffering, streaming output, reasoning display, tool status, and live Markdown rendering with flicker-free incremental updates
 
 ### 📁 Workspace Management
 
-- **Project Detection**: Automatic recognition of Git, .NET, Node.js, Python, Rust, Go, Unity, Vue projects
-- **Isolated Config**: Per-workspace configuration, cache, and memory with workspace-scoped sessions
-- **Templated Bootstrap**: `haoyue init` seeds AGENTS.md, the workspace config.json and custom prompt files; place same-named files under `~/.haoyue/templates/workspace/` to customize all templates globally — existing files are never overwritten
+- **Project Detection**: automatic recognition of Git, .NET, Node.js, Python, Rust, Go, Unity, and Vue projects
+- **Isolated Configuration**: per-workspace config, cache, sessions, and memory
+- **Templated Init**: `haoyue init` generates AGENTS.md and config structure; templates are globally customizable and existing files are never overwritten
 
-### 🌐 Website & Skill Market
+## 🚀 Quick Start
 
-- **Bilingual Docs**: Online documentation site in Chinese and English
-- **Skill Market**: Browse, search, and submit skill shares; the desktop app can install official skills
-- **Accounts**: Registration, login, and admin console with cookie auth and rate limiting
+### Install CLI via npm (Recommended)
 
-### 🔧 Developer Experience
+Self-contained .NET binaries — no separate .NET SDK required. Windows x64 is currently provided.
 
-- **Session Management**: SQLite-backed persistence, restoration, and concurrent access, with full-text search across titles and message bodies (ranked by hit count and recency)
-- **Memory System**: Workspace-specific memory with automatic context injection
-- **Verification**: Automatic build/check/repair cycle with multi-step command chains (run in order with fail-fast; the failing step's error-line summary feeds the repair prompt)
-- **Event Journal**: Key events (turns, tool calls, usage, diagnostics) persist to a SQLite journal (last 5000 entries retained); the daemon exposes `events.recent` for query and replay across restarts
-- **Hot Reload**: Prompt files and configurations reload without restart
-
-## 📦 Installation
-
-### Install the CLI via npm (recommended)
-
-The published `haoyue-cli` package is a self-contained .NET binary. It can be used immediately after installation without a separate .NET SDK. The npm package currently provides the Windows x64 platform binary.
-
-Prerequisites:
-
-- Node.js 18 or later
-- Git (for workspace detection)
+Prerequisites: Node.js 18+, Git.
 
 ```powershell
 npm install -g haoyue-cli
 
-# Verify the installation
 haoyue --version
-
-# Start interactive chat
-haoyue
-```
-
-You can also run one-shot tasks and administration commands:
-
-```powershell
-haoyue "Explain the architecture of this project"
-haoyue --continue
-haoyue doctor
+haoyue              # interactive chat
+haoyue "Explain this project's architecture"
+haoyue doctor       # health check
 ```
 
 ### Build from Source
 
-Building from source requires:
-
-- .NET 10.0 SDK or later
-- Git (for workspace detection)
+Requires .NET 10 SDK and Git:
 
 ```bash
 git clone https://github.com/Laogaodhck/haoyue.git
 cd haoyue
 dotnet build
-```
 
-### Run from Source
-
-```bash
-# Interactive chat mode
-dotnet run --project haoyue_cli
-
-# One-shot prompt
-dotnet run --project haoyue_cli -- "Explain the architecture of this project"
-
-# Continue previous session
-dotnet run --project haoyue_cli -- --continue
-
-# Resume specific session
-dotnet run --project haoyue_cli -- --resume <session-id>
-
-# Override model
+dotnet run --project haoyue_cli              # interactive chat
+dotnet run --project haoyue_cli -- --continue  # continue the last session
 dotnet run --project haoyue_cli -- --model "openai/gpt-5.5"
 ```
+
+Desktop app: enter `haoyue_desktop` and run `pnpm install && pnpm dev`.
+
+## ⚡ Evolution Engine
+
+Haoyue's meta-cognitive layer keeps improving the agent through usage — with **zero code changes and human final approval** throughout:
+
+```mermaid
+flowchart LR
+    A[Runtime failure signals<br/>tool failure clusters / verify streaks<br/>capability gaps / user thumbs-down] --> B[DefectAggregator<br/>signal aggregation + fingerprints]
+    B --> C[Reflection Turn<br/>isolated runtime drafts a skill]
+    C --> D[labs Sandbox<br/>draft validation + verify chain]
+    D --> E[Candidate Directory<br/>inert by default · never active]
+    E --> F{Human Approval on Desktop}
+    F -->|Adopt| G[Official Skills Directory<br/>hot-reload activated]
+    F -->|Discard| H[Fingerprint Closed<br/>archived]
+```
+
+- **Four signal types**: the same (tool, error) failing ≥3 times within 30 minutes; a verify chain failing ≥3 times in a row (including a barely-passing recovery); a `declare_skill` capability gap (reported on a single occurrence); user thumbs-down feedback (each one becomes its own report)
+- **Reflection turn**: triggered by cron or manually, it analyzes defect reports in an isolated runtime and produces `new-skill` / `revise-skill` conclusions
+- **labs sandbox**: drafts must be written under `~/.haoyue/labs/`; after validation they are promoted to `~/.haoyue/skills-candidates/` — a directory outside the skill scan roots, **inert by nature**, never effective until approved
+- **Anti-self-feeding**: a defect fingerprint is processed only once (decision-ledger idempotency); the reflection turn's own events are excluded by the aggregator — reflection never reflects on its own reflections
+- **Safety red line**: the LLM may only produce skill-layer data assets (`skill.yaml` / `prompt.txt`); modifying runtime code or core prompts is forbidden — code evolution follows the human process
+
+Related RPCs: `evolution.inspect` (view defect reports), `evolution.reflect` (trigger reflection), `evolution.pending-list` / `evolution.decide` (approval), `feedback.turn` (negative feedback).
 
 ## 🏗️ Architecture
 
 ```mermaid
 flowchart TD
     subgraph Frontends[Frontends]
-        CLI[haoyue_cli<br/>System.CommandLine + Rendering Engine]
+        CLI[haoyue_cli<br/>System.CommandLine + render engine]
         DESKTOP[haoyue_desktop<br/>Electron + Vue 3]
     end
 
     subgraph Runtime[haoyue_runtime]
-        Facade[HaoyueRuntime<br/>Composition Root / Facade]
-        Agent[Agent Main Loop]
-        Bus[(EventBus)]
+        Facade[HaoyueRuntime<br/>composition root / facade]
+        Agent[Agent loop<br/>+ TurnScope step ledger]
+        Bus[(JournaledEventBus<br/>SQLite event sourcing)]
         subgraph Provider[Provider Layer]
-            PM[ProviderManager<br/>Routing·Retry·Failover·Circuit Breaker]
+            PM[ProviderManager<br/>routing · retry · circuit breaker]
             MR[ModelRegistry]
             OAI[OpenAiCompatibleClient]
             ANT[AnthropicClient]
-            HC[HealthChecker]
             UT[UsageTracker]
         end
         subgraph Plugins[Plugin System]
             TR[ToolRegistry]
-            PR[PromptRegistry]
+            PR[PromptRegistry<br/>24k budget · degrade ranks]
             SK[SkillManager]
-            MCP[McpManager<br/>stdio / SSE]
+            MCP[McpManager<br/>stdio / SSE · quotas]
         end
-        PP[PromptProvider<br/>File-based·Hot-reload·Variables]
+        subgraph Evolution[Evolution Engine]
+            DA[DefectAggregator<br/>four signal types]
+            ES[EvolutionStore<br/>decision ledger]
+            RR[ReflectionRunner<br/>reflection · labs · approval]
+        end
+        PP[PromptProvider<br/>file-based · hot reload]
         WS[WorkspaceManager]
         SS[SessionStore]
-        VF[BuildVerifier]
-        CFG[ConfigStore<br/>~/.haoyue/config.json]
-        DMN[DaemonServer<br/>Named Pipe / Unix Socket]
+        VF[BuildVerifier<br/>build-verify loop]
+        CO[Coordination<br/>file locks]
+        CFG[ConfigStore<br/>atomic writes · reload-merge]
+        DMN[DaemonServer<br/>JSON-RPC + token auth]
     end
 
     CLI --> Facade
     DESKTOP -. daemon protocol .-> DMN
     DMN --> Agent
+    DMN --> RR
     Facade --> Agent
     Agent --> PM
     Agent --> TR
     Agent --> VF
     Agent --> SS
     Agent --> Bus
+    Agent --> CO
     PM --> MR
     PM --> OAI
     PM --> ANT
@@ -210,6 +197,9 @@ flowchart TD
     MCP --> PR
     Agent --> PP
     PP --> PR
+    Bus --> DA
+    DA --> RR
+    ES --> RR
     WS --> CFG
     Bus --> CLI
 ```
@@ -219,31 +209,34 @@ flowchart TD
 ```
 Haoyue/
 ├── haoyue_cli/           # CLI frontend
-│   ├── Commands/           # CLI commands (provider, model, profile, knowledge, schedule, etc.)
-│   ├── Ui/                 # Terminal rendering engine
+│   ├── Commands/           # CLI commands (provider, model, knowledge, schedule, etc.)
+│   ├── Ui/                 # Terminal render engine
 │   └── Program.cs          # Entry point
 ├── haoyue_runtime/       # Core runtime
-│   ├── Agents/             # Agent loop and context planning
+│   ├── Agents/             # Agent loop, context planning, TurnScope rollback
 │   ├── ComputerUse/        # Screen capture
-│   ├── Configuration/      # Config management
-│   ├── Daemon/             # Daemon (Named Pipe / Unix Socket JSON-RPC)
-│   ├── Data/               # Data layer (knowledge store, import, and search ranking)
-│   ├── Events/             # Event bus system
+│   ├── Configuration/      # Config management (atomic writes, reload-merge, single-writer bridge)
+│   ├── Coordination/       # File-lock coordinator
+│   ├── Daemon/             # Daemon (JSON-RPC, RPC routing, crash reconciliation)
+│   ├── Data/               # Data layer (knowledge storage, retrieval ranking, SQLite)
+│   ├── Events/             # Event bus & journal (SQLite persistence)
+│   ├── Evolution/          # Evolution engine (signal aggregation, decision ledger, reflection turns)
 │   ├── Experts/            # Expert system
-│   ├── Mcp/                # MCP client implementation
-│   ├── Prompts/            # Prompt loading and composition
-│   ├── Providers/          # LLM provider integrations
-│   ├── Scheduling/         # Scheduled tasks
-│   ├── Sessions/           # Session persistence
-│   ├── Skills/             # Skill management
+│   ├── Mcp/                # MCP client (stdio/SSE, injection quotas)
+│   ├── Prompts/            # Prompt loading, composition, and budget enforcement
+│   ├── Providers/          # LLM provider integrations & circuit breaker
+│   ├── Scheduling/         # Scheduled task dispatch
+│   ├── Sessions/           # Session persistence (SQLite)
+│   ├── Skills/             # Skill management (manifest v2, hot reload)
 │   ├── Tools/              # Tool registry and implementations
-│   ├── Verification/       # Build verification
+│   ├── Verification/       # Build verification chain
 │   └── Workspaces/         # Workspace detection and management
 ├── haoyue_desktop/       # Desktop app (Electron + Vue 3 + TypeScript)
-├── haoyue_webserver/     # Website & skill market (Blazor Server + SQLite)
+├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
-├── haoyue_tests/         # Runtime unit tests
+├── haoyue_tests/         # Runtime unit tests (399 cases)
 ├── haoyue_cli_tests/     # CLI tests
+├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index)
 ├── models/               # Local GGUF models (dev environment)
 └── packaging/            # Packaging scripts and configuration
 ```
@@ -252,24 +245,15 @@ Haoyue/
 
 ### Global Configuration
 
-Located at `~/.haoyue/config.json`:
+Lives at `~/.haoyue/config.json` (all writes are atomic; concurrent multi-client edits merge only changed fields):
 
 ```json
 {
   "providers": {
-    "openai": {
-      "apiKey": "sk-...",
-      "baseUrl": "https://api.openai.com/v1"
-    },
-    "anthropic": {
-      "apiKey": "sk-ant-..."
-    }
+    "openai": { "apiKey": "sk-...", "baseUrl": "https://api.openai.com/v1" }
   },
   "profiles": {
-    "default": {
-      "provider": "openai",
-      "model": "gpt-5.5"
-    }
+    "default": { "provider": "openai", "model": "gpt-5.5" }
   },
   "agent": {
     "maxSteps": 10,
@@ -281,52 +265,9 @@ Located at `~/.haoyue/config.json`:
 
 ### Workspace Configuration
 
-Each project can have `.haoyue/config.json` to override:
+Each project can override providers and models, temperature and context, tool permissions, skill and MCP server settings in `.haoyue/config.json`.
 
-- Provider and model selection
-- Temperature and context settings
-- Tool permissions
-- Skill configurations
-- MCP server settings
-
-## 🎯 Usage Examples
-
-### Interactive Chat
-
-```bash
-haoyue chat
-# or simply
-haoyue
-```
-
-### One-shot Tasks
-
-```bash
-haoyue "Refactor the authentication module to use JWT"
-haoyue "Write unit tests for the UserService class"
-haoyue "Fix the build errors in the project"
-```
-
-### Provider Management
-
-```bash
-haoyue provider list
-haoyue provider add openai --api-key sk-...
-haoyue provider test openai
-haoyue provider use anthropic
-```
-
-### Local Models (GGUF)
-
-Drop GGUF files into `~/.haoyue/models` (or the `models/` folder of a repository checkout) to run them in-process with no network and no server:
-
-```bash
-haoyue provider add --id local --kind local --model DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf
-```
-
-Use `--models-directory` to point at a different folder. Local models support streaming and thinking output; tool calling is not supported yet.
-
-Local inference tuning (provider options in `~/.haoyue/config.json`):
+### Local Model Tuning
 
 ```json
 {
@@ -344,71 +285,36 @@ Local inference tuning (provider options in `~/.haoyue/config.json`):
 }
 ```
 
-- `gpuLayers`: number of layers offloaded to GPU (llama.cpp `n_gpu_layers`). Defaults to `0` (CPU only). Install a CUDA backend (e.g. `LLamaSharp.Backend.Cuda12`) and set it to `999` to offload everything; the value is ignored when no GPU backend is present.
-- `threads`: CPU inference thread count. Defaults to llama.cpp auto-selection (all logical cores).
-- `localPrefixReuse`: reuse decoded KV prefixes across requests. In multi-step agent turns each step only decodes the newly appended suffix tokens, skipping repeated prefill of the system prompt and history for significantly higher throughput. Falls back to full recomputation automatically when the prefix mismatches or the backend does not support memory moves, with identical results.
-- `flashAttention`: enable the llama.cpp Flash Attention kernel. Defaults to `false`; recommended for GPU inference.
-- `kvCacheQuantization`: KV cache type — `none` (native f16), `q8_0`, or `q4_0`; quantization substantially reduces VRAM usage. Only applied when `flashAttention` is enabled (llama.cpp limitation). After changing the GPU offload or context length, model weights and inference contexts are reloaded automatically on the next request — no restart required.
+- `gpuLayers`: number of GPU-offloaded layers, default `0` (pure CPU); set `999` after installing a CUDA backend to offload everything
+- `localPrefixReuse`: reuse KV prefixes across requests — multi-step turns only decode new tokens, throughput improves significantly
+- `flashAttention` / `kvCacheQuantization`: attention-kernel acceleration and KV cache quantization (`q8_0` / `q4_0`); quantization only takes effect with Flash Attention enabled
 
-All of these can also be configured graphically in the desktop app under "Settings → Advanced → Local Inference (CUDA)".
+All of these can also be configured visually in the desktop app under "Settings → Advanced → Local Inference Acceleration".
 
-### Model Management
+## 🎯 Usage Examples
 
 ```bash
-haoyue model list
+# Sessions & providers
+haoyue session list && haoyue session resume <session-id>
+haoyue provider add openai --api-key sk-...
 haoyue model use openai/gpt-5.5
-haoyue model info claude-opus
-haoyue model search "fast coding model"
-```
 
-### Session Management
-
-```bash
-haoyue session list
-haoyue session resume <session-id>
-haoyue session export <session-id> --format json
-```
-
-Sessions and the Desktop project list are stored in `~/.haoyue/haoyue.db`. On first access after upgrading, legacy `.session/*.jsonl`, `.haoyue/sessions/*.jsonl`, and global `~/.haoyue/sessions/*.jsonl` files are imported automatically and retained as backups. Provider, model, profile, MCP, skill, and workspace configuration remains in the existing JSON/text files; usage records remain in `~/.haoyue/usage.jsonl`.
-
-### Knowledge Base & Data Management
-
-The CLI ships management commands for the knowledge base, workspace rules, memory, experts, and scheduled tasks:
-
-```bash
-# Knowledge base: search, capture, and maintenance (content can be piped in)
-haoyue knowledge search "deployment workflow"
+# Knowledge base & memory
+haoyue knowledge search "deployment process"
 haoyue knowledge add "Release steps" --tags ops,release
-haoyue knowledge list
-
-# Workspace rules (hierarchical AGENTS.md discovery and editing)
-haoyue rules list
-haoyue rules set
-
-# Long-term memory (--global targets the global memory file)
-haoyue memory show
 haoyue memory set "Run the full test suite before releasing this repo"
 
-# Built-in expert catalog
-haoyue expert list
-
-# Scheduled tasks (an 8-char short id prefix locates a task)
+# Scheduled tasks (cron drives full agent turns)
 haoyue schedule add "Daily report" "0 9 * * *" "Summarize yesterday's commits into a report"
-haoyue schedule list
-haoyue schedule enable <id>
 ```
 
-### Health Check
-
-```bash
-haoyue doctor
-```
+Session data is stored in `~/.haoyue/haoyue.db`; legacy session formats are imported automatically on upgrade.
 
 ## 🔌 Extending Haoyue
 
-### Adding Tools
+### Adding a Tool
 
-Implement the `ITool` interface:
+Implement the `ITool` interface and register it with the ToolRegistry:
 
 ```csharp
 public class MyTool : ITool
@@ -418,39 +324,34 @@ public class MyTool : ITool
     public JsonElement ParameterSchema => /* JSON schema */;
     public bool Mutating => false;
     public string StatusLabel => "Running my tool";
-    
+
     public async Task<ToolResult> ExecuteAsync(
         JsonObject args, ToolContext ctx, CancellationToken ct)
     {
-        // Implementation
+        // implementation
     }
 }
 ```
 
-### Creating Skills
-
-Create a directory in `skills/`:
+### Creating a Skill
 
 ```
 skills/
   my-skill/
-    skill.yaml          # Metadata and configuration
-    prompt.txt          # Prompt template
-    tools/              # Optional tool implementations
+    skill.yaml          # metadata and configuration
+    prompt.txt          # prompt template
 ```
 
-`skill.yaml` supports optional v2 fields that control injection behavior:
+`skill.yaml` supports optional v2 fields controlling injection behavior:
 
 ```yaml
 name: my-skill
-description: One line describing when this skill applies
-triggers:            # When declared, the skill is injected only if the user message hits a keyword; otherwise it is always injected
+description: One sentence on when to use this skill
+triggers:            # once declared, injected only when a user message hits a keyword; otherwise always on
   - deploy
-  - release
-allowed-tools:       # Tool allow-list while the skill is injected; undeclared means unrestricted
+allowed-tools:       # tool whitelist during injection; unrestricted if omitted
   - bash
-  - read_file
-parameters:          # Appends a parameter-collection appendix to the injected prompt
+parameters:          # appends a parameter-collection note to the prompt
   - name: env
     description: Target deployment environment
     required: true
@@ -458,56 +359,36 @@ parameters:          # Appends a parameter-collection appendix to the injected p
 
 ### MCP Servers
 
-Configure in `mcp/servers.json`:
-
-```json
-{
-  "servers": {
-    "my-server": {
-      "command": "node",
-      "args": ["path/to/server.js"],
-      "transport": "stdio"
-    }
-  }
-}
-```
-
-Prompts and text resources exposed by the server are registered automatically as context contributions to the system prompt: contents are trimmed to the injection token budget, at most 16 resources per server are injected, and failed reads degrade gracefully without affecting the session.
+Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resources are registered automatically as context contributions, injected under the 24k total budget with up to 24 prompts per server and 48 globally — truncation reasons are visible in MCP status.
 
 ## 🧪 Testing
 
 ```bash
-# Run all tests
-dotnet test haoyue_tests
+dotnet test haoyue_tests      # runtime tests (399 cases)
+dotnet test haoyue_cli_tests  # CLI tests
 
-# Run specific test class
-dotnet test haoyue_tests --filter "ClassName=ProviderTests"
+# Desktop (requires pnpm install first)
+cd haoyue_desktop && pnpm test && pnpm typecheck
 ```
 
-## 📊 Monitoring
+## 📚 Design Documents
 
-Haoyue includes built-in monitoring:
+Architecture reviews, adjudications, and implementation plans are collected in [`haoyue_doc/`](haoyue_doc/README.md) (in Chinese), including:
 
-- **Usage Tracking**: Token counts, costs, response times
-- **Health Checks**: Provider availability and latency
-- **Circuit Breaker**: Automatic failure detection and recovery
-- **Session Analytics**: Conversation history and patterns
+- State concurrency, context boundaries, and atomicity risk review (with fix reconciliation)
+- Workflow orchestration adjudication & TurnScope design
+- Evolution engine blueprint review & landing design (E1-E4)
+- NLP & HCI optimization assessment, knowledge base optimization notes
+- ProviderManager concurrency and parameter review
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
-
-- Built with .NET 10.0 and System.CommandLine
-- Uses Spectre.Console for terminal rendering
-- Follows clean architecture and vertical slice patterns
-- Designed with Native AOT compatibility in mind
-
 ## 👤 Author
 
-**老高 (Lao Gao)** · QQ: 846193
+**Laogao (老高)** · QQ: 846193
 
 ---
 
-**Haoyue** - A modern, high-performance AI agent built on .NET.
+**Haoyue** - A self-reflecting, local-first AI Agent platform.

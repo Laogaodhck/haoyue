@@ -19,6 +19,12 @@ public sealed class ToolContext
     public IFileLockCoordinator? Coordinator { get; init; }
     /// <summary>Task identity used when acquiring file write locks.</summary>
     public string Owner { get; init; } = "";
+    /// <summary>
+    /// Per-turn execution scope: file-writing tools register the pre-turn content of
+    /// each change here (undo ledger) and every execution appends a step record.
+    /// Null in contexts without a turn scope (direct tool invocations in tests).
+    /// </summary>
+    public Haoyue.Runtime.Agents.TurnExecutionScope? TurnScope { get; init; }
 
     public string ResolvePath(string path)
     {

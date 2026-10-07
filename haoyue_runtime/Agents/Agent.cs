@@ -35,9 +35,18 @@ public sealed partial class Agent(
     IEventBus events,
     IFileLockCoordinator fileLocks,
     FileLockScope lockScope,
-    ISkillManager? skills = null)
+    ISkillManager? skills = null,
+    TurnUndoRegistry? undoRegistry = null)
 {
     private readonly ISkillManager? _skills = skills;
+    private readonly TurnUndoRegistry? _undoRegistry = undoRegistry;
+
+    /// <summary>
+    /// Optional daemon hook: invoked for every mutating step so the crash journal can
+    /// carry an executed-steps ledger for post-crash reconciliation. Set by the daemon
+    /// before the turn starts; null in CLI / test contexts.
+    /// </summary>
+    public Action<TurnStepRecord>? MutatingStepObserved { get; set; }
 
     /// <summary>Identical failed tool calls (same tool + normalized args) tolerated before a strategy nudge is injected.</summary>
     internal const int RepeatedFailureNudgeThreshold = 2;
@@ -119,6 +128,12 @@ public sealed partial class Agent(
         // normalized arguments usually mean the model is stuck retrying a dead end.
         var failureSignature = "";
         var consecutiveFailures = 0;
+
+        // Per-turn execution ledger + compensation stack (retrospective, not a
+        // prospective plan): every tool execution appends a step; file tools register
+        // their pre-turn content for user-confirmed undo after the turn ends.
+        var turnScope = new TurnExecutionScope(session.Header.Id, workspace.Root);
+
         void HandleToolResult(ToolCallRequest call, ToolExecution execution)
         {
             mutated |= execution.ToolMutated;
@@ -292,21 +307,21 @@ public sealed partial class Agent(
                             if (readOnlyBatch.Count > 0)
                             {
                                 foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
-                                var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, ct))).ConfigureAwait(false);
+                                var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, ct))).ConfigureAwait(false);
                                 for (var i = 0; i < batchResults.Length; i++)
                                     HandleToolResult(readOnlyBatch[i], batchResults[i]);
                                 readOnlyBatch.Clear();
                             }
 
                             PublishWorkflow(step, "tool", call.Name);
-                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, ct).ConfigureAwait(false));
+                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, turnScope, ct).ConfigureAwait(false));
                         }
                     }
 
                     if (readOnlyBatch.Count > 0)
                     {
                         foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
-                        var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, ct))).ConfigureAwait(false);
+                        var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, ct))).ConfigureAwait(false);
                         for (var i = 0; i < batchResults.Length; i++)
                             HandleToolResult(readOnlyBatch[i], batchResults[i]);
                     }
@@ -413,20 +428,48 @@ public sealed partial class Agent(
             events.Publish(new ErrorEvent("Agent turn failed", error));
         }
 
-        // Terminal WorkflowEvent MUST live on the common path after all catches: the
-        // previous placement inside the try made the "error" branch unreachable, so
-        // failed/cancelled turns never closed the client's workflow view. kind reflects
-        // the real outcome instead of always reporting "任务完成".
-        events.Publish(new WorkflowEvent(
-            step,
-            error is null && !cancelled ? "done" : "error",
-            error is null && !cancelled ? "任务完成" : "任务失败"));
+        finally
+        {
+            // Terminal WorkflowEvent MUST live on the common path after all catches: the
+            // previous placement inside the try made the "error" branch unreachable, so
+            // failed/cancelled turns never closed the client's workflow view. kind reflects
+            // the real outcome instead of always reporting "任务完成". The try/catch block
+            // above became try/catch/finally when the turn scope arrived — same ordering,
+            // one fewer place to duplicate cleanup.
+            events.Publish(new WorkflowEvent(
+                step,
+                error is null && !cancelled ? "done" : "error",
+                error is null && !cancelled ? "任务完成" : "任务失败"));
 
-        PublishSteering(AppendSteering(session, steering));
-        steering?.Complete();
-        events.Publish(new TurnCompletedEvent(session.Header.Id, cancelled, error));
+            PublishSteering(AppendSteering(session, steering));
+            steering?.Complete();
+
+            // Deposit the undo ledger and tell clients what can be reverted. A failed or
+            // cancelled turn gets an explicit warning; a successful turn carries the file
+            // list on the completion event so the UI can offer undo anyway.
+            var failedTurn = error is not null || cancelled;
+            var ledger = turnScope.BuildLedger(failedTurn);
+            if (ledger is not null)
+            {
+                _undoRegistry?.Deposit(ledger);
+                if (failedTurn)
+                {
+                    events.Publish(new WarningEvent(
+                        $"本回合{(cancelled ? "被取消" : "失败")}，但已有 {ledger.Changes.Count} 个文件被修改。可通过撤销操作恢复到修改前的内容。"));
+                }
+            }
+
+            events.Publish(new TurnCompletedEvent(
+                session.Header.Id, cancelled, error,
+                ledger is null ? null : ledger.Changes.Select(c => ToRelativePath(c.AbsolutePath, workspace.Root)).ToList()));
+        }
         return new AgentTurnResult(finalText, cancelled, error);
     }
+
+    private static string ToRelativePath(string absolutePath, string root) =>
+        absolutePath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            ? absolutePath[root.Length..].TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            : absolutePath;
 
     private void PublishWorkflow(int step, string kind, string label, string? detail = null) =>
         events.Publish(new WorkflowEvent(step, kind, label, detail));

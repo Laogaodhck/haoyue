@@ -26,6 +26,8 @@ namespace Haoyue.Runtime.Configuration;
 [JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(Haoyue.Runtime.Daemon.ActiveTurnRecord))]
 [JsonSerializable(typeof(List<Haoyue.Runtime.Daemon.ActiveTurnRecord>))]
+[JsonSerializable(typeof(Haoyue.Runtime.Daemon.TurnStepSummary))]
+[JsonSerializable(typeof(List<Haoyue.Runtime.Daemon.TurnStepSummary>))]
 public sealed partial class HaoyueJsonContext : JsonSerializerContext
 {
     /// <summary>Compact variant for embedded session payloads and protocol serialization.</summary>

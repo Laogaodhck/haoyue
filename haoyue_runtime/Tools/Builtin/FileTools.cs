@@ -212,6 +212,12 @@ public sealed class WriteFileTool(IPromptProvider prompts) : BuiltinTool(prompts
         if (diff.Length > 0)
             context.Events.Publish(new FileDiffEvent(context.CallId, relative, diff));
 
+        // Undo ledger: remember the pre-turn content so agent.undo can restore it.
+        // previousContent=null marks a newly created file (undo deletes it).
+        context.TurnScope?.TryRegisterFileChange(
+            path, existed ? oldText : null,
+            $"{(existed ? "覆盖" : "创建")} {relative}（写回 {(existed ? "旧内容" : "删除文件")}）");
+
         return ToolResult.Ok(
             existed ? $"Overwrote {relative}" : $"Created {relative}",
             $"{(existed ? "Updated" : "Created")} {relative} ({lineCount} lines)") with
@@ -269,6 +275,9 @@ public sealed class EditFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
         var diff = DiffUtil.Unified(text, updated, relative);
         if (diff.Length > 0)
             context.Events.Publish(new FileDiffEvent(context.CallId, relative, diff));
+
+        // Undo ledger: remember the pre-edit content so agent.undo can restore it.
+        context.TurnScope?.TryRegisterFileChange(path, text, $"编辑 {relative}（写回编辑前内容）");
 
         var summary = replaceAll && occurrences > 1
             ? $"Replaced {occurrences} occurrences in {relative}"

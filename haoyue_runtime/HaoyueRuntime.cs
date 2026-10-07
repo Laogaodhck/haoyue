@@ -48,6 +48,9 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     public ExtensionManager Extensions { get; } = ExtensionManager.CreateDefault();
     public IMcpManager Mcp => _services.GetRequiredService<IMcpManager>();
     public Agent Agent => _services.GetRequiredService<Agent>();
+    /// <summary>Per-runtime undo ledger registry; the daemon overrides this with a
+    /// process-wide instance shared across isolated turn runtimes.</summary>
+    public TurnUndoRegistry UndoRegistry => _services.GetRequiredService<TurnUndoRegistry>();
 
     private HaoyueRuntime(ServiceProvider services, WorkspaceInfo workspace)
     {
@@ -325,6 +328,7 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<IFileLockCoordinator>(coordinator ?? new NoopFileLockCoordinator());
         services.AddSingleton(new FileLockScope(turnOwner ?? ""));
         services.AddSingleton<IAgentDelegator, AgentDelegator>();
+        services.AddSingleton<TurnUndoRegistry>();
         services.AddSingleton<Agent>();
         return services;
     }

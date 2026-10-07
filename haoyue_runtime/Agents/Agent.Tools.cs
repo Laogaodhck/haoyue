@@ -15,7 +15,7 @@ public sealed partial class Agent
     private readonly record struct ToolExecution(ChatMessage Message, bool ToolMutated);
 
     private async Task<ToolExecution> ExecuteToolAsync(
-        ToolCallRequest call, WorkspaceInfo workspace, ModelInfo model, CancellationToken ct)
+        ToolCallRequest call, WorkspaceInfo workspace, ModelInfo model, TurnExecutionScope turnScope, CancellationToken ct)
     {
         var tool = toolRegistry.Resolve(call.Name);
         var argsSummary = SummarizeArguments(call.ArgumentsJson);
@@ -60,10 +60,12 @@ public sealed partial class Agent
             CallId = call.Id,
             Coordinator = fileLocks,
             Owner = lockScope.Owner,
+            TurnScope = turnScope,
         };
 
         var stopwatch = Stopwatch.StartNew();
         ToolResult result;
+        var changesBefore = turnScope.Changes.Count;
         try
         {
             result = await tool.ExecuteAsync(arguments, context, ct).ConfigureAwait(false);
@@ -87,6 +89,18 @@ public sealed partial class Agent
             : Path.IsPathRooted(result.FilePath)
                 ? Path.GetRelativePath(workspace.Root, result.FilePath)
                 : result.FilePath;
+
+        // Execution ledger: every tool call becomes a step; a step is compensable when
+        // the tool registered a file change during this execution. delegate_task runs a
+        // nested agent under the same lock scope, so its ledger entries flow in via the
+        // same channel and get their own kind.
+        var compensable = turnScope.Changes.Count > changesBefore;
+        turnScope.RecordStep(
+            call.Name == "delegate_task" ? "subtask" : "tool",
+            call.Name, filePath ?? argsSummary, compensable, result.Success);
+        if (compensable && tool.Mutating)
+            MutatingStepObserved?.Invoke(turnScope.Steps[^1]);
+
         return new ToolExecution(
             ChatMessage.ToolResult(call.Id, call.Name, result.Output, result.Success, result.Diff, filePath, result.Images),
             tool.Mutating && result.Success);

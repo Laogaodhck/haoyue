@@ -90,6 +90,11 @@ public sealed class DaemonServer : IAsyncDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private readonly string _activeTurnsFile;
 
+    // Undo ledgers of the latest completed turn per session. Shared across isolated
+    // turn runtimes so agent.undo can revert file changes after the turn's runtime
+    // (and its in-scope compensation stack) is gone.
+    private readonly TurnUndoRegistry _undoRegistry = new();
+
     // Turn ids recovered by startup crash recovery (this daemon process lifetime).
     // Clients query these via agent.interrupted on reconnect, because the startup
     // broadcast fires before any client has connected.
@@ -670,6 +675,64 @@ public sealed class DaemonServer : IAsyncDisposable
                         lock (_interruptedTurnsGate) snapshot = _interruptedTurns.ToList();
                         await WriteAsync(context.Writer, context.WriterGate, id, "result",
                             JsonSerializer.Serialize(snapshot, HaoyueJsonContext.Compact.ListString),
+                            context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "agent.undo":
+                    {
+                        // User-confirmed revert of the latest completed turn's builtin
+                        // file-tool changes (LIFO). shell/MCP side effects were never
+                        // registered as compensable, so they are never silently "undone".
+                        var requestedSession = request["params"]?["sessionId"]?.GetValue<string>();
+                        if (string.IsNullOrWhiteSpace(requestedSession))
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                "params.sessionId is required", context.ConnectionCt).ConfigureAwait(false);
+                            break;
+                        }
+                        if (_sessionTurns.ContainsKey(requestedSession))
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                "A turn is active for this session; wait for it to finish before undoing.",
+                                context.ConnectionCt).ConfigureAwait(false);
+                            break;
+                        }
+                        var ledger = _undoRegistry.Take(requestedSession);
+                        if (ledger is null)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                                "no undoable changes", context.ConnectionCt).ConfigureAwait(false);
+                            break;
+                        }
+
+                        var (restored, failed) = await ledger.ApplyAsync(context.ConnectionCt).ConfigureAwait(false);
+                        var summary = failed.Count > 0
+                            ? $"撤销完成 {restored.Count} 项，失败 {failed.Count} 项：\n{string.Join("\n", failed)}"
+                            : $"已撤销本回合对 {restored.Count} 个文件的修改：\n{string.Join("\n", restored)}";
+
+                        // Record the undo in session history so the record and the file
+                        // system stay consistent for later turns.
+                        try
+                        {
+                            var workspaceForSession = TryDetectWorkspace(ledger.WorkspaceRoot)
+                                                      ?? _runtime.Workspaces.CreateGlobal();
+                            var undoSession = _runtime.Sessions.Load(workspaceForSession, requestedSession);
+                            if (undoSession is not null)
+                            {
+                                var notice = failed.Count > 0
+                                    ? $">>> [undo] {summary}"
+                                    : $">>> [undo] 已按用户要求撤销上一回合的文件修改（{restored.Count} 项）：\n{string.Join("\n", restored)}";
+                                if (failed.Count > 0) notice += $"\n失败项：{string.Join("; ", failed)}";
+                                _runtime.Sessions.Append(undoSession, ChatMessage.User(notice));
+                            }
+                        }
+                        catch
+                        {
+                            // History bookkeeping is best effort; the files are already reverted.
+                        }
+
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", summary,
                             context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }
@@ -1295,6 +1358,7 @@ public sealed class DaemonServer : IAsyncDisposable
                   services.AddSingleton<ILlmHttpFactory>(_sharedHttp);
                   services.AddSingleton(_sharedBreaker);
                   services.AddSingleton(_sharedLocalModels);
+                  services.AddSingleton(_undoRegistry);
               })
             : null;
         var runtime = turnRuntime ?? _runtime;
@@ -1311,6 +1375,15 @@ public sealed class DaemonServer : IAsyncDisposable
             runtime.Skills.Attach(workspace);
             if (_useIsolatedTurnRuntime && runtime.Mcp.LoadServerConfigs(workspace).Count > 0)
                 await runtime.Mcp.ConnectAllAsync(workspace, turnCt).ConfigureAwait(false);
+
+            // Crash-reconciliation hook: mutating steps update the in-memory journal
+            // record (and rewrite the crash file) so a process death leaves not just a
+            // "was mid-turn" marker but an executed-steps + changed-files ledger.
+            if (_useIsolatedTurnRuntime)
+            {
+                runtime.Agent.MutatingStepObserved = stepRecord =>
+                    UpdateTurnJournalSteps(session.Header.Id, stepRecord);
+            }
 
             result = _runTurn is null
                 ? await runtime.Agent.RunTurnAsync(
@@ -1354,14 +1427,31 @@ public sealed class DaemonServer : IAsyncDisposable
 
         try
         {
+            // Surface the turn's revertible file list on the terminal envelope so the
+            // client can offer a one-click undo (agent.undo) without another RPC.
+            JsonObject? terminalDetails = null;
+            var undoable = runtime.UndoRegistry.Peek(session.Header.Id);
+            if (undoable is { Changes.Count: > 0 })
+            {
+                terminalDetails = new JsonObject
+                {
+                    ["undoableFiles"] = new JsonArray(undoable.Changes
+                        .Select(c => JsonValue.Create(
+                            c.AbsolutePath.StartsWith(workspace.Root, StringComparison.OrdinalIgnoreCase)
+                                ? c.AbsolutePath[workspace.Root.Length..].TrimStart('/', '\\')
+                                : c.AbsolutePath))
+                        .ToArray<JsonNode?>()),
+                };
+            }
+
             if (failure is not null)
-                await WriteAsync(writer, writerGate, id, "error", failure.Message, connectionCt, session.Header.Id).ConfigureAwait(false);
+                await WriteAsync(writer, writerGate, id, "error", failure.Message, connectionCt, session.Header.Id, terminalDetails).ConfigureAwait(false);
             else if (result!.Cancelled)
-                await WriteAsync(writer, writerGate, id, "cancelled", result.Text, connectionCt, session.Header.Id).ConfigureAwait(false);
+                await WriteAsync(writer, writerGate, id, "cancelled", result.Text, connectionCt, session.Header.Id, terminalDetails).ConfigureAwait(false);
             else
                 await WriteAsync(writer, writerGate, id,
                     result.Error is null ? "done" : "error",
-                    result.Error ?? result.Text, connectionCt, session.Header.Id).ConfigureAwait(false);
+                    result.Error ?? result.Text, connectionCt, session.Header.Id, terminalDetails).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
         {
@@ -1602,7 +1692,8 @@ public sealed class DaemonServer : IAsyncDisposable
     /// crash journal was mid-turn when the process died. Best effort only — the
     /// session gets an interruption notice appended to its history and every client
     /// receives a <c>turn.interrupted</c> broadcast; the turn is never re-run
-    /// automatically because half-executed tools make a blind retry unsafe.
+    /// automatically because half-executed tools make a blind retry unsafe. When the
+    /// journal carries a mutating-step ledger, the notice lists what may have changed.
     /// </summary>
     internal async Task RecoverInterruptedTurnsAsync(CancellationToken ct)
     {
@@ -1622,8 +1713,19 @@ public sealed class DaemonServer : IAsyncDisposable
                     var session = _runtime.Sessions.Load(workspace, record.SessionId);
                     if (session is not null)
                     {
-                        _runtime.Sessions.Append(session, ChatMessage.User(
-                            ">>> [turn interrupted] 上次回合因 Runtime 异常退出而中断，上方可能缺少本轮的最终回答。可重新发送消息或要求重试。"));
+                        var notice = ">>> [turn interrupted] 上次回合因 Runtime 异常退出而中断，上方可能缺少本轮的最终回答。可重新发送消息或要求重试。";
+                        if (record.Steps is { Count: > 0 })
+                        {
+                            // Reconciliation, not re-run: list what the interrupted turn
+                            // touched so the user can verify the workspace against the
+                            // conversation record. Builtin file tools are revertible via
+                            // agent.undo if the daemon deposited a ledger — but after a
+                            // crash the ledger is gone, so only the paths are shown.
+                            var lines = record.Steps.Select(s =>
+                                $"  - {s.Tool} → {s.Target}{(s.Compensable ? "" : "（不可自动恢复）")}");
+                            notice += $"\n本轮已执行到以下修改步骤（共 {record.Steps.Count} 项），请核对这些文件的当前状态：\n{string.Join("\n", lines)}";
+                        }
+                        _runtime.Sessions.Append(session, ChatMessage.User(notice));
                     }
                 }
             }
@@ -1662,6 +1764,28 @@ public sealed class DaemonServer : IAsyncDisposable
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Appends one mutating step to the turn's crash-journal record and rewrites the
+    /// journal file. Called from the agent via <see cref="Agent.MutatingStepObserved"/>
+    /// — only for mutating steps, so the write amplification stays proportional to the
+    /// number of file changes, not the number of tool calls. Best effort by design.
+    /// </summary>
+    private void UpdateTurnJournalSteps(string sessionId, TurnStepRecord step)
+    {
+        if (!_turnJournal.TryGetValue(sessionId, out var record)) return;
+        var steps = (record.Steps ?? []).ToList();
+        steps.Add(new TurnStepSummary(step.Tool, step.Target, step.Compensable));
+        _turnJournal[sessionId] = record with { Steps = steps };
+        try
+        {
+            ActiveTurnJournal.Write(_activeTurnsFile, _turnJournal.Values.ToList());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Journal is an optimization; never fail the turn over it.
         }
     }
 

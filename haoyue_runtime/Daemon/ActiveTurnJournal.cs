@@ -3,13 +3,19 @@ using Haoyue.Runtime.Configuration;
 
 namespace Haoyue.Runtime.Daemon;
 
+/// <summary>One mutating step recorded for post-crash reconciliation.</summary>
+public sealed record TurnStepSummary(string Tool, string Target, bool Compensable);
+
 /// <summary>One in-flight agent turn recorded in the crash-marker journal.</summary>
+/// <param name="Steps">Mutating steps executed so far; a crash residue doubles as a
+/// changed-files ledger so recovery can tell the user what may have been touched.</param>
 public sealed record ActiveTurnRecord(
     string SessionId,
     string Scope,
     string WorkspaceRoot,
     bool IsGlobal,
-    DateTimeOffset StartedAt);
+    DateTimeOffset StartedAt,
+    IReadOnlyList<TurnStepSummary>? Steps = null);
 
 /// <summary>
 /// Crash marker for in-flight agent turns. The daemon rewrites the file whenever a

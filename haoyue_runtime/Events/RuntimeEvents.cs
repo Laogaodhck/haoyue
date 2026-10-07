@@ -15,7 +15,10 @@ public sealed record TurnStartedEvent(string SessionId, string UserInput) : Runt
 
 public sealed record UserSteerEvent(string Instruction) : RuntimeEvent;
 
-public sealed record TurnCompletedEvent(string SessionId, bool Cancelled, string? Error) : RuntimeEvent;
+/// <param name="UndoableFiles">Workspace-relative paths changed by builtin file tools this
+/// turn; a later agent.undo RPC can revert them. Null when nothing was changed.</param>
+public sealed record TurnCompletedEvent(
+    string SessionId, bool Cancelled, string? Error, IReadOnlyList<string>? UndoableFiles = null) : RuntimeEvent;
 
 /// <summary>High-level agent status: Thinking, Reading files, Searching, Editing, Building, Verifying…</summary>
 public sealed record StatusEvent(string Status, string? Detail = null) : RuntimeEvent;

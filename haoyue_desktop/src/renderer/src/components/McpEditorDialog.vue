@@ -3,6 +3,7 @@ import { ExternalLink, KeyRound, Plus, Save, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import {
   MCP_SCOPE_OPTIONS,
+  MCP_TRANSPORT_OPTIONS,
   buildMcpServerPayload,
   createMcpFormValue,
   credentialRowsToText,
@@ -48,6 +49,8 @@ const firstInput = ref<HTMLInputElement | null>(null)
 const nameTouched = ref(false)
 const newEnvKey = ref('')
 const newHeaderKey = ref('')
+/** Expert section pre-opens only when the edited server actually uses those fields. */
+const expertOpen = ref(false)
 
 const editing = computed(() => props.server !== null)
 const remote = computed(() => isRemoteTransport(form.transport))
@@ -189,6 +192,14 @@ watch(() => props.open, (open) => {
   nameTouched.value = false
   newEnvKey.value = ''
   newHeaderKey.value = ''
+  expertOpen.value = Boolean(
+    props.server &&
+    (props.server.connectTimeoutSeconds ||
+      (props.server.mutatingTools?.length ?? 0) > 0 ||
+      (props.server.readOnlyTools?.length ?? 0) > 0 ||
+      props.server.trustReadOnly ||
+      props.server.oauthConfigured)
+  )
   document.addEventListener('keydown', handleKeydown)
   void nextTick(() => firstInput.value?.focus())
 }, { immediate: true })
@@ -327,8 +338,59 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                     </button>
                   </div>
                 </div>
-                <small class="mcp-headers-hint">常用：Authorization = Bearer &lt;token&gt;。携带请求头的远程连接必须使用 https://（127.0.0.1 本地调试除外）。</small>
+                <small class="mcp-headers-hint">常用：Authorization = Bearer &lt;token&gt;。携带请求头的远程连接必须使用 https://（127.0.0.1 本地调试除外）。支持 OAuth 的服务器保存后会自动发起浏览器授权，无需手动填请求头。</small>
               </template>
+            </section>
+
+            <section class="mcp-form-section">
+              <details class="mcp-advanced" :open="expertOpen">
+                <summary>
+                  <strong>专家选项</strong>
+                  <small>传输协议、超时与信任设置；主路径无需修改</small>
+                </summary>
+                <div class="mcp-form-grid mcp-advanced-grid">
+                  <label class="form-field">
+                    <FieldLabel en="Transport" zh="传输协议" help="默认由连接内容自动判断；仅当自动判断不符合预期时覆盖。" />
+                    <SelectMenu v-model="form.transport" :options="MCP_TRANSPORT_OPTIONS" label="MCP 连接方式" />
+                  </label>
+                  <label v-if="remote" class="form-field">
+                    <FieldLabel en="Connect timeout" zh="连接超时（秒）" help="1~120；留空使用默认 10 秒，内网慢服务器可调大。" />
+                    <input
+                      v-model="form.connectTimeoutSeconds"
+                      class="form-input"
+                      type="number"
+                      min="1"
+                      max="120"
+                      placeholder="10"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <label class="form-field full-width">
+                    <FieldLabel en="Mutating tools" zh="视为变更类工具" help="每行一个工具名；这些工具始终按「会改动真实世界」处理，只读模式下默认拒绝执行。" />
+                    <textarea v-model="form.mutatingTools" class="form-input" rows="2" placeholder="send_email&#10;deploy"></textarea>
+                  </label>
+                  <label class="form-field full-width">
+                    <FieldLabel en="Read-only tools" zh="只读工具白名单" help="每行一个工具名；优先级高于变更类清单，命中即视为安全只读。" />
+                    <textarea v-model="form.readOnlyTools" class="form-input" rows="2" placeholder="search&#10;get_weather"></textarea>
+                  </label>
+                  <label class="mcp-enabled-row mcp-trust-row">
+                    <span>
+                      <strong>信任只读工具</strong>
+                      <small>勾选后，名称不含变更关键词的工具一律视为只读；仅对已知安全的服务器使用</small>
+                    </span>
+                    <input v-model="form.trustReadOnly" class="sr-only" type="checkbox" />
+                    <span class="toggle-switch" aria-hidden="true"><span /></span>
+                  </label>
+                  <label v-if="remote" class="mcp-enabled-row mcp-trust-row">
+                    <span>
+                      <strong>禁用 OAuth 自动授权 <span v-if="server?.oauthConfigured" class="mcp-transport-tag">已授权</span></strong>
+                      <small>默认自动发起浏览器授权并静默刷新令牌；勾选后仅使用上方手动配置的凭证</small>
+                    </span>
+                    <input v-model="form.oauthDisabled" class="sr-only" type="checkbox" />
+                    <span class="toggle-switch" aria-hidden="true"><span /></span>
+                  </label>
+                </div>
+              </details>
             </section>
 
             <section class="mcp-form-section">
@@ -569,6 +631,49 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
   margin-top: 8px;
   color: var(--text-muted);
   font-size: 11.5px;
+}
+
+.mcp-advanced {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-hover) 40%, transparent);
+}
+
+.mcp-advanced summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.mcp-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.mcp-advanced summary::after {
+  content: '▸';
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  transition: transform 140ms ease;
+}
+
+.mcp-advanced[open] summary::after {
+  transform: rotate(90deg);
+}
+
+.mcp-advanced summary strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.mcp-advanced-grid {
+  padding: 12px;
+  border-top: 1px solid var(--border);
 }
 
 .mcp-enabled-row {

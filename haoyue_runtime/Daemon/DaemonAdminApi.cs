@@ -842,6 +842,24 @@ internal sealed class DaemonAdminApi(
         if (input["headers"] is JsonObject headers)
             server.Headers = MergeCredentials(headers, server.Headers, $"mcp:{scope}:{name}:headers");
 
+        // Expert-mode fields: sending null clears, a value sets (clamped), absence
+        // keeps whatever was stored — the same merge contract as the credential maps.
+        if (input["connectTimeoutSeconds"] is JsonValue timeout)
+        {
+            if (timeout.TryGetValue(out int timeoutValue))
+                server.ConnectTimeoutSeconds = Math.Clamp(timeoutValue, 1, 120);
+            else
+                server.ConnectTimeoutSeconds = null;
+        }
+        if (input["mutatingTools"] is JsonArray mutating)
+            server.MutatingTools = ToolNameList(mutating);
+        if (input["readOnlyTools"] is JsonArray readOnly)
+            server.ReadOnlyTools = ToolNameList(readOnly);
+        if (input["trustReadOnly"] is JsonValue trust)
+            server.TrustReadOnly = trust.TryGetValue(out bool trustValue) && trustValue;
+        if (input["oauthDisabled"] is JsonValue oauthDisabled)
+            server.OAuthDisabled = oauthDisabled.TryGetValue(out bool disabledValue) && disabledValue;
+
         // Keep the stored entry consistent with the selected connection method so a
         // converted server never keeps a command for a remote transport or vice versa.
         if (server.Transport.Equals("stdio", StringComparison.OrdinalIgnoreCase))
@@ -1660,6 +1678,13 @@ internal sealed class DaemonAdminApi(
         ["url"] = server.Url,
         ["envKeys"] = Strings(server.Env is null ? Enumerable.Empty<string>() : server.Env.Keys),
         ["headerKeys"] = Strings(server.Headers is null ? Enumerable.Empty<string>() : server.Headers.Keys),
+        ["connectTimeoutSeconds"] = server.ConnectTimeoutSeconds,
+        ["mutatingTools"] = Strings(server.MutatingTools ?? []),
+        ["readOnlyTools"] = Strings(server.ReadOnlyTools ?? []),
+        ["trustReadOnly"] = server.TrustReadOnly,
+        // Presence flag only — the token values themselves never leave the runtime.
+        ["oauthConfigured"] = server.OAuthAccessToken is not null || server.OAuthRefreshToken is not null,
+        ["oauthDisabled"] = server.OAuthDisabled ?? false,
         ["enabled"] = server.Enabled,
         ["connected"] = status?.Connected ?? false,
         ["connecting"] = status?.Connecting ?? false,
@@ -1731,6 +1756,13 @@ internal sealed class DaemonAdminApi(
         }
         return merged.Count > 0 ? merged : null;
     }
+
+    /// <summary>Normalizes an expert-mode tool-name list: trims, drops empties, dedupes.</summary>
+    private static List<string>? ToolNameList(JsonArray names) =>
+        names.Select(node => node?.GetValue<string>()?.Trim() ?? "")
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() is { Count: > 0 } list ? list : null;
 
     internal static void ValidateMcpServer(string name, McpServerConfig server)
     {

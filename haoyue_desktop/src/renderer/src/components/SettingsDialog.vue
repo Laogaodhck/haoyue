@@ -3,12 +3,14 @@ import {
   Activity,
   ArrowLeft,
   Blocks,
+  BookOpen,
   Bot,
   Brain,
   BrainCircuit,
   Check,
   Circle,
   Clock,
+  Database,
   FolderOpen,
   Gauge,
   GitBranch,
@@ -18,6 +20,8 @@ import {
   LoaderCircle,
   Moon,
   Monitor,
+  MonitorPlay,
+  MessageSquare,
   Plug,
   Plus,
   RefreshCw,
@@ -315,7 +319,13 @@ const mcpPresetIcons: Record<string, unknown> = {
   fetch: Globe,
   memory: Brain,
   'sequential-thinking': BrainCircuit,
-  git: GitBranch
+  git: GitBranch,
+  playwright: MonitorPlay,
+  'brave-search': Search,
+  context7: BookOpen,
+  postgres: Database,
+  slack: MessageSquare,
+  time: Clock
 }
 
 const pageTitle = computed(() => props.page === 'extensions' ? 'MCP 与技能' : '设置')

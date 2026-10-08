@@ -17,6 +17,17 @@ export interface McpFormValue {
   /** `KEY=value` per line for remote transports (e.g. `Authorization=Bearer …`). */
   headers: string
   enabled: boolean
+  // ---- expert-mode fields (collapsed by default; the main path never touches them) ----
+  /** Remote connect timeout in seconds as a UI string; '' = runtime default (10s). */
+  connectTimeoutSeconds: string
+  /** Tool names (one per line) always treated as mutating regardless of the name heuristic. */
+  mutatingTools: string
+  /** Tool names (one per line) always treated as read-only; wins over mutatingTools. */
+  readOnlyTools: string
+  /** Vouch for the whole server: tools without a mutating keyword count as read-only. */
+  trustReadOnly: boolean
+  /** Expert escape hatch: never launch the interactive OAuth browser flow. */
+  oauthDisabled: boolean
 }
 
 export interface McpServerSummary {
@@ -29,6 +40,13 @@ export interface McpServerSummary {
   envKeys: string[]
   /** Remote header key names only — values never leave the runtime. */
   headerKeys?: string[]
+  connectTimeoutSeconds?: number | null
+  mutatingTools?: string[]
+  readOnlyTools?: string[]
+  trustReadOnly?: boolean
+  /** Presence flag only — OAuth token values never leave the runtime. */
+  oauthConfigured?: boolean
+  oauthDisabled?: boolean
   enabled: boolean
   connected: boolean
   /** True while the runtime is still connecting this server in the background. */
@@ -96,7 +114,12 @@ export function createMcpFormValue(): McpFormValue {
     connection: '',
     env: '',
     headers: '',
-    enabled: true
+    enabled: true,
+    connectTimeoutSeconds: '',
+    mutatingTools: '',
+    readOnlyTools: '',
+    trustReadOnly: false,
+    oauthDisabled: false
   }
 }
 
@@ -266,10 +289,10 @@ export interface McpPreset {
   createForm: (context?: McpPresetContext) => McpFormValue
 }
 
-function presetForm(id: string, connection: string, env = '', description = ''): McpFormValue {
+function presetForm(id: string, connection: string, env = '', name?: string): McpFormValue {
   return {
     ...createMcpFormValue(),
-    name: inferMcpName(connection) || id,
+    name: name ?? (inferMcpName(connection) || id),
     connection,
     env
   }
@@ -312,6 +335,42 @@ export const MCP_PRESETS: McpPreset[] = [
     label: 'Git',
     description: '对 Git 仓库做只读分析（历史、分支、状态、差异）；需要本机安装 uv 与 Git',
     createForm: () => presetForm('git', 'uvx mcp-server-git')
+  },
+  {
+    id: 'playwright',
+    label: '浏览器自动化',
+    description: '基于 Playwright 驱动真实浏览器：导航、点击、填表与截图；首次运行自动下载浏览器内核',
+    createForm: () => presetForm('playwright', 'npx -y @playwright/mcp', '', 'playwright')
+  },
+  {
+    id: 'brave-search',
+    label: '网页搜索',
+    description: 'Brave Search 网页与新闻搜索；需自行填写 API Key（brave.com/search/api 免费申请）',
+    createForm: () => presetForm('brave-search', 'npx -y @modelcontextprotocol/server-brave-search', 'BRAVE_API_KEY=')
+  },
+  {
+    id: 'context7',
+    label: '框架文档',
+    description: '检索主流库与框架的最新官方文档（React、Vue、Next.js、Tailwind 等）；无需任何配置',
+    createForm: () => presetForm('context7', 'npx -y @upstash/context7-mcp', '', 'context7')
+  },
+  {
+    id: 'postgres',
+    label: 'PostgreSQL',
+    description: '以只读方式查询 PostgreSQL 的表结构与数据；保存前把连接串替换为你的数据库地址',
+    createForm: () => presetForm('postgres', 'npx -y @modelcontextprotocol/server-postgres postgresql://user:password@localhost:5432/postgres')
+  },
+  {
+    id: 'slack',
+    label: 'Slack',
+    description: '读取频道历史、列成员与发送消息；需 Bot Token（api.slack.com/apps 创建）与 Team ID',
+    createForm: () => presetForm('slack', 'npx -y @modelcontextprotocol/server-slack', 'SLACK_BOT_TOKEN=\nSLACK_TEAM_ID=')
+  },
+  {
+    id: 'time',
+    label: '时间与时区',
+    description: '查询各时区当前时间并进行换算，适合跨时区协作场景；无需任何配置',
+    createForm: () => presetForm('time', 'uvx mcp-server-time')
   }
 ]
 
@@ -331,7 +390,12 @@ export function mcpFormFromServer(server: McpServerSummary): McpFormValue {
     connection,
     env: '',
     headers: '',
-    enabled: server.enabled
+    enabled: server.enabled,
+    connectTimeoutSeconds: server.connectTimeoutSeconds?.toString() ?? '',
+    mutatingTools: (server.mutatingTools ?? []).join('\n'),
+    readOnlyTools: (server.readOnlyTools ?? []).join('\n'),
+    trustReadOnly: server.trustReadOnly ?? false,
+    oauthDisabled: server.oauthDisabled ?? false
   }
 }
 
@@ -383,6 +447,11 @@ export function envNeedsGithubToken(value: string): boolean {
   })
 }
 
+/** Parses one tool name per line into the expert-mode list; empty input means "keep runtime default". */
+export function parseToolNameList(value: string): string[] {
+  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+}
+
 /** Returns a user-facing validation message, or null when the form can be saved. */
 export function mcpFormError(form: McpFormValue): string | null {
   if (!form.name.trim()) return '请填写 MCP 服务器名称'
@@ -390,6 +459,8 @@ export function mcpFormError(form: McpFormValue): string | null {
   if (isRemoteTransport(form.transport)) {
     if (!connection) return `${transportLabel(form.transport)} 连接需要填写 URL`
     if (!/^https?:\/\//i.test(connection)) return 'URL 需要以 http:// 或 https:// 开头'
+    if (form.connectTimeoutSeconds.trim() && !/^\d+$/.test(form.connectTimeoutSeconds.trim()))
+      return '连接超时需要是 1~120 之间的整数（秒），留空使用默认 10 秒'
     return null
   }
   if (!connection) return '请填写连接内容：包名（如 @modelcontextprotocol/server-github）、完整命令或 npx/uvx 启动命令'
@@ -418,6 +489,16 @@ export function buildMcpServerPayload(form: McpFormValue): Record<string, unknow
     // Only remote servers consume headers today.
     const headers = parseEnvText(form.headers)
     if (headers) server.headers = headers
+    // Expert-mode overrides. Absent keys keep the stored value, so they are only
+    // sent when the user touched them (or cleared them via the null reset).
+    const timeout = form.connectTimeoutSeconds.trim()
+    if (timeout) server.connectTimeoutSeconds = Math.min(Math.max(Number(timeout), 1), 120)
+    const mutating = parseToolNameList(form.mutatingTools)
+    if (mutating.length > 0) server.mutatingTools = mutating
+    const readOnly = parseToolNameList(form.readOnlyTools)
+    if (readOnly.length > 0) server.readOnlyTools = readOnly
+    if (form.trustReadOnly) server.trustReadOnly = true
+    if (form.oauthDisabled) server.oauthDisabled = true
   } else {
     const tokens = tokenizeCommand(form.connection)
     server.command = tokens[0] ?? ''

@@ -165,24 +165,116 @@ public sealed class McpManager(
 
     private async Task<McpServerStatus> ConnectOneAsync(string name, McpServerConfig server, CancellationToken ct)
     {
-        IMcpTransport transport = _transportFactory(name, server);
+        var remote = IsRemoteTransport(server.Transport);
+        for (var attempt = 1; ; attempt++)
+        {
+            IMcpTransport transport = _transportFactory(name, server);
 
-        var client = new McpClient(name, transport);
-        using var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        initCts.CancelAfter(TimeSpan.FromSeconds(30));
+            var client = new McpClient(name, transport);
+            using var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            initCts.CancelAfter(TimeSpan.FromSeconds(30));
 
+            try
+            {
+                await client.InitializeAsync(initCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+                throw new McpException($"Server '{name}' timed out during initialization.");
+            }
+            catch (McpUnauthorizedException) when (remote && attempt == 1 && server.OAuthDisabled != true)
+            {
+                // First contact with an OAuth-protected server: authorize (silent
+                // refresh first, interactive browser otherwise), then rebuild the
+                // transport with the fresh token and retry exactly once.
+                await client.DisposeAsync().ConfigureAwait(false);
+                if (!await TryAuthorizeAsync(name, server, ct).ConfigureAwait(false))
+                    throw new McpException(
+                        $"Server '{name}' 需要浏览器授权但未完成：请点击重连再次发起授权，或在设置中改用 Authorization 请求头。");
+                continue;
+            }
+            catch
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+
+            _clients.Add(client);
+            return await DiscoverAndRegisterAsync(name, server, client, ct).ConfigureAwait(false);
+        }
+    }
+
+    private static bool IsRemoteTransport(string transport) =>
+        transport is "sse" or "http" or "streamable-http" or "streamable_http";
+
+    /// <summary>
+    /// Authorization attempt for a 401-ing remote server: silent refresh first (no
+    /// browser), then the interactive flow. Tokens land secret:-encrypted on the
+    /// server entry and are persisted when it lives in the global config.
+    /// </summary>
+    private async Task<bool> TryAuthorizeAsync(string name, McpServerConfig server, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(server.Url)) return false;
         try
         {
-            await client.InitializeAsync(initCts.Token).ConfigureAwait(false);
+            if (SecretResolver.Resolve(server.OAuthRefreshToken) is { Length: > 0 } refreshToken)
+            {
+                var refreshed = await McpOAuthFlow.RefreshAsync(
+                    server.Url!, refreshToken,
+                    server.OAuthClientId,
+                    SecretResolver.Resolve(server.OAuthClientSecret),
+                    ct).ConfigureAwait(false);
+                if (refreshed is not null)
+                {
+                    StoreOAuthTokens(name, server, new OAuthGrant(refreshed, null, null));
+                    return true;
+                }
+            }
+
+            var grant = await McpOAuthFlow.AuthorizeAsync(server.Url!, ct).ConfigureAwait(false);
+            StoreOAuthTokens(name, server, grant);
+            return true;
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (McpException)
         {
-            await client.DisposeAsync().ConfigureAwait(false);
-            throw new McpException($"Server '{name}' timed out during initialization.");
+            throw; // actionable, user-facing flow errors (denied grant, no DCR, timeout)
         }
+        catch
+        {
+            return false;
+        }
+    }
 
-        _clients.Add(client);
+    private void StoreOAuthTokens(string name, McpServerConfig server, OAuthGrant grant)
+    {
+        server.OAuthAccessToken = SecretResolver.Encrypt($"mcp:oauth:{name}:access", grant.Tokens.AccessToken);
+        if (grant.Tokens.RefreshToken is { Length: > 0 } refresh)
+            server.OAuthRefreshToken = SecretResolver.Encrypt($"mcp:oauth:{name}:refresh", refresh);
+        // A grant without a rotated refresh token keeps the previously stored one.
 
+        if (grant.ClientId is { Length: > 0 } clientId)
+            server.OAuthClientId = clientId;
+        if (grant.ClientSecret is { Length: > 0 } clientSecret)
+            server.OAuthClientSecret = SecretResolver.Encrypt($"mcp:oauth:{name}:client", clientSecret);
+
+        // Persist only when the server lives in the global config (the default scope)
+        // so tokens survive restarts; workspace-scoped copies keep the in-memory token
+        // for the current session.
+        if (configStore.Config.Mcp?.Servers is not { } servers ||
+            !servers.TryGetValue(name, out var stored) ||
+            !string.Equals(stored.Url, server.Url, StringComparison.OrdinalIgnoreCase))
+            return;
+        stored.OAuthAccessToken = server.OAuthAccessToken;
+        stored.OAuthRefreshToken = server.OAuthRefreshToken;
+        stored.OAuthClientId = server.OAuthClientId;
+        stored.OAuthClientSecret = server.OAuthClientSecret;
+        configStore.Save();
+    }
+
+    private async Task<McpServerStatus> DiscoverAndRegisterAsync(
+        string name, McpServerConfig server, McpClient client, CancellationToken ct)
+    {
         try
         {
             // Auto-discover tools. Names are sanitized to [a-zA-Z0-9_-] (the character set
@@ -290,6 +382,15 @@ public sealed class McpManager(
                         ?? throw new McpException(
                             $"Server '{name}': header '{pair.Key}' is stored as a secret that cannot be resolved on this platform. Re-enter the value in settings."));
 
+        // OAuth token from the local authorization flow rides along as a Bearer
+        // header unless the user configured an explicit Authorization header.
+        if (SecretResolver.Resolve(server.OAuthAccessToken) is { Length: > 0 } bearer)
+        {
+            headers ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!headers.ContainsKey("Authorization"))
+                headers["Authorization"] = $"Bearer {bearer}";
+        }
+
         return server.Transport.ToLowerInvariant() switch
         {
             "stdio" when !string.IsNullOrWhiteSpace(server.Command) =>
@@ -308,6 +409,7 @@ public sealed class McpManager(
     private static string DescribeConnectionError(Exception error) => error switch
     {
         Win32Exception win32 => $"无法启动 MCP 服务器进程：{win32.Message}",
+        McpUnauthorizedException => "需要授权：请点击重连发起浏览器 OAuth 授权，或在设置中改用 Authorization 请求头",
         OperationCanceledException or TimeoutException => "连接超时",
         HttpRequestException http => $"连接失败：{http.Message}",
         McpException mcp => mcp.Message,

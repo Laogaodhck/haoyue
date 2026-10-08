@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
@@ -167,6 +168,7 @@ public class HttpMcpTransport : IMcpTransport
             request.Headers.TryAddWithoutValidation("Accept", "text/event-stream, application/json");
             ApplyHeaders(request);
             var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            ThrowIfUnauthorized(response);
 
             CaptureSessionId(response);
 
@@ -223,6 +225,12 @@ public class HttpMcpTransport : IMcpTransport
                 }
             }
         }
+        catch (McpUnauthorizedException)
+        {
+            // The server demanded authorization on the GET probe: do not swallow it
+            // into the POST fallback — the OAuth assistant needs the exception.
+            throw;
+        }
         catch (Exception)
         {
             // Server might only accept POST /mcp and reject GET with 405/400.
@@ -250,6 +258,7 @@ public class HttpMcpTransport : IMcpTransport
         }
 
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        ThrowIfUnauthorized(response);
         response.EnsureSuccessStatusCode();
 
         CaptureSessionId(response);
@@ -290,6 +299,13 @@ public class HttpMcpTransport : IMcpTransport
             if (!string.IsNullOrWhiteSpace(key))
                 request.Headers.TryAddWithoutValidation(key, value);
         }
+    }
+
+    private void ThrowIfUnauthorized(HttpResponseMessage response)
+    {
+        if (response.StatusCode != HttpStatusCode.Unauthorized) return;
+        var challenge = response.Headers.WwwAuthenticate.FirstOrDefault()?.ToString();
+        throw new McpUnauthorizedException(_url, challenge);
     }
 
     private void CaptureSessionId(HttpResponseMessage response)

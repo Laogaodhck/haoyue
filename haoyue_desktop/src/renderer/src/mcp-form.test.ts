@@ -19,6 +19,7 @@ import {
   parseCredentialRows,
   parseEnvText,
   parseMcpJsonConfig,
+  parseToolNameList,
   tokenizeCommand,
   transportLabel,
   type McpFormValue,
@@ -164,6 +165,16 @@ describe('mcpFormError', () => {
       .toBe('无法识别的命令；请输入 npx/uvx 包名、完整命令或 http(s):// URL')
   })
 
+  it('requires the expert timeout to be a positive integer', () => {
+    expect(mcpFormError(makeForm({ name: 'web', transport: 'http', connection: 'https://example.com/mcp', connectTimeoutSeconds: '30' })))
+      .toBeNull()
+    expect(mcpFormError(makeForm({ name: 'web', transport: 'http', connection: 'https://example.com/mcp', connectTimeoutSeconds: 'abc' })))
+      .toBe('连接超时需要是 1~120 之间的整数（秒），留空使用默认 10 秒')
+    // stdio servers have no connect timeout to validate.
+    expect(mcpFormError(makeForm({ name: 'fs', connection: 'npx -y pkg', connectTimeoutSeconds: 'abc' })))
+      .toBeNull()
+  })
+
   it('accepts complete forms', () => {
     expect(mcpFormError(makeForm({ name: 'fs', connection: 'npx -y @modelcontextprotocol/server-filesystem' }))).toBeNull()
     expect(mcpFormError(makeForm({ name: 'fs', connection: 'C:\\tools\\mcp.exe --port 5' }))).toBeNull()
@@ -224,6 +235,48 @@ describe('buildMcpServerPayload', () => {
     expect(payload).not.toHaveProperty('headers')
     expect(payload).not.toHaveProperty('env')
   })
+
+  it('sends expert-mode overrides for remote servers only when non-default', () => {
+    const payload = buildMcpServerPayload(makeForm({
+      name: 'web',
+      transport: 'http',
+      connection: 'https://example.com/mcp',
+      connectTimeoutSeconds: ' 45 ',
+      mutatingTools: 'send_email\n\ndeploy\n',
+      readOnlyTools: 'search',
+      trustReadOnly: true
+    }))
+
+    expect(payload.connectTimeoutSeconds).toBe(45)
+    expect(payload.mutatingTools).toEqual(['send_email', 'deploy'])
+    expect(payload.readOnlyTools).toEqual(['search'])
+    expect(payload.trustReadOnly).toBe(true)
+    expect(payload).not.toHaveProperty('oauthDisabled')
+  })
+
+  it('clamps the expert timeout into the 1-120 range', () => {
+    const payload = buildMcpServerPayload(makeForm({
+      name: 'web', transport: 'http', connection: 'https://example.com/mcp', connectTimeoutSeconds: '999'
+    }))
+    expect(payload.connectTimeoutSeconds).toBe(120)
+  })
+
+  it('never sends expert-mode overrides for stdio servers', () => {
+    const payload = buildMcpServerPayload(makeForm({
+      name: 'fs',
+      connection: 'npx -y pkg',
+      connectTimeoutSeconds: '30',
+      mutatingTools: 'deploy',
+      readOnlyTools: 'search',
+      trustReadOnly: true,
+      oauthDisabled: true
+    }))
+    expect(payload).not.toHaveProperty('connectTimeoutSeconds')
+    expect(payload).not.toHaveProperty('mutatingTools')
+    expect(payload).not.toHaveProperty('readOnlyTools')
+    expect(payload).not.toHaveProperty('trustReadOnly')
+    expect(payload).not.toHaveProperty('oauthDisabled')
+  })
 })
 
 describe('buildMcpTogglePayload', () => {
@@ -270,7 +323,12 @@ describe('mcpFormFromServer', () => {
       connection: 'http://localhost:5070/mcp',
       env: '',
       headers: '',
-      enabled: true
+      enabled: true,
+      connectTimeoutSeconds: '',
+      mutatingTools: '',
+      readOnlyTools: '',
+      trustReadOnly: false,
+      oauthDisabled: false
     })
   })
 
@@ -279,6 +337,24 @@ describe('mcpFormFromServer', () => {
       ...remoteServer, transport: 'stdio', command: 'node', args: ['E:\\My Server\\mcp.js'], url: undefined
     })
     expect(form.connection).toBe('node "E:\\My Server\\mcp.js"')
+  })
+
+  it('restores expert-mode fields from the runtime summary', () => {
+    const form = mcpFormFromServer({
+      ...remoteServer,
+      connectTimeoutSeconds: 30,
+      mutatingTools: ['send_email', 'deploy'],
+      readOnlyTools: ['search'],
+      trustReadOnly: true,
+      oauthConfigured: true
+    })
+
+    expect(form.connectTimeoutSeconds).toBe('30')
+    expect(form.mutatingTools).toBe('send_email\ndeploy')
+    expect(form.readOnlyTools).toBe('search')
+    expect(form.trustReadOnly).toBe(true)
+    // oauthConfigured is a presence flag with no editable counterpart in the form.
+    expect(form.oauthDisabled).toBe(false)
   })
 })
 
@@ -336,10 +412,18 @@ describe('GitHub token guidance', () => {
   })
 })
 
+describe('parseToolNameList', () => {
+  it('reads one tool name per line and drops blanks', () => {
+    expect(parseToolNameList('send_email\n\ndeploy \n')).toEqual(['send_email', 'deploy'])
+    expect(parseToolNameList('')).toEqual([])
+  })
+})
+
 describe('MCP_PRESETS', () => {
   it('covers the commonly used reference servers', () => {
     expect(MCP_PRESETS.map((item) => item.id)).toEqual([
-      'github', 'filesystem', 'fetch', 'memory', 'sequential-thinking', 'git'
+      'github', 'filesystem', 'fetch', 'memory', 'sequential-thinking', 'git',
+      'playwright', 'brave-search', 'context7', 'postgres', 'slack', 'time'
     ])
   })
 
@@ -391,6 +475,41 @@ describe('MCP_PRESETS', () => {
         url: '',
         enabled: true
       })
+    }
+  })
+
+  it('ships the extended preset set with explicit names and credential keys', () => {
+    const shapes: Record<string, { name: string; command: string; args: string[]; env?: Record<string, string> }> = {
+      playwright: { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp'] },
+      'brave-search': { name: 'brave-search', command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'], env: { BRAVE_API_KEY: '' } },
+      context7: { name: 'context7', command: 'npx', args: ['-y', '@upstash/context7-mcp'] },
+      postgres: {
+        name: 'postgres',
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://user:password@localhost:5432/postgres']
+      },
+      slack: {
+        name: 'slack',
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-slack'],
+        env: { SLACK_BOT_TOKEN: '', SLACK_TEAM_ID: '' }
+      },
+      time: { name: 'time', command: 'uvx', args: ['mcp-server-time'] }
+    }
+
+    for (const [id, shape] of Object.entries(shapes)) {
+      const preset = MCP_PRESETS.find((item) => item.id === id)
+      expect(preset, id).toBeDefined()
+
+      const form = preset!.createForm()
+      expect(mcpFormError(form)).toBeNull()
+      expect(form.name).toBe(shape.name)
+
+      const payload = buildMcpServerPayload(form)
+      expect(payload.command).toBe(shape.command)
+      expect(payload.args).toEqual(shape.args)
+      if (shape.env) expect(payload.env).toEqual(shape.env)
+      else expect(payload).not.toHaveProperty('env')
     }
   })
 

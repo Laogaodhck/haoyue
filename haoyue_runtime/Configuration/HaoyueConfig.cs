@@ -250,6 +250,19 @@ public sealed class McpServerConfig
     public Dictionary<string, string>? Headers { get; set; }
     /// <summary>Remote connect timeout in seconds; defaults to 10 when null.</summary>
     public int? ConnectTimeoutSeconds { get; set; }
+    /// <summary>
+    /// OAuth access token from the local authorization flow, stored secret:-prefixed.
+    /// Applied as a Bearer Authorization header when no explicit one is configured.
+    /// </summary>
+    public string? OAuthAccessToken { get; set; }
+    /// <summary>OAuth refresh token (secret:-prefixed); enables silent re-authorization.</summary>
+    public string? OAuthRefreshToken { get; set; }
+    /// <summary>Client id from the RFC 7591 dynamic registration bound to the refresh token.</summary>
+    public string? OAuthClientId { get; set; }
+    /// <summary>Client secret from dynamic registration (secret:-prefixed), when the server issues one.</summary>
+    public string? OAuthClientSecret { get; set; }
+    /// <summary>Expert-mode escape hatch: never launch the interactive OAuth browser flow for this server.</summary>
+    public bool? OAuthDisabled { get; set; }
     public bool Enabled { get; set; } = true;
     /// <summary>
     /// Tool names (exact, case-insensitive) always treated as mutating, regardless of the

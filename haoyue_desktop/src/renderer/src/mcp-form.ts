@@ -5,10 +5,17 @@ export interface McpFormValue {
   name: string
   scope: McpScope
   transport: McpTransport
-  command: string
-  args: string
-  url: string
+  /**
+   * Single-line connection input — the one field the user always fills. It may be
+   * a package name (`@modelcontextprotocol/server-github`, auto-expanded to
+   * `npx -y …`), a full command line, or a remote URL. The content itself decides
+   * the transport; there is no separate transport selector to reason about.
+   */
+  connection: string
+  /** `KEY=value` per line; values are credentials and stored encrypted. */
   env: string
+  /** `KEY=value` per line for remote transports (e.g. `Authorization=Bearer …`). */
+  headers: string
   enabled: boolean
 }
 
@@ -20,6 +27,8 @@ export interface McpServerSummary {
   args: string[]
   url?: string
   envKeys: string[]
+  /** Remote header key names only — values never leave the runtime. */
+  headerKeys?: string[]
   enabled: boolean
   connected: boolean
   /** True while the runtime is still connecting this server in the background. */
@@ -37,8 +46,8 @@ export interface McpOption {
 }
 
 export const MCP_SCOPE_OPTIONS: McpOption[] = [
-  { value: 'workspace', label: '当前工作区', description: '仅在此工作区生效' },
-  { value: 'global', label: '全局', description: '在所有工作区中生效' }
+  { value: 'global', label: '全局', description: '在所有工作区中生效（推荐）' },
+  { value: 'workspace', label: '当前工作区', description: '仅在此工作区生效' }
 ]
 
 /**
@@ -82,28 +91,146 @@ export function isRemoteTransport(transport: string): boolean {
 export function createMcpFormValue(): McpFormValue {
   return {
     name: '',
-    scope: 'workspace',
+    scope: 'global',
     transport: 'stdio',
-    command: '',
-    args: '',
-    url: '',
+    connection: '',
     env: '',
+    headers: '',
     enabled: true
   }
 }
 
-/** Ambient paths a preset may prefill; callers supply whatever they know. */
-export interface McpPresetContext {
-  /** Active workspace directory, used by presets that serve a folder on disk. */
-  workspacePath?: string
+// ---------------------------------------------------------------------------
+// Connection input recognition — all inference lives here and in the dialog's
+// live preview. The stored config is always the explicit expansion produced by
+// buildMcpServerPayload, so recognition mistakes surface in the connection test
+// instead of failing silently.
+// ---------------------------------------------------------------------------
+
+/** Interpreters that are already runnable commands, not bare package names. */
+const KNOWN_INTERPRETERS = new Set([
+  'npx', 'uvx', 'pnpm', 'bunx', 'deno', 'node', 'python', 'python3', 'pipx', 'docker', 'cargo'
+])
+
+/** Quote-aware tokenizer for a single command line (double or single quotes). */
+export function tokenizeCommand(line: string): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  let started = false
+  for (const ch of line) {
+    if (quote) {
+      if (ch === quote) quote = null
+      else current += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      started = true
+      continue
+    }
+    if (ch === ' ' || ch === '\t') {
+      if (current.length > 0 || started) tokens.push(current)
+      current = ''
+      started = false
+      continue
+    }
+    current += ch
+  }
+  if (current.length > 0 || started) tokens.push(current)
+  return tokens
 }
 
-export interface McpPreset {
-  id: string
-  label: string
-  description: string
-  /** Returns a fresh form value on every call so entry points never share mutable state. */
-  createForm: (context?: McpPresetContext) => McpFormValue
+/**
+ * Expands a bare package name into the command that runs it. Idempotent: full
+ * commands, URLs and already-expanded forms pass through unchanged.
+ */
+export function normalizeConnection(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed || /^https?:\/\//i.test(trimmed)) return trimmed
+  const tokens = tokenizeCommand(trimmed)
+  const first = tokens[0]
+  if (tokens.length === 0 || !first) return trimmed
+  if (KNOWN_INTERPRETERS.has(first.toLowerCase())) return trimmed
+
+  const target = tokens[tokens.length - 1]
+  if (!target) return trimmed
+  const isUv = /^mcp-server-|^mcp_server-|^mcp-server$/.test(target)
+  const isNpm = target.startsWith('@') || (target.includes('/') && !target.startsWith('-'))
+  const expanded = isUv ? `uvx ${target}` : isNpm ? `npx -y ${target}` : null
+  // Extra tokens before a bare package are unusual; only expand the clean case.
+  if (expanded && tokens.length === 1) return expanded
+  return trimmed
+}
+
+/** True when the connection string is a remote URL (decides the transport). */
+export function classifyTransport(connection: string): McpTransport {
+  return /^https?:\/\//i.test(connection.trim()) ? 'http' : 'stdio'
+}
+
+/**
+ * Derives a short server name from the connection input: package tail for
+ * commands (`server-github` → `github`), hostname body for URLs
+ * (`mcp.example.com` → `example`). Returns '' when nothing confident is found.
+ */
+export function inferMcpName(connection: string): string {
+  const trimmed = connection.trim()
+  if (!trimmed) return ''
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const host = new URL(trimmed).hostname
+      const label = host
+        .replace(/^(mcp|api|server)\./i, '')
+        .split('.')
+        .find((part) => part.length > 0) ?? ''
+      return sanitizeName(label)
+    } catch {
+      return ''
+    }
+  }
+
+  const tokens = tokenizeCommand(normalizeConnection(trimmed))
+  // The package is the first token that looks like one (skips npx/-y flags).
+  const pkg = tokens.find((token, index) => index >= 1 && !token.startsWith('-')) ?? tokens[0]
+  if (!pkg) return ''
+  const tail = pkg.split(/[\\/]/).pop() ?? pkg
+  const stripped = tail.replace(/^(mcp-)?server-/i, '').replace(/\.(exe|cmd|js|mjs|py)$/i, '')
+  return sanitizeName(stripped || tail)
+}
+
+function sanitizeName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40)
+}
+
+/**
+ * Parses a pasted JSON config (Claude/Cursor style) into form fields. Accepts
+ * both the `{"mcpServers": {…}}` wrapper and a single server object. Returns
+ * null when the text is not a recognizable MCP config.
+ */
+export function parseMcpJsonConfig(
+  text: string
+): { name: string; server: Record<string, unknown> } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (parsed === null || typeof parsed !== 'object') return null
+
+  const record = parsed as Record<string, unknown>
+  const servers = record.mcpServers ?? record.servers
+  if (servers && typeof servers === 'object' && !Array.isArray(servers)) {
+    const entry = Object.entries(servers as Record<string, unknown>)[0]
+    if (!entry) return null
+    const [name, value] = entry
+    if (value && typeof value === 'object') return { name, server: value as Record<string, unknown> }
+    return null
+  }
+
+  if (record.command || record.url) return { name: '', server: record }
+  return null
 }
 
 /** Environment key the GitHub MCP server reads its personal access token from. */
@@ -122,95 +249,88 @@ export function githubTokenCreateUrl(): string {
 }
 
 /**
- * One-click templates for well-known MCP servers. Presets only fill in the
- * connection skeleton; credentials are never prefilled and stay user-provided.
+ * One-click templates for well-known MCP servers. Presets fill in the
+ * connection line and credential key names; credential values stay empty and
+ * user-provided.
  */
+export interface McpPresetContext {
+  /** Active workspace directory, used by presets that serve a folder on disk. */
+  workspacePath?: string
+}
+
+export interface McpPreset {
+  id: string
+  label: string
+  description: string
+  /** Returns a fresh form value on every call so entry points never share mutable state. */
+  createForm: (context?: McpPresetContext) => McpFormValue
+}
+
+function presetForm(id: string, connection: string, env = '', description = ''): McpFormValue {
+  return {
+    ...createMcpFormValue(),
+    name: inferMcpName(connection) || id,
+    connection,
+    env
+  }
+}
+
 export const MCP_PRESETS: McpPreset[] = [
   {
     id: 'github',
     label: 'GitHub',
     description: '接入 GitHub MCP Server：浏览仓库、Issue、PR 与代码搜索；需自行填写个人访问令牌',
-    createForm: () => ({
-      ...createMcpFormValue(),
-      name: 'github',
-      transport: 'stdio',
-      command: 'npx',
-      args: '-y\n@modelcontextprotocol/server-github',
-      env: `${GITHUB_TOKEN_ENV_KEY}=`
-    })
+    createForm: () => presetForm('github', 'npx -y @modelcontextprotocol/server-github', `${GITHUB_TOKEN_ENV_KEY}=`)
   },
   {
     id: 'filesystem',
     label: '文件系统',
     description: '让 Agent 读写工作区目录中的文件；如需其他目录，保存前修改最后一个参数',
-    createForm: (context) => ({
-      ...createMcpFormValue(),
-      name: 'filesystem',
-      transport: 'stdio',
-      command: 'npx',
-      args: `-y\n@modelcontextprotocol/server-filesystem\n${context?.workspacePath?.trim() || '.'}`
-    })
+    createForm: (context) =>
+      presetForm('filesystem', `npx -y @modelcontextprotocol/server-filesystem "${context?.workspacePath?.trim() || '.'}"`)
   },
   {
     id: 'fetch',
     label: '网页抓取',
     description: '抓取网页并转为 Markdown 供 Agent 阅读；需要本机安装 uv（Python 工具链）',
-    createForm: () => ({
-      ...createMcpFormValue(),
-      name: 'fetch',
-      transport: 'stdio',
-      command: 'uvx',
-      args: 'mcp-server-fetch'
-    })
+    createForm: () => presetForm('fetch', 'uvx mcp-server-fetch')
   },
   {
     id: 'memory',
     label: '记忆图谱',
     description: '基于知识图谱的长期记忆，跨会话记住实体与关系；无需任何配置',
-    createForm: () => ({
-      ...createMcpFormValue(),
-      name: 'memory',
-      transport: 'stdio',
-      command: 'npx',
-      args: '-y\n@modelcontextprotocol/server-memory'
-    })
+    createForm: () => presetForm('memory', 'npx -y @modelcontextprotocol/server-memory')
   },
   {
     id: 'sequential-thinking',
     label: '顺序思考',
     description: '提供逐步推理与思路修订工具，适合把复杂问题拆解后再行动；无需任何配置',
-    createForm: () => ({
-      ...createMcpFormValue(),
-      name: 'sequential-thinking',
-      transport: 'stdio',
-      command: 'npx',
-      args: '-y\n@modelcontextprotocol/server-sequential-thinking'
-    })
+    createForm: () => presetForm('sequential-thinking', 'npx -y @modelcontextprotocol/server-sequential-thinking')
   },
   {
     id: 'git',
     label: 'Git',
     description: '对 Git 仓库做只读分析（历史、分支、状态、差异）；需要本机安装 uv 与 Git',
-    createForm: () => ({
-      ...createMcpFormValue(),
-      name: 'git',
-      transport: 'stdio',
-      command: 'uvx',
-      args: 'mcp-server-git'
-    })
+    createForm: () => presetForm('git', 'uvx mcp-server-git')
   }
 ]
 
-/** Builds editor state from a runtime server entry. Environment values are never sent back to the UI. */
+/** Builds editor state from a runtime server entry. Credential values are never sent to the UI. */
 export function mcpFormFromServer(server: McpServerSummary): McpFormValue {
+  const remote = isRemoteTransport(normalizeTransport(server.transport))
+  // Quote args containing whitespace so the single line round-trips through
+  // tokenizeCommand without splitting paths like "E:\My Files".
+  const quote = (token: string) => (/\s/.test(token) ? `"${token.replace(/"/g, '\\"')}"` : token)
+  const connection = remote
+    ? server.url ?? ''
+    : [server.command ?? '', ...(server.args ?? []).map(quote)].join(' ').trim()
   return {
     name: server.name,
     scope: server.scope,
     transport: normalizeTransport(server.transport),
-    command: server.command ?? '',
-    args: (server.args ?? []).join('\n'),
-    url: server.url ?? '',
+    connection,
     env: '',
+    headers: '',
     enabled: server.enabled
   }
 }
@@ -225,7 +345,32 @@ export function parseEnvText(value: string): Record<string, string> | undefined 
   }))
 }
 
-/** True when the env textarea declares the GitHub token key but still has no value. */
+export interface CredentialRow {
+  key: string
+  /** Empty means "unchanged" — the runtime keeps the stored value. */
+  value: string
+}
+
+/** Reads credential rows out of a KEY=value textarea. Values are trimmed —
+ *  credential UI edits each value in its own field, verbatim surrounding
+ *  whitespace is never meaningful. */
+export function parseCredentialRows(text: string): CredentialRow[] {
+  return text.split(/\r?\n/).map((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return null
+    const index = trimmed.indexOf('=')
+    return index < 0
+      ? { key: trimmed, value: '' }
+      : { key: trimmed.slice(0, index).trim(), value: trimmed.slice(index + 1).trim() }
+  }).filter((row): row is CredentialRow => row !== null && row.key.length > 0)
+}
+
+/** Serializes credential rows back into the KEY=value textarea format. */
+export function credentialRowsToText(rows: CredentialRow[]): string {
+  return rows.filter((row) => row.key.trim()).map((row) => `${row.key}=${row.value}`).join('\n')
+}
+
+/** True when the env rows declare the GitHub token key but still have no value. */
 export function envNeedsGithubToken(value: string): boolean {
   const target = GITHUB_TOKEN_ENV_KEY.toUpperCase()
   return value.split(/\r?\n/).some((rawLine) => {
@@ -241,14 +386,18 @@ export function envNeedsGithubToken(value: string): boolean {
 /** Returns a user-facing validation message, or null when the form can be saved. */
 export function mcpFormError(form: McpFormValue): string | null {
   if (!form.name.trim()) return '请填写 MCP 服务器名称'
-  if (!isRemoteTransport(form.transport)) {
-    if (!form.command.trim()) return 'stdio 连接需要填写启动命令，例如 npx'
+  const connection = form.connection.trim()
+  if (isRemoteTransport(form.transport)) {
+    if (!connection) return `${transportLabel(form.transport)} 连接需要填写 URL`
+    if (!/^https?:\/\//i.test(connection)) return 'URL 需要以 http:// 或 https:// 开头'
     return null
   }
-  const url = form.url.trim()
-  if (!url) return `${transportLabel(form.transport)} 连接需要填写 URL`
-  if (!/^https?:\/\//i.test(url)) return 'URL 需要以 http:// 或 https:// 开头'
-  return null
+  if (!connection) return '请填写连接内容：包名（如 @modelcontextprotocol/server-github）、完整命令或 npx/uvx 启动命令'
+  const command = tokenizeCommand(connection)[0]
+  if (command && (KNOWN_INTERPRETERS.has(command.toLowerCase()) || command.includes('/') || command.includes('\\') || command.endsWith('.exe') || command.endsWith('.cmd'))) {
+    return null
+  }
+  return '无法识别的命令；请输入 npx/uvx 包名、完整命令或 http(s):// URL'
 }
 
 /**
@@ -259,14 +408,24 @@ export function buildMcpServerPayload(form: McpFormValue): Record<string, unknow
   const remote = isRemoteTransport(form.transport)
   const server: Record<string, unknown> = {
     transport: form.transport,
-    command: remote ? '' : form.command.trim(),
-    args: remote ? [] : form.args.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
-    url: remote ? form.url.trim() : '',
+    command: '',
+    args: [] as string[],
+    url: '',
     enabled: form.enabled
   }
-  // Only stdio servers consume process environment variables today.
-  const env = remote ? undefined : parseEnvText(form.env)
-  if (env) server.env = env
+  if (remote) {
+    server.url = form.connection.trim()
+    // Only remote servers consume headers today.
+    const headers = parseEnvText(form.headers)
+    if (headers) server.headers = headers
+  } else {
+    const tokens = tokenizeCommand(form.connection)
+    server.command = tokens[0] ?? ''
+    server.args = tokens.slice(1)
+    // Only stdio servers consume process environment variables today.
+    const env = parseEnvText(form.env)
+    if (env) server.env = env
+  }
   return server
 }
 

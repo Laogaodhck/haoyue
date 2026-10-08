@@ -1,17 +1,23 @@
 <script setup lang="ts">
-import { ExternalLink, KeyRound, Save, X } from '@lucide/vue'
+import { ExternalLink, KeyRound, Plus, Save, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import {
   MCP_SCOPE_OPTIONS,
-  MCP_TRANSPORT_OPTIONS,
   buildMcpServerPayload,
   createMcpFormValue,
+  credentialRowsToText,
   envNeedsGithubToken,
   githubTokenCreateUrl,
+  inferMcpName,
   isRemoteTransport,
   mcpFormError,
   mcpFormFromServer,
+  normalizeConnection,
+  parseCredentialRows,
+  parseMcpJsonConfig,
   transportLabel,
+  classifyTransport,
+  type CredentialRow,
   type McpFormValue,
   type McpScope,
   type McpServerSummary
@@ -38,12 +44,26 @@ const emit = defineEmits<{
 const form = reactive<McpFormValue>(createMcpFormValue())
 const validationError = ref('')
 const firstInput = ref<HTMLInputElement | null>(null)
+/** False until the user edits the name field — auto-inference stops afterwards. */
+const nameTouched = ref(false)
+const newEnvKey = ref('')
+const newHeaderKey = ref('')
 
 const editing = computed(() => props.server !== null)
 const remote = computed(() => isRemoteTransport(form.transport))
 const message = computed(() => validationError.value || props.error || '')
 const githubTokenUrl = githubTokenCreateUrl()
+const envRows = computed(() => parseCredentialRows(form.env))
+const headerRows = computed(() => parseCredentialRows(form.headers))
 const showGithubHint = computed(() => !remote.value && envNeedsGithubToken(form.env))
+/** Short human summary of what the connection string will do. */
+const connectionSummary = computed(() => {
+  const value = form.connection.trim()
+  if (!value) return ''
+  if (/^https?:\/\//i.test(value)) return `远程连接：POST/GET ${value}`
+  if (parseMcpJsonConfig(value)) return '检测到 JSON 配置，已自动填充各字段'
+  return `本地命令：${value}`
+})
 
 function close(): void {
   if (!props.saving) emit('close')
@@ -74,6 +94,91 @@ function handleKeydown(event: KeyboardEvent): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Credential rows: rendered as per-key password inputs. An empty value sent to
+// the runtime means "keep the stored value" — the stored value itself never
+// reaches the UI, so editing never requires re-typing credentials.
+// ---------------------------------------------------------------------------
+
+function updateEnvRows(rows: CredentialRow[]): void {
+  form.env = credentialRowsToText(rows)
+}
+
+function updateHeaderRows(rows: CredentialRow[]): void {
+  form.headers = credentialRowsToText(rows)
+}
+
+function addEnvKey(): void {
+  const key = newEnvKey.value.trim()
+  if (!key) return
+  const rows = envRows.value
+  if (rows.some((row) => row.key === key)) return
+  updateEnvRows([...rows, { key, value: '' }])
+  newEnvKey.value = ''
+}
+
+function addHeaderKey(): void {
+  const key = newHeaderKey.value.trim()
+  if (!key) return
+  const rows = headerRows.value
+  if (rows.some((row) => row.key === key)) return
+  updateHeaderRows([...rows, { key, value: '' }])
+  newHeaderKey.value = ''
+}
+
+function applyJsonConfig(): void {
+  const parsed = parseMcpJsonConfig(form.connection)
+  if (!parsed) return
+  const server = parsed.server
+  const transport = typeof server.transport === 'string' ? server.transport : undefined
+  const command = typeof server.command === 'string' ? server.command : ''
+  const args = Array.isArray(server.args) ? server.args.map(String) : []
+  const url = typeof server.url === 'string' ? server.url : ''
+
+  if (parsed.name && !nameTouched.value) form.name = parsed.name
+  form.transport = transport
+    ? (transport === 'sse' ? 'sse' : transport === 'stdio' ? 'stdio' : 'http')
+    : classifyTransport(url || command)
+  form.connection = url || [command, ...args].join(' ')
+  const toText = (value: unknown) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.entries(value as Record<string, unknown>).map(([k, v]) => `${k}=${String(v ?? '')}`).join('\n')
+      : ''
+  form.env = toText(server.env)
+  form.headers = toText(server.headers)
+}
+
+// Live recognition: the connection string fills name/transport and expands bare
+// package names. All inference happens here at the input layer — the payload
+// that gets stored is always the explicit expansion, so a wrong guess surfaces
+// immediately in the connection test instead of failing silently.
+watch(() => form.connection, (value) => {
+  if (!props.open || editing.value) {
+    // Editing keeps recognition on for JSON pastes only — the stored name/URL
+    // must not be silently rewritten while the user edits another field.
+    if (props.open && parseMcpJsonConfig(value)) applyJsonConfig()
+    return
+  }
+  if (parseMcpJsonConfig(value)) {
+    applyJsonConfig()
+    return
+  }
+  const isUrl = /^https?:\/\//i.test(value.trim())
+  if (remote.value && !isUrl) {
+    // User replaced a URL with something local — switch back.
+    form.transport = 'stdio'
+  }
+  if (!remote.value && !isUrl) {
+    const normalized = normalizeConnection(value)
+    if (normalized !== value) {
+      form.connection = normalized
+      return
+    }
+  }
+  form.transport = classifyTransport(value)
+  if (!nameTouched.value) form.name = inferMcpName(value)
+})
+
 watch(() => props.open, (open) => {
   if (!open) return
   Object.assign(
@@ -81,6 +186,9 @@ watch(() => props.open, (open) => {
     props.server ? mcpFormFromServer(props.server) : (props.preset ?? createMcpFormValue())
   )
   validationError.value = ''
+  nameTouched.value = false
+  newEnvKey.value = ''
+  newHeaderKey.value = ''
   document.addEventListener('keydown', handleKeydown)
   void nextTick(() => firstInput.value?.focus())
 }, { immediate: true })
@@ -105,7 +213,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
           <header class="mcp-editor-header">
             <div>
               <h2 id="mcp-editor-title">{{ editing ? '编辑 MCP 服务器' : '新增 MCP 服务器' }}</h2>
-              <p>{{ editing ? form.name : '配置一个 MCP Server 并重新加载工具' }}</p>
+              <p>{{ editing ? form.name : '粘贴包名、命令或 URL，一步接入 MCP Server' }}</p>
             </div>
             <button class="icon-button" type="button" title="关闭" :disabled="saving" @click="close">
               <X :size="18" />
@@ -114,19 +222,34 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
 
           <div class="mcp-editor-body">
             <section class="mcp-form-section">
-              <div class="mcp-section-heading">
-                <strong>基本信息</strong>
-              </div>
               <div class="mcp-form-grid">
-                <label class="form-field">
-                  <FieldLabel en="Name" zh="名称" help="MCP 服务器的唯一标识；创建后不可修改。" required />
+                <label class="form-field full-width">
+                  <FieldLabel
+                    en="Connection"
+                    zh="连接"
+                    help="粘贴 npm/uv 包名、完整启动命令或远程 URL；粘贴完整 JSON 配置也可以自动识别。"
+                    required
+                  />
                   <input
                     ref="firstInput"
+                    v-model="form.connection"
+                    class="form-input"
+                    :placeholder="remote ? 'https://example.com/mcp' : '@modelcontextprotocol/server-github'"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <small v-if="connectionSummary" class="mcp-connection-summary">{{ connectionSummary }}</small>
+                </label>
+
+                <label class="form-field">
+                  <FieldLabel en="Name" zh="名称" help="MCP 服务器的唯一标识；创建后不可修改。留空会根据连接内容自动推断。" required />
+                  <input
                     v-model="form.name"
                     class="form-input"
-                    placeholder="filesystem"
+                    placeholder="github"
                     :disabled="editing"
                     autocomplete="off"
+                    @input="nameTouched = true"
                   />
                 </label>
                 <label class="form-field">
@@ -138,54 +261,74 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
 
             <section class="mcp-form-section">
               <div class="mcp-section-heading">
-                <strong>连接方式</strong>
-                <small>{{ transportLabel(form.transport) }}</small>
+                <strong>凭据 <span class="mcp-transport-tag">{{ transportLabel(form.transport) }}</span></strong>
+                <small>值加密存储，保存后不会回显；留空表示保持原值不变</small>
               </div>
-              <div class="mcp-form-grid">
-                <label class="form-field full-width">
-                  <FieldLabel en="Transport" zh="传输协议" help="stdio 为本机子进程；其余为远程 HTTP 连接。" />
-                  <SelectMenu v-model="form.transport" :options="MCP_TRANSPORT_OPTIONS" label="MCP 连接方式" />
-                </label>
 
-                <template v-if="!remote">
-                  <label class="form-field full-width">
-                    <FieldLabel en="Command" zh="命令" help="启动 MCP 服务器子进程的可执行命令，例如 npx、uvx 或 node。" required />
-                    <input v-model="form.command" class="form-input" placeholder="npx" autocomplete="off" />
-                  </label>
-                  <label class="form-field full-width">
-                    <FieldLabel en="Arguments" zh="参数" help="每行一个参数，按顺序传给命令；对应 JSON 配置中的 args。" />
-                    <textarea v-model="form.args" class="form-input" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
-                  </label>
-                  <label class="form-field full-width">
-                    <FieldLabel en="Environment" zh="环境变量" help="每行一个 KEY=VALUE；用于传入令牌等凭据，保存后加密存储。" />
-                    <textarea v-model="form.env" class="form-input" rows="2" placeholder="TOKEN=..."></textarea>
-                  </label>
-
-                  <div v-if="showGithubHint" class="mcp-token-hint">
-                    <div class="mcp-token-hint-copy">
-                      <strong><KeyRound :size="13" /> 获取 GitHub 令牌</strong>
-                      <ol>
-                        <li>点「去 GitHub 生成」打开令牌页，所需权限已预选（repo、read:org 等）</li>
-                        <li>在页面底部点 Generate token，复制 ghp_ 开头的令牌</li>
-                        <li>把令牌粘贴到上方环境变量 GITHUB_PERSONAL_ACCESS_TOKEN 的等号后面</li>
-                      </ol>
-                    </div>
-                    <a class="secondary-button" :href="githubTokenUrl" target="_blank" rel="noreferrer">
-                      <ExternalLink :size="14" /> 去 GitHub 生成
-                    </a>
+              <template v-if="!remote">
+                <div class="mcp-credential-list">
+                  <div v-for="(row, index) in envRows" :key="row.key" class="mcp-credential-row">
+                    <code class="mcp-credential-key">{{ row.key }}</code>
+                    <input
+                      class="form-input"
+                      type="password"
+                      :placeholder="editing ? '留空保持原值' : '输入值'"
+                      :value="row.value"
+                      autocomplete="new-password"
+                      @input="updateEnvRows(envRows.map((r, i) => i === index ? { ...r, value: ($event.target as HTMLInputElement).value } : r))"
+                    />
+                    <button class="icon-button" type="button" title="删除" @click="updateEnvRows(envRows.filter((_, i) => i !== index))">
+                      <X :size="14" />
+                    </button>
                   </div>
-                </template>
+                  <div class="mcp-credential-add">
+                    <input v-model="newEnvKey" class="form-input" placeholder="环境变量名，如 GITHUB_PERSONAL_ACCESS_TOKEN" autocomplete="off" spellcheck="false" @keydown.enter.prevent="addEnvKey" />
+                    <button class="secondary-button" type="button" :disabled="!newEnvKey.trim()" @click="addEnvKey">
+                      <Plus :size="14" /> 添加
+                    </button>
+                  </div>
+                </div>
 
-                <label v-else class="form-field full-width">
-                  <FieldLabel en="URL" zh="URL" help="远程 MCP 服务的完整地址；SSE 以 /sse 结尾，Streamable HTTP 以 /mcp 结尾。" required />
-                  <input
-                    v-model="form.url"
-                    class="form-input"
-                    :placeholder="form.transport === 'sse' ? 'https://example.com/sse' : 'https://example.com/mcp'"
-                    autocomplete="off"
-                  />
-                </label>
-              </div>
+                <div v-if="showGithubHint" class="mcp-token-hint">
+                  <div class="mcp-token-hint-copy">
+                    <strong><KeyRound :size="13" /> 获取 GitHub 令牌</strong>
+                    <ol>
+                      <li>点「去 GitHub 生成」打开令牌页，所需权限已预选（repo、read:org 等）</li>
+                      <li>在页面底部点 Generate token，复制 ghp_ 开头的令牌</li>
+                      <li>粘贴到上方 GITHUB_PERSONAL_ACCESS_TOKEN 的值输入框</li>
+                    </ol>
+                  </div>
+                  <a class="secondary-button" :href="githubTokenUrl" target="_blank" rel="noreferrer">
+                    <ExternalLink :size="14" /> 去 GitHub 生成
+                  </a>
+                </div>
+              </template>
+
+              <template v-else>
+                <div class="mcp-credential-list">
+                  <div v-for="(row, index) in headerRows" :key="row.key" class="mcp-credential-row">
+                    <code class="mcp-credential-key">{{ row.key }}</code>
+                    <input
+                      class="form-input"
+                      type="password"
+                      :placeholder="editing ? '留空保持原值' : '输入值'"
+                      :value="row.value"
+                      autocomplete="new-password"
+                      @input="updateHeaderRows(headerRows.map((r, i) => i === index ? { ...r, value: ($event.target as HTMLInputElement).value } : r))"
+                    />
+                    <button class="icon-button" type="button" title="删除" @click="updateHeaderRows(headerRows.filter((_, i) => i !== index))">
+                      <X :size="14" />
+                    </button>
+                  </div>
+                  <div class="mcp-credential-add">
+                    <input v-model="newHeaderKey" class="form-input" placeholder="请求头名称，如 Authorization" autocomplete="off" spellcheck="false" @keydown.enter.prevent="addHeaderKey" />
+                    <button class="secondary-button" type="button" :disabled="!newHeaderKey.trim()" @click="addHeaderKey">
+                      <Plus :size="14" /> 添加
+                    </button>
+                  </div>
+                </div>
+                <small class="mcp-headers-hint">常用：Authorization = Bearer &lt;token&gt;。携带请求头的远程连接必须使用 https://（127.0.0.1 本地调试除外）。</small>
+              </template>
             </section>
 
             <section class="mcp-form-section">
@@ -263,7 +406,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
   margin: 4px 0 0;
   color: var(--text-muted);
   font-size: 12px;
-  font-family: var(--font-mono, monospace);
 }
 
 .mcp-editor-body {
@@ -298,9 +440,22 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
 }
 
 .mcp-section-heading strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
+}
+
+.mcp-transport-tag {
+  padding: 1px 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  background: color-mix(in srgb, var(--surface-hover) 80%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
 }
 
 .mcp-section-heading small {
@@ -347,11 +502,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
-textarea.form-input {
-  resize: vertical;
-  line-height: 1.5;
-}
-
 .form-input:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--text-muted) 58%, var(--border));
 }
@@ -363,6 +513,62 @@ textarea.form-input {
 
 .form-input:disabled {
   opacity: .62;
+}
+
+.mcp-connection-summary {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+}
+
+.mcp-credential-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-credential-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-credential-key {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--surface-hover) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.mcp-credential-row .form-input {
+  flex: 1;
+  min-height: 34px;
+}
+
+.mcp-credential-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.mcp-credential-add .form-input {
+  flex: 1;
+  min-height: 34px;
+}
+
+.mcp-headers-hint {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
 
 .mcp-enabled-row {
@@ -411,10 +617,10 @@ textarea.form-input {
 
 .mcp-token-hint {
   display: flex;
-  grid-column: 1 / -1;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  margin-top: 10px;
   padding: 12px 14px;
   background: color-mix(in srgb, var(--accent) 6%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);

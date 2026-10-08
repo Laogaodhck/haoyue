@@ -45,7 +45,7 @@ Desktop 查询现有配置时只返回环境变量键名，不返回敏感值。
 }
 ```
 
-当前 `McpServerConfig` 不包含 `autoConnect` 或自定义 HTTP `headers` 字段。
+远程 Server 支持自定义 HTTP `headers`（如 `Authorization`）；值以 `secret:` 前缀加密存储（Windows DPAPI / Linux Secret Service），不回显、不进日志。携带 headers 的连接必须使用 https://（127.0.0.1 调试除外）。
 
 ## 连接与重载
 

@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Prompts;
+using Haoyue.Runtime.Secrets;
 using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Workspaces;
 
@@ -269,17 +270,40 @@ public sealed class McpManager(
         }
     }
 
-    private static IMcpTransport CreateTransport(string name, McpServerConfig server) =>
-        server.Transport.ToLowerInvariant() switch
+    private static IMcpTransport CreateTransport(string name, McpServerConfig server)
+    {
+        // Credentials (env / headers) are stored with an optional "secret:" prefix;
+        // resolve them at the last possible moment — the plaintext only exists in
+        // transport memory, never in config or logs.
+        var env = server.Env is null
+            ? null
+            : server.Env.ToDictionary(
+                pair => pair.Key,
+                pair => SecretResolver.Resolve(pair.Value)
+                        ?? throw new McpException(
+                            $"Server '{name}': environment variable '{pair.Key}' is stored as a secret that cannot be resolved on this platform. Re-enter the value in settings."));
+        var headers = server.Headers is null
+            ? null
+            : server.Headers.ToDictionary(
+                pair => pair.Key,
+                pair => SecretResolver.Resolve(pair.Value)
+                        ?? throw new McpException(
+                            $"Server '{name}': header '{pair.Key}' is stored as a secret that cannot be resolved on this platform. Re-enter the value in settings."));
+
+        return server.Transport.ToLowerInvariant() switch
         {
             "stdio" when !string.IsNullOrWhiteSpace(server.Command) =>
-                new StdioMcpTransport(server.Command!, server.Args, server.Env),
+                new StdioMcpTransport(server.Command!, server.Args, env),
             "sse" or "http" or "streamable-http" or "streamable_http" when !string.IsNullOrWhiteSpace(server.Url) =>
-                new HttpMcpTransport(server.Url!),
+                new HttpMcpTransport(
+                    server.Url!,
+                    headers: headers,
+                    connectTimeout: TimeSpan.FromSeconds(Math.Clamp(server.ConnectTimeoutSeconds ?? 10, 1, 120))),
             "websocket" =>
                 throw new McpException($"Transport '{server.Transport}' is reserved but not implemented yet."),
             _ => throw new McpException($"Server '{name}': invalid transport/command/url combination."),
         };
+    }
 
     private static string DescribeConnectionError(Exception error) => error switch
     {

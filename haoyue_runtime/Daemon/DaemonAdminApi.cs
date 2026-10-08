@@ -831,14 +831,23 @@ internal sealed class DaemonAdminApi(
         server.Enabled = input["enabled"]?.GetValue<bool?>() ?? server.Enabled;
         if (input["args"] is JsonArray args)
             server.Args = args.Select(node => node?.GetValue<string>() ?? "").Where(value => value.Length > 0).ToList();
+
+        // Credential maps: the UI never sees stored values (only key names), so an
+        // entry whose value arrives empty means "keep the existing value for this
+        // key" rather than "clear it". New values are encrypted via SecretResolver
+        // before they ever touch disk; values already carrying "secret:" pass
+        // through unchanged so round-trips never double-encrypt.
         if (input["env"] is JsonObject env)
-            server.Env = env.ToDictionary(item => item.Key, item => item.Value?.GetValue<string>() ?? "");
+            server.Env = MergeCredentials(env, server.Env, $"mcp:{scope}:{name}:env");
+        if (input["headers"] is JsonObject headers)
+            server.Headers = MergeCredentials(headers, server.Headers, $"mcp:{scope}:{name}:headers");
 
         // Keep the stored entry consistent with the selected connection method so a
         // converted server never keeps a command for a remote transport or vice versa.
         if (server.Transport.Equals("stdio", StringComparison.OrdinalIgnoreCase))
         {
             server.Url = null;
+            server.Headers = null; // headers are meaningless for a local subprocess
         }
         else
         {
@@ -1650,6 +1659,7 @@ internal sealed class DaemonAdminApi(
         ["args"] = Strings(server.Args ?? []),
         ["url"] = server.Url,
         ["envKeys"] = Strings(server.Env is null ? Enumerable.Empty<string>() : server.Env.Keys),
+        ["headerKeys"] = Strings(server.Headers is null ? Enumerable.Empty<string>() : server.Headers.Keys),
         ["enabled"] = server.Enabled,
         ["connected"] = status?.Connected ?? false,
         ["connecting"] = status?.Connecting ?? false,
@@ -1696,6 +1706,32 @@ internal sealed class DaemonAdminApi(
             JsonSerializer.Serialize(config, HaoyueJsonContext.Default.McpConfig));
     }
 
+    /// <summary>
+    /// Merges incoming credential entries into the stored map with
+    /// "empty value = keep existing" semantics: the UI never receives stored
+    /// values, so an empty string arriving for a known key means the user left
+    /// the field untouched. Unknown keys with empty values are dropped. Values
+    /// are encrypted (idempotently) before returning.
+    /// </summary>
+    private static Dictionary<string, string>? MergeCredentials(
+        JsonObject incoming, Dictionary<string, string>? existing, string purposeId)
+    {
+        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, node) in incoming)
+        {
+            var value = node?.GetValue<string>() ?? "";
+            if (value.Length == 0)
+            {
+                // Preserve the stored value (already encrypted) when the field was left blank.
+                if (existing is not null && existing.TryGetValue(key, out var stored))
+                    merged[key] = stored;
+                continue;
+            }
+            merged[key] = Secrets.SecretResolver.Encrypt($"{purposeId}:{key}", value);
+        }
+        return merged.Count > 0 ? merged : null;
+    }
+
     internal static void ValidateMcpServer(string name, McpServerConfig server)
     {
         var transport = server.Transport.ToLowerInvariant();
@@ -1709,8 +1745,16 @@ internal sealed class DaemonAdminApi(
             case "http":
             case "streamable-http":
             case "streamable_http":
-                if (Uri.TryCreate(server.Url, UriKind.Absolute, out _)) return;
-                throw new DaemonRequestException($"MCP 服务器 '{name}' 需要填写完整的 URL（以 http:// 或 https:// 开头）");
+                if (!Uri.TryCreate(server.Url, UriKind.Absolute, out var uri))
+                    throw new DaemonRequestException($"MCP 服务器 '{name}' 需要填写完整的 URL（以 http:// 或 https:// 开头）");
+
+                // Credentials over plaintext HTTP would leak on every hop; only loopback
+                // debugging is exempt. This is a hard block, not a warning — there is no
+                // warning channel on the upsert response and the safe default wins.
+                if (server.Headers is { Count: > 0 } && uri.Scheme == "http" && !uri.IsLoopback)
+                    throw new DaemonRequestException(
+                        $"MCP 服务器 '{name}'：携带认证头（headers）的连接必须使用 https://；本地调试请使用 http://127.0.0.1 地址");
+                return;
 
             case "websocket":
                 throw new DaemonRequestException($"MCP 服务器 '{name}' 使用 WebSocket 连接，但该连接方式尚未实现");

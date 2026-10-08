@@ -5,14 +5,21 @@ import {
   MCP_TRANSPORT_OPTIONS,
   buildMcpServerPayload,
   buildMcpTogglePayload,
+  classifyTransport,
   createMcpFormValue,
+  credentialRowsToText,
   envNeedsGithubToken,
   githubTokenCreateUrl,
+  inferMcpName,
   mcpFormError,
   mcpFormFromServer,
   mcpStatusText,
+  normalizeConnection,
   normalizeTransport,
+  parseCredentialRows,
   parseEnvText,
+  parseMcpJsonConfig,
+  tokenizeCommand,
   transportLabel,
   type McpFormValue,
   type McpServerSummary
@@ -56,34 +63,119 @@ describe('transport naming', () => {
   })
 })
 
-describe('mcpFormError', () => {
-  it('requires a server name', () => {
-    expect(mcpFormError(makeForm())).toBe('请填写 MCP 服务器名称')
+describe('tokenizeCommand', () => {
+  it('splits on whitespace and respects single/double quotes', () => {
+    expect(tokenizeCommand('npx -y @modelcontextprotocol/server-github'))
+      .toEqual(['npx', '-y', '@modelcontextprotocol/server-github'])
+    expect(tokenizeCommand('node "E:\\My Server\\mcp.js" --port 5'))
+      .toEqual(['node', 'E:\\My Server\\mcp.js', '--port', '5'])
+    expect(tokenizeCommand("uvx 'mcp server'")).toEqual(['uvx', 'mcp server'])
+    expect(tokenizeCommand('   ')).toEqual([])
+  })
+})
+
+describe('normalizeConnection', () => {
+  it('expands bare npm package names with npx -y', () => {
+    expect(normalizeConnection('@modelcontextprotocol/server-github'))
+      .toBe('npx -y @modelcontextprotocol/server-github')
+    expect(normalizeConnection('some/mcp-pkg')).toBe('npx -y some/mcp-pkg')
   })
 
-  it('requires a command for stdio servers', () => {
-    expect(mcpFormError(makeForm({ name: 'fs' }))).toBe('stdio 连接需要填写启动命令，例如 npx')
+  it('expands mcp-server-* uv packages with uvx', () => {
+    expect(normalizeConnection('mcp-server-fetch')).toBe('uvx mcp-server-fetch')
+  })
+
+  it('leaves full commands, interpreters and URLs unchanged', () => {
+    expect(normalizeConnection('npx -y foo')).toBe('npx -y foo')
+    expect(normalizeConnection('node server.js --flag')).toBe('node server.js --flag')
+    expect(normalizeConnection('https://example.com/mcp')).toBe('https://example.com/mcp')
+    expect(normalizeConnection('C:\\tools\\mcp.exe')).toBe('C:\\tools\\mcp.exe')
+  })
+})
+
+describe('classifyTransport and inferMcpName', () => {
+  it('routes URLs to the http transport and everything else to stdio', () => {
+    expect(classifyTransport('https://example.com/mcp')).toBe('http')
+    expect(classifyTransport('http://127.0.0.1:5070/mcp')).toBe('http')
+    expect(classifyTransport('npx -y foo')).toBe('stdio')
+  })
+
+  it('derives names from package tails', () => {
+    expect(inferMcpName('npx -y @modelcontextprotocol/server-github')).toBe('github')
+    expect(inferMcpName('uvx mcp-server-fetch')).toBe('fetch')
+    expect(inferMcpName('node E:\\tools\\memory.js')).toBe('memory')
+  })
+
+  it('derives names from URL hostnames', () => {
+    expect(inferMcpName('https://mcp.example.com/mcp')).toBe('example')
+    expect(inferMcpName('https://api.github.com/mcp')).toBe('github')
+  })
+
+  it('returns an empty name for unrecognized input', () => {
+    expect(inferMcpName('')).toBe('')
+    expect(inferMcpName('???')).toBe('')
+  })
+})
+
+describe('parseMcpJsonConfig', () => {
+  it('reads the mcpServers wrapper (Claude/Cursor style)', () => {
+    const parsed = parseMcpJsonConfig(JSON.stringify({
+      mcpServers: {
+        github: {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+          env: { GITHUB_PERSONAL_ACCESS_TOKEN: 'ghp_x' }
+        }
+      }
+    }))
+
+    expect(parsed?.name).toBe('github')
+    expect(parsed?.server.command).toBe('npx')
+    expect(parsed?.server.args).toEqual(['-y', '@modelcontextprotocol/server-github'])
+  })
+
+  it('reads a single server object and rejects unrelated JSON', () => {
+    expect(parseMcpJsonConfig('{"command":"npx","args":["-y","pkg"]}')).not.toBeNull()
+    expect(parseMcpJsonConfig('{"hello":"world"}')).toBeNull()
+    expect(parseMcpJsonConfig('not json at all')).toBeNull()
+    expect(parseMcpJsonConfig('{"mcpServers":{}}')).toBeNull()
+  })
+})
+
+describe('mcpFormError', () => {
+  it('requires a server name', () => {
+    expect(mcpFormError(makeForm({ connection: 'npx -y pkg' }))).toBe('请填写 MCP 服务器名称')
+  })
+
+  it('requires a connection string', () => {
+    expect(mcpFormError(makeForm({ name: 'fs' })))
+      .toBe('请填写连接内容：包名（如 @modelcontextprotocol/server-github）、完整命令或 npx/uvx 启动命令')
   })
 
   it('requires an absolute URL for remote servers', () => {
     expect(mcpFormError(makeForm({ name: 'StarLife', transport: 'sse' })))
       .toBe('HTTP SSE 连接需要填写 URL')
-    expect(mcpFormError(makeForm({ name: 'StarLife', transport: 'http', url: 'localhost:5070/mcp' })))
+    expect(mcpFormError(makeForm({ name: 'StarLife', transport: 'http', connection: 'localhost:5070/mcp' })))
       .toBe('URL 需要以 http:// 或 https:// 开头')
   })
 
+  it('rejects unrecognizable stdio commands', () => {
+    expect(mcpFormError(makeForm({ name: 'x', connection: 'not-a-command!' })))
+      .toBe('无法识别的命令；请输入 npx/uvx 包名、完整命令或 http(s):// URL')
+  })
+
   it('accepts complete forms', () => {
-    expect(mcpFormError(makeForm({ name: 'fs', command: 'npx' }))).toBeNull()
-    expect(mcpFormError(makeForm({ name: 'web', transport: 'http', url: 'https://example.com/mcp' }))).toBeNull()
+    expect(mcpFormError(makeForm({ name: 'fs', connection: 'npx -y @modelcontextprotocol/server-filesystem' }))).toBeNull()
+    expect(mcpFormError(makeForm({ name: 'fs', connection: 'C:\\tools\\mcp.exe --port 5' }))).toBeNull()
+    expect(mcpFormError(makeForm({ name: 'web', transport: 'http', connection: 'https://example.com/mcp' }))).toBeNull()
   })
 })
 
 describe('buildMcpServerPayload', () => {
-  it('sends commands and parsed env for stdio servers', () => {
+  it('tokenizes the connection line and sends parsed env for stdio servers', () => {
     const payload = buildMcpServerPayload(makeForm({
       name: 'fs',
-      command: 'npx',
-      args: '-y\n@modelcontextprotocol/server-filesystem\n',
+      connection: 'npx -y @modelcontextprotocol/server-filesystem',
       env: 'TOKEN=abc\nEMPTY='
     }))
 
@@ -97,14 +189,22 @@ describe('buildMcpServerPayload', () => {
     })
   })
 
-  it('drops stdio-only fields for remote servers', () => {
+  it('handles quoted arguments with whitespace', () => {
+    const payload = buildMcpServerPayload(makeForm({
+      name: 'fs',
+      connection: 'node "E:\\My Server\\mcp.js" --port 5'
+    }))
+    expect(payload.command).toBe('node')
+    expect(payload.args).toEqual(['E:\\My Server\\mcp.js', '--port', '5'])
+  })
+
+  it('sends headers for remote servers and drops stdio fields', () => {
     const payload = buildMcpServerPayload(makeForm({
       name: 'StarLife',
       transport: 'sse',
-      command: 'npx',
-      args: '-y\nfoo',
-      url: ' http://localhost:5070/mcp ',
-      env: 'TOKEN=abc'
+      connection: ' http://localhost:5070/mcp ',
+      env: 'TOKEN=abc',
+      headers: 'Authorization=Bearer tok'
     }))
 
     expect(payload).toEqual({
@@ -112,8 +212,17 @@ describe('buildMcpServerPayload', () => {
       command: '',
       args: [],
       url: 'http://localhost:5070/mcp',
-      enabled: true
+      enabled: true,
+      headers: { Authorization: 'Bearer tok' }
     })
+  })
+
+  it('omits headers when none are configured', () => {
+    const payload = buildMcpServerPayload(makeForm({
+      name: 'web', transport: 'http', connection: 'https://example.com/mcp'
+    }))
+    expect(payload).not.toHaveProperty('headers')
+    expect(payload).not.toHaveProperty('env')
   })
 })
 
@@ -139,8 +248,6 @@ describe('buildMcpTogglePayload', () => {
   })
 
   it('returns a payload that survives structured cloning when the source is reactive', () => {
-    // Vue reactive arrays are Proxies; sending them straight to ipcRenderer.invoke
-    // fails with "An object could not be cloned."
     const reactiveArgs = new Proxy(['-y', 'server'], {})
     expect(() => structuredClone(reactiveArgs)).toThrow()
 
@@ -151,19 +258,44 @@ describe('buildMcpTogglePayload', () => {
 })
 
 describe('mcpFormFromServer', () => {
-  it('restores editor state and never leaks stored env values', () => {
-    const form = mcpFormFromServer({ ...remoteServer, transport: 'streamable-http', envKeys: ['TOKEN'] })
+  it('rebuilds the single connection line and never leaks credential values', () => {
+    const form = mcpFormFromServer({
+      ...remoteServer, transport: 'streamable-http', envKeys: ['TOKEN'], headerKeys: ['Authorization']
+    })
 
     expect(form).toEqual({
       name: 'StarLife',
       scope: 'global',
       transport: 'http',
-      command: '',
-      args: '',
-      url: 'http://localhost:5070/mcp',
+      connection: 'http://localhost:5070/mcp',
       env: '',
+      headers: '',
       enabled: true
     })
+  })
+
+  it('quotes stdio arguments containing whitespace when rebuilding the line', () => {
+    const form = mcpFormFromServer({
+      ...remoteServer, transport: 'stdio', command: 'node', args: ['E:\\My Server\\mcp.js'], url: undefined
+    })
+    expect(form.connection).toBe('node "E:\\My Server\\mcp.js"')
+  })
+})
+
+describe('credential rows', () => {
+  it('round-trips KEY=value lines through structured rows', () => {
+    const rows = parseCredentialRows('A=1\nB\n C = 2 ')
+    expect(rows).toEqual([
+      { key: 'A', value: '1' },
+      { key: 'B', value: '' },
+      { key: 'C', value: '2' }
+    ])
+    expect(credentialRowsToText(rows)).toBe('A=1\nB=\nC=2')
+  })
+
+  it('keeps empty values as the keep-stored-value marker', () => {
+    // The daemon interprets an empty value as "unchanged"; deleting a row drops the key.
+    expect(credentialRowsToText([{ key: 'TOKEN', value: '' }])).toBe('TOKEN=')
   })
 })
 
@@ -180,8 +312,6 @@ describe('mcpStatusText', () => {
 
 describe('parseEnvText', () => {
   it('reads KEY=value lines and treats a bare key as an empty value', () => {
-    // The key is trimmed; the value is kept verbatim because leading or trailing
-    // spaces can be meaningful in tokens.
     expect(parseEnvText('A=1\nB\n C = 2 ')).toEqual({ A: '1', B: '', C: ' 2' })
     expect(parseEnvText('   ')).toBeUndefined()
   })
@@ -219,6 +349,7 @@ describe('MCP_PRESETS', () => {
 
     const form = preset!.createForm()
     expect(mcpFormError(form)).toBeNull()
+    expect(form.name).toBe('github')
     expect(buildMcpServerPayload(form)).toEqual({
       transport: 'stdio',
       command: 'npx',
@@ -231,18 +362,12 @@ describe('MCP_PRESETS', () => {
 
   it('prefills filesystem with the workspace directory when provided', () => {
     const preset = MCP_PRESETS.find((item) => item.id === 'filesystem')!
-    const form = preset.createForm({ workspacePath: ' E:\\notes ' })
+    const form = preset.createForm({ workspacePath: 'E:\\notes' })
 
     expect(mcpFormError(form)).toBeNull()
     expect(parseEnvText(form.env)).toBeUndefined()
-    expect(form.args.split(/\r?\n/)).toEqual(['-y', '@modelcontextprotocol/server-filesystem', 'E:\\notes'])
     expect(buildMcpServerPayload(form).args)
       .toEqual(['-y', '@modelcontextprotocol/server-filesystem', 'E:\\notes'])
-  })
-
-  it('falls back to the current directory when no workspace path is known', () => {
-    const preset = MCP_PRESETS.find((item) => item.id === 'filesystem')!
-    expect(preset.createForm().args.endsWith('\n.')).toBe(true)
   })
 
   it('ships zero-configuration presets for fetch, memory, sequential-thinking and git', () => {
@@ -259,7 +384,6 @@ describe('MCP_PRESETS', () => {
 
       const form = preset!.createForm()
       expect(mcpFormError(form)).toBeNull()
-      expect(form.command).toBe(shape.command)
       expect(buildMcpServerPayload(form)).toEqual({
         transport: 'stdio',
         command: shape.command,
@@ -281,9 +405,9 @@ describe('MCP_PRESETS', () => {
       }
 
       first.name = 'mutated'
-      first.args = ''
-      expect(second.name).toBe(preset.id)
-      expect(second.args).not.toBe('')
+      first.connection = ''
+      expect(second.name).not.toBe('mutated')
+      expect(second.connection).not.toBe('')
     }
   })
 })

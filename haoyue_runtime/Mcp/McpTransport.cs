@@ -110,6 +110,7 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
 public class HttpMcpTransport : IMcpTransport
 {
     private readonly string _url;
+    private readonly IReadOnlyDictionary<string, string>? _headers;
     private readonly HttpClient _http;
     private readonly bool _ownsHttpClient;
     private readonly Channel<JsonObject> _incoming = Channel.CreateUnbounded<JsonObject>();
@@ -118,11 +119,23 @@ public class HttpMcpTransport : IMcpTransport
     private string? _sessionId;
     private Task? _readLoop;
 
-    public HttpMcpTransport(string url, HttpClient? httpClient = null)
+    /// <param name="url">Remote server base URL.</param>
+    /// <param name="httpClient">Optional externally-owned client (tests).</param>
+    /// <param name="headers">
+    /// Static headers applied to every request (GET probe and POST). Resolved
+    /// credentials such as Authorization land here; values are never logged.
+    /// </param>
+    /// <param name="connectTimeout">Connect timeout; defaults to 10s.</param>
+    public HttpMcpTransport(
+        string url,
+        HttpClient? httpClient = null,
+        IReadOnlyDictionary<string, string>? headers = null,
+        TimeSpan? connectTimeout = null)
     {
         _url = url;
+        _headers = headers;
         _ownsHttpClient = httpClient is null;
-        _http = httpClient ?? CreateDefaultClient();
+        _http = httpClient ?? CreateDefaultClient(connectTimeout ?? TimeSpan.FromSeconds(10));
     }
 
     /// <summary>
@@ -131,11 +144,11 @@ public class HttpMcpTransport : IMcpTransport
     /// stalling the whole MCP reload, since a black-holed address otherwise hangs
     /// until the OS gives up.
     /// </summary>
-    private static HttpClient CreateDefaultClient()
+    private static HttpClient CreateDefaultClient(TimeSpan connectTimeout)
     {
         var handler = new SocketsHttpHandler
         {
-            ConnectTimeout = TimeSpan.FromSeconds(10),
+            ConnectTimeout = connectTimeout,
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
         };
         return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
@@ -152,6 +165,7 @@ public class HttpMcpTransport : IMcpTransport
         {
             var request = new HttpRequestMessage(HttpMethod.Get, _url);
             request.Headers.TryAddWithoutValidation("Accept", "text/event-stream, application/json");
+            ApplyHeaders(request);
             var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
 
             CaptureSessionId(response);
@@ -229,6 +243,7 @@ public class HttpMcpTransport : IMcpTransport
             Content = new StringContent(message.ToJsonString(), Encoding.UTF8, "application/json")
         };
         request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+        ApplyHeaders(request);
         if (!string.IsNullOrWhiteSpace(_sessionId))
         {
             request.Headers.TryAddWithoutValidation("Mcp-Session-Id", _sessionId);
@@ -264,6 +279,16 @@ public class HttpMcpTransport : IMcpTransport
             {
                 DispatchJson(body);
             }
+        }
+    }
+
+    private void ApplyHeaders(HttpRequestMessage request)
+    {
+        if (_headers is null) return;
+        foreach (var (key, value) in _headers)
+        {
+            if (!string.IsNullOrWhiteSpace(key))
+                request.Headers.TryAddWithoutValidation(key, value);
         }
     }
 

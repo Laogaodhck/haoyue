@@ -241,6 +241,15 @@ public sealed class McpServerConfig
     public List<string>? Args { get; set; }
     public Dictionary<string, string>? Env { get; set; }
     public string? Url { get; set; }
+    /// <summary>
+    /// Optional HTTP headers for remote transports (sse / http / streamable-http), e.g.
+    /// "Authorization": "Bearer …". Values may carry the "secret:" prefix written by
+    /// the credential store; they are resolved right before a transport is created and
+    /// never echoed back through the daemon API.
+    /// </summary>
+    public Dictionary<string, string>? Headers { get; set; }
+    /// <summary>Remote connect timeout in seconds; defaults to 10 when null.</summary>
+    public int? ConnectTimeoutSeconds { get; set; }
     public bool Enabled { get; set; } = true;
     /// <summary>
     /// Tool names (exact, case-insensitive) always treated as mutating, regardless of the

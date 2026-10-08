@@ -8,6 +8,7 @@ namespace Haoyue.Tests;
 /// normalization applies to file content exactly like to queries. Uses keys that
 /// do not collide with the built-in table so parallel evaluation tests are safe.
 /// </summary>
+[Collection("KnowledgeTuningSerial")]
 public class KnowledgeTuningTests : IDisposable
 {
     private readonly string _file;

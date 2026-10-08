@@ -1222,6 +1222,26 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.ImportKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "knowledge.tags":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.KnowledgeTags(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.export":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ExportKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.synonyms.get":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.GetKnowledgeSynonyms()), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.synonyms.save":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SaveKnowledgeSynonyms(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "memory.get":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.GetMemory(Params(request))), context.ConnectionCt).ConfigureAwait(false);

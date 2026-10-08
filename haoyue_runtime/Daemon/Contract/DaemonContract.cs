@@ -419,18 +419,26 @@ public static class DaemonContract
 
         // knowledge
         M("knowledge.list", "knowledge", "列出知识条目", parameters: Scope(
-            ("limit", SInteger("1..2000，缺省 500"), false))),
+            ("limit", SInteger("1..2000，缺省 500"), false),
+            ("tag", SString("仅返回携带该标签的条目"), false))),
         M("knowledge.search", "knowledge", "高容错知识检索", parameters: Scope(
             ("query", SString("检索词"), true),
+            ("tag", SString("仅返回携带该标签的条目"), false),
             ("limit", SInteger("1..100，缺省 50"), false))),
-        M("knowledge.save", "knowledge", "保存知识条目（同题 upsert）", parameters: Scope(
+        M("knowledge.save", "knowledge", "保存知识条目（同题 upsert，或按 id 原地更新）", parameters: Scope(
             ("title", SString("条目标题"), true),
             ("content", SString("条目内容（≤8000 字符）"), true),
-            ("tags", SString("逗号分隔标签"), false))),
+            ("tags", SString("逗号分隔标签"), false),
+            ("id", SInteger("按 id 原地更新（含改名），缺省走同题 upsert"), false))),
         M("knowledge.delete", "knowledge", "删除知识条目", parameters: Scope(
             ("id", SInteger("条目 id"), true))),
         M("knowledge.import", "knowledge", "批量导入文件到知识库", parameters: Scope(
             ("paths", SArray("文件路径（≥1 个，≤10 MB/个）"), true))),
+        M("knowledge.tags", "knowledge", "聚合标签与出现次数", parameters: Scope()),
+        M("knowledge.export", "knowledge", "导出整个范围为 Markdown 文本", parameters: Scope()),
+        M("knowledge.synonyms.get", "knowledge", "读取检索同义词表", parameters: EmptyParams),
+        M("knowledge.synonyms.save", "knowledge", "写入检索同义词表（热重载）", parameters: SObject(
+            ("content", SString("synonyms.txt 全文"), true))),
 
         // memory
         M("memory.get", "memory", "读取 MEMORY.md 长期记忆", parameters: KnowledgeScope),

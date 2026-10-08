@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
@@ -13,6 +14,9 @@ using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Tests;
 
+// 同义词 IPC 读写 KnowledgeTuning 的全局路径表；与 KnowledgeTuningTests 串行，
+// 避免并行的 ConfigurePaths 重定向互相踩踏（其余测试类不受影响，保持并行）。
+[Collection("KnowledgeTuningSerial")]
 public sealed class DaemonServerTests : IAsyncDisposable
 {
     private readonly string _tempDir = Path.Combine(
@@ -1113,6 +1117,104 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var workspaceId = workspaceList["entries"]![0]!["id"]!.GetValue<int>();
         await connection.SendAsync(9, "knowledge.delete", new JsonObject { ["id"] = workspaceId });
         Assert.Equal(0, ParseData(await connection.ReadAsync())["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task Knowledge_TagsExport_TagFilter_AndSaveById()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "knowledge.save", new JsonObject
+        {
+            ["title"] = "构建命令",
+            ["content"] = "使用 pnpm build 构建桌面端",
+            ["tags"] = "build,前端"
+        });
+        ParseData(await connection.ReadAsync());
+        await connection.SendAsync(2, "knowledge.save", new JsonObject
+        {
+            ["title"] = "部署流程",
+            ["content"] = "使用 docker compose up -d 发布",
+            ["tags"] = "build，部署"
+        });
+        ParseData(await connection.ReadAsync());
+
+        // 标签聚合：全角逗号同样拆分，按计数排序。
+        await connection.SendAsync(3, "knowledge.tags");
+        var tags = ParseData(await connection.ReadAsync());
+        Assert.Equal(2, tags["total"]!.GetValue<int>());
+        var tagList = tags["tags"]!.AsArray();
+        Assert.Equal("build", tagList[0]!["tag"]!.GetValue<string>());
+        Assert.Equal(2, tagList[0]!["count"]!.GetValue<int>());
+
+        // 标签精确筛选："buildtool" 这类子串不算命中。
+        await connection.SendAsync(4, "knowledge.list", new JsonObject { ["tag"] = "部署" });
+        var filtered = ParseData(await connection.ReadAsync());
+        Assert.Equal(1, filtered["count"]!.GetValue<int>());
+        Assert.Equal("部署流程", filtered["entries"]![0]!["title"]!.GetValue<string>());
+
+        // 编辑时带 id（含改名）：原地更新，不会分叉出重复条目。
+        await connection.SendAsync(5, "knowledge.list");
+        var list = ParseData(await connection.ReadAsync());
+        var entryId = list["entries"]!.AsArray()
+            .First(e => e!["title"]!.GetValue<string>() == "构建命令")!["id"]!.GetValue<int>();
+        await connection.SendAsync(6, "knowledge.save", new JsonObject
+        {
+            ["id"] = entryId,
+            ["title"] = "构建桌面命令",
+            ["content"] = "使用 pnpm build:desktop 构建桌面端",
+            ["tags"] = "build,前端"
+        });
+        var renamed = ParseData(await connection.ReadAsync());
+        Assert.Equal(2, renamed["count"]!.GetValue<int>());
+        Assert.Contains(renamed["entries"]!.AsArray(), e => e!["title"]!.GetValue<string>() == "构建桌面命令");
+
+        await connection.SendAsync(7, "knowledge.save", new JsonObject
+        {
+            ["id"] = 987654,
+            ["title"] = "不存在",
+            ["content"] = "无"
+        });
+        Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+
+        // 导出：Markdown 包含标题与标签行。
+        await connection.SendAsync(8, "knowledge.export");
+        var exported = ParseData(await connection.ReadAsync());
+        Assert.Equal(2, exported["count"]!.GetValue<int>());
+        var markdown = exported["markdown"]!.GetValue<string>();
+        Assert.Contains("## 构建桌面命令", markdown);
+        Assert.Contains("> 标签：", markdown);
+
+        // 同义词表 get/save：写入临时路径（本类已与 KnowledgeTuningTests 串行），结束后还原。
+        var synonymsFile = Path.Combine(_tempDir, "synonyms.txt");
+        KnowledgeTuning.ConfigurePaths(synonymsFile);
+        try
+        {
+            await connection.SendAsync(9, "knowledge.synonyms.get");
+            var initial = ParseData(await connection.ReadAsync());
+            Assert.False(initial["exists"]!.GetValue<bool>());
+            Assert.Equal(synonymsFile, initial["path"]!.GetValue<string>());
+
+            await connection.SendAsync(10, "knowledge.synonyms.save", new JsonObject
+            {
+                ["content"] = "# 注释\n部署 = 发布"
+            });
+            var saved = ParseData(await connection.ReadAsync());
+            Assert.True(saved["exists"]!.GetValue<bool>());
+            Assert.Equal("# 注释\n部署 = 发布", saved["content"]!.GetValue<string>());
+            Assert.True(File.Exists(synonymsFile));
+
+            // 保存的条目立刻参与检索（热加载）。
+            await connection.SendAsync(11, "knowledge.search", new JsonObject { ["query"] = "发布" });
+            var searched = ParseData(await connection.ReadAsync());
+            Assert.Contains(searched["entries"]!.AsArray(),
+                e => e!["title"]!.GetValue<string>() == "部署流程");
+        }
+        finally
+        {
+            KnowledgeTuning.ResetForTests();
+        }
     }
 
     [Fact]

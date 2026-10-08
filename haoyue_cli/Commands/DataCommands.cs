@@ -98,6 +98,66 @@ public static class KnowledgeCommands
         });
 
         command.Add(list); command.Add(search); command.Add(add); command.Add(show); command.Add(delete);
+
+        var pathsArg = new Argument<string[]>("paths") { Arity = ArgumentArity.OneOrMore, Description = "Files to import (txt/md/csv/docx/xlsx/code, 10 MB max each)" };
+        var import = new Command("import", "Import files as knowledge entries (auto-chunked, re-import upserts)");
+        import.Add(pathsArg);
+        import.SetAction(parse =>
+        {
+            using var rt = CliHost.CreateRuntime();
+            var scope = HaoyueDatabase.ScopeKey(rt.Workspace);
+            var paths = parse.GetRequiredValue(pathsArg);
+            var okFiles = 0;
+            var totalEntries = 0;
+            var failures = 0;
+            foreach (var raw in paths)
+            {
+                try
+                {
+                    var (fileName, count) = KnowledgeIngest.ImportFile(rt.Knowledge, scope, raw);
+                    okFiles++;
+                    totalEntries += count;
+                    AnsiConsole.MarkupLine($"[green]✓[/] {Markup.Escape(fileName)} → {count} 条");
+                }
+                catch (KnowledgeImportException ex)
+                {
+                    failures++;
+                    AnsiConsole.MarkupLine($"[red]✗ {Markup.Escape(Path.GetFileName(raw.Trim()))}：{Markup.Escape(ex.Message)}[/]");
+                }
+            }
+            var failureNote = failures > 0 ? $"，{failures} 个文件失败" : "";
+            AnsiConsole.MarkupLine($"[gray]导入完成：{okFiles} 个文件，{totalEntries} 条知识{failureNote}。[/]");
+            return failures > 0 ? 1 : 0;
+        });
+
+        var exportFileArg = new Argument<string?>("file") { Arity = ArgumentArity.ZeroOrOne, Description = "Output .md path (prints to stdout when omitted)" };
+        var export = new Command("export", "Export all entries as one Markdown document (backup/sharing)");
+        export.Add(exportFileArg);
+        export.SetAction(parse =>
+        {
+            using var rt = CliHost.CreateRuntime();
+            var entries = rt.Knowledge.List(HaoyueDatabase.ScopeKey(rt.Workspace), 2000);
+            var markdown = KnowledgeExport.ToMarkdown(rt.Workspace.IsGlobal ? "全局" : rt.Workspace.Root, entries);
+            var target = parse.GetValue(exportFileArg);
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                Console.Out.Write(markdown);
+                return 0;
+            }
+            try
+            {
+                File.WriteAllText(target, markdown);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                AnsiConsole.MarkupLine($"[red]无法写入导出文件：{Markup.Escape(ex.Message)}[/]");
+                return 1;
+            }
+            AnsiConsole.MarkupLine($"[green]Exported[/] {entries.Count} 条知识 → {Markup.Escape(target)}");
+            return 0;
+        });
+
+        command.Add(import); command.Add(export);
         return command;
     }
 

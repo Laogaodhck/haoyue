@@ -56,6 +56,13 @@ public static class KnowledgeTuning
 
     public static string DefaultPath => DefaultPathValue;
 
+    /// <summary>
+    /// The path the daemon's synonyms get/save IPC operates on: the first configured
+    /// path — the real user file unless a test (or a future workspace-level table)
+    /// reconfigures the watch list.
+    /// </summary>
+    public static string ActivePath => _paths[0];
+
     private static Dictionary<string, string[]> _synonyms = BuildDefaultSynonyms();
     private static string[] _paths = [DefaultPathValue];
     private static Dictionary<string, DateTime> _timestamps = [];

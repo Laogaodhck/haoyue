@@ -1086,7 +1086,11 @@ internal sealed class DaemonAdminApi(
     {
         var workspace = SessionWorkspace(parameters);
         var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 500, 1, 2000);
-        return KnowledgePayload(workspace, runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), limit));
+        var tag = OptionalString(parameters, "tag");
+        var entries = tag is { Length: > 0 } tagValue
+            ? runtime.Knowledge.ListByTag(HaoyueDatabase.ScopeKey(workspace), tagValue, limit)
+            : runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), limit);
+        return KnowledgePayload(workspace, entries);
     }
 
     public string SearchKnowledge(JsonObject parameters)
@@ -1094,10 +1098,91 @@ internal sealed class DaemonAdminApi(
         var workspace = SessionWorkspace(parameters);
         var query = RequiredString(parameters, "query");
         var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 50, 1, 100);
-        return KnowledgePayload(workspace, runtime.Knowledge.Search(HaoyueDatabase.ScopeKey(workspace), query, limit));
+        var tag = OptionalString(parameters, "tag");
+        return KnowledgePayload(workspace,
+            runtime.Knowledge.Search(HaoyueDatabase.ScopeKey(workspace), query, limit, tag));
     }
 
-    /// <summary>Creates or updates one entry (same-title upsert) and returns the refreshed list.</summary>
+    /// <summary>Distinct tags with occurrence counts plus the total entry count of the scope.</summary>
+    public string KnowledgeTags(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var tags = new JsonArray();
+        foreach (var (tag, count) in runtime.Knowledge.TagCounts(scope))
+        {
+            tags.Add((JsonNode)new JsonObject { ["tag"] = tag, ["count"] = count });
+        }
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["total"] = runtime.Knowledge.Count(scope),
+            ["tags"] = tags,
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// Renders the whole scope as one Markdown document for backup/sharing. The
+    /// desktop saves it through its own save dialog; the daemon never writes to
+    /// user-chosen paths by itself.
+    /// </summary>
+    public string ExportKnowledge(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var entries = runtime.Knowledge.List(scope, 2000);
+
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["count"] = entries.Count,
+            ["markdown"] = KnowledgeExport.ToMarkdown(workspace.IsGlobal ? "全局" : workspace.Root, entries),
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// Read-only view of the user-editable search synonym table
+    /// (~/.haoyue/knowledge/synonyms.txt, hot-reloaded by KnowledgeTuning).
+    /// </summary>
+    public string GetKnowledgeSynonyms()
+    {
+        var path = KnowledgeTuning.ActivePath;
+        string? content = null;
+        if (File.Exists(path))
+        {
+            try { content = File.ReadAllText(path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new DaemonRequestException($"无法读取同义词表：{ex.Message}");
+            }
+        }
+        return new JsonObject
+        {
+            ["path"] = path,
+            ["exists"] = content is not null,
+            ["content"] = content ?? "",
+        }.ToJsonString();
+    }
+
+    public string SaveKnowledgeSynonyms(JsonObject parameters)
+    {
+        var content = RequiredString(parameters, "content");
+        var path = KnowledgeTuning.ActivePath;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new DaemonRequestException($"无法写入同义词表：{ex.Message}");
+        }
+        return GetKnowledgeSynonyms();
+    }
+
+    /// <summary>Creates or updates one entry (same-title upsert, or in-place when params.id is given) and returns the refreshed list.</summary>
     public string SaveKnowledge(JsonObject parameters)
     {
         var workspace = SessionWorkspace(parameters);
@@ -1105,7 +1190,20 @@ internal sealed class DaemonAdminApi(
         var content = RequiredString(parameters, "content");
         if (content.Length > 8000)
             throw new DaemonRequestException($"Knowledge content is too long ({content.Length} chars); keep entries under 8000 characters.");
-        runtime.Knowledge.Save(HaoyueDatabase.ScopeKey(workspace), title, content, OptionalString(parameters, "tags"));
+        long? id = null;
+        if (parameters["id"] is JsonValue value)
+        {
+            if (value.TryGetValue<long>(out var longId)) id = longId;
+            else if (value.TryGetValue<double>(out var doubleId)) id = (long)doubleId;
+        }
+        try
+        {
+            runtime.Knowledge.Save(HaoyueDatabase.ScopeKey(workspace), title, content, OptionalString(parameters, "tags"), id);
+        }
+        catch (KeyNotFoundException)
+        {
+            throw new DaemonRequestException($"No knowledge entry #{id} in this scope.");
+        }
         return KnowledgePayload(workspace, runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), 500));
     }
 
@@ -1261,38 +1359,15 @@ internal sealed class DaemonAdminApi(
         foreach (var node in paths)
         {
             var raw = node?.GetValue<string>() ?? throw new DaemonRequestException("params.paths must contain file paths");
-            string fullPath;
-            try { fullPath = Path.GetFullPath(raw.Trim()); }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-            {
-                throw new DaemonRequestException($"Invalid knowledge import path: {ex.Message}");
-            }
-            if (!File.Exists(fullPath))
-                throw new DaemonRequestException($"文件不存在：{fullPath}");
-            if (new FileInfo(fullPath).Length > KnowledgeImport.MaxFileBytes)
-                throw new DaemonRequestException($"文件过大：{Path.GetFileName(fullPath)} 超过 10 MB 限制");
-
-            string text;
-            try { text = KnowledgeImport.ExtractText(fullPath); }
+            string fileName;
+            int count;
+            try { (fileName, count) = KnowledgeIngest.ImportFile(runtime.Knowledge, scope, raw); }
             catch (KnowledgeImportException ex)
             {
                 throw new DaemonRequestException(ex.Message);
             }
-
-            var chunks = KnowledgeImport.SplitChunks(text);
-            if (chunks.Count == 0)
-                throw new DaemonRequestException($"文件内容为空：{Path.GetFileName(fullPath)}");
-
-            var fileName = Path.GetFileName(fullPath);
-            var tags = $"导入,{Path.GetExtension(fullPath).TrimStart('.').ToLowerInvariant()}";
-            for (var index = 0; index < chunks.Count; index++)
-            {
-                var title = chunks.Count == 1 ? fileName : $"{fileName} · 第{index + 1}/{chunks.Count}部分";
-                runtime.Knowledge.Save(scope, title, chunks[index], tags);
-            }
-
-            files.Add((JsonNode)new JsonObject { ["file"] = fileName, ["entries"] = chunks.Count });
-            totalEntries += chunks.Count;
+            files.Add((JsonNode)new JsonObject { ["file"] = fileName, ["entries"] = count });
+            totalEntries += count;
         }
 
         var payload = JsonNode.Parse(KnowledgePayload(workspace, runtime.Knowledge.List(scope, 500)))!.AsObject();

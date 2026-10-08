@@ -45,6 +45,90 @@ public class McpTransportTests
         Assert.Contains("PATH", ex.Message);
     }
 
+    [Fact]
+    public async Task StdioTransport_RunsBatchShimFromPathWithSpaces()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        // A .cmd shim under a spaced directory (the common "C:\Program Files" case)
+        // must survive the cmd.exe /s /c wrapper and keep the JSON-RPC pipe working.
+        var dir = Path.Combine(Path.GetTempPath(), $"haoyue mcp {Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var script = Path.Combine(dir, "fake-mcp.cmd");
+        var lines = string.Join("\r\n",
+            "@echo off",
+            ":loop",
+            "set \"REQ=\"",
+            "set /p REQ=",
+            "if not defined REQ exit /b 0",
+            @"echo {""jsonrpc"":""2.0"",""id"":1,""result"":{""protocolVersion"":""2024-11-05"",""capabilities"":{},""serverInfo"":{""name"":""fake-mcp"",""version"":""1.0""}}}",
+            "goto loop",
+            "");
+        File.WriteAllText(script, lines);
+
+        try
+        {
+            await using var transport = new StdioMcpTransport(script, [], null);
+            await using var client = new McpClient("fake-mcp", transport);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await client.InitializeAsync(cts.Token);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task StdioTransport_UnexpectedChildExitSurfacesStderrDetail()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var script = Path.Combine(Path.GetTempPath(), $"haoyue-mcp-exit-{Guid.NewGuid():N}.cmd");
+        var lines = string.Join("\r\n",
+            "@echo off",
+            "ping -n 2 127.0.0.1 >nul",
+            "echo boom 1>&2",
+            "exit /b 7",
+            "");
+        File.WriteAllText(script, lines);
+
+        try
+        {
+            await using var transport = new StdioMcpTransport(script, [], null);
+            await using var client = new McpClient("exit-probe", transport);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var ex = await Assert.ThrowsAsync<McpException>(() => client.InitializeAsync(cts.Token));
+            Assert.Contains("exit code 7", ex.Message);
+            Assert.Contains("boom", ex.Message);
+        }
+        finally
+        {
+            try { File.Delete(script); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task StdioTransport_SendsBomlessUtf8ToChild()
+    {
+        // Encoding.UTF8 as StandardInputEncoding makes StreamWriter emit a BOM
+        // before the first line; Node-based servers fail JSON.parse on
+        // "\uFEFF{...}" and silently drop every request. The child below exits
+        // with code 3 exactly when the first line is not parseable JSON.
+        if (OperatingSystem.IsWindows() && StdioMcpTransport.ResolveOnPath("node") is null) return;
+
+        const string script =
+            "const rl=require('readline').createInterface({input:process.stdin});" +
+            "rl.once('line',l=>{try{const m=JSON.parse(l);" +
+            "process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2024-11-05',capabilities:{},serverInfo:{name:'bom-test',version:'1'}}})+'\\n')}" +
+            "catch(e){process.exit(3)}});";
+
+        await using var transport = new StdioMcpTransport("node", ["-e", script], null);
+        await using var client = new McpClient("bom-test", transport);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await client.InitializeAsync(cts.Token);
+    }
+
     private sealed class DelegatingMockHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

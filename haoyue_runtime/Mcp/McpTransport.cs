@@ -18,11 +18,50 @@ public interface IMcpTransport : IAsyncDisposable
 public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? args, IReadOnlyDictionary<string, string>? env)
     : IMcpTransport
 {
+    // Encoding.UTF8 carries a BOM preamble that StreamWriter emits before the first
+    // line; Node-based MCP servers fail JSON.parse on "\uFEFF{...}" and silently
+    // drop every request — the pipe must be strictly BOM-less UTF-8.
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
     private readonly Channel<JsonObject> _incoming = Channel.CreateUnbounded<JsonObject>();
+    private readonly object _stderrGate = new();
+    private readonly Queue<string> _stderrLines = new();
+    private bool _killRequested;
     private Process? _process;
     private Task? _readLoop;
+    private Task? _stderrPump;
 
     public ChannelReader<JsonObject> Incoming => _incoming.Reader;
+
+    /// <summary>
+    /// Human-readable reason for an unplanned child exit (exit code + stderr tail),
+    /// or null when shutdown was requested by us or the process is still running.
+    /// Lets the client turn a bare "disconnected" into a diagnosable message.
+    /// Waits briefly for the stderr pump so the final error lines are captured.
+    /// </summary>
+    internal async Task<string?> DescribeUnexpectedExitAsync()
+    {
+        if (_killRequested || _process is null) return null;
+        bool exited;
+        int code;
+        try { exited = _process.HasExited; code = exited ? _process.ExitCode : 0; }
+        catch (InvalidOperationException) { return null; }
+        if (!exited) return null;
+
+        if (_stderrPump is not null)
+        {
+            try { await _stderrPump.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false); }
+            catch (TimeoutException) { }
+            catch { }
+        }
+
+        string stderr;
+        lock (_stderrGate)
+            stderr = string.Join("\n", _stderrLines).TrimEnd();
+        return string.IsNullOrWhiteSpace(stderr)
+            ? $"子进程已退出（exit code {code}），且未输出任何 stderr 信息"
+            : $"子进程已退出（exit code {code}）：{stderr}";
+    }
 
     public Task StartAsync(CancellationToken ct)
     {
@@ -32,8 +71,8 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardInputEncoding = Encoding.UTF8,
+            StandardOutputEncoding = Utf8NoBom,
+            StandardInputEncoding = Utf8NoBom,
         };
 
         if (OperatingSystem.IsWindows())
@@ -53,11 +92,22 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
         _process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start MCP server process: {command}");
 
-        // Drain stderr so the child never blocks on a full pipe.
-        _ = Task.Run(async () =>
+        // Drain stderr so the child never blocks on a full pipe, keeping a short
+        // tail for diagnostics when the process dies unexpectedly.
+        _stderrPump = Task.Run(async () =>
         {
-            try { while (await _process.StandardError.ReadLineAsync().ConfigureAwait(false) is not null) { } }
-            catch (IOException) { }
+            try
+            {
+                while (await _process.StandardError.ReadLineAsync().ConfigureAwait(false) is { } line)
+                {
+                    lock (_stderrGate)
+                    {
+                        _stderrLines.Enqueue(line);
+                        while (_stderrLines.Count > 15) _stderrLines.Dequeue();
+                    }
+                }
+            }
+            catch { }
         }, CancellationToken.None);
 
         _readLoop = Task.Run(async () =>
@@ -67,9 +117,10 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
                 while (await _process.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } line)
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
+                    var cleaned = line.TrimStart('\uFEFF');
                     try
                     {
-                        if (JsonNode.Parse(line) is JsonObject obj)
+                        if (JsonNode.Parse(cleaned) is JsonObject obj)
                             _incoming.Writer.TryWrite(obj);
                     }
                     catch (System.Text.Json.JsonException) { }
@@ -87,6 +138,8 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
     /// .cmd/.bat shims under UseShellExecute=false — so bare commands like `npx`
     /// (actually npx.cmd) fail with "file not found". Resolve the real shim first;
     /// batch shims launch through cmd.exe, which keeps stdin/stdout redirection intact.
+    /// With /s, cmd strips the outer quote pair, so the whole command line is wrapped
+    /// in one and inner quotes keep a spaced path like "C:\Program Files\..." intact.
     /// </summary>
     private static void ApplyWindowsCommand(ProcessStartInfo startInfo, string command, IReadOnlyList<string> args)
     {
@@ -99,17 +152,22 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
              resolved.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)))
         {
             startInfo.FileName = "cmd.exe";
-            startInfo.ArgumentList.Add("/d");
-            startInfo.ArgumentList.Add("/s");
-            startInfo.ArgumentList.Add("/c");
-            startInfo.ArgumentList.Add(resolved);
+            var inner = QuoteForCmd(resolved) + string.Concat(args.Select(a => " " + QuoteForCmd(a)));
+            startInfo.Arguments = $"/d /s /c \"{inner}\"";
         }
         else
         {
             startInfo.FileName = resolved ?? command;
+            foreach (var arg in args) startInfo.ArgumentList.Add(arg);
         }
-        foreach (var arg in args) startInfo.ArgumentList.Add(arg);
     }
+
+    private static readonly char[] CmdSpecialChars = [' ', '\t', '"', '&', '<', '>', '(', ')', '^', '|'];
+
+    private static string QuoteForCmd(string value) =>
+        value.IndexOfAny(CmdSpecialChars) >= 0
+            ? "\"" + value.Replace("\"", "\"\"") + "\""
+            : value;
 
     /// <summary>Full path of the command shim on PATH, or null when not found.</summary>
     internal static string? ResolveOnPath(string command)
@@ -154,6 +212,7 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
 
     public async ValueTask DisposeAsync()
     {
+        _killRequested = true;
         _incoming.Writer.TryComplete();
         if (_process is not null)
         {

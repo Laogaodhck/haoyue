@@ -34,11 +34,19 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
             ["clientInfo"] = new JsonObject { ["name"] = "haoyue", ["version"] = "1.0.0" },
         }, ct).ConfigureAwait(false);
 
-        await transport.SendAsync(new JsonObject
+        try
         {
-            ["jsonrpc"] = "2.0",
-            ["method"] = "notifications/initialized",
-        }, ct).ConfigureAwait(false);
+            await transport.SendAsync(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["method"] = "notifications/initialized",
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            // The server may exit right after answering initialize; the next
+            // request will surface the enriched disconnect reason instead.
+        }
     }
 
     public async Task<IReadOnlyList<McpTool>> ListToolsAsync(CancellationToken ct)
@@ -171,6 +179,20 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
 
             return await tcs.Task.WaitAsync(RequestTimeout, ct).ConfigureAwait(false);
         }
+        catch (Exception sendEx) when (sendEx is IOException or InvalidOperationException)
+        {
+            // The child may have died between request registration and send; the
+            // dispatch loop usually lands a richer failure (exit code + stderr)
+            // shortly after — prefer that over the raw pipe error.
+            try
+            {
+                return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                throw new McpException($"MCP server '{serverName}' transport error: {sendEx.Message}");
+            }
+        }
         catch (TimeoutException)
         {
             throw new McpException($"MCP server '{serverName}' did not answer '{method}' within {RequestTimeout.TotalSeconds:0}s.");
@@ -216,8 +238,14 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
             return;
         }
 
+        var exitDetail = transport is StdioMcpTransport stdio
+            ? await stdio.DescribeUnexpectedExitAsync().ConfigureAwait(false)
+            : null;
+        var exitMessage = exitDetail is null
+            ? $"MCP server '{serverName}' disconnected."
+            : $"MCP server '{serverName}' disconnected：{exitDetail}";
         foreach (var pending in _pending.Values)
-            pending.TrySetException(new McpException($"MCP server '{serverName}' disconnected."));
+            pending.TrySetException(new McpException(exitMessage));
         _pending.Clear();
     }
 

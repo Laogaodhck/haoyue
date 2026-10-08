@@ -69,7 +69,9 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **Full observe → act → verify loop**: the `computer` tool supports 18 actions (mouse move/click/drag, keyboard input, window management, scrolling, etc.), with an automatic screenshot sent back to the model after each step to verify the result
 - **Cloud and local models can both "see the screen"**: cloud vision models parse screenshots directly; local GGUF models read them through the mmproj multimodal integration — no more navigating blind via accessibility text only
 - **Coordinate self-calibration**: CoordinateMapper screen calibration + `cursor_position` self-check, DriverFaultSandbox driver fault tolerance, and a 30-step-per-turn cap as a safety net
-- **Dormant by default**: `computerUse.enabled` defaults to off; enabling it requires an explicit toggle in desktop settings, accompanied by a full-screen halo indicator
+- **System Control subsystem**: `computer_exec` (PowerShell / CMD / Python with automatic Python detection) + `computer_scan` (hardware device and folder-structure scanning to locate follow-up actions) + `computer_sysinfo` (system configuration, settings, and running processes) + `computer_browser_repair` (browser homepage hijack detection & repair — covers policy registry, IE start page, Preferences JSON, Firefox prefs.js, and hijacked shortcuts; repairs always back up findings first and can be rolled back)
+- **Cross-platform adaptation**: system control picks the Windows / Linux adapter automatically (CIM queries & registry repair vs. /proc, lscpu, /etc policy files); permission-denied operations are reported per-item with elevation hints instead of failing the whole call
+- **Dormant by default**: `computerUse.enabled` defaults to off; enabling it requires an explicit toggle in desktop settings, accompanied by a full-screen halo indicator; `systemControlEnabled` turns off system control alone without affecting mouse/keyboard operation
 
 ### 🖥️ Desktop App
 
@@ -222,7 +224,7 @@ Haoyue/
 │   └── Program.cs          # Entry point
 ├── haoyue_runtime/       # Core runtime
 │   ├── Agents/             # Agent loop, context planning, TurnScope rollback
-│   ├── ComputerUse/        # Computer-use agent (screen observation, mouse/keyboard driver, coordinate calibration, fault sandbox)
+│   ├── ComputerUse/        # Computer-use agent (screen observation, mouse/keyboard driver, coordinate calibration, fault sandbox, SystemControl subsystem)
 │   ├── Configuration/      # Config management (atomic writes, reload-merge, single-writer bridge)
 │   ├── Coordination/       # File-lock coordinator
 │   ├── Daemon/             # Daemon (JSON-RPC, RPC routing, crash reconciliation)
@@ -243,7 +245,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (435 cases, ≥70% line coverage gate)
+├── haoyue_tests/         # Runtime unit tests (463 cases, ≥70% line coverage gate)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -378,7 +380,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test haoyue_tests      # runtime tests (435 cases)
+dotnet test haoyue_tests      # runtime tests (463 cases)
 dotnet test haoyue_cli_tests  # CLI tests
 
 # Desktop (requires pnpm install first)

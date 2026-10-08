@@ -28,6 +28,17 @@ public static class ComputerUseModule
         runtime.Tools.Register(new ComputerInspectTool(runtime.Prompts, driver));
         runtime.Tools.Register(new ComputerTool(runtime.Prompts, driver, config));
 
+        if (config.ShellEnabled)
+            runtime.Tools.Register(new ComputerExecTool(runtime.Prompts, config));
+
+        if (config.SystemControlEnabled)
+        {
+            var adapter = SystemControl.SystemControlFactory.Create();
+            runtime.Tools.Register(new SystemControl.SystemScanTool(runtime.Prompts, adapter));
+            runtime.Tools.Register(new SystemControl.SystemInfoTool(runtime.Prompts, adapter, config));
+            runtime.Tools.Register(new SystemControl.BrowserRepairTool(runtime.Prompts, adapter));
+        }
+
     }
 
     /// <summary>

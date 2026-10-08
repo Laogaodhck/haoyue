@@ -49,6 +49,14 @@ public sealed class ComputerUseExtension : IRuntimeExtension
 
         if (config.ShellEnabled)
             registry.Register(new ComputerExecTool(runtime.Prompts, config));
+
+        if (config.SystemControlEnabled)
+        {
+            var adapter = SystemControl.SystemControlFactory.Create();
+            registry.Register(new SystemControl.SystemScanTool(runtime.Prompts, adapter));
+            registry.Register(new SystemControl.SystemInfoTool(runtime.Prompts, adapter, config));
+            registry.Register(new SystemControl.BrowserRepairTool(runtime.Prompts, adapter));
+        }
     }
 
     public async ValueTask DisposeAsync()

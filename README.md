@@ -69,7 +69,9 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **完整 observe → act → verify 闭环**：`computer` 工具支持 18 种动作（鼠标移动/点击/拖拽、键盘输入、窗口管理、滚动等），每步自动截图回传模型核验结果
 - **云端与本地模型都能"看屏幕"**：云视觉模型直接解析截图；本地 GGUF 模型经 mmproj 多模态接入同样可读图操作，不再只能靠无障碍文本盲操作
 - **坐标自校准**：CoordinateMapper 屏幕标定 + `cursor_position` 自校准，DriverFaultSandbox 驱动容错，单回合 30 步上限兜底
-- **默认休眠**：`computerUse.enabled` 默认关闭，开启需在桌面端设置中显式打开，并伴随全屏光晕提示
+- **系统操控子系统（SystemControl）**：`computer_exec`（PowerShell / CMD / Python，自动检测 Python 环境）+ `computer_scan`（硬件设备与文件夹结构扫描，按扫描结果定位后续操作）+ `computer_sysinfo`（系统配置、设置项与运行进程读取）+ `computer_browser_repair`（浏览器主页劫持检测与自动修复——检测策略注册表/IE 起始页/Preferences JSON/Firefox prefs.js/快捷方式五类劫持源，修复前自动备份可回滚）
+- **跨平台自动适配**：系统操控按 Windows / Linux 自动选择适配器（CIM 查询、注册表修复 vs /proc、lscpu、/etc 策略文件），权限不足的操作按失败项报告并给出提权指引，而非整体失败
+- **默认休眠**：`computerUse.enabled` 默认关闭，开启需在桌面端设置中显式打开，并伴随全屏光晕提示；`systemControlEnabled` 可单独关闭系统操控而不影响鼠标键盘操控
 
 ### 🖥️ 桌面应用
 
@@ -222,7 +224,7 @@ Haoyue/
 │   └── Program.cs          # 入口点
 ├── haoyue_runtime/       # 核心运行时
 │   ├── Agents/             # Agent 循环、上下文规划与 TurnScope 回滚
-│   ├── ComputerUse/        # 电脑操作智能体（屏幕观察、鼠标键盘驱动、坐标标定、容错沙箱）
+│   ├── ComputerUse/        # 电脑操作智能体（屏幕观察、鼠标键盘驱动、坐标标定、容错沙箱、SystemControl 系统操控子系统）
 │   ├── Configuration/      # 配置管理（原子写、reload-merge、单写者桥接）
 │   ├── Coordination/       # 文件锁协调器
 │   ├── Daemon/             # 守护进程（JSON-RPC、RPC 路由、崩溃对账）
@@ -243,7 +245,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX 提取与互转 + OCR，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（435 用例，覆盖率门槛 ≥70%）
+├── haoyue_tests/         # 运行时单元测试（463 用例，覆盖率门槛 ≥70%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
@@ -378,7 +380,7 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test haoyue_tests      # 运行时测试（435 用例）
+dotnet test haoyue_tests      # 运行时测试（463 用例）
 dotnet test haoyue_cli_tests  # CLI 测试
 
 # 桌面端（需先 pnpm install）

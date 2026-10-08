@@ -3,6 +3,9 @@ using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.Win32;
 
 namespace Haoyue.Runtime.Secrets;
 
@@ -15,6 +18,9 @@ namespace Haoyue.Runtime.Secrets;
 /// Schemes:
 ///   secret:dpapi:&lt;base64&gt;   Windows DPAPI (CurrentUser scope; same user, same machine).
 ///   secret:keyring:&lt;id&gt;    freedesktop Secret Service via the secret-tool CLI (Linux).
+///   secret:file:&lt;id&gt;      AES-GCM entry in ~/.haoyue/secrets.json (Linux fallback when no
+///                          keyring is available; file mode 0600, key derived from the
+///                          machine identifier — documented as weaker than DPAPI).
 ///   (no prefix)              plaintext passthrough — legacy configs keep working unchanged.
 /// </summary>
 public static class SecretResolver
@@ -22,6 +28,7 @@ public static class SecretResolver
     public const string Prefix = "secret:";
     private const string DpapiScheme = "secret:dpapi:";
     private const string KeyringScheme = "secret:keyring:";
+    internal const string FileScheme = "secret:file:";
     private const string KeyringService = "haoyue-mcp";
 
     public static bool IsSecret(string? value) =>
@@ -52,15 +59,19 @@ public static class SecretResolver
                 : null;
         }
 
+        if (value.StartsWith(FileScheme, StringComparison.Ordinal))
+        {
+            return FileStoreLookup(value[FileScheme.Length..]);
+        }
+
         // Unknown scheme: never forward ciphertext as if it were the credential.
         return null;
     }
 
     /// <summary>
     /// Encrypts a credential for storage. On Windows this is DPAPI; on Linux the
-    /// Secret Service when secret-tool is available; otherwise the value is stored
-    /// as plaintext (documented limitation — the config file should then be
-    /// protected by filesystem permissions alone).
+    /// Secret Service when secret-tool is available, otherwise the AES-GCM file
+    /// store — credentials are never silently downgraded to plaintext on Linux.
     /// </summary>
     public static string Encrypt(string purposeId, string value)
     {
@@ -70,8 +81,12 @@ public static class SecretResolver
         if (OperatingSystem.IsWindows())
             return DpapiScheme + DpapiProtect(value);
 
-        if (OperatingSystem.IsLinux() && KeyringStore(purposeId, value))
-            return KeyringScheme + purposeId;
+        if (OperatingSystem.IsLinux())
+        {
+            if (KeyringStore(purposeId, value))
+                return KeyringScheme + purposeId;
+            return FileScheme + FileStoreStore(purposeId, value);
+        }
 
         return value;
     }
@@ -214,6 +229,156 @@ public static class SecretResolver
         {
             var candidate = Path.Combine(dir, "secret-tool");
             if (File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    // ---- AES-GCM file store (Linux fallback when no Secret Service is available) ----
+    //
+    // Entries live in ~/.haoyue/secrets.json (mode 0600 on Linux) as
+    // { "version": 1, "entries": { "<id>": "<base64 nonce||ciphertext||tag>" } }.
+    // The key is HKDF-SHA256 over the machine identifier (/etc/machine-id, Windows
+    // MachineGuid), so a copied secrets.json is useless on another machine. The
+    // entry id is bound as AES-GCM associated data, preventing entry swaps. This
+    // is deliberately documented as weaker than DPAPI: /etc/machine-id is
+    // world-readable, so root or same-user read access to both files suffices
+    // to recover credentials.
+
+    private const string SecretsFileName = "secrets.json";
+    private const string SecretsKdfSalt = "haoyue-mcp-secrets-v1";
+    private const string SecretsKdfInfo = "mcp-credential";
+    private const int FileKeyByteCount = 32;
+    private const int FileNonceByteCount = 12;
+    private const int FileTagByteCount = 16;
+
+    private static readonly JsonSerializerOptions SecretsJsonOptions = new() { WriteIndented = true };
+
+    internal static string SecretsFilePath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".haoyue", SecretsFileName);
+
+    /// <summary>
+    /// Stores a credential in the file store and returns the entry id for the
+    /// secret:file: prefix. IO or key-derivation failures throw — saving must
+    /// fail loudly rather than silently storing plaintext (hard constraint).
+    /// </summary>
+    internal static string FileStoreStore(string id, string value)
+    {
+        var machineId = MachineIdentifierBytes()
+            ?? throw new InvalidOperationException(
+                "No machine identifier is available for the file credential store on this platform.");
+        var path = SecretsFilePath();
+        JsonObject root;
+        try
+        {
+            root = File.Exists(path)
+                ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? new JsonObject()
+                : new JsonObject();
+        }
+        catch (JsonException)
+        {
+            root = new JsonObject(); // corrupt store: rebuild; resolution already returns null for it.
+        }
+        if (root["entries"] is not JsonObject entries)
+        {
+            entries = new JsonObject();
+            root["entries"] = entries;
+        }
+        entries[id] = FileStoreSeal(machineId, id, value);
+        root["version"] = 1;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, root.ToJsonString(SecretsJsonOptions));
+        if (OperatingSystem.IsLinux())
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        return id;
+    }
+
+    /// <summary>Resolves an entry id; every failure mode returns null, never ciphertext.</summary>
+    internal static string? FileStoreLookup(string id)
+    {
+        var path = SecretsFilePath();
+        if (!File.Exists(path)) return null;
+        var entries = ReadEntries(path);
+        if (entries?[id] is not JsonValue payload || !payload.TryGetValue<string>(out var blob) || blob is null)
+            return null;
+        var machineId = MachineIdentifierBytes();
+        return machineId is null ? null : FileStoreOpen(machineId, id, blob);
+    }
+
+    private static JsonObject? ReadEntries(string path)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            return (JsonNode.Parse(File.ReadAllText(path)) as JsonObject)?["entries"] as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return null; // corrupt store: resolution yields null; the next write rebuilds it.
+        }
+    }
+
+    private static string FileStoreSeal(byte[] machineId, string id, string plaintext)
+    {
+        using var aes = new AesGcm(DeriveFileStoreKey(machineId), FileTagByteCount);
+        var nonce = RandomNumberGenerator.GetBytes(FileNonceByteCount);
+        var plain = Encoding.UTF8.GetBytes(plaintext);
+        var cipher = new byte[plain.Length];
+        var tag = new byte[FileTagByteCount];
+        aes.Encrypt(nonce, plain, cipher, tag, Encoding.UTF8.GetBytes(id));
+        var payload = new byte[nonce.Length + cipher.Length + tag.Length];
+        Buffer.BlockCopy(nonce, 0, payload, 0, nonce.Length);
+        Buffer.BlockCopy(cipher, 0, payload, nonce.Length, cipher.Length);
+        Buffer.BlockCopy(tag, 0, payload, nonce.Length + cipher.Length, tag.Length);
+        return Convert.ToBase64String(payload);
+    }
+
+    private static string? FileStoreOpen(byte[] machineId, string id, string blob)
+    {
+        byte[] payload;
+        try { payload = Convert.FromBase64String(blob); }
+        catch (FormatException) { return null; }
+        if (payload.Length < FileNonceByteCount + FileTagByteCount) return null;
+
+        try
+        {
+            using var aes = new AesGcm(DeriveFileStoreKey(machineId), FileTagByteCount);
+            var nonce = payload[..FileNonceByteCount];
+            var cipher = payload[FileNonceByteCount..^FileTagByteCount];
+            var tag = payload[^FileTagByteCount..];
+            var plain = new byte[cipher.Length];
+            aes.Decrypt(nonce, cipher, tag, plain, Encoding.UTF8.GetBytes(id));
+            return Encoding.UTF8.GetString(plain);
+        }
+        catch (AuthenticationTagMismatchException)
+        {
+            return null;
+        }
+    }
+
+    private static byte[] DeriveFileStoreKey(byte[] machineId) =>
+        HKDF.DeriveKey(
+            HashAlgorithmName.SHA256,
+            machineId,
+            FileKeyByteCount,
+            Encoding.UTF8.GetBytes(SecretsKdfSalt),
+            Encoding.UTF8.GetBytes(SecretsKdfInfo));
+
+    private static byte[]? MachineIdentifierBytes()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var guid = Registry.GetValue(
+                @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography", "MachineGuid", null) as string;
+            return string.IsNullOrEmpty(guid) ? null : Encoding.UTF8.GetBytes(guid);
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            foreach (var path in new[] { "/etc/machine-id", "/var/lib/dbus/machine-id" })
+            {
+                if (!File.Exists(path)) continue;
+                var id = File.ReadAllText(path).Trim();
+                if (id.Length > 0) return Encoding.UTF8.GetBytes(id);
+            }
         }
         return null;
     }

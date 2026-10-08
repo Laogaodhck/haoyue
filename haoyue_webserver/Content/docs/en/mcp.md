@@ -43,7 +43,7 @@ Global servers can be stored under `mcp.servers` in `~/.haoyue/config.json`. A w
 }
 ```
 
-Remote servers support custom HTTP `headers` (e.g. `Authorization`); values are stored encrypted with a `secret:` prefix (Windows DPAPI / Linux Secret Service), never echoed back or logged. Connections carrying headers must use https:// (127.0.0.1 debugging exempt).
+Remote servers support custom HTTP `headers` (e.g. `Authorization`); values are stored encrypted with a `secret:` prefix (Windows DPAPI; Linux prefers the Secret Service and falls back to an AES-GCM-encrypted `~/.haoyue/secrets.json` keyed by the machine identifier — weaker than DPAPI), never echoed back or logged. Connections carrying headers must use https:// (127.0.0.1 debugging exempt).
 
 ## Connection and reload behavior
 

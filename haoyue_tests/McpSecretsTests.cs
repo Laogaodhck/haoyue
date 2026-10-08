@@ -102,11 +102,67 @@ public class McpSecretsTests
         const string plaintext = "ghp_secret-value-123";
         var stored = SecretResolver.Encrypt("test:mcp-secrets", plaintext);
 
-        // On Windows the value is DPAPI-protected; on Linux with secret-tool it is
-        // keyring-stored; otherwise it stays plaintext (documented limitation).
+        // On Windows the value is DPAPI-protected; on Linux it is keyring-stored
+        // when secret-tool is available and AES-GCM file-stored (secret:file:) otherwise.
         if (OperatingSystem.IsWindows())
             Assert.StartsWith("secret:dpapi:", stored);
         Assert.Equal(plaintext, SecretResolver.Resolve(stored));
+    }
+
+    // ---- AES-GCM file store fallback (secret:file:) ----
+
+    [Fact]
+    public void FileStore_RoundTripsThroughSecretFilePrefix()
+    {
+        const string id = "mcp:test:filestore:roundtrip";
+        var stored = SecretResolver.FileStoreStore(id, "file-secret-123");
+
+        Assert.Equal(id, stored);
+        Assert.Equal("file-secret-123", SecretResolver.Resolve(SecretResolver.FileScheme + id));
+    }
+
+    [Fact]
+    public void FileStore_MissingEntry_ResolvesToNull()
+    {
+        Assert.Null(SecretResolver.Resolve("secret:file:mcp:test:filestore:missing"));
+    }
+
+    [Fact]
+    public void FileStore_CorruptPayload_ResolvesToNullInsteadOfCiphertext()
+    {
+        const string id = "mcp:test:filestore:corrupt";
+        SecretResolver.FileStoreStore(id, "value");
+
+        TamperFileEntry(id, "not-valid-base64!!");
+        Assert.Null(SecretResolver.FileStoreLookup(id));
+    }
+
+    [Fact]
+    public void FileStore_EntryIsBoundToItsId_SwapFails()
+    {
+        const string idA = "mcp:test:filestore:bind-a";
+        const string idB = "mcp:test:filestore:bind-b";
+        SecretResolver.FileStoreStore(idA, "secret-a");
+        SecretResolver.FileStoreStore(idB, "secret-b");
+
+        // Moving A's ciphertext under B's id breaks the associated-data check.
+        TamperFileEntry(idB, ReadFileEntry(idA));
+        Assert.Null(SecretResolver.FileStoreLookup(idB));
+        Assert.Equal("secret-a", SecretResolver.FileStoreLookup(idA));
+    }
+
+    private static void TamperFileEntry(string id, string payload)
+    {
+        var path = SecretResolver.SecretsFilePath();
+        var root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        (root["entries"]!.AsObject())[id] = payload;
+        File.WriteAllText(path, root.ToJsonString());
+    }
+
+    private static string ReadFileEntry(string id)
+    {
+        var path = SecretResolver.SecretsFilePath();
+        return ((JsonNode.Parse(File.ReadAllText(path))!["entries"]!.AsObject())[id]!).GetValue<string>();
     }
 
     // ---- transport headers ----

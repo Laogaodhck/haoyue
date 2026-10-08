@@ -1295,6 +1295,46 @@ public sealed class DaemonServerTests : IAsyncDisposable
         // Global sessions carry no rules.
         await connection.SendAsync(12, "rules.save", new JsonObject { ["global"] = true, ["content"] = "x" });
         Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+
+        // rules.delete removes a hierarchical file with the same validation as save.
+        await connection.SendAsync(13, "rules.delete", new JsonObject { ["path"] = "packages/app/AGENTS.md" });
+        var deleted = ParseData(await connection.ReadAsync());
+        Assert.Equal("packages/app/AGENTS.md", deleted["path"]!.GetValue<string>());
+        Assert.False(File.Exists(Path.Combine(_tempDir, "packages", "app", "AGENTS.md")));
+
+        await connection.SendAsync(14, "rules.list", new JsonObject());
+        Assert.Single(ParseData(await connection.ReadAsync())["files"]!.AsArray());
+
+        await connection.SendAsync(15, "rules.delete", new JsonObject { ["path"] = "../evil/AGENTS.md" });
+        Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task EvolutionConfig_RoundTrip_PersistsAndClampsInterval()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "evolution.config.get", new JsonObject());
+        var initial = ParseData(await connection.ReadAsync());
+        Assert.False(initial["autoReflect"]!.GetValue<bool>());
+
+        await connection.SendAsync(2, "evolution.config.set", new JsonObject
+        {
+            ["autoReflect"] = true,
+            ["intervalMinutes"] = 5
+        });
+        var clamped = ParseData(await connection.ReadAsync());
+        Assert.True(clamped["autoReflect"]!.GetValue<bool>());
+        Assert.Equal(30, clamped["intervalMinutes"]!.GetValue<int>());
+
+        await connection.SendAsync(3, "evolution.config.set", new JsonObject { ["intervalMinutes"] = 99999 });
+        Assert.Equal(10080, ParseData(await connection.ReadAsync())["intervalMinutes"]!.GetValue<int>());
+
+        // Set persists through ConfigStore, so a fresh read reflects the stored value.
+        await connection.SendAsync(4, "evolution.config.get", new JsonObject());
+        var persisted = ParseData(await connection.ReadAsync());
+        Assert.Equal(10080, persisted["intervalMinutes"]!.GetValue<int>());
     }
 
     [Fact]

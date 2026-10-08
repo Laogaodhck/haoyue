@@ -440,6 +440,8 @@ public static class DaemonContract
         M("rules.save", "memory", "写入工作区规则", parameters: Scope(
             ("content", SString("规则文件内容"), true),
             ("path", SString("目标规则文件相对路径，缺省根 AGENTS.md"), false))),
+        M("rules.delete", "memory", "删除工作区规则文件", parameters: Scope(
+            ("path", SString("目标规则文件相对路径，缺省根 AGENTS.md"), false))),
 
         // usage
         M("usage.get", "usage", "查询用量聚合", parameters: SObject(
@@ -496,6 +498,10 @@ public static class DaemonContract
         M("evolution.decide", "evolution", "人工终审技能草稿", parameters: SObject(
             ("fingerprint", SString("缺陷指纹"), true),
             ("decision", SString("裁决", "adopt", "reject"), true))),
+        M("evolution.config.get", "evolution", "读取自动反思配置", parameters: EmptyParams),
+        M("evolution.config.set", "evolution", "更新自动反思配置", parameters: SObject(
+            ("autoReflect", SBoolean("是否按间隔自动运行反思回合"), false),
+            ("intervalMinutes", SInteger("自动反思间隔（分钟，30..10080）"), false))),
 
         // diagnostics
         M("doctor", "diagnostics", "健康检查（人类可读文本）", parameters: EmptyParams),

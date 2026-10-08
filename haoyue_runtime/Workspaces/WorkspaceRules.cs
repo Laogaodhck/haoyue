@@ -48,6 +48,53 @@ public static class WorkspaceRules
     /// </summary>
     public static string Save(WorkspaceInfo workspace, string? relativePath, string content)
     {
+        var fullPath = ResolveWithinWorkspace(workspace, relativePath);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, content);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"无法写入规则文件：{ex.Message}", ex);
+        }
+        return Path.GetRelativePath(Path.GetFullPath(workspace.Root), fullPath).Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// Deletes one rule file with the same validation as <see cref="Save"/>.
+    /// Returns the normalized relative path actually removed. The root AGENTS.md is
+    /// deletable too (recreated on the next save); a missing file is not an error.
+    /// </summary>
+    public static string Delete(WorkspaceInfo workspace, string? relativePath)
+    {
+        var fullPath = ResolveWithinWorkspace(workspace, relativePath);
+        try
+        {
+            if (File.Exists(fullPath)) File.Delete(fullPath);
+            var directory = Path.GetDirectoryName(fullPath);
+            // 清理删除后变空的子目录，保持工作区整洁；根目录从不删除。
+            if (!string.Equals(directory, Path.GetFullPath(workspace.Root), StringComparison.OrdinalIgnoreCase)
+                && Directory.Exists(directory)
+                && !Directory.EnumerateFileSystemEntries(directory).Any())
+            {
+                Directory.Delete(directory);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"无法删除规则文件：{ex.Message}", ex);
+        }
+        return Path.GetRelativePath(Path.GetFullPath(workspace.Root), fullPath).Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// Shared validation for rule-file paths: global workspaces carry no rules, the
+    /// name must end with AGENTS.md, and the resolved path must stay inside the
+    /// workspace root.
+    /// </summary>
+    private static string ResolveWithinWorkspace(WorkspaceInfo workspace, string? relativePath)
+    {
         if (workspace.IsGlobal)
             throw new InvalidOperationException("全局会话不加载规则文件，请选择工作区后保存。");
 
@@ -64,17 +111,7 @@ public static class WorkspaceRules
         }
         if (!fullPath.StartsWith(rootPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("规则路径越出了工作区根目录");
-
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-            File.WriteAllText(fullPath, content);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new IOException($"无法写入规则文件：{ex.Message}", ex);
-        }
-        return Path.GetRelativePath(rootPath, fullPath).Replace('\\', '/');
+        return fullPath;
     }
 
     private static bool IsRootFile(string candidate, string rootPath)

@@ -67,6 +67,9 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly SemaphoreSlim _reflectionGate = new(1, 1);
     private readonly IEventSubscription _runtimeEvents;
     private readonly Task _scheduleEventsTask;
+    // Unattended auto-reflection (E2): armed from EvolutionConfig; disposed/rearmed on
+    // config changes. The reflection turn itself stays human-gated for adoption.
+    private Timer? _autoReflectTimer;
 
     // Configuration and workspace administration remains serialized, while agent turns
     // execute concurrently in isolated runtime instances.
@@ -192,11 +195,15 @@ public sealed class DaemonServer : IAsyncDisposable
         _scheduleEventsTask = BroadcastScheduleEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
         _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token);
         _admin.McpStatusChanged += OnMcpStatusChanged;
+        _admin.EvolutionConfigChanged += ScheduleAutoReflect;
+        ScheduleAutoReflect();
     }
 
     /// <summary>Releases the scheduler and shared HTTP clients when the daemon host shuts down.</summary>
     public async ValueTask DisposeAsync()
     {
+        _autoReflectTimer?.Dispose();
+        _autoReflectTimer = null;
         _shutdown.Cancel();
         try
         {
@@ -650,6 +657,16 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         break;
                     }
+
+                    case "evolution.config.get":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.GetEvolutionConfig()), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "evolution.config.set":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SetEvolutionConfig(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
 
                     case "feedback.turn":
                     {
@@ -1225,6 +1242,11 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.SaveRules(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "rules.delete":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.DeleteRules(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "usage.get":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.Usage(Params(request))), context.ConnectionCt).ConfigureAwait(false);
@@ -1433,6 +1455,38 @@ public sealed class DaemonServer : IAsyncDisposable
     }
 
     private void OnMcpStatusChanged() => _ = BroadcastMcpStatusAsync();
+
+    /// <summary>
+    /// Rearms the unattended auto-reflection timer from the current evolution config.
+    /// Called at construction and again whenever SetEvolutionConfig persists changes.
+    /// </summary>
+    private void ScheduleAutoReflect()
+    {
+        _autoReflectTimer?.Dispose();
+        _autoReflectTimer = null;
+        var config = _runtime.ConfigStore.Config.Evolution;
+        if (!config.AutoReflect) return;
+        var interval = TimeSpan.FromMinutes(Math.Clamp(config.IntervalMinutes, 30, 10080));
+        _autoReflectTimer = new Timer(
+            _ => StartAutoReflectTurn(), null, interval, interval);
+    }
+
+    /// <summary>
+    /// Fires one reflection turn if none is running. Conflicts (a manual or scheduled
+    /// reflection still in flight) are silently skipped — the next tick retries, and
+    /// outcomes reach clients through the evolution.reflected broadcast either way.
+    /// </summary>
+    private void StartAutoReflectTurn()
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        if (!_reflectionGate.Wait(0)) return;
+        _ = Task.Run(async () =>
+        {
+            try { await _reflection.RunAsync(_shutdown.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+            finally { _reflectionGate.Release(); }
+        }, _shutdown.Token);
+    }
 
     /// <summary>
     /// Tells every connected client that a background MCP reconnect finished, so the

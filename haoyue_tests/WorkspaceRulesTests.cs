@@ -76,4 +76,38 @@ public sealed class WorkspaceRulesTests : IDisposable
         var rules = WorkspaceRules.List(Workspace());
         Assert.Empty(rules);
     }
+
+    [Fact]
+    public void Delete_RemovesFile_AndCleansUpEmptyDirectory()
+    {
+        WorkspaceRules.Save(Workspace(), null, "root rules");
+        WorkspaceRules.Save(Workspace(), "docs/guides/AGENTS.md", "nested rules");
+
+        var deleted = WorkspaceRules.Delete(Workspace(), "docs/guides/AGENTS.md");
+
+        Assert.Equal("docs/guides/AGENTS.md", deleted);
+        Assert.False(File.Exists(Path.Combine(_root, "docs", "guides", "AGENTS.md")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "docs", "guides")));
+        Assert.Single(WorkspaceRules.List(Workspace()));
+    }
+
+    [Fact]
+    public void Delete_RootFile_AndMissingFileAreNotErrors()
+    {
+        WorkspaceRules.Save(Workspace(), null, "root rules");
+
+        Assert.Equal("AGENTS.md", WorkspaceRules.Delete(Workspace(), null));
+        Assert.False(File.Exists(Path.Combine(_root, "AGENTS.md")));
+        // 根目录本身永不清理；缺失文件视为已删除。
+        Assert.Equal("AGENTS.md", WorkspaceRules.Delete(Workspace(), "AGENTS.md"));
+    }
+
+    [Fact]
+    public void Delete_AppliesSameValidationAsSave()
+    {
+        Assert.Throws<InvalidOperationException>(() => WorkspaceRules.Delete(Workspace(isGlobal: true), null));
+        Assert.Throws<ArgumentException>(() => WorkspaceRules.Delete(Workspace(), "README.md"));
+        Assert.Throws<ArgumentException>(() => WorkspaceRules.Delete(Workspace(), "../evil/AGENTS.md"));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(_root)!, "evil", "AGENTS.md")));
+    }
 }

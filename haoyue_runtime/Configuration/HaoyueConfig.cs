@@ -17,6 +17,7 @@ public sealed class HaoyueConfig
     public AgentConfig Agent { get; set; } = new();
     public McpConfig Mcp { get; set; } = new();
     public Haoyue.Runtime.ComputerUse.ComputerUseConfig ComputerUse { get; set; } = new();
+    public EvolutionConfig Evolution { get; set; } = new();
 
 
     public ProviderConfig? FindProvider(string id) =>
@@ -231,6 +232,18 @@ public sealed class AgentConfig
 public sealed class McpConfig
 {
     public Dictionary<string, McpServerConfig> Servers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// 进化引擎配置。反思产出的技能草稿始终等待人工采纳（人工闸门），这里只控制
+/// 反思回合本身的触发方式：仅手动，或按间隔无人值守自动运行。
+/// </summary>
+public sealed class EvolutionConfig
+{
+    /// <summary>按 <see cref="IntervalMinutes"/> 间隔自动运行反思 turn；关闭时仅手动触发。</summary>
+    public bool AutoReflect { get; set; }
+    /// <summary>自动反思间隔（分钟），读写时夹紧到 30..10080（7 天）。</summary>
+    public int IntervalMinutes { get; set; } = 360;
 }
 
 public sealed class McpServerConfig

@@ -36,6 +36,9 @@ internal sealed class DaemonAdminApi(
     /// </summary>
     public event Action? McpStatusChanged;
 
+    /// <summary>Raised after the evolution auto-reflect schedule changes so the daemon can re-arm its timer.</summary>
+    public event Action? EvolutionConfigChanged;
+
     public string ListLocks()
     {
         var locks = new JsonArray();
@@ -307,6 +310,30 @@ internal sealed class DaemonAdminApi(
         runtime.ConfigStore.Save();
         return GetAdvancedConfig();
 
+    }
+
+    /// <summary>Current evolution auto-reflect schedule (always human-gated adoption).</summary>
+    public string GetEvolutionConfig() => new JsonObject
+    {
+        ["autoReflect"] = runtime.ConfigStore.Config.Evolution.AutoReflect,
+        ["intervalMinutes"] = runtime.ConfigStore.Config.Evolution.IntervalMinutes,
+    }.ToJsonString();
+
+    public string SetEvolutionConfig(JsonObject parameters)
+    {
+        if (parameters["autoReflect"] is JsonValue autoVal && autoVal.TryGetValue<bool>(out var autoReflect))
+        {
+            runtime.ConfigStore.Config.Evolution.AutoReflect = autoReflect;
+        }
+
+        if (parameters["intervalMinutes"] is JsonValue intervalVal && intervalVal.TryGetValue<int>(out var interval))
+        {
+            runtime.ConfigStore.Config.Evolution.IntervalMinutes = Math.Clamp(interval, 30, 10080);
+        }
+
+        runtime.ConfigStore.Save();
+        EvolutionConfigChanged?.Invoke();
+        return GetEvolutionConfig();
     }
 
     /// <summary>
@@ -1185,6 +1212,32 @@ internal sealed class DaemonAdminApi(
         return new JsonObject
         {
             ["path"] = savedPath,
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// Deletes one hierarchical rule file with the same validation as
+    /// <see cref="SaveRules"/>. Missing files are not an error.
+    /// </summary>
+    public string DeleteRules(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        string deletedPath;
+        try
+        {
+            deletedPath = WorkspaceRules.Delete(workspace, OptionalString(parameters, "path"));
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw new DaemonRequestException(ex.Message);
+        }
+        catch (IOException ex)
+        {
+            throw new DaemonRequestException(ex.Message);
+        }
+        return new JsonObject
+        {
+            ["path"] = deletedPath,
         }.ToJsonString();
     }
 

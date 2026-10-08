@@ -254,7 +254,7 @@ const composerCaption = computed(() => {
   if (conversationLoading.value) return '正在读取会话历史…'
   // H24: surface the offline state before the user hits send, not after.
   if (!daemonState.value.connected) return reconnecting.value ? '正在重连 Haoyue Runtime…' : 'Haoyue Runtime 未连接，请点击右上角按钮重连后再发送。'
-  if (!activeThread.value) return '选择一个任务，或新建任务开始。'
+  if (!activeThread.value) return '新任务：直接输入开始对话。'
   if (activeThread.value.archived) return '此任务已归档，发送消息后将自动恢复并继续对话。'
   // H13: an empty task has no stats yet — zero noise instead of "0 轮 · 0 步 | 缓存命中 — |…"。
   if (activeThread.value.messages.length === 0) return '新任务：直接输入开始对话。'
@@ -1250,6 +1250,8 @@ async function resumeThreadIfArchived(thread: ThreadItem): Promise<boolean> {
 }
 
 async function sendMessage(content: string, images: ImageAttachment[], files?: FileAttachment[]): Promise<void> {
+  // 空状态修复：尚未创建任何任务时，直接输入会先自动新建任务再发送。
+  if (!activeThread.value) newTask(selectedProjectId.value || undefined)
   const thread = activeThread.value
   const project = thread ? projects.value.find((item) => item.id === thread.projectId) : undefined
   if (!thread || (thread.projectId && !project)) return
@@ -2002,8 +2004,9 @@ watch(theme, applyTheme)
 
             <TaskStepList :steps="activeThreadTurnSteps" :running="activeThread?.running"
               :phase="activeThread?.phase" />
+            <!-- 空状态修复：无任务时输入框保持可用，发送时由 sendMessage 自动创建任务。 -->
             <Composer ref="composer" :busy="busy"
-              :disabled="!activeThread || conversationLoading" :model="activeModel"
+              :disabled="conversationLoading" :model="activeModel"
               :models="models" :mode="mode" :task-id="activeThread?.id" :supports-images="activeModelSupportsImages"
               :reasoning-level="activeReasoningLevel" :network-enabled="activeThread?.networkEnabled ?? true"
               :optimize-prompt="optimizePrompt" @send="sendMessage" @stop="stopTurn" @change-model="changeModel"

@@ -491,6 +491,19 @@ function registerIpc(): void {
     shell.showItemInFolder(path)
   })
 
+  ipcMain.handle('app:save-text-file', async (_event, defaultName: string, content: string) => {
+    const options: Electron.SaveDialogOptions = {
+      title: '保存文件',
+      defaultPath: String(defaultName || 'export.txt')
+    }
+    const result = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, options)
+      : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    writeFileSync(result.filePath, String(content), 'utf-8')
+    return result.filePath
+  })
+
   ipcMain.handle('app:close', () => mainWindow?.close())
 
   ipcMain.handle('app:open-devtools', () => {

@@ -134,6 +134,7 @@ export interface DesktopApi {
   selectModelDirectory(): Promise<string | null>
   selectGgufFile(): Promise<string | null>
   showItemInFolder(path: string): Promise<void>
+  saveTextFile(defaultName: string, content: string): Promise<string | null>
   closeApp(): Promise<void>
   openDevTools(): Promise<void>
   setTheme(theme: AppearanceTheme): Promise<void>

@@ -5,7 +5,6 @@ import type { DaemonMessage, DaemonState, DesktopApi } from '../shared/ipc.js'
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   selectWorkspace: () => ipcRenderer.invoke('app:select-workspace'),
-  selectImages: () => ipcRenderer.invoke('app:select-images'),
   selectFiles: () => ipcRenderer.invoke('app:select-files'),
   readFileBase64: (path: string) => ipcRenderer.invoke('app:read-file-base64', path),
   getPathForFile: (file: File) => {
@@ -32,7 +31,6 @@ const api: DesktopApi = {
   },
   daemon: {
     connect: () => ipcRenderer.invoke('daemon:connect'),
-    disconnect: () => ipcRenderer.invoke('daemon:disconnect'),
     request: (method, params, options) => ipcRenderer.invoke(
       'daemon:request',
       method,

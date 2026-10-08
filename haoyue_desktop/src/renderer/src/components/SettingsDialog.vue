@@ -172,7 +172,6 @@ const emit = defineEmits<{
   close: []
   changeTheme: [theme: 'system' | 'light' | 'dark']
   reconnect: []
-  openWorkspace: []
   openRulesMemory: []
   runtimeChanged: []
 }>()

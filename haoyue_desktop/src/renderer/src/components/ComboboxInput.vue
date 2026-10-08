@@ -22,7 +22,6 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: number]
-  change: [value: number]
 }>()
 
 const wrapperRef = ref<HTMLElement | null>(null)
@@ -76,7 +75,6 @@ function toggle(): void {
 
 function select(option: ComboboxOption): void {
   emit('update:modelValue', option.value)
-  emit('change', option.value)
   hide()
   void nextTick(() => inputRef.value?.focus())
 }
@@ -95,7 +93,6 @@ function handleInput(event: Event): void {
     const num = Number(raw)
     if (!isNaN(num)) {
       emit('update:modelValue', num)
-      emit('change', num)
     }
   }
 }

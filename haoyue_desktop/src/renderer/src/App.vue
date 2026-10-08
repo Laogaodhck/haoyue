@@ -1754,7 +1754,7 @@ watch(theme, applyTheme)
           :active-project-id="selectedProjectId" :version="appInfo.version" @new-task="newTask"
           @open-workspace="openWorkspace" @select-thread="selectThread" @task-settings="openTaskSettings"
           @rename-task="renameTaskInline"
-          @archive-task="archiveTask" @restore-task="restoreTask" @delete-task="deleteTask"
+          @archive-task="archiveTask" @delete-task="deleteTask"
           @delete-project="deleteProject" @archive-project-tasks="archiveProjectTasks"
           @initialize-project-workspace="initializeProjectWorkspace" @open-project-properties="openProjectProperties"
           @delete-project-tasks="deleteProjectTasks" @archive-global-tasks="archiveGlobalTasks"
@@ -2014,7 +2014,7 @@ watch(theme, applyTheme)
       :daemon-connected="daemonState.connected" :daemon-endpoint="daemonState.endpoint"
       :workspace-path="runtimeWorkspacePath"
       :initial-section="activePage === 'settings' ? settingsSection : extensionsSection" @close="closePage"
-      @change-theme="applyTheme" @reconnect="reconnectDaemon" @open-workspace="openWorkspace"
+      @change-theme="applyTheme" @reconnect="reconnectDaemon"
       @open-rules-memory="openRulesMemory"
       @runtime-changed="refreshRuntimeState" />
 

@@ -96,18 +96,6 @@ export interface GitHistory {
   error?: string
 }
 
-export interface DesktopImageFile {
-  name: string
-  mediaType: string
-  data: string
-  sizeBytes: number
-}
-
-export interface DesktopImageSelection {
-  images: DesktopImageFile[]
-  warning?: string
-}
-
 export interface DesktopSkillFileSelection {
   paths: string[]
   warning?: string
@@ -126,7 +114,6 @@ export interface RevertDiffsResult {
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>
   selectWorkspace(): Promise<string | null>
-  selectImages(): Promise<DesktopImageSelection>
   selectFiles(): Promise<string[]>
   readFileBase64(path: string): Promise<{ data: string; mediaType: string; sizeBytes: number } | null>
   getPathForFile(file: File): string
@@ -147,7 +134,6 @@ export interface DesktopApi {
   }
   daemon: {
     connect(): Promise<DaemonState>
-    disconnect(): Promise<void>
     request(
       method: string,
       params?: Record<string, unknown>,

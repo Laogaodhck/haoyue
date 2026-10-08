@@ -26,7 +26,6 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
-  change: [value: string]
 }>()
 
 const root = ref<HTMLElement | null>(null)
@@ -135,7 +134,6 @@ function toggle(): void {
 function select(option: SelectOption): void {
   if (option.disabled) return
   emit('update:modelValue', option.value)
-  emit('change', option.value)
   hide(true)
 }
 

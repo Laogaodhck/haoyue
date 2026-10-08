@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowUp, LoaderCircle, Paperclip, Sparkles, Square, X } from '@lucide/vue'
+import { ArrowUp, Globe, GlobeOff, LoaderCircle, Paperclip, Sparkles, Square, X } from '@lucide/vue'
 import { nextTick, ref, watch } from 'vue'
 import type { FileAttachment, ImageAttachment, ReasoningLevel } from '../types'
 import { confirmAction } from '../confirmation'
@@ -526,6 +526,12 @@ watch(() => props.supportsImages, async (supported) => {
       <span class="toolbar-spacer" />
       <ReasoningDepthMenu :model-value="reasoningLevel" :disabled="busy || disabled"
         @update:model-value="emit('changeReasoningLevel', $event)" />
+      <button v-if="networkEnabled !== undefined" class="icon-button composer-icon" type="button"
+        :title="networkEnabled ? '本任务联网已开启，点击关闭' : '本任务联网已关闭，点击开启'"
+        :disabled="busy || disabled" @click="emit('changeNetwork', !networkEnabled)">
+        <GlobeOff v-if="!networkEnabled" :size="16" />
+        <Globe v-else :size="16" />
+      </button>
       <!-- Stop is always reachable while a turn runs: typing text must not hide the
            only emergency exit. The send button turns into "queue" next to it. -->
       <button v-if="busy" class="send-button" title="停止当前回合（Esc）" @click="emit('stop')">

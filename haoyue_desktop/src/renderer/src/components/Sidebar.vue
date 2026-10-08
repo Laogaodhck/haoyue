@@ -37,7 +37,6 @@ const emit = defineEmits<{
   taskSettings: [thread: ThreadItem]
   renameTask: [thread: ThreadItem, title: string]
   archiveTask: [thread: ThreadItem]
-  restoreTask: [thread: ThreadItem]
   deleteTask: [thread: ThreadItem]
   openProjectProperties: [project: ProjectItem]
   deleteProject: [project: ProjectItem]

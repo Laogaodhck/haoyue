@@ -48,7 +48,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   initializeWorkspace: [project: ProjectItem]
-  openExtensions: [tab: 'mcp' | 'skills']
+  openExtensions: [tab: 'mcp' | 'skills' | 'experts']
 }>()
 
 const activeTab = ref<'general' | 'mcp' | 'skills'>('general')
@@ -138,7 +138,7 @@ async function toggleSkill(skill: SkillInfo): Promise<void> {
   }
 }
 
-function navigateToExtensions(tab: 'mcp' | 'skills'): void {
+function navigateToExtensions(tab: 'mcp' | 'skills' | 'experts'): void {
   emit('close')
   emit('openExtensions', tab)
 }
@@ -252,7 +252,7 @@ function navigateToExtensions(tab: 'mcp' | 'skills'): void {
             <div class="tab-toolbar">
               <span class="tab-desc">仅对当前项目生效的 Model Context Protocol 扩展。</span>
               <button type="button" class="secondary-button compact" @click="navigateToExtensions('mcp')">
-                <ExternalLink :size="12" /> MCP 管理
+                <ExternalLink :size="12" /> 连接器管理
               </button>
             </div>
 

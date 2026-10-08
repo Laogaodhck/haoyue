@@ -1,13 +1,10 @@
 <script setup lang="ts">
-import { ArrowLeft, LoaderCircle, PackageOpen, RefreshCw, Search } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-
-const props = defineProps<{
-  open: boolean
-}>()
+import { LoaderCircle, PackageOpen, RefreshCw, Search } from '@lucide/vue'
+import { computed, onMounted, ref } from 'vue'
 
 const emit = defineEmits<{
-  close: []
+  /** 目录发生变化（安装/启停），宿主可刷新本地技能列表。 */
+  changed: []
 }>()
 
 /** 技能市场条目，由 daemon 的 skill.official.list 接口返回。 */
@@ -72,6 +69,7 @@ async function toggleSkill(skill: OfficialSkill): Promise<void> {
     } else {
       catalog.value = await requestJson<OfficialSkill[]>('skill.official.install', { slug: skill.slug })
     }
+    emit('changed')
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -79,43 +77,18 @@ async function toggleSkill(skill: OfficialSkill): Promise<void> {
   }
 }
 
-watch(() => props.open, (open) => {
-  if (open) {
-    query.value = ''
-    void loadCatalog()
-  }
-})
-
-function closeOnEscape(event: KeyboardEvent): void {
-  if (props.open && event.key === 'Escape') emit('close')
-}
-
-onMounted(() => document.addEventListener('keydown', closeOnEscape))
-onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
+onMounted(() => { void loadCatalog() })
 </script>
 
 <template>
-  <section v-if="open" class="official-skills-dialog embedded-page" role="region"
-    aria-labelledby="official-skills-title">
-    <header class="official-skills-header">
-      <div class="official-skills-heading">
-        <button class="page-back-button" type="button" @click="emit('close')">
-          <ArrowLeft :size="18" />
-          <span>返回应用</span>
-        </button>
-        <div class="official-skills-title-copy">
-          <h2 id="official-skills-title">技能市场</h2>
-        </div>
-      </div>
-    </header>
-
+  <div class="official-skills-panel">
     <div class="official-skills-toolbar">
       <label class="official-skills-search">
-        <Search :size="17" />
-        <input v-model="query" autofocus placeholder="搜索技能" aria-label="搜索技能" />
+        <Search :size="16" />
+        <input v-model="query" placeholder="搜索技能" aria-label="搜索技能" />
       </label>
       <button class="icon-button" title="刷新" :disabled="loading" @click="loadCatalog">
-        <RefreshCw :size="17" :class="{ spinning: loading }" />
+        <RefreshCw :size="16" :class="{ spinning: loading }" />
       </button>
     </div>
 
@@ -159,116 +132,27 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
         </div>
       </div>
     </div>
-
-    <footer class="official-skills-footer">
-      技能市场由 Haoyue 团队维护 · 本地技能请前往「设置 → 技能」管理
-    </footer>
-  </section>
+  </div>
 </template>
 
 <style scoped>
-.official-skills-backdrop {
-  z-index: 130;
-  padding: clamp(16px, 4vw, 54px);
-  background: rgb(0 0 0 / 38%);
-  backdrop-filter: blur(3px);
-}
-
-.official-skills-dialog.embedded-page {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: var(--bg);
-}
-
-.official-skills-dialog {
+.official-skills-panel {
   display: grid;
-  width: min(760px, 100%);
-  height: min(620px, calc(100vh - 44px));
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-height: 0;
-  overflow: hidden;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  box-shadow: 0 24px 70px rgb(0 0 0 / 24%);
-}
-
-.official-skills-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  min-height: 62px;
-  padding: 10px 22px;
-  border-bottom: 1px solid var(--border);
-}
-
-.official-skills-heading {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 12px;
-}
-
-.official-skills-title-copy {
-  min-width: 0;
-}
-
-.official-skills-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .1em;
-}
-
-.official-skills-header h2,
-.official-skills-header p {
-  margin: 0;
-}
-
-.official-skills-header h2 {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 0;
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: -.01em;
-}
-
-.official-skills-chip {
-  padding: 3px 9px;
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0;
-  background: var(--accent-soft);
-  border-radius: 999px;
-}
-
-.official-skills-header p {
-  margin-top: 2px;
-  color: var(--text-secondary);
-  font-size: 11px;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .official-skills-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 18px 22px 14px;
+  padding: 4px 0 12px;
 }
 
 .official-skills-search {
   display: flex;
   min-width: 0;
-  height: 40px;
+  height: 38px;
   flex: 1;
   align-items: center;
   gap: 9px;
@@ -297,7 +181,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 }
 
 .official-skills-error {
-  margin: 0 22px 12px;
+  margin: 0 0 12px;
   padding: 9px 12px;
   color: var(--danger);
   font-size: 12px;
@@ -309,12 +193,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 .official-skills-list {
   min-height: 0;
   overflow-y: auto;
-  padding: 0 22px 22px;
+  padding-bottom: 8px;
 }
 
 .official-skills-empty {
   display: grid;
-  height: 100%;
   min-height: 260px;
   place-content: center;
   justify-items: center;
@@ -347,7 +230,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 .official-skill-row {
   display: flex;
   min-width: 0;
-  min-height: 72px;
+  min-height: 68px;
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
@@ -386,14 +269,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.official-skills-footer {
-  padding: 12px 22px;
-  color: var(--text-muted);
-  font-size: 11px;
-  text-align: center;
-  border-top: 1px solid var(--border);
 }
 
 .spinning {

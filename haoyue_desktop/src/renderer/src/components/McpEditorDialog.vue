@@ -223,7 +223,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
         <form class="mcp-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="mcp-editor-title" @submit.prevent="save">
           <header class="mcp-editor-header">
             <div>
-              <h2 id="mcp-editor-title">{{ editing ? '编辑 MCP 服务器' : '新增 MCP 服务器' }}</h2>
+              <h2 id="mcp-editor-title">{{ editing ? '编辑连接器' : '新增连接器' }}</h2>
               <p>{{ editing ? form.name : '粘贴包名、命令或 URL，一步接入 MCP Server' }}</p>
             </div>
             <button class="icon-button" type="button" title="关闭" :disabled="saving" @click="close">
@@ -253,7 +253,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                 </label>
 
                 <label class="form-field">
-                  <FieldLabel en="Name" zh="名称" help="MCP 服务器的唯一标识；创建后不可修改。留空会根据连接内容自动推断。" required />
+                  <FieldLabel en="Name" zh="名称" help="连接器的唯一标识；创建后不可修改。留空会根据连接内容自动推断。" required />
                   <input
                     v-model="form.name"
                     class="form-input"

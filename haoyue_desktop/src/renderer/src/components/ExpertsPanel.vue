@@ -1,14 +1,6 @@
 <script setup lang="ts">
 import { ArrowLeft, Check, Copy, LoaderCircle, RefreshCw, Search, Users } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-
-const props = defineProps<{
-  open: boolean
-}>()
-
-const emit = defineEmits<{
-  close: []
-}>()
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 /** 专家条目，由 daemon 的 expert.list 接口返回（runtime 内置专家目录）。 */
 interface Expert {
@@ -87,59 +79,28 @@ async function copyPrompt(): Promise<void> {
   }
 }
 
-watch(() => props.open, (open) => {
-  if (open) {
-    query.value = ''
-    activeDomain.value = ''
-    selected.value = null
-    void loadExperts()
-  }
-})
-
 function closeOnEscape(event: KeyboardEvent): void {
-  if (!props.open || event.key !== 'Escape') return
-  // 详情态先返回列表，再次 Esc 才离开页面，避免误触退出。
-  if (selected.value) backToList()
-  else emit('close')
+  // 详情态先返回列表；列表态不拦 Esc，交给宿主页面处理。
+  if (event.key === 'Escape' && selected.value) backToList()
 }
 
-onMounted(() => document.addEventListener('keydown', closeOnEscape))
+onMounted(() => {
+  document.addEventListener('keydown', closeOnEscape)
+  void loadExperts()
+})
 onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 </script>
 
 <template>
-  <section v-if="open" class="experts-dialog embedded-page" role="region" aria-labelledby="experts-title">
-    <header class="experts-header">
-      <div class="experts-heading">
-        <button v-if="selected" class="page-back-button" type="button" @click="backToList">
-          <ArrowLeft :size="18" />
-          <span>返回专家列表</span>
-        </button>
-        <button v-else class="page-back-button" type="button" @click="emit('close')">
-          <ArrowLeft :size="18" />
-          <span>返回应用</span>
-        </button>
-        <div class="experts-title-copy">
-          <h2 id="experts-title">
-            <span v-if="selected" class="experts-title-with-avatar">
-              <span class="experts-avatar experts-avatar-title">{{ selected.avatar }}</span>
-              {{ selected.name }}
-            </span>
-            <template v-else>专家</template>
-          </h2>
-          <p v-if="selected" class="experts-title-sub">{{ selected.title }}</p>
-        </div>
-      </div>
-    </header>
-
+  <div class="experts-panel">
     <template v-if="!selected">
       <div class="experts-toolbar">
         <label class="experts-search">
-          <Search :size="17" />
+          <Search :size="16" />
           <input v-model="query" placeholder="搜索专家或擅长领域" aria-label="搜索专家" />
         </label>
         <button class="icon-button" title="刷新" :disabled="loading" @click="loadExperts">
-          <RefreshCw :size="17" :class="{ spinning: loading }" />
+          <RefreshCw :size="16" :class="{ spinning: loading }" />
         </button>
       </div>
 
@@ -185,6 +146,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
     </template>
 
     <div v-else class="experts-detail">
+      <button class="page-back-button experts-detail-back" type="button" @click="backToList">
+        <ArrowLeft :size="16" />
+        <span>返回专家列表</span>
+      </button>
+
       <div class="experts-detail-hero">
         <span class="experts-avatar experts-avatar-hero">{{ selected.avatar }}</span>
         <div class="experts-detail-hero-copy">
@@ -225,111 +191,67 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
         </section>
       </div>
     </div>
-
-    <footer v-if="!selected" class="experts-footer">
-      专家由 Haoyue 团队维护 · 复制专家提示词后在任务对话中使用
-    </footer>
-  </section>
+  </div>
 </template>
 
 <style scoped>
-.experts-dialog.embedded-page {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: var(--bg);
-}
-
-.experts-dialog {
+.experts-panel {
   display: grid;
-  width: 100%;
-  height: 100%;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-height: 0;
-  overflow: hidden;
-  background: var(--bg);
-}
-
-.experts-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  min-height: 62px;
-  padding: 10px 22px;
-  border-bottom: 1px solid var(--border);
-}
-
-.experts-heading {
-  display: flex;
   min-width: 0;
-  align-items: center;
-  gap: 12px;
-}
-
-.experts-title-copy {
-  display: grid;
-  gap: 2px;
-}
-
-.experts-title-copy h2 {
-  margin: 0;
-  font-size: 17px;
-}
-
-.experts-title-sub {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.experts-title-with-avatar {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .experts-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 22px 4px;
+  padding: 4px 0 10px;
 }
 
 .experts-search {
   display: flex;
+  min-width: 0;
+  height: 38px;
   flex: 1;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  color: var(--text-secondary);
-  background: var(--surface-raised);
+  gap: 9px;
+  padding: 0 12px;
+  color: var(--text-muted);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
 
+.experts-search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
 .experts-search input {
+  min-width: 0;
   flex: 1;
-  color: inherit;
+  color: var(--text);
   background: transparent;
   border: 0;
   outline: none;
+}
+
+.experts-search input::placeholder {
+  color: var(--text-muted);
 }
 
 .experts-domain-filter {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 8px 22px 4px;
+  padding-bottom: 10px;
 }
 
 .experts-domain-chip {
   padding: 4px 12px;
   font-size: 12px;
   color: var(--text-secondary);
-  background: var(--surface-raised);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 999px;
   cursor: pointer;
@@ -348,15 +270,15 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 }
 
 .experts-error {
-  margin: 8px 22px 0;
+  margin: 0 0 10px;
   font-size: 13px;
   color: var(--danger, #e5484d);
 }
 
 .experts-list {
   min-height: 0;
-  padding: 12px 22px 16px;
   overflow-y: auto;
+  padding-bottom: 10px;
 }
 
 .experts-empty {
@@ -364,8 +286,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   justify-items: center;
   gap: 8px;
   padding: 60px 20px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   text-align: center;
+}
+
+.experts-empty svg {
+  opacity: .7;
 }
 
 .experts-grid {
@@ -381,7 +307,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   gap: 6px;
   padding: 16px;
   text-align: left;
-  background: var(--surface-raised);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
   cursor: pointer;
@@ -404,12 +330,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 50%;
-}
-
-.experts-avatar-title {
-  width: 30px;
-  height: 30px;
-  font-size: 16px;
 }
 
 .experts-avatar-hero {
@@ -445,17 +365,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   margin-top: 2px;
 }
 
-.experts-footer {
-  padding: 10px 22px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  border-top: 1px solid var(--border);
-}
-
 .experts-detail {
   min-height: 0;
-  padding: 18px 22px;
   overflow-y: auto;
+  padding-bottom: 10px;
+}
+
+.experts-detail-back {
+  margin-bottom: 12px;
 }
 
 .experts-detail-hero {
@@ -463,7 +380,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   align-items: center;
   gap: 16px;
   padding: 18px;
-  background: var(--surface-raised);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 16px;
 }
@@ -487,7 +404,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
 
 .experts-detail-section {
   padding: 16px;
-  background: var(--surface-raised);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 14px;
 }
@@ -551,23 +468,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   color: var(--text-secondary);
 }
 
+.spinning {
+  animation: experts-panel-spin .8s linear infinite;
+}
+
+@keyframes experts-panel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 640px) {
-  .experts-header {
-    padding: 10px 14px;
-  }
-
-  .experts-toolbar,
-  .experts-domain-filter {
-    padding-left: 14px;
-    padding-right: 14px;
-  }
-
-  .experts-list,
-  .experts-detail {
-    padding-left: 14px;
-    padding-right: 14px;
-  }
-
   .experts-grid {
     grid-template-columns: 1fr;
   }

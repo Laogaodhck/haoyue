@@ -2785,8 +2785,6 @@ select:focus-visible {
 .modal-fade-leave-to .provider-editor-dialog,
 .modal-fade-enter-from .about-dialog,
 .modal-fade-leave-to .about-dialog,
-.modal-fade-enter-from .official-skills-dialog,
-.modal-fade-leave-to .official-skills-dialog,
 .modal-fade-enter-from .project-properties-dialog,
 .modal-fade-leave-to .project-properties-dialog,
 .modal-fade-enter-from .model-editor-dialog,

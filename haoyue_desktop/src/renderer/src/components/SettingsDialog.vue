@@ -35,6 +35,7 @@ import {
   Telescope,
   Trash2,
   Upload,
+  Users,
   Wrench,
   X,
   Zap
@@ -51,9 +52,11 @@ import {
   type McpScope,
   type McpServerSummary
 } from '../mcp-form'
+import ExpertsPanel from './ExpertsPanel.vue'
 import McpEditorDialog from './McpEditorDialog.vue'
 import type { ModelDetailConfig } from './ModelConfigModal.vue'
 import FieldLabel from './FieldLabel.vue'
+import OfficialSkillsPanel from './OfficialSkillsPanel.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
@@ -69,7 +72,7 @@ import {
   type EvolutionDefectReport
 } from '../evolution-form'
 
-type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
+type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
 
 interface ProviderInfo {
   id: string
@@ -170,7 +173,6 @@ const emit = defineEmits<{
   changeTheme: [theme: 'system' | 'light' | 'dark']
   reconnect: []
   openWorkspace: []
-  openOfficialSkills: []
   openRulesMemory: []
   runtimeChanged: []
 }>()
@@ -317,6 +319,13 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'advanced', label: '高级设置', icon: SlidersHorizontal }
 ]
 
+/** 扩展中心（Qoder 式）：连接器 / 技能 / 专家三大类目。 */
+const extensionSections: Array<{ id: SettingsSection; label: string; icon: typeof Settings2 }> = [
+  { id: 'mcp', label: '连接器', icon: Plug },
+  { id: 'skills', label: '技能', icon: Wrench },
+  { id: 'experts', label: '专家', icon: Users }
+]
+
 /** GitHub brand mark; lucide no longer ships brand icons. */
 const GithubMark = defineComponent({
   props: { size: { type: Number, default: 15 } },
@@ -347,11 +356,12 @@ const mcpPresetIcons: Record<string, unknown> = {
   time: Clock
 }
 
-const pageTitle = computed(() => props.page === 'extensions' ? 'MCP 与技能' : '设置')
+const pageTitle = computed(() => props.page === 'extensions' ? '扩展' : '设置')
 const visibleSections = computed(() =>
-  props.page === 'extensions'
-    ? sections.filter((item) => item.id === 'mcp' || item.id === 'skills')
-    : sections)
+  props.page === 'extensions' ? extensionSections : sections)
+
+/** 扩展页技能类目内的二级视图：本地已安装 / 技能市场。 */
+const skillsView = ref<'installed' | 'market'>('installed')
 
 async function requestJson<T>(
   method: string,
@@ -382,6 +392,7 @@ function showPath(path: string): void {
 
 async function loadCurrentSection(): Promise<void> {
   if (!props.open || !props.daemonConnected) return
+  if (section.value === 'experts') return // 专家目录由 ExpertsPanel 自行加载
   loading.value = true
   error.value = ''
   notice.value = ''
@@ -1189,7 +1200,9 @@ async function importSkills(): Promise<void> {
 }
 
 function normalizedSection(value?: SettingsSection): SettingsSection {
-  if (props.page === 'extensions') return value === 'skills' ? 'skills' : 'mcp'
+  if (props.page === 'extensions') {
+    return value === 'skills' || value === 'experts' ? value : 'mcp'
+  }
   return value ?? 'general'
 }
 
@@ -1208,7 +1221,10 @@ watch(() => props.page, () => {
   section.value = normalizedSection(props.initialSection)
   void loadCurrentSection()
 })
-watch(section, () => { void loadCurrentSection() })
+watch(section, (next) => {
+  if (next === 'skills') skillsView.value = 'installed'
+  void loadCurrentSection()
+})
 
 /**
  * Enabling a server returns immediately and connects in the background, so the
@@ -1496,7 +1512,7 @@ onBeforeUnmount(() => {
         <template v-else-if="section === 'mcp'">
           <div class="settings-section-heading">
             <div>
-              <h3>MCP 服务器</h3>
+              <h3>{{ page === 'extensions' ? '连接器（MCP）' : 'MCP 服务器' }}</h3>
               <div class="settings-stat-chips">
                 <span class="stat-chip">
                   <span class="status-dot" :class="{ online: mcpServers.some((server) => server.connected) }" />
@@ -1514,13 +1530,15 @@ onBeforeUnmount(() => {
                 <component :is="mcpPresetIcons[preset.id] ?? Plug" :size="15" /> {{ preset.label }}
               </button>
               <button class="secondary-button" @click="newMcpServer">
-                <Plus :size="15" /> 服务器
+                <Plus :size="15" /> {{ page === 'extensions' ? '连接器' : '服务器' }}
               </button>
             </div>
           </div>
 
           <section class="settings-list">
-            <div v-if="mcpServers.length === 0" class="empty-settings">尚未配置 MCP 服务器</div>
+            <div v-if="mcpServers.length === 0" class="empty-settings">
+              {{ page === 'extensions' ? '尚未配置连接器，可从上方预设一键添加' : '尚未配置 MCP 服务器' }}
+            </div>
             <div v-for="server in mcpServers" :key="`${server.scope}:${server.name}`" class="settings-list-row">
               <span class="status-dot" :class="{ online: server.connected }" />
               <div class="list-main">
@@ -1555,39 +1573,62 @@ onBeforeUnmount(() => {
           <div class="settings-section-heading">
             <div>
               <h3>技能</h3>
-              <p>{{skills.filter((skill) => skill.enabled).length}} 已启用</p>
+              <p v-if="page !== 'extensions' || skillsView === 'installed'">
+                {{ skills.filter((skill) => skill.enabled).length }} 已启用
+              </p>
             </div>
             <div class="row-actions">
+              <div v-if="page === 'extensions'" class="segmented-control">
+                <button :class="{ active: skillsView === 'installed' }" @click="skillsView = 'installed'">已安装</button>
+                <button :class="{ active: skillsView === 'market' }" @click="skillsView = 'market'">技能市场</button>
+              </div>
               <button class="icon-button" title="刷新" @click="loadCurrentSection">
                 <RefreshCw :size="17" />
               </button>
-              <button class="secondary-button" :disabled="action === 'skill.import'" @click="importSkills">
+              <button v-if="skillsView === 'installed' || page !== 'extensions'" class="secondary-button"
+                :disabled="action === 'skill.import'" @click="importSkills">
                 <LoaderCircle v-if="action === 'skill.import'" class="spin" :size="15" />
                 <Upload v-else :size="15" />导入技能
               </button>
             </div>
           </div>
-          <section class="settings-list">
-            <div v-if="skills.length === 0" class="empty-settings">尚未发现技能，可导入 .md 或 .zip 文件</div>
-            <div v-for="skill in skills" :key="skill.name" class="settings-list-row skill-row">
-              <Wrench :size="17" />
-              <div class="list-main">
-                <div>
-                  <strong :title="skill.name">{{ skill.name }}</strong>
-                  <span class="inline-badge">{{ skill.scope === 'workspace' ? '工作区' : '全局' }}</span>
-                  <span v-if="skill.version" class="version-text">v{{ skill.version }}</span>
+
+          <OfficialSkillsPanel v-if="page === 'extensions' && skillsView === 'market'"
+            @changed="loadCurrentSection()" />
+
+          <template v-else>
+            <section class="settings-list">
+              <div v-if="skills.length === 0" class="empty-settings">尚未发现技能，可导入 .md 或 .zip 文件</div>
+              <div v-for="skill in skills" :key="skill.name" class="settings-list-row skill-row">
+                <Wrench :size="17" />
+                <div class="list-main">
+                  <div>
+                    <strong :title="skill.name">{{ skill.name }}</strong>
+                    <span class="inline-badge">{{ skill.scope === 'workspace' ? '工作区' : '全局' }}</span>
+                    <span v-if="skill.version" class="version-text">v{{ skill.version }}</span>
+                  </div>
+                  <small>{{ skill.description || skill.directory }}</small>
                 </div>
-                <small>{{ skill.description || skill.directory }}</small>
+                <div class="row-controls">
+                  <button class="icon-button compact" title="打开位置" @click="showPath(skill.directory)">
+                    <FolderOpen :size="15" />
+                  </button>
+                  <button class="switch-control" :class="{ active: skill.enabled }"
+                    :aria-label="skill.enabled ? '禁用' : '启用'" @click="toggleSkill(skill)"><span /></button>
+                </div>
               </div>
-              <div class="row-controls">
-                <button class="icon-button compact" title="打开位置" @click="showPath(skill.directory)">
-                  <FolderOpen :size="15" />
-                </button>
-                <button class="switch-control" :class="{ active: skill.enabled }"
-                  :aria-label="skill.enabled ? '禁用' : '启用'" @click="toggleSkill(skill)"><span /></button>
-              </div>
+            </section>
+          </template>
+        </template>
+
+        <template v-else-if="section === 'experts'">
+          <div class="settings-section-heading">
+            <div>
+              <h3>专家</h3>
+              <p>内置领域专家：复制提示词到新任务，让 Agent 以该角色协作</p>
             </div>
-          </section>
+          </div>
+          <ExpertsPanel />
         </template>
 
         <template v-else-if="section === 'rules-memory'">

@@ -16,9 +16,7 @@ import {
   Settings2,
   SlidersHorizontal,
   SquarePen,
-  Store,
-  Trash2,
-  Users
+  Trash2
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logoUrl from '../../../../resources/logo.png?url'
@@ -51,8 +49,6 @@ const emit = defineEmits<{
   openArchived: []
   openScheduledTasks: []
   openExtensions: []
-  openOfficialSkills: []
-  openExperts: []
   openKnowledge: []
   openSettings: []
 }>()
@@ -239,15 +235,7 @@ onBeforeUnmount(() => {
       </button>
       <button class="nav-item" @click="emit('openExtensions')">
         <Blocks :size="18" />
-        <span>MCP 与技能</span>
-      </button>
-      <button class="nav-item" @click="emit('openOfficialSkills')">
-        <Store :size="18" />
-        <span>技能市场</span>
-      </button>
-      <button class="nav-item" @click="emit('openExperts')">
-        <Users :size="18" />
-        <span>专家</span>
+        <span>扩展</span>
       </button>
       <button class="nav-item" @click="emit('openKnowledge')">
         <BookOpen :size="18" />

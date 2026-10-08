@@ -454,7 +454,7 @@ export function parseToolNameList(value: string): string[] {
 
 /** Returns a user-facing validation message, or null when the form can be saved. */
 export function mcpFormError(form: McpFormValue): string | null {
-  if (!form.name.trim()) return '请填写 MCP 服务器名称'
+  if (!form.name.trim()) return '请填写连接器名称'
   const connection = form.connection.trim()
   if (isRemoteTransport(form.transport)) {
     if (!connection) return `${transportLabel(form.transport)} 连接需要填写 URL`

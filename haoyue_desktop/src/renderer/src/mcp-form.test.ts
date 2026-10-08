@@ -145,7 +145,7 @@ describe('parseMcpJsonConfig', () => {
 
 describe('mcpFormError', () => {
   it('requires a server name', () => {
-    expect(mcpFormError(makeForm({ connection: 'npx -y pkg' }))).toBe('请填写 MCP 服务器名称')
+    expect(mcpFormError(makeForm({ connection: 'npx -y pkg' }))).toBe('请填写连接器名称')
   })
 
   it('requires a connection string', () => {

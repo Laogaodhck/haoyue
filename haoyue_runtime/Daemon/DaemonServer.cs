@@ -1242,6 +1242,51 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.SaveKnowledgeSynonyms(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "knowledge.notebook.list":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListKnowledgeNotebooks(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.notebook.save":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SaveKnowledgeNotebook(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.notebook.delete":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.DeleteKnowledgeNotebook(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.source.add":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.AddKnowledgeSource(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.source.list":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListKnowledgeSources(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.source.read":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ReadKnowledgeSource(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.source.delete":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.DeleteKnowledgeSource(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.source.refresh":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.RefreshKnowledgeSource(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.retrieve":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.RetrieveKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "memory.get":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.GetMemory(Params(request))), context.ConnectionCt).ConfigureAwait(false);

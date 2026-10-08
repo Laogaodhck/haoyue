@@ -6,6 +6,19 @@ public sealed record KnowledgeEntry(long Id, string Title, string Content, strin
 
 public sealed record KnowledgeSaveResult(KnowledgeEntry Entry, bool Created);
 
+/// <summary>A notebook (collection) inside one scope — the QMind-style grouping unit.</summary>
+public sealed record KnowledgeNotebook(
+    long Id, string Name, string? Description, bool IsDefault, int EntryCount, int SourceCount, string CreatedAt, string UpdatedAt);
+
+/// <summary>An ingest unit inside a notebook: a text snippet, a local file or a fetched URL.</summary>
+public sealed record KnowledgeSource(
+    long Id, long NotebookId, string Kind, string Title, string? Locator, string Content, int ChunkCount, string CreatedAt, string UpdatedAt);
+
+/// <summary>An entry plus its notebook/source attribution, for knowledge-center views.</summary>
+public sealed record KnowledgeEntryInfo(
+    KnowledgeEntry Entry, long NotebookId, string? NotebookName, long? SourceId,
+    string? SourceTitle, string? SourceKind, string? SourceLocator, int? ChunkOrdinal);
+
 /// <summary>
 /// Workspace-scoped knowledge base the agent extends through the knowledge_* tools.
 /// Entries match by substring instead of FTS: SQLite tokenizers do not segment CJK
@@ -13,15 +26,18 @@ public sealed record KnowledgeSaveResult(KnowledgeEntry Entry, bool Created);
 /// Knowledge bases are small (tens to hundreds of entries per workspace), so a
 /// scanned in-memory score stays fast and correct. Query preprocessing (normalization,
 /// CJK bigram slicing, synonyms, typo fallback) lives in KnowledgeSearchRanker.
+/// Notebook/source management (the knowledge-center layer) lives in the partial
+/// halves of this class — KnowledgeCenter.cs.
 /// </summary>
-public sealed class KnowledgeStore(HaoyueDatabase database)
+public sealed partial class KnowledgeStore(HaoyueDatabase database)
 {
     /// <summary>
     /// Creates an entry (same-title upsert) or, when <paramref name="id"/> is given,
     /// updates that entry in place — including its title, so renaming from the
-    /// desktop editor does not silently fork the entry.
+    /// desktop editor does not silently fork the entry. New entries land in
+    /// <paramref name="notebookId"/>, or the scope's default notebook when omitted.
     /// </summary>
-    public KnowledgeSaveResult Save(string scope, string title, string content, string? tags, long? id = null)
+    public KnowledgeSaveResult Save(string scope, string title, string content, string? tags, long? id = null, long? notebookId = null)
     {
         var trimmedTitle = title.Trim();
         var trimmedContent = content.Trim();
@@ -59,6 +75,11 @@ public sealed class KnowledgeStore(HaoyueDatabase database)
                 new KnowledgeEntry(updateId, trimmedTitle, trimmedContent, trimmedTags, createdAt, now),
                 Created: false);
         }
+
+        EnsureScopeReady(scope);
+        var targetNotebook = notebookId ?? EnsureDefaultNotebook(scope);
+        if (notebookId is long requested && !NotebookExists(scope, requested))
+            throw new KeyNotFoundException($"No knowledge notebook #{requested} in this scope.");
 
         using var connection2 = database.OpenConnection();
         long? existingId = null;
@@ -101,13 +122,14 @@ public sealed class KnowledgeStore(HaoyueDatabase database)
         using (var insert = connection2.CreateCommand())
         {
             insert.CommandText = """
-                INSERT INTO knowledge (scope, title, content, tags, created_at, updated_at)
-                VALUES ($scope, $title, $content, $tags, $now, $now);
+                INSERT INTO knowledge (scope, title, content, tags, notebook_id, created_at, updated_at)
+                VALUES ($scope, $title, $content, $tags, $notebook, $now, $now);
                 """;
             insert.Parameters.AddWithValue("$scope", scope);
             insert.Parameters.AddWithValue("$title", trimmedTitle);
             insert.Parameters.AddWithValue("$content", trimmedContent);
             insert.Parameters.AddWithValue("$tags", (object?)trimmedTags ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$notebook", targetNotebook);
             insert.Parameters.AddWithValue("$now", now);
             insert.ExecuteNonQuery();
         }

@@ -1081,16 +1081,19 @@ internal sealed class DaemonAdminApi(
         }
     }
 
-    /// <summary>Knowledge entries for one scope; params accept the standard global/workspace selectors.</summary>
+    /// <summary>
+    /// Knowledge entries for one scope with notebook/source attribution; params
+    /// accept the standard global/workspace selectors plus optional notebookId
+    /// and tag filters.
+    /// </summary>
     public string ListKnowledge(JsonObject parameters)
     {
         var workspace = SessionWorkspace(parameters);
         var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 500, 1, 2000);
         var tag = OptionalString(parameters, "tag");
-        var entries = tag is { Length: > 0 } tagValue
-            ? runtime.Knowledge.ListByTag(HaoyueDatabase.ScopeKey(workspace), tagValue, limit)
-            : runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), limit);
-        return KnowledgePayload(workspace, entries);
+        var notebookId = OptionalId(parameters, "notebookId");
+        return KnowledgeInfoPayload(workspace,
+            runtime.Knowledge.ListInfo(HaoyueDatabase.ScopeKey(workspace), limit, notebookId, tag));
     }
 
     public string SearchKnowledge(JsonObject parameters)
@@ -1099,25 +1102,50 @@ internal sealed class DaemonAdminApi(
         var query = RequiredString(parameters, "query");
         var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 50, 1, 100);
         var tag = OptionalString(parameters, "tag");
-        return KnowledgePayload(workspace,
-            runtime.Knowledge.Search(HaoyueDatabase.ScopeKey(workspace), query, limit, tag));
+        var notebookId = OptionalId(parameters, "notebookId");
+        return KnowledgeInfoPayload(workspace,
+            runtime.Knowledge.RetrieveInfo(
+                HaoyueDatabase.ScopeKey(workspace), query,
+                notebookId is long nb ? [nb] : null, null, limit, tag));
     }
 
-    /// <summary>Distinct tags with occurrence counts plus the total entry count of the scope.</summary>
+    /// <summary>Distinct tags with occurrence counts plus the total entry count of the scope (or one notebook).</summary>
     public string KnowledgeTags(JsonObject parameters)
     {
         var workspace = SessionWorkspace(parameters);
         var scope = HaoyueDatabase.ScopeKey(workspace);
         var tags = new JsonArray();
-        foreach (var (tag, count) in runtime.Knowledge.TagCounts(scope))
+        int total;
+        if (OptionalId(parameters, "notebookId") is long notebookId)
         {
-            tags.Add((JsonNode)new JsonObject { ["tag"] = tag, ["count"] = count });
+            var infos = runtime.Knowledge.ListInfo(scope, 2000, notebookId);
+            total = infos.Count;
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var info in infos)
+            {
+                foreach (var rawTag in (info.Entry.Tags ?? "").Split([',', '，', ';', '；'],
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (rawTag.Length == 0) continue;
+                    counts[rawTag] = counts.GetValueOrDefault(rawTag) + 1;
+                }
+            }
+            foreach (var pair in counts.OrderByDescending(item => item.Value).ThenBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+                tags.Add((JsonNode)new JsonObject { ["tag"] = pair.Key, ["count"] = pair.Value });
+        }
+        else
+        {
+            total = runtime.Knowledge.Count(scope);
+            foreach (var (tag, count) in runtime.Knowledge.TagCounts(scope))
+            {
+                tags.Add((JsonNode)new JsonObject { ["tag"] = tag, ["count"] = count });
+            }
         }
         return new JsonObject
         {
             ["workspace"] = workspace.Root,
             ["isGlobal"] = workspace.IsGlobal,
-            ["total"] = runtime.Knowledge.Count(scope),
+            ["total"] = total,
             ["tags"] = tags,
         }.ToJsonString();
     }
@@ -1141,6 +1169,339 @@ internal sealed class DaemonAdminApi(
             ["markdown"] = KnowledgeExport.ToMarkdown(workspace.IsGlobal ? "全局" : workspace.Root, entries),
         }.ToJsonString();
     }
+
+    // ───────────────────── knowledge center: notebooks ─────────────────────
+
+    public string ListKnowledgeNotebooks(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        return KnowledgeNotebooksPayload(workspace);
+    }
+
+    public string SaveKnowledgeNotebook(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var name = RequiredString(parameters, "name");
+        var id = OptionalId(parameters, "id");
+        try
+        {
+            runtime.Knowledge.SaveNotebook(
+                HaoyueDatabase.ScopeKey(workspace), name, OptionalString(parameters, "description"), id);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
+        {
+            throw new DaemonRequestException(ex.Message);
+        }
+        return KnowledgeNotebooksPayload(workspace);
+    }
+
+    public string DeleteKnowledgeNotebook(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var id = RequiredId(parameters, "id");
+        try
+        {
+            runtime.Knowledge.DeleteNotebook(HaoyueDatabase.ScopeKey(workspace), id);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
+        {
+            throw new DaemonRequestException(ex.Message);
+        }
+        return KnowledgeNotebooksPayload(workspace);
+    }
+
+    // ────────────────────── knowledge center: sources ──────────────────────
+
+    /// <summary>
+    /// Adds one ingest source: kind "text" (title+content), "url" (page fetched and
+    /// reduced to text) or "file" (paths[] reused from knowledge.import). Long text
+    /// is chunked into 「标题 · 第N/M部分」 entries; re-adding the same url/file
+    /// refreshes instead of duplicating.
+    /// </summary>
+    public string AddKnowledgeSource(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var kind = RequiredString(parameters, "kind").Trim().ToLowerInvariant();
+        if (kind is not ("text" or "url" or "file"))
+            throw new DaemonRequestException("params.kind must be text, url or file");
+        var notebookId = OptionalId(parameters, "notebookId") ?? runtime.Knowledge.EnsureDefaultNotebook(scope);
+
+        if (kind == "text")
+        {
+            var content = RequiredString(parameters, "content");
+            if (content.Length > KnowledgeWeb.MaxTextChars)
+                throw new DaemonRequestException($"文本过长（{content.Length} 字符），上限 {KnowledgeWeb.MaxTextChars}。");
+            var chunks = KnowledgeImport.SplitChunks(content);
+            if (chunks.Count == 0)
+                throw new DaemonRequestException("文本内容为空，无法收录。");
+            var (source, _) = runtime.Knowledge.SaveSource(
+                scope, notebookId, "text", RequiredString(parameters, "title"), null, content);
+            var count = runtime.Knowledge.ReplaceSourceChunks(scope, source.Id, chunks, OptionalString(parameters, "tags"));
+            return SourceActionPayload(workspace, notebookId, SourceNode(runtime.Knowledge.GetSource(scope, source.Id)!, true), count);
+        }
+
+        if (kind == "url")
+        {
+            var raw = RequiredString(parameters, "url");
+            if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+                throw new DaemonRequestException("params.url 必须是 http(s) 绝对链接。");
+            string title, text;
+            try { (title, text) = KnowledgeWeb.Fetch(uri); }
+            catch (KnowledgeWebException ex) { throw new DaemonRequestException(ex.Message); }
+            var chunks = KnowledgeImport.SplitChunks(text);
+            if (chunks.Count == 0)
+                throw new DaemonRequestException("网页内容为空，无法收录。");
+            var (source, _) = runtime.Knowledge.SaveSource(
+                scope, notebookId, "url", title, uri.ToString(), text);
+            var count = runtime.Knowledge.ReplaceSourceChunks(
+                scope, source.Id, chunks, OptionalString(parameters, "tags") ?? $"网页,{uri.Host}");
+            return SourceActionPayload(workspace, notebookId, SourceNode(runtime.Knowledge.GetSource(scope, source.Id)!, true), count);
+        }
+
+        var paths = parameters["paths"] as JsonArray
+            ?? throw new DaemonRequestException("params.paths is required");
+        if (paths.Count == 0)
+            throw new DaemonRequestException("params.paths must contain at least one file path");
+        var added = new List<KnowledgeSource>();
+        var files = new JsonArray();
+        var totalEntries = 0;
+        foreach (var node in paths)
+        {
+            var raw = node?.GetValue<string>() ?? throw new DaemonRequestException("params.paths must contain file paths");
+            KnowledgeSource source;
+            int count;
+            try
+            {
+                (source, count) = KnowledgeIngest.ImportFile(runtime.Knowledge, scope, raw, notebookId);
+            }
+            catch (KnowledgeImportException ex)
+            {
+                throw new DaemonRequestException(ex.Message);
+            }
+            added.Add(source);
+            files.Add((JsonNode)new JsonObject { ["file"] = source.Title, ["entries"] = count });
+            totalEntries += count;
+        }
+        var sources = new JsonArray();
+        foreach (var source in added)
+            sources.Add((JsonNode)SourceNode(source, false));
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["notebookId"] = notebookId,
+            ["sources"] = sources,
+            ["entries"] = totalEntries,
+            ["importedFiles"] = files.Count,
+            ["importedEntries"] = totalEntries,
+            ["files"] = files,
+        }.ToJsonString();
+    }
+
+    public string ListKnowledgeSources(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        return KnowledgeSourcesPayload(workspace, RequiredId(parameters, "notebookId"));
+    }
+
+    /// <summary>One source's content as a windowed slice (offset + maxChars ≤ 50000).</summary>
+    public string ReadKnowledgeSource(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var id = RequiredId(parameters, "id");
+        var source = runtime.Knowledge.GetSource(HaoyueDatabase.ScopeKey(workspace), id)
+            ?? throw new DaemonRequestException($"No knowledge source #{id} in this scope.");
+        var offset = Math.Clamp(parameters["offset"]?.GetValue<int?>() ?? 0, 0, Math.Max(source.Content.Length - 1, 0));
+        var maxChars = Math.Clamp(parameters["maxChars"]?.GetValue<int?>() ?? 50_000, 1, 50_000);
+        var slice = source.Content[offset..Math.Min(source.Content.Length, offset + maxChars)];
+
+        var node = SourceNode(source, false);
+        node["content"] = slice;
+        node["offset"] = offset;
+        node["totalChars"] = source.Content.Length;
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["source"] = node,
+        }.ToJsonString();
+    }
+
+    public string DeleteKnowledgeSource(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var id = RequiredId(parameters, "id");
+        var source = runtime.Knowledge.GetSource(scope, id)
+            ?? throw new DaemonRequestException($"No knowledge source #{id} in this scope.");
+        runtime.Knowledge.DeleteSource(scope, id);
+        return KnowledgeSourcesPayload(workspace, source.NotebookId);
+    }
+
+    /// <summary>
+    /// Re-extracts a source: files are re-read from disk, URLs re-fetched, text
+    /// re-chunked — then the chunk entries are rebuilt in place.
+    /// </summary>
+    public string RefreshKnowledgeSource(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var id = RequiredId(parameters, "id");
+        var source = runtime.Knowledge.GetSource(scope, id)
+            ?? throw new DaemonRequestException($"No knowledge source #{id} in this scope.");
+
+        int count;
+        switch (source.Kind)
+        {
+            case "file":
+                try
+                {
+                    (_, count) = KnowledgeIngest.ImportFile(runtime.Knowledge, scope, source.Locator!, source.NotebookId);
+                }
+                catch (KnowledgeImportException ex)
+                {
+                    throw new DaemonRequestException(ex.Message);
+                }
+                break;
+            case "url":
+                if (!Uri.TryCreate(source.Locator, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+                    throw new DaemonRequestException($"来源链接无效：{source.Locator}");
+                string title, text;
+                try { (title, text) = KnowledgeWeb.Fetch(uri); }
+                catch (KnowledgeWebException ex) { throw new DaemonRequestException(ex.Message); }
+                var urlChunks = KnowledgeImport.SplitChunks(text);
+                if (urlChunks.Count == 0)
+                    throw new DaemonRequestException("网页内容为空，无法刷新。");
+                runtime.Knowledge.SaveSource(scope, source.NotebookId, "url", title, uri.ToString(), text);
+                count = runtime.Knowledge.ReplaceSourceChunks(scope, source.Id, urlChunks, null);
+                break;
+            default:
+                var textChunks = KnowledgeImport.SplitChunks(source.Content);
+                if (textChunks.Count == 0)
+                    throw new DaemonRequestException("来源内容为空，无法刷新。");
+                count = runtime.Knowledge.ReplaceSourceChunks(scope, source.Id, textChunks, null);
+                break;
+        }
+
+        return SourceActionPayload(workspace, source.NotebookId, SourceNode(runtime.Knowledge.GetSource(scope, id)!, true), count);
+    }
+
+    // ───────────────────── knowledge center: retrieval ─────────────────────
+
+    /// <summary>
+    /// Ranked retrieval across the whole scope or selected notebooks/sources,
+    /// every hit annotated with its notebook/source origin.
+    /// </summary>
+    public string RetrieveKnowledge(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var query = RequiredString(parameters, "query");
+        var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 8, 1, 50);
+        var tag = OptionalString(parameters, "tag");
+        return KnowledgeInfoPayload(workspace,
+            runtime.Knowledge.RetrieveInfo(
+                HaoyueDatabase.ScopeKey(workspace), query,
+                OptionalIdList(parameters, "notebookIds"), OptionalIdList(parameters, "sourceIds"), limit, tag));
+    }
+
+    // ───────────────────── knowledge center: helpers ───────────────────────
+
+    private static long? OptionalId(JsonObject parameters, string name)
+    {
+        if (parameters[name] is not JsonValue value) return null;
+        if (value.TryGetValue<long>(out var longId)) return longId;
+        if (value.TryGetValue<double>(out var doubleId)) return (long)doubleId;
+        throw new DaemonRequestException($"params.{name} must be an integer id");
+    }
+
+    private static long RequiredId(JsonObject parameters, string name) =>
+        OptionalId(parameters, name) ?? throw new DaemonRequestException($"params.{name} is required");
+
+    private static List<long>? OptionalIdList(JsonObject parameters, string name)
+    {
+        if (parameters[name] is not JsonArray array || array.Count == 0) return null;
+        var values = new List<long>();
+        foreach (var node in array)
+        {
+            if (node is JsonValue value)
+            {
+                if (value.TryGetValue<long>(out var longValue)) { values.Add(longValue); continue; }
+                if (value.TryGetValue<double>(out var doubleValue)) { values.Add((long)doubleValue); continue; }
+            }
+            throw new DaemonRequestException($"params.{name} must contain integer ids");
+        }
+        return values;
+    }
+
+    private static JsonObject NotebookNode(KnowledgeNotebook notebook) => new()
+    {
+        ["id"] = notebook.Id,
+        ["name"] = notebook.Name,
+        ["description"] = notebook.Description,
+        ["isDefault"] = notebook.IsDefault,
+        ["entryCount"] = notebook.EntryCount,
+        ["sourceCount"] = notebook.SourceCount,
+        ["createdAt"] = notebook.CreatedAt,
+        ["updatedAt"] = notebook.UpdatedAt,
+    };
+
+    private static JsonObject SourceNode(KnowledgeSource source, bool includeContent)
+    {
+        var node = new JsonObject
+        {
+            ["id"] = source.Id,
+            ["notebookId"] = source.NotebookId,
+            ["kind"] = source.Kind,
+            ["title"] = source.Title,
+            ["locator"] = source.Locator,
+            ["chunkCount"] = source.ChunkCount,
+            ["charCount"] = source.Content.Length,
+            ["createdAt"] = source.CreatedAt,
+            ["updatedAt"] = source.UpdatedAt,
+        };
+        if (includeContent) node["content"] = source.Content;
+        return node;
+    }
+
+    private string KnowledgeNotebooksPayload(Haoyue.Runtime.Workspaces.WorkspaceInfo workspace)
+    {
+        var data = new JsonArray();
+        foreach (var notebook in runtime.Knowledge.ListNotebooks(HaoyueDatabase.ScopeKey(workspace)))
+            data.Add((JsonNode)NotebookNode(notebook));
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["count"] = data.Count,
+            ["notebooks"] = data,
+        }.ToJsonString();
+    }
+
+    private string KnowledgeSourcesPayload(Haoyue.Runtime.Workspaces.WorkspaceInfo workspace, long notebookId)
+    {
+        var data = new JsonArray();
+        foreach (var source in runtime.Knowledge.ListSources(HaoyueDatabase.ScopeKey(workspace), notebookId))
+            data.Add((JsonNode)SourceNode(source, false));
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["notebookId"] = notebookId,
+            ["count"] = data.Count,
+            ["sources"] = data,
+        }.ToJsonString();
+    }
+
+    private static string SourceActionPayload(
+        Haoyue.Runtime.Workspaces.WorkspaceInfo workspace, long notebookId, JsonObject source, int entries) => new JsonObject
+    {
+        ["workspace"] = workspace.Root,
+        ["isGlobal"] = workspace.IsGlobal,
+        ["notebookId"] = notebookId,
+        ["source"] = source,
+        ["entries"] = entries,
+    }.ToJsonString();
 
     /// <summary>
     /// Read-only view of the user-editable search synonym table
@@ -1198,13 +1559,14 @@ internal sealed class DaemonAdminApi(
         }
         try
         {
-            runtime.Knowledge.Save(HaoyueDatabase.ScopeKey(workspace), title, content, OptionalString(parameters, "tags"), id);
+            runtime.Knowledge.Save(HaoyueDatabase.ScopeKey(workspace), title, content,
+                OptionalString(parameters, "tags"), id, OptionalId(parameters, "notebookId"));
         }
         catch (KeyNotFoundException)
         {
             throw new DaemonRequestException($"No knowledge entry #{id} in this scope.");
         }
-        return KnowledgePayload(workspace, runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), 500));
+        return KnowledgeInfoPayload(workspace, runtime.Knowledge.ListInfo(HaoyueDatabase.ScopeKey(workspace), 500));
     }
 
     public string DeleteKnowledge(JsonObject parameters)
@@ -1220,7 +1582,7 @@ internal sealed class DaemonAdminApi(
             throw new DaemonRequestException("params.id is required");
         if (!runtime.Knowledge.Delete(HaoyueDatabase.ScopeKey(workspace), id.Value))
             throw new DaemonRequestException($"No knowledge entry #{id} in this scope.");
-        return KnowledgePayload(workspace, runtime.Knowledge.List(HaoyueDatabase.ScopeKey(workspace), 500));
+        return KnowledgeInfoPayload(workspace, runtime.Knowledge.ListInfo(HaoyueDatabase.ScopeKey(workspace), 500));
     }
 
     /// <summary>Workspace or global MEMORY.md content plus its absolute path.</summary>
@@ -1359,38 +1721,57 @@ internal sealed class DaemonAdminApi(
         foreach (var node in paths)
         {
             var raw = node?.GetValue<string>() ?? throw new DaemonRequestException("params.paths must contain file paths");
-            string fileName;
+            KnowledgeSource source;
             int count;
-            try { (fileName, count) = KnowledgeIngest.ImportFile(runtime.Knowledge, scope, raw); }
+            try
+            {
+                (source, count) = KnowledgeIngest.ImportFile(runtime.Knowledge, scope, raw);
+            }
             catch (KnowledgeImportException ex)
             {
                 throw new DaemonRequestException(ex.Message);
             }
-            files.Add((JsonNode)new JsonObject { ["file"] = fileName, ["entries"] = count });
+            files.Add((JsonNode)new JsonObject { ["file"] = source.Title, ["entries"] = count });
             totalEntries += count;
         }
 
-        var payload = JsonNode.Parse(KnowledgePayload(workspace, runtime.Knowledge.List(scope, 500)))!.AsObject();
+        var payload = JsonNode.Parse(KnowledgeInfoPayload(workspace, runtime.Knowledge.ListInfo(scope, 500)))!.AsObject();
         payload["importedFiles"] = files.Count;
         payload["importedEntries"] = totalEntries;
         payload["files"] = files;
         return payload.ToJsonString();
     }
 
-    private string KnowledgePayload(Haoyue.Runtime.Workspaces.WorkspaceInfo workspace, IReadOnlyList<KnowledgeEntry> entries)
+    private static JsonObject InfoNode(KnowledgeEntryInfo info)
+    {
+        var node = new JsonObject
+        {
+            ["id"] = info.Entry.Id,
+            ["title"] = info.Entry.Title,
+            ["content"] = info.Entry.Content,
+            ["tags"] = info.Entry.Tags,
+            ["createdAt"] = info.Entry.CreatedAt,
+            ["updatedAt"] = info.Entry.UpdatedAt,
+            ["notebookId"] = info.NotebookId,
+            ["notebookName"] = info.NotebookName,
+        };
+        if (info.SourceId is long sourceId)
+        {
+            node["sourceId"] = sourceId;
+            node["sourceTitle"] = info.SourceTitle;
+            node["sourceKind"] = info.SourceKind;
+            node["sourceLocator"] = info.SourceLocator;
+            node["chunkOrdinal"] = info.ChunkOrdinal;
+        }
+        return node;
+    }
+
+    private static string KnowledgeInfoPayload(Haoyue.Runtime.Workspaces.WorkspaceInfo workspace, IReadOnlyList<KnowledgeEntryInfo> infos)
     {
         var data = new JsonArray();
-        foreach (var entry in entries)
+        foreach (var info in infos)
         {
-            data.Add((JsonNode)new JsonObject
-            {
-                ["id"] = entry.Id,
-                ["title"] = entry.Title,
-                ["content"] = entry.Content,
-                ["tags"] = entry.Tags,
-                ["createdAt"] = entry.CreatedAt,
-                ["updatedAt"] = entry.UpdatedAt,
-            });
+            data.Add((JsonNode)InfoNode(info));
         }
         return new JsonObject
         {

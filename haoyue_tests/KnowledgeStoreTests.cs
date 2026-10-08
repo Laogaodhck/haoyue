@@ -101,8 +101,8 @@ public class KnowledgeStoreTests : IDisposable
         var source = Path.Combine(_dir, "部署笔记.md");
         File.WriteAllText(source, new string('知', 7000), new UTF8Encoding(false));
 
-        var (fileName, entries) = KnowledgeIngest.ImportFile(_store, scope, source);
-        Assert.Equal("部署笔记.md", fileName);
+        var (fileSource, entries) = KnowledgeIngest.ImportFile(_store, scope, source);
+        Assert.Equal("部署笔记.md", fileSource.Title);
         Assert.Equal(2, entries);
 
         var saved = _store.List(scope, 10);
@@ -145,5 +145,101 @@ public class KnowledgeStoreTests : IDisposable
         Assert.Contains("pnpm build", markdown);
         Assert.Contains("## 无标签", markdown);
         Assert.Equal(2, markdown.Split("---").Length - 1);
+    }
+
+    [Fact]
+    public void ListInfo_WithoutNotebookFilter_AttributesDefaultNotebook()
+    {
+        _store.Save("w", "构建命令", "pnpm build", "build");
+
+        // notebookId 缺省回归：不筛选笔记本时必须返回全部条目。
+        var infos = _store.ListInfo("w", 100);
+        var info = Assert.Single(infos);
+        Assert.Equal("构建命令", info.Entry.Title);
+        Assert.Equal("默认笔记本", info.NotebookName);
+        Assert.Null(info.SourceId);
+
+        var defaultId = info.NotebookId;
+        Assert.Single(_store.ListInfo("w", 100, defaultId));
+        Assert.Empty(_store.ListInfo("w", 100, defaultId + 1));
+
+        var tagged = _store.ListInfo("w", 100, null, "build");
+        Assert.Single(tagged);
+        Assert.Empty(_store.ListInfo("w", 100, null, "不存在的标签"));
+    }
+
+    [Fact]
+    public void Notebooks_SaveListDelete_WithDefaultProtection()
+    {
+        _store.Save("w", "沉淀", "agent 落入默认笔记本", null);
+        var defaultNotebook = Assert.Single(_store.ListNotebooks("w"));
+        Assert.True(defaultNotebook.IsDefault);
+        Assert.Equal(1, defaultNotebook.EntryCount);
+        Assert.Throws<InvalidOperationException>(() => _store.DeleteNotebook("w", defaultNotebook.Id));
+
+        var created = _store.SaveNotebook("w", "项目调研", "竞品资料");
+        Assert.False(created.IsDefault);
+        Assert.Throws<InvalidOperationException>(() => _store.SaveNotebook("w", "项目调研", null));
+
+        var renamed = _store.SaveNotebook("w", "调研", "新描述", created.Id);
+        Assert.Equal("调研", renamed.Name);
+        Assert.Equal("新描述", renamed.Description);
+
+        // 删除笔记本连带删除其中的条目。
+        _store.Save("w", "调研笔记", "内容", null, null, created.Id);
+        Assert.Equal(2, _store.List("w", 10).Count);
+        _store.DeleteNotebook("w", created.Id);
+        var remaining = _store.List("w", 10);
+        Assert.Single(remaining);
+        Assert.Equal("沉淀", remaining[0].Title);
+        Assert.Single(_store.ListNotebooks("w"));
+    }
+
+    [Fact]
+    public void Sources_SaveChunksDelete_WithChunkAttribution()
+    {
+        var defaultId = _store.EnsureDefaultNotebook("w");
+        var (source, created) = _store.SaveSource("w", defaultId, "text", "网页摘录", "https://example.com/a", "部署说明第一段。部署说明第二段。");
+        Assert.True(created);
+        var (upserted, createdAgain) = _store.SaveSource("w", defaultId, "text", "网页摘录", "https://example.com/a", "更新后的正文。");
+        Assert.False(createdAgain);
+        Assert.Equal(source.Id, upserted.Id);
+
+        Assert.Equal(2, _store.ReplaceSourceChunks("w", source.Id, ["部署说明第一段。", "部署说明第二段。"], "网页"));
+        Assert.Equal(2, Assert.Single(_store.ListSources("w", defaultId)).ChunkCount);
+
+        var infos = _store.ListInfo("w", 100, defaultId).OrderBy(i => i.ChunkOrdinal).ToList();
+        Assert.Equal(2, infos.Count);
+        Assert.All(infos, info => Assert.Equal(source.Id, info.SourceId));
+        Assert.All(infos, info => Assert.Equal("网页摘录", info.SourceTitle));
+        Assert.Equal([1, 2], infos.Select(info => info.ChunkOrdinal));
+        Assert.Contains(infos, info => info.Entry.Title.Contains("第1/2部分"));
+
+        _store.DeleteSource("w", source.Id);
+        Assert.Empty(_store.ListInfo("w", 100, defaultId));
+        Assert.Empty(_store.ListSources("w", defaultId));
+    }
+
+    [Fact]
+    public void RetrieveInfo_FiltersByNotebookSourceAndTag_WithAttribution()
+    {
+        var frontend = _store.SaveNotebook("w", "前端", null);
+        var ops = _store.SaveNotebook("w", "运维", null);
+
+        _store.Save("w", "构建命令", "pnpm build 构建桌面", null, null, frontend.Id);
+        var (manual, _) = _store.SaveSource("w", ops.Id, "text", "部署手册", null, "docker compose up -d 发布服务");
+        _store.ReplaceSourceChunks("w", manual.Id, ["docker compose up -d 发布服务"], "部署");
+
+        Assert.Single(_store.RetrieveInfo("w", "pnpm", [frontend.Id], null, 10));
+        var bySource = Assert.Single(_store.RetrieveInfo("w", "docker", null, [manual.Id], 10));
+        Assert.Equal("运维", bySource.NotebookName);
+        Assert.Equal("部署手册", bySource.SourceTitle);
+        Assert.Equal(1, bySource.ChunkOrdinal);
+
+        // 跨笔记本检索：不限范围时两个笔记本各命中一条。
+        Assert.Equal("前端", Assert.Single(_store.RetrieveInfo("w", "桌面", null, null, 10)).NotebookName);
+        Assert.Equal("运维", Assert.Single(_store.RetrieveInfo("w", "发布", null, null, 10)).NotebookName);
+        Assert.Single(_store.RetrieveInfo("w", "docker", null, null, 10, "部署"));
+        Assert.Empty(_store.RetrieveInfo("w", "docker", [frontend.Id], null, 10));
     }
 }

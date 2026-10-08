@@ -141,6 +141,8 @@ public sealed class HaoyueDatabase
             DROP TABLE IF EXISTS projects;
             DROP TABLE IF EXISTS scheduled_tasks;
             DROP TABLE IF EXISTS migrations;
+            DROP TABLE IF EXISTS kb_sources;
+            DROP TABLE IF EXISTS kb_notebooks;
             DROP TABLE IF EXISTS knowledge;
             DROP TABLE IF EXISTS events;
             """;
@@ -241,6 +243,35 @@ public sealed class HaoyueDatabase
             CREATE INDEX IF NOT EXISTS ix_knowledge_scope_title
                 ON knowledge(scope, title);
 
+            CREATE TABLE IF NOT EXISTS kb_notebooks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NULL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (scope, name)
+            );
+
+            CREATE TABLE IF NOT EXISTS kb_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                notebook_id INTEGER NOT NULL
+                    REFERENCES kb_notebooks(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                locator TEXT NULL,
+                content TEXT NOT NULL,
+                content_hash TEXT NULL,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (notebook_id, kind, locator)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_kb_sources_notebook
+                ON kb_sources(notebook_id, updated_at DESC);
+
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
@@ -271,6 +302,19 @@ public sealed class HaoyueDatabase
         EnsureColumn(connection, "sessions", "cached_input_tokens", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, "sessions", "output_tokens", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, "sessions", "output_elapsed_ms", "INTEGER NOT NULL DEFAULT 0");
+
+        // 知识中心（笔记本 + 来源）：老库只加列不重建，回填在 KnowledgeStore 首次访问时进行。
+        EnsureColumn(connection, "knowledge", "notebook_id", "INTEGER NULL");
+        EnsureColumn(connection, "knowledge", "source_id", "INTEGER NULL");
+        EnsureColumn(connection, "knowledge", "chunk_ordinal", "INTEGER NULL");
+        using (var indexCommand = connection.CreateCommand())
+        {
+            indexCommand.CommandText = """
+                CREATE INDEX IF NOT EXISTS ix_knowledge_scope_notebook ON knowledge(scope, notebook_id);
+                CREATE INDEX IF NOT EXISTS ix_knowledge_source ON knowledge(source_id);
+                """;
+            indexCommand.ExecuteNonQuery();
+        }
     }
 
     private static void EnsureColumn(

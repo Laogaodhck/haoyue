@@ -114,10 +114,10 @@ public static class KnowledgeCommands
             {
                 try
                 {
-                    var (fileName, count) = KnowledgeIngest.ImportFile(rt.Knowledge, scope, raw);
+                    var (source, count) = KnowledgeIngest.ImportFile(rt.Knowledge, scope, raw);
                     okFiles++;
                     totalEntries += count;
-                    AnsiConsole.MarkupLine($"[green]✓[/] {Markup.Escape(fileName)} → {count} 条");
+                    AnsiConsole.MarkupLine($"[green]✓[/] {Markup.Escape(source.Title)} → {count} 条");
                 }
                 catch (KnowledgeImportException ex)
                 {

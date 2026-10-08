@@ -1,14 +1,16 @@
 namespace Haoyue.Runtime.Data;
 
 /// <summary>
-/// Shared file → knowledge-entry pipeline used by both the daemon (knowledge.import)
-/// and the CLI (haoyue knowledge import): validates the path, extracts text, splits
-/// chunks and saves them under the stable 「文件名 · 第N/M部分」 title convention with
-/// 导入,&lt;ext&gt; tags — so re-importing the same file upserts instead of duplicating.
+/// Shared file → knowledge-source pipeline used by both the daemon (knowledge.import /
+/// knowledge.source.add) and the CLI (haoyue knowledge import): validates the path,
+/// extracts text, and stores the file as a <see cref="KnowledgeSource"/> whose chunks
+/// become entries under the stable 「文件名 · 第N/M部分」 title convention — so
+/// re-importing the same file refreshes the source instead of duplicating.
 /// </summary>
 public static class KnowledgeIngest
 {
-    public static (string FileName, int Entries) ImportFile(KnowledgeStore store, string scope, string rawPath)
+    public static (KnowledgeSource Source, int Entries) ImportFile(
+        KnowledgeStore store, string scope, string rawPath, long? notebookId = null)
     {
         string fullPath;
         try { fullPath = Path.GetFullPath(rawPath.Trim()); }
@@ -28,11 +30,9 @@ public static class KnowledgeIngest
 
         var fileName = Path.GetFileName(fullPath);
         var tags = $"导入,{Path.GetExtension(fullPath).TrimStart('.').ToLowerInvariant()}";
-        for (var index = 0; index < chunks.Count; index++)
-        {
-            var title = chunks.Count == 1 ? fileName : $"{fileName} · 第{index + 1}/{chunks.Count}部分";
-            store.Save(scope, title, chunks[index], tags);
-        }
-        return (fileName, chunks.Count);
+        var target = notebookId ?? store.EnsureDefaultNotebook(scope);
+        var (source, _) = store.SaveSource(scope, target, "file", fileName, fullPath, text);
+        store.ReplaceSourceChunks(scope, source.Id, chunks, tags);
+        return (store.GetSource(scope, source.Id)!, chunks.Count);
     }
 }

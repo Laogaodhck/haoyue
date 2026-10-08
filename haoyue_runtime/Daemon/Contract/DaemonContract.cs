@@ -418,27 +418,62 @@ public static class DaemonContract
         M("expert.list", "skill", "列出内置领域专家", parameters: EmptyParams),
 
         // knowledge
-        M("knowledge.list", "knowledge", "列出知识条目", parameters: Scope(
+        M("knowledge.list", "knowledge", "列出知识条目（含笔记本/来源归属）", parameters: Scope(
             ("limit", SInteger("1..2000，缺省 500"), false),
-            ("tag", SString("仅返回携带该标签的条目"), false))),
+            ("tag", SString("仅返回携带该标签的条目"), false),
+            ("notebookId", SInteger("仅列出该笔记本的条目"), false))),
         M("knowledge.search", "knowledge", "高容错知识检索", parameters: Scope(
             ("query", SString("检索词"), true),
             ("tag", SString("仅返回携带该标签的条目"), false),
+            ("notebookId", SInteger("限定单笔记本"), false),
             ("limit", SInteger("1..100，缺省 50"), false))),
         M("knowledge.save", "knowledge", "保存知识条目（同题 upsert，或按 id 原地更新）", parameters: Scope(
             ("title", SString("条目标题"), true),
             ("content", SString("条目内容（≤8000 字符）"), true),
             ("tags", SString("逗号分隔标签"), false),
-            ("id", SInteger("按 id 原地更新（含改名），缺省走同题 upsert"), false))),
+            ("id", SInteger("按 id 原地更新（含改名），缺省走同题 upsert"), false),
+            ("notebookId", SInteger("新条目归属笔记本，缺省默认笔记本"), false))),
         M("knowledge.delete", "knowledge", "删除知识条目", parameters: Scope(
             ("id", SInteger("条目 id"), true))),
         M("knowledge.import", "knowledge", "批量导入文件到知识库", parameters: Scope(
             ("paths", SArray("文件路径（≥1 个，≤10 MB/个）"), true))),
-        M("knowledge.tags", "knowledge", "聚合标签与出现次数", parameters: Scope()),
+        M("knowledge.tags", "knowledge", "聚合标签与出现次数", parameters: Scope(
+            ("notebookId", SInteger("仅聚合该笔记本"), false))),
         M("knowledge.export", "knowledge", "导出整个范围为 Markdown 文本", parameters: Scope()),
         M("knowledge.synonyms.get", "knowledge", "读取检索同义词表", parameters: EmptyParams),
         M("knowledge.synonyms.save", "knowledge", "写入检索同义词表（热重载）", parameters: SObject(
             ("content", SString("synonyms.txt 全文"), true))),
+        M("knowledge.notebook.list", "knowledge", "列出知识笔记本", parameters: Scope()),
+        M("knowledge.notebook.save", "knowledge", "创建或更新笔记本（同库内同名拒绝）", parameters: Scope(
+            ("name", SString("笔记本名称"), true),
+            ("description", SString("笔记本描述"), false),
+            ("id", SInteger("按 id 更新名称/描述，缺省创建"), false))),
+        M("knowledge.notebook.delete", "knowledge", "删除笔记本（含其来源与条目；默认笔记本不可删）", parameters: Scope(
+            ("id", SInteger("笔记本 id"), true))),
+        M("knowledge.source.add", "knowledge", "添加来源（text/url/file），长文自动分块入库", parameters: Scope(
+            ("kind", SString("text | url | file"), true),
+            ("notebookId", SInteger("目标笔记本，缺省默认笔记本"), false),
+            ("title", SString("text 来源标题"), false),
+            ("content", SString("text 来源内容（≤200000 字符）"), false),
+            ("url", SString("url 来源链接（http/https）"), false),
+            ("tags", SString("条目标签，缺省按来源类型生成"), false),
+            ("paths", SArray("file 来源文件路径（≥1 个，≤10 MB/个）"), false))),
+        M("knowledge.source.list", "knowledge", "列出笔记本内的来源", parameters: Scope(
+            ("notebookId", SInteger("笔记本 id"), true))),
+        M("knowledge.source.read", "knowledge", "窗口化读取来源全文", parameters: Scope(
+            ("id", SInteger("来源 id"), true),
+            ("offset", SInteger("起始字符偏移，缺省 0"), false),
+            ("maxChars", SInteger("最多返回字符数（≤50000，缺省 50000）"), false))),
+        M("knowledge.source.delete", "knowledge", "删除来源及其分块条目（手工条目保留）", parameters: Scope(
+            ("id", SInteger("来源 id"), true))),
+        M("knowledge.source.refresh", "knowledge", "重新抓取/读取来源并重建分块条目", parameters: Scope(
+            ("id", SInteger("来源 id"), true))),
+        M("knowledge.retrieve", "knowledge", "跨笔记本带出处检索", parameters: Scope(
+            ("query", SString("检索词"), true),
+            ("notebookIds", SArray("限定笔记本 id 列表"), false),
+            ("sourceIds", SArray("限定来源 id 列表"), false),
+            ("tag", SString("仅返回携带该标签的条目"), false),
+            ("limit", SInteger("1..50，缺省 8"), false))),
 
         // memory
         M("memory.get", "memory", "读取 MEMORY.md 长期记忆", parameters: KnowledgeScope),

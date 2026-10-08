@@ -8,6 +8,43 @@ namespace Haoyue.Tests;
 
 public class McpTransportTests
 {
+    [Fact]
+    public async Task StdioTransport_ResolvesExeShimsOnPath()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var resolved = StdioMcpTransport.ResolveOnPath("dotnet");
+        Assert.NotNull(resolved);
+        Assert.EndsWith(".exe", resolved, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task StdioTransport_StartsBatchShimsLikeNpxOnWindows()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        // `npx` ships as npx.cmd on Windows; CreateProcess cannot start batch
+        // shims directly, so the transport must wrap them with cmd.exe.
+        var resolved = StdioMcpTransport.ResolveOnPath("npx");
+        Assert.NotNull(resolved);
+
+        await using var transport = new StdioMcpTransport("npx", ["--version"], null);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await transport.StartAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task StdioTransport_UnknownBareCommandFailsWithFriendlyHint()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var transport = new StdioMcpTransport("haoyue-no-such-tool-xyz", [], null);
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => transport.StartAsync(CancellationToken.None));
+        Assert.Contains("haoyue-no-such-tool-xyz", ex.Message);
+        Assert.Contains("PATH", ex.Message);
+    }
+
     private sealed class DelegatingMockHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

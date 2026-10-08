@@ -28,7 +28,6 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = command,
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -36,7 +35,17 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
             StandardOutputEncoding = Encoding.UTF8,
             StandardInputEncoding = Encoding.UTF8,
         };
-        foreach (var arg in args ?? []) startInfo.ArgumentList.Add(arg);
+
+        if (OperatingSystem.IsWindows())
+        {
+            ApplyWindowsCommand(startInfo, command, args ?? []);
+        }
+        else
+        {
+            startInfo.FileName = command;
+            foreach (var arg in args ?? []) startInfo.ArgumentList.Add(arg);
+        }
+
         if (env is not null)
             foreach (var (key, value) in env)
                 startInfo.Environment[key] = value;
@@ -72,6 +81,69 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
 
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// CreateProcess only finds .exe files on PATH, and modern .NET refuses to run
+    /// .cmd/.bat shims under UseShellExecute=false — so bare commands like `npx`
+    /// (actually npx.cmd) fail with "file not found". Resolve the real shim first;
+    /// batch shims launch through cmd.exe, which keeps stdin/stdout redirection intact.
+    /// </summary>
+    private static void ApplyWindowsCommand(ProcessStartInfo startInfo, string command, IReadOnlyList<string> args)
+    {
+        var resolved = ResolveOnPath(command);
+        if (resolved is null && !command.Contains('\\') && !command.Contains('/') && !Path.HasExtension(command))
+            throw new McpException(NotInstalledHint(command));
+
+        if (resolved is not null &&
+            (resolved.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) ||
+             resolved.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)))
+        {
+            startInfo.FileName = "cmd.exe";
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/s");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(resolved);
+        }
+        else
+        {
+            startInfo.FileName = resolved ?? command;
+        }
+        foreach (var arg in args) startInfo.ArgumentList.Add(arg);
+    }
+
+    /// <summary>Full path of the command shim on PATH, or null when not found.</summary>
+    internal static string? ResolveOnPath(string command)
+    {
+        // A command carrying a directory part is used verbatim — the OS reports a
+        // precise error when it does not exist.
+        if (command.Contains('\\') || command.Contains('/')) return command;
+
+        var searchExtensions = Path.HasExtension(command)
+            ? [string.Empty]
+            : new[] { ".exe", ".cmd", ".bat", ".com" };
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        foreach (var rawEntry in path.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var directory = Environment.ExpandEnvironmentVariables(rawEntry.Trim('"'));
+            if (directory.Length == 0) continue;
+            foreach (var extension in searchExtensions)
+            {
+                var candidate = Path.Combine(directory, command + extension);
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static string NotInstalledHint(string command) => command.ToLowerInvariant() switch
+    {
+        "npx" or "npm" or "node" =>
+            $"未在本机找到 '{command}'：尚未安装 Node.js。请从 https://nodejs.org 安装（自带 npx），安装后重启 Haoyue 再试。",
+        "uvx" or "uv" or "pipx" =>
+            $"未在本机找到 '{command}'：尚未安装 Python 工具链。请从 https://docs.astral.sh/uv/ 安装 uv，安装后重启 Haoyue 再试。",
+        _ =>
+            $"未在 PATH 中找到 '{command}'。请确认该命令已安装并可在终端直接运行，或在高级选项中改用完整路径。",
+    };
 
     public async Task SendAsync(JsonObject message, CancellationToken ct)
     {

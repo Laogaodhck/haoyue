@@ -242,6 +242,7 @@ Haoyue/
 ├── haoyue_desktop/       # Desktop app (Electron + Vue 3 + TypeScript)
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
+├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
 ├── haoyue_tests/         # Runtime unit tests (435 cases, ≥70% line coverage gate)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
@@ -399,6 +400,24 @@ dotnet run --project benchmarks/local-model-eval -- visiontest  # multimodal vis
 ```
 
 The measured gemma-4-E4B report is available at [`本地模型评测报告-gemma-4-E4B-2026-10-07.md`](benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md) (in Chinese).
+
+## 📄 Document Toolkit
+
+The repo ships a standalone toolkit [`doc_toolkit/`](doc_toolkit/README.md): content extraction, format conversion and OCR for common document formats. Pure Python, fully offline.
+
+```python
+from doc_toolkit import default_toolkit as kit
+
+kit.extract_text("report.docx")                     # one-step plain-text extraction
+kit.convert("notes.md", "docx")                     # conversion between formats, structure preserved
+kit.recognize("screenshot.png", structured=True)    # OCR: per-line text + confidence + boxes
+kit.parse("scanned.pdf", ocr_fallback=True)         # scanned PDF via per-page OCR
+```
+
+- **Unified intermediate model (IR)**: parsers and renderers only talk to six block types (heading/paragraph/list/quote/code/divider). Adding a format is zero-intrusive — subclass `BaseParser`/`BaseRenderer` and register.
+- **OCR**: RapidOCR (ONNX Runtime CPU, bundled models, fully offline), strong Chinese accuracy; blurry images get a confidence-based warning instead of a hard failure.
+- **Explicit error taxonomy**: unsupported format / corrupted file / empty content all raise dedicated exceptions with readable messages.
+- Verification scripts: `verify_e2e.py` (23 checks) and `verify_ocr.py` (9 checks). See [doc_toolkit/README.md](doc_toolkit/README.md).
 
 ## 📚 Design Documents
 

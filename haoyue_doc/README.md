@@ -42,4 +42,5 @@
 | 文档 | 日期 | 状态 | 说明 |
 |---|---|---|---|
 | [DeepSeek 官方 Agent 优化技术分析](deepseek-optimize.md) | — | 📄 研究 | 剖析 `deepseek-harness` 对 DeepSeek 模型的优化机制，提炼可移植到 Haoyue 的具体技术要点 |
+| [doc_toolkit 文档处理工具包](../doc_toolkit/README.md) | 2026-10-08 | ✅ 已交付 | 模块化文档处理：IR 中间模型 + 解析/渲染注册表扩展架构，TXT/MD/PDF/DOCX 互转保留结构，RapidOCR 图片识别与扫描件 PDF 回退；端到端验证 23 + 9 项全过 |
 | [本地模型评测报告 gemma-4-E4B](../benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md) | 2026-10-07 | ✅ 已完成 | 流畅性/速度/自修正/GPU/视觉五相评测：流畅性检查点 100% 命中；CUDA 12 解码 7.6 → 84.9 tok/s（11 倍）；KV 前缀复用 TTFT 20.5s → 0.61s；多模态视觉闭环验证通过（带图请求自动 CPU 上下文规避上游 CUDA 慢路径）。评测 harness 与复现方式见 [benchmarks/local-model-eval/](../benchmarks/local-model-eval/) |

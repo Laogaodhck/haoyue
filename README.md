@@ -242,6 +242,7 @@ Haoyue/
 ├── haoyue_desktop/       # 桌面应用（Electron + Vue 3 + TypeScript）
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
+├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX 提取与互转 + OCR，见 doc_toolkit/README.md）
 ├── haoyue_tests/         # 运行时单元测试（435 用例，覆盖率门槛 ≥70%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
@@ -399,6 +400,24 @@ dotnet run --project benchmarks/local-model-eval -- visiontest  # 多模态视�
 ```
 
 gemma-4-E4B 实测报告见 [`本地模型评测报告-gemma-4-E4B-2026-10-07.md`](benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md)。
+
+## 📄 文档处理工具包
+
+仓库内置独立工具包 [`doc_toolkit/`](doc_toolkit/README.md)：多格式文档的内容提取、格式互转与 OCR 识别，纯 Python、离线可用。
+
+```python
+from doc_toolkit import default_toolkit as kit
+
+kit.extract_text("报告.docx")                       # 一步提取纯文本
+kit.convert("notes.md", "docx")                    # 任意格式互转，保留标题/段落/列表结构
+kit.recognize("截图.png", structured=True)          # OCR：每行文本 + 置信度 + 坐标
+kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OCR
+```
+
+- **统一中间模型（IR）**：解析器与渲染器只对接六种块类型（标题/段落/列表/引用/代码块/分隔线），新增格式零侵入——继承 `BaseParser`/`BaseRenderer` 后一行注册即接入全部互转链路
+- **OCR**：RapidOCR（ONNX Runtime CPU 推理，模型内置完全离线），中文识别效果佳；模糊图片按置信度标记警告而非硬失败
+- **明确错误体系**：格式不支持/文件损坏/内容为空等均抛带中文提示的专用异常
+- 验证脚本：`verify_e2e.py`（23 项）与 `verify_ocr.py`（9 项），详见 [doc_toolkit/README.md](doc_toolkit/README.md)
 
 ## 📚 设计文档
 

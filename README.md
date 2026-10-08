@@ -40,7 +40,8 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 🤖 多提供商与模型
 
 - **OpenAI 兼容 / Anthropic / Google**：主流云端模型开箱即用
-- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用
+- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）
+- **本地多模态视觉**：GGUF 配套 mmproj 权重自动发现，本地模型可直接"看"对话中的图片与工具截图——带图请求自动降级 CPU 上下文规避上游 CUDA 慢路径，文本轮保持 GPU 全速
 - **智能路由**：快速、均衡、质量、经济、离线多种策略，自动重试、指数退避与熔断器故障转移
 - **用量统计**：Token 计数、成本与模型分布，桌面端图表可视化
 
@@ -63,11 +64,18 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **提示预算**：上下文注入总量超 24k token 时按降级秩逆序丢弃（知识库 → 技能正文 → MCP → 目录/记忆），System/Developer 消息永不丢弃，丢弃动作在会话中明示
 - **回合回滚（TurnScope）**：每个回合维护步骤账本与补偿栈，`write`/`edit` 的文件变更可一键撤销（`agent.undo`）；桌面端回合完成后出现撤销横幅；daemon 崩溃后启动对账，提示未完成回合的可恢复文件
 
+### 🖱️ Computer Use（电脑操作智能体）
+
+- **完整 observe → act → verify 闭环**：`computer` 工具支持 18 种动作（鼠标移动/点击/拖拽、键盘输入、窗口管理、滚动等），每步自动截图回传模型核验结果
+- **云端与本地模型都能"看屏幕"**：云视觉模型直接解析截图；本地 GGUF 模型经 mmproj 多模态接入同样可读图操作，不再只能靠无障碍文本盲操作
+- **坐标自校准**：CoordinateMapper 屏幕标定 + `cursor_position` 自校准，DriverFaultSandbox 驱动容错，单回合 30 步上限兜底
+- **默认休眠**：`computerUse.enabled` 默认关闭，开启需在桌面端设置中显式打开，并伴随全屏光晕提示
+
 ### 🖥️ 桌面应用
 
 - **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown、图片预览、推理深度调节
 - **专家系统**：内置领域专家库，一键切换角色预设
-- **图形化配置**：Provider、模型、Profile、MCP 服务器、本地推理加速全程可视化
+- **图形化配置**：Provider、模型、Profile、MCP 服务器、本地推理加速全程可视化；「模型与提供商」页展示活动模型参数（上下文窗口/最大输出）与能力徽章（流式/工具/思考/视觉/推理）及全模型目录
 - **定时任务**：cron 驱动的调度回合，失败即时桌面通知，支持 Webhook 回调
 - **回合撤销与负反馈**：文件变更一键回滚；每条助手回答可点踩并附原因，反馈直接进入进化信号
 
@@ -214,7 +222,7 @@ Haoyue/
 │   └── Program.cs          # 入口点
 ├── haoyue_runtime/       # 核心运行时
 │   ├── Agents/             # Agent 循环、上下文规划与 TurnScope 回滚
-│   ├── ComputerUse/        # 屏幕捕获
+│   ├── ComputerUse/        # 电脑操作智能体（屏幕观察、鼠标键盘驱动、坐标标定、容错沙箱）
 │   ├── Configuration/      # 配置管理（原子写、reload-merge、单写者桥接）
 │   ├── Coordination/       # 文件锁协调器
 │   ├── Daemon/             # 守护进程（JSON-RPC、RPC 路由、崩溃对账）
@@ -234,10 +242,12 @@ Haoyue/
 ├── haoyue_desktop/       # 桌面应用（Electron + Vue 3 + TypeScript）
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
-├── haoyue_tests/         # 运行时单元测试（399 用例）
+├── haoyue_tests/         # 运行时单元测试（435 用例，覆盖率门槛 ≥70%）
 ├── haoyue_cli_tests/     # CLI 测试
-├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引）
-├── models/               # 本地 GGUF 模型（开发环境）
+├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
+├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
+├── benchmarks/           # 本地模型评测 harness（流畅性/速度/自修正/视觉四相，含评测报告）
+├── models/               # 本地 GGUF 模型（开发环境，不入库）
 └── packaging/            # 打包脚本与配置
 ```
 
@@ -279,15 +289,18 @@ Haoyue/
       "threads": 8,
       "localPrefixReuse": true,
       "flashAttention": false,
-      "kvCacheQuantization": "none"
+      "kvCacheQuantization": "none",
+      "mmprojPath": ""
     }
   }
 }
 ```
 
-- `gpuLayers`：GPU 卸载层数，默认 `0`（纯 CPU）；安装 CUDA 后端后设 `999` 卸载全部层
-- `localPrefixReuse`：跨请求复用 KV 前缀，多步回合只解码新增 token，吞吐显著提升
+- `gpuLayers`：GPU 卸载层数，默认 `0`（纯 CPU）；构建 CUDA 12 后端（`dotnet build -p:LlamaBackend=Cuda12`）后设 `999` 卸载全部层，实测解码 7.6 → 84.9 tok/s
+- `mmprojPath`：多模态视觉投影权重（mmproj GGUF）路径；留空时自动发现模型目录下唯一 `*mmproj*.gguf`——必须与主模型同目录，且须使用与该模型配套的 mmproj 版本（如 gemma-4-E4B 配 unsloth 版 mmproj-F16）
+- `localPrefixReuse`：跨请求复用 KV 前缀，多步回合只解码新增 token，吞吐显著提升（实测 TTFT 20.5s → 0.61s）
 - `flashAttention` / `kvCacheQuantization`：注意力内核加速与 KV 缓存量化（`q8_0` / `q4_0`），量化仅在 Flash Attention 开启时生效
+- 显存提示：8GB 显存 + 长上下文可能 OOM，届时下调 `gpuLayers` 或开启 KV 量化；带图请求会自动切换 CPU 上下文（规避上游 CUDA 多模态慢路径），文本轮保持 GPU 全速
 
 以上参数也可在桌面端「设置 → 高级设置 → 本地推理加速」图形化配置。
 
@@ -364,12 +377,28 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test haoyue_tests      # 运行时测试（399 用例）
+dotnet test haoyue_tests      # 运行时测试（435 用例）
 dotnet test haoyue_cli_tests  # CLI 测试
 
 # 桌面端（需先 pnpm install）
 cd haoyue_desktop && pnpm test && pnpm typecheck
 ```
+
+haoyue_tests 带 70% 行覆盖率硬门槛（`coverage.runsettings`），契约快照漂移、Runbook 章节齐全性均有护栏测试强制。
+
+## 📊 本地模型评测
+
+[`benchmarks/local-model-eval/`](benchmarks/local-model-eval/) 内置可复现的评测 harness，走 runtime `LocalLlmClient` 真实链路，四个模式：
+
+```bash
+dotnet run --project benchmarks/local-model-eval -- fluency     # 对话流畅性
+dotnet run --project benchmarks/local-model-eval -- speed       # TTFT / tok-s
+dotnet run --project benchmarks/local-model-eval -- selfcorrect # 自修正闭环
+dotnet run --project benchmarks/local-model-eval -- gputest     # GPU 卸载验证（HAOYUE_GPU_LAYERS 控制层数）
+dotnet run --project benchmarks/local-model-eval -- visiontest  # 多模态视觉
+```
+
+gemma-4-E4B 实测报告见 [`本地模型评测报告-gemma-4-E4B-2026-10-07.md`](benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md)。
 
 ## 📚 设计文档
 
@@ -378,8 +407,11 @@ cd haoyue_desktop && pnpm test && pnpm typecheck
 - 状态并发、上下文边界与原子性风险评审（含修复对账）
 - 工作流编排层架构裁决与 TurnScope 设计
 - 进化引擎设计蓝图评审与落地设计（E1-E4）
+- 跨语言契约治理（Contract First）、测试金字塔与覆盖率门槛
 - NLP 与 HCI 全面优化评估报告、知识库优化说明
 - ProviderManager 并发与参数审查
+
+重大技术选型以 [ADR（架构决策记录）](haoyue_doc/adr/README.md) 文档化（已回填 7 篇），每个内置工具与官方技能配有 [Runbook 操作手册](haoyue_doc/runbooks/README.md)（护栏测试强制）。
 
 ## 📄 许可证
 

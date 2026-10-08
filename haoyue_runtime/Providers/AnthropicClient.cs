@@ -8,7 +8,8 @@ namespace Haoyue.Runtime.Providers;
 /// <summary>Anthropic Messages API client (streaming, tool use, extended thinking).</summary>
 public sealed class AnthropicClient(ILlmHttpFactory httpFactory) : ILlmClient
 {
-    private const string ApiVersion = "2023-06-01";
+    /// <summary>版本契约：API 版本唯一声明处为 <see cref="ApiVersionContract"/>。</summary>
+    private const string ApiVersion = ApiVersionContract.AnthropicApiVersion;
 
     public string Kind => "anthropic";
 
@@ -63,8 +64,11 @@ public sealed class AnthropicClient(ILlmHttpFactory httpFactory) : ILlmClient
                 if (retryAfter is null && response.Headers.RetryAfter?.Date is { } retryDate)
                     retryAfter = retryDate - DateTimeOffset.UtcNow;
                 if (retryAfter is { } ra && ra < TimeSpan.Zero) retryAfter = TimeSpan.Zero;
+                var detail = OpenAiCompatibleClient.ExtractErrorMessage(body);
+                var breakingChange = ApiVersionContract.ClassifyBreakingChange(status, detail);
                 throw new LlmException(
-                    $"{request.Provider.Id} HTTP {status}（{OpenAiCompatibleClient.StatusHint(status)}）：{OpenAiCompatibleClient.ExtractErrorMessage(body)}",
+                    $"{request.Provider.Id} HTTP {status}（{OpenAiCompatibleClient.StatusHint(status)}）：{detail}" +
+                    (breakingChange is null ? "" : $"\n{breakingChange}"),
                     status,
                     retryable: status is 408 or 409 or 429 or 529 or >= 500)
                 {

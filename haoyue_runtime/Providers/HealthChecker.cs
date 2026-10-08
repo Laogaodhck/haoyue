@@ -102,7 +102,7 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
         if (isAnthropic)
         {
             if (!string.IsNullOrWhiteSpace(key)) message.Headers.TryAddWithoutValidation("x-api-key", key);
-            message.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+            message.Headers.TryAddWithoutValidation("anthropic-version", ApiVersionContract.AnthropicApiVersion);
         }
         else
         {
@@ -139,6 +139,12 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
             if (response.IsSuccessStatusCode)
             {
                 return new HealthReport(provider.Id, true, stopwatch.Elapsed.TotalMilliseconds, "ok");
+            }
+
+            if (status == 410)
+            {
+                return new HealthReport(provider.Id, false, stopwatch.Elapsed.TotalMilliseconds,
+                    "API 已退役（Breaking Change）：该模型或端点已停止服务，请更新 provider 配置或升级 haoyue");
             }
 
             if (status is 401 or 403)

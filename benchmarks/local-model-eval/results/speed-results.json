@@ -1,0 +1,73 @@
+{
+  "LoadWarmupSeconds": 452.9640342,
+  "LengthCases": [
+    {
+      "Case": "短输入(~50 tok)",
+      "PromptTokens": 87,
+      "TtftMs": 1383.6055,
+      "PrefillTps": 62.87919497284451,
+      "OutputTokens": 28,
+      "DecodeTps": 7.309391772516134,
+      "TotalMs": 5077.4833,
+      "CachedTokens": 5,
+      "FinishReason": "stop"
+    },
+    {
+      "Case": "中输入(~600 tok)",
+      "PromptTokens": 605,
+      "TtftMs": 9051.7596,
+      "PrefillTps": 66.83783338656056,
+      "OutputTokens": 38,
+      "DecodeTps": 7.63594678496303,
+      "TotalMs": 13897.2622,
+      "CachedTokens": 66,
+      "FinishReason": "stop"
+    },
+    {
+      "Case": "长输入(~2200 tok)",
+      "PromptTokens": 2296,
+      "TtftMs": 31032.1306,
+      "PrefillTps": 73.98782989138361,
+      "OutputTokens": 39,
+      "DecodeTps": 7.215246682068815,
+      "TotalMs": 36298.7558,
+      "CachedTokens": 584,
+      "FinishReason": "stop"
+    }
+  ],
+  "ReuseComparison": [
+    {
+      "Case": "冷基线·首问完整预填充",
+      "PromptTokens": 1180,
+      "TtftMs": 20529.5668,
+      "PrefillTps": 57.47807596212892,
+      "OutputTokens": 57,
+      "DecodeTps": 7.483829082440456,
+      "TotalMs": 28012.3673,
+      "CachedTokens": 2,
+      "FinishReason": "stop"
+    },
+    {
+      "Case": "复用命中·第二问",
+      "PromptTokens": 1263,
+      "TtftMs": 612.4977,
+      "PrefillTps": 2062.048559529285,
+      "OutputTokens": 41,
+      "DecodeTps": 7.445419722042007,
+      "TotalMs": 5984.9282,
+      "CachedTokens": 1237,
+      "FinishReason": "stop"
+    },
+    {
+      "Case": "冷对照·标记破坏复用",
+      "PromptTokens": 1280,
+      "TtftMs": 22134.4824,
+      "PrefillTps": 57.828323105490824,
+      "OutputTokens": 22,
+      "DecodeTps": 7.158864510000779,
+      "TotalMs": 25067.9085,
+      "CachedTokens": 4,
+      "FinishReason": "stop"
+    }
+  ]
+}

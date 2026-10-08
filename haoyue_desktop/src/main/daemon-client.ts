@@ -4,6 +4,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection, type Socket } from 'node:net'
 import type { DaemonMessage, DaemonRequestOptions, DaemonState } from '../shared/ipc.js'
+import { DaemonError, errorCodeOf } from '../shared/ipc.js'
+import { DAEMON_PROTOCOL_VERSION } from '../shared/daemon-contract.gen.js'
 
 interface PendingRequest {
   method: string
@@ -13,7 +15,8 @@ interface PendingRequest {
   idleTimer?: NodeJS.Timeout
 }
 
-const TERMINAL_EVENTS = new Set(['pong', 'result', 'done', 'cancelled', 'error', 'bye'])
+// 与契约的 terminal 事件保持一致（daemon-contract.test.ts 双向校验）。
+export const TERMINAL_EVENTS = new Set(['pong', 'result', 'done', 'cancelled', 'error', 'bye'])
 
 /** How long the daemon gets to answer the mandatory handshake. */
 const HANDSHAKE_TIMEOUT_MS = 5000
@@ -149,15 +152,38 @@ export class DaemonClient extends EventEmitter {
             event: string
             data: string
           }
-          if (response.id === 0 && response.event === 'result') resolve()
-          else reject(new Error(`Daemon authentication failed: ${response.data || 'invalid token'}`))
+          if (response.id === 0 && response.event === 'result') {
+            // 版本契约：daemon 回报其协议版本，主版本不一致视为 Breaking Change，
+            // 客户端拒绝继续（daemon 侧也会对客户端声明做同样校验，此处是双保险）。
+            let info: { version?: string; versionWarning?: string } = {}
+            try {
+              info = JSON.parse(response.data) as typeof info
+            } catch { /* 版本信息缺失：旧 daemon，跳过校验 */ }
+            if (info.version) {
+              const daemonMajor = info.version.split('.')[0]
+              const clientMajor = DAEMON_PROTOCOL_VERSION.split('.')[0]
+              if (daemonMajor !== clientMajor) {
+                reject(
+                  new DaemonError(
+                    'versionMismatch',
+                    `协议版本不兼容（Breaking Change）：daemon=${info.version}，desktop=${DAEMON_PROTOCOL_VERSION}。请升级 haoyue desktop 或 daemon。`,
+                  ),
+                )
+                return
+              }
+              if (info.versionWarning) console.warn(`[daemon] ${info.versionWarning}`)
+            }
+            resolve()
+          } else {
+            reject(new DaemonError('unknown', `Daemon authentication failed: ${response.data || 'invalid token'}`))
+          }
         } catch {
           reject(new Error('Invalid daemon handshake response'))
         }
       }
 
       socket.on('data', onData)
-      socket.write(`${JSON.stringify({ id: 0, method: 'handshake', params: { token } })}\n`)
+      socket.write(`${JSON.stringify({ id: 0, method: 'handshake', params: { token, protocolVersion: DAEMON_PROTOCOL_VERSION } })}\n`)
     })
   }
 
@@ -269,7 +295,7 @@ export class DaemonClient extends EventEmitter {
 
     if (!request) return
     this.pending.delete(message.id)
-    if (message.event === 'error') request.reject(new Error(message.data))
+    if (message.event === 'error') request.reject(new DaemonError(errorCodeOf(message), message.data, request.method))
     else request.resolve(event)
   }
 

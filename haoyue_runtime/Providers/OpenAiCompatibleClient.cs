@@ -448,13 +448,17 @@ public sealed class OpenAiCompatibleClient(ILlmHttpFactory httpFactory) : ILlmCl
         catch { /* body unavailable */ }
 
         var detail = ExtractErrorMessage(body);
+        var breakingChange = ApiVersionContract.ClassifyBreakingChange(status, detail);
         var retryable = status is 408 or 409 or 429 or >= 500;
         // Honor an explicit Retry-After (429/503) instead of guessing with backoff.
         TimeSpan? retryAfter = response.Headers.RetryAfter?.Delta;
         if (retryAfter is null && response.Headers.RetryAfter?.Date is { } retryDate)
             retryAfter = retryDate - DateTimeOffset.UtcNow;
         if (retryAfter is { } ra && ra < TimeSpan.Zero) retryAfter = TimeSpan.Zero;
-        return new LlmException($"{providerId} HTTP {status}（{StatusHint(status)}）：{detail}", status, retryable)
+        return new LlmException(
+            $"{providerId} HTTP {status}（{StatusHint(status)}）：{detail}" +
+            (breakingChange is null ? "" : $"\n{breakingChange}"),
+            status, retryable)
         {
             RetryAfter = retryAfter,
         };

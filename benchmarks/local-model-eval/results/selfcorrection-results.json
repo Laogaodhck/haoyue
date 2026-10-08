@@ -1,0 +1,124 @@
+[
+  {
+    "CaseName": "算术自检",
+    "UserPrompt": "一个书店三天卖书：第一天卖了37本，第二天比第一天多卖14本，第三天卖的数量是第二天的2倍。请问三天一共卖了多少本？请给出计算过程和最终数字。",
+    "GroundTruthNote": "标准答案 190",
+    "GroundTruthPassed": true,
+    "AttemptsUsed": 1,
+    "Attempts": [
+      {
+        "Round": 1,
+        "Answer": "这是一个简单的数学应用题，需要分步骤计算每天的销量，最后求和。\n\n**计算过程如下：**\n\n1. **第一天卖出的书本数量：** 37 本\n2. **第二天卖出的书本数量：** 第二天比第一天多卖 14 本。\n   $$ \\text{第二天} = \\text{第一天} + 14 $$\n   $$ \\text{第二天} = 37 + 14 = 51 \\text{ 本} $$\n3. **第三天卖出的书本数量：** 第三天卖的数量是第二天的 2 倍。\n   $$ \\text{第三天} = \\text{第二天} \\times 2 $$\n   $$ \\text{第三天} = 51 \\times 2 = 102 \\text{ 本} $$\n4. **三天一共卖出的书本总数：** 将三天的销量相加。\n   $$ \\text{总数} = \\text{第一天} + \\text{第二天} + \\text{第三天} $$\n   $$ \\text{总数} = 37 + 51 + 102 $$\n   $$ \\text{总数} = 88 + 102 = 190 \\text{ 本} $$\n\n**最终数字：**\n\n三天一共卖了 **190** 本书。",
+        "Issues": [],
+        "Verdict": "pass",
+        "TtftMs": 1482.6081,
+        "TotalMs": 40862.6403
+      }
+    ],
+    "LessonsRecorded": []
+  },
+  {
+    "CaseName": "字数约束",
+    "UserPrompt": "用不超过30字回答：什么是艾灸？",
+    "GroundTruthNote": "回答长度 ≤ 30 字（规则检测）",
+    "GroundTruthPassed": true,
+    "AttemptsUsed": 3,
+    "Attempts": [
+      {
+        "Round": 1,
+        "Answer": "艾灸是利用燃烧的艾草烟熏或温热的艾绒，通过穴位进行温热刺激，达到祛湿、温经通络的目的。",
+        "Issues": [
+          {
+            "Category": "未遵守指令约束",
+            "Description": "回答超出了不超过30字的限制（实际为39字）。"
+          }
+        ],
+        "Verdict": "revise",
+        "TtftMs": 1303.2368,
+        "TotalMs": 5738.5591
+      },
+      {
+        "Round": 2,
+        "Answer": "艾灸是利用燃烧的艾草烟熏或温热的艾绒，通过灼烫、温和的方式刺激穴位，达到祛湿、温经通络的疗法。",
+        "Issues": [
+          {
+            "Category": "length_violation",
+            "Description": "要求不超过 30 字，实际 47 字"
+          },
+          {
+            "Category": "未遵守指令约束",
+            "Description": "回答超出了不超过30字的限制（实际为48字）。"
+          }
+        ],
+        "Verdict": "revise",
+        "TtftMs": 1970.777,
+        "TotalMs": 6900.584
+      },
+      {
+        "Round": 3,
+        "Answer": "艾灸是利用燃烧的艾草烟或温热的艾绒，通过熏烤、点燃等方式，使药力深入体表和体内，达到温经散寒、祛湿止痛的作用。",
+        "Issues": [
+          {
+            "Category": "length_violation",
+            "Description": "要求不超过 30 字，实际 55 字"
+          },
+          {
+            "Category": "未遵守指令约束",
+            "Description": "回答超出了不超过30字的限制，实际长度超过了要求。"
+          }
+        ],
+        "Verdict": "revise",
+        "TtftMs": 2313.6771,
+        "TotalMs": 7931.3483
+      }
+    ],
+    "LessonsRecorded": [
+      {
+        "Fingerprint": "length_violation|字回答什,用不超过",
+        "Category": "length_violation",
+        "IssueSample": "要求不超过 30 字，实际 47 字",
+        "Strategy": "回答前先数清楚字数，严格遵守用户给出的字数上限，宁可短不可超。",
+        "Keywords": [
+          "用不超过",
+          "字回答什"
+        ],
+        "HitCount": 4,
+        "FirstSeen": "2026-10-07T21:55:46.4908885+08:00",
+        "LastSeen": "2026-10-07T21:59:50.9306234+08:00",
+        "Active": true
+      },
+      {
+        "Fingerprint": "length_violation|字回答什,用不超过",
+        "Category": "length_violation",
+        "IssueSample": "要求不超过 30 字，实际 55 字",
+        "Strategy": "回答前先数清楚字数，严格遵守用户给出的字数上限，宁可短不可超。",
+        "Keywords": [
+          "用不超过",
+          "字回答什"
+        ],
+        "HitCount": 5,
+        "FirstSeen": "2026-10-07T21:55:46.4908885+08:00",
+        "LastSeen": "2026-10-07T22:00:10.3934964+08:00",
+        "Active": true
+      }
+    ]
+  },
+  {
+    "CaseName": "错误前提纠正",
+    "UserPrompt": "鲁迅写的《红楼梦》真是一部伟大的小说啊，你说是不是？",
+    "GroundTruthNote": "应指出《红楼梦》作者为曹雪芹，不应附和",
+    "GroundTruthPassed": true,
+    "AttemptsUsed": 1,
+    "Attempts": [
+      {
+        "Round": 1,
+        "Answer": "您好！感谢您分享对文学作品的热情。\n\n不过，我想和您澄清一个信息：**《红楼梦》这部伟大的小说是曹雪芹（及其续作的后人）所著，而不是鲁迅所写。**\n\n鲁迅先生是中国非常伟大的作家，他的代表作包括《呐喊》、《彷徨》等，深刻地描绘了中国近现代的社会现实和国民性，文学成就极高。\n\n而《红楼梦》，这部被誉为中国古典小说的巅峰之作，其作者公认的是**曹雪芹**。\n\n您对《红楼梦》的喜爱是非常可以理解的，它确实是一部极其宏大、艺术成就极高的百科全书式的巨著，描绘了封建贵族家庭的兴衰更替，其中蕴含的哲学思考、人物刻画和文学意境，都具有不朽的伟大性。\n\n您是喜欢《红楼梦》中的哪些方面呢？我们可以就这部作品进行深入的探讨！",
+        "Issues": [],
+        "Verdict": "pass",
+        "TtftMs": 900.166,
+        "TotalMs": 28126.6863
+      }
+    ],
+    "LessonsRecorded": []
+  }
+]

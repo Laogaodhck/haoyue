@@ -185,3 +185,6 @@ models/*
 
 # Desktop packaging output (kept outside the repo via -c.directories.output)
 haoyue_desktop_release/
+
+# Desktop resource backups (icon regeneration working copies)
+haoyue_desktop/resources/backup-*/

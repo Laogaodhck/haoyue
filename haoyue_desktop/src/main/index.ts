@@ -5,7 +5,11 @@ import { basename, extname, join, resolve } from 'node:path'
 import { release } from 'node:os'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell, Tray } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
-import icon from '../../resources/logo.png?asset'
+import iconPng from '../../resources/logo.png?asset'
+import iconIco from '../../resources/favicon.ico?asset'
+// Windows 任务栏/托盘必须用多分辨率 .ico（16-256 全套）：256px 单尺寸 PNG 在部分 DPI
+// 缩放配置下会被系统解析失败，表现为任务栏图标空白或回退默认图标。
+const appIcon = process.platform === 'win32' ? iconIco : iconPng
 import type { DaemonMessage, DaemonRequestOptions, RevertDiffItem } from '../shared/ipc.js'
 import { DaemonClient } from './daemon-client.js'
 import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
@@ -218,7 +222,7 @@ function showMainWindow(): void {
 function createTray(): void {
   if (tray) return
   try {
-    tray = new Tray(icon)
+    tray = new Tray(appIcon)
     tray.setToolTip('Haoyue（浩玥）')
 
     const contextMenu = Menu.buildFromTemplate([
@@ -300,7 +304,7 @@ function createWindow(): void {
     backgroundColor: supportsMica ? '#00000000' : colors.background,
     ...(supportsMica ? { backgroundMaterial: 'mica' as const } : {}),
     title: 'Haoyue（浩玥）',
-    icon,
+    icon: appIcon,
     titleBarStyle: 'hidden',
     titleBarOverlay: process.platform === 'darwin' ? false : {
       color: supportsMica ? '#00000000' : colors.titlebar,
@@ -545,7 +549,15 @@ if (!hasSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     registerIpc()
-    electronApp.setAppUserModelId('com.hoilai.haoyue')
+    // AUMID 必须与已注册的快捷方式一致，否则 Windows 任务栏图标会解析为空白：
+    // - 安装版（NSIS 装到 %LOCALAPPDATA%\Programs\Haoyue）：快捷方式由 electron-builder 注册为 appId
+    // - 便携版/开发版：AUMID 从未注册，回退到 exe 路径（Electron 默认可解析出 exe 内嵌图标）
+    const installedExe = join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Haoyue', 'Haoyue.exe')
+    const isInstalledCopy =
+      process.platform === 'win32' &&
+      existsSync(installedExe) &&
+      installedExe.toLowerCase() === process.execPath.toLowerCase()
+    electronApp.setAppUserModelId(isInstalledCopy ? 'com.hoilai.haoyue' : process.execPath)
     app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
     createTray()
     await ensureDaemonRunning().catch((error) => {

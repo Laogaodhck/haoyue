@@ -10,6 +10,8 @@ public interface IConfigStore
     bool HasAnomaly { get; }
     string? AnomalyDetail { get; }
     string? BackupConfigFile { get; }
+    /// <summary>最近一次加载时 ConfigSchema 规范化/迁移产生的告警（字段回退、越界钳制、版本升级）。</summary>
+    IReadOnlyList<string> ValidationWarnings { get; }
 
     void Save();
     void SaveState();
@@ -48,6 +50,7 @@ public sealed class ConfigStore : IConfigStore
     public bool HasAnomaly { get; private set; }
     public string? AnomalyDetail { get; private set; }
     public string? BackupConfigFile { get; private set; }
+    public IReadOnlyList<string> ValidationWarnings { get; private set; } = [];
 
     public ConfigStore(string? configFile = null, string? stateFile = null)
     {
@@ -259,17 +262,41 @@ public sealed class ConfigStore : IConfigStore
                 }
                 else
                 {
-                    var loaded = JsonSerializer.Deserialize(text, HaoyueJsonContext.Default.HaoyueConfig);
-                    if (loaded is not null)
+                    var root = JsonNode.Parse(text, new JsonNodeOptions { PropertyNameCaseInsensitive = true },
+                        new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })
+                        as JsonObject;
+                    if (root is null)
                     {
-                        if (string.IsNullOrWhiteSpace(loaded.Model))
-                            MigrateLegacyProfiles(loaded, _configFile);
-                        HasAnomaly = false;
-                        AnomalyDetail = null;
-                        _configBaseline = text;
-                        return loaded;
+                        HandleAnomaly("配置文件根节点不是 JSON 对象");
                     }
-                    HandleAnomaly("配置文件反序列化结果为空");
+                    else
+                    {
+                        // 统一 Schema 管道：规范化（默认值回填/越界钳制/枚举回退）→ 版本迁移 → 反序列化。
+                        var (warnings, _) = ConfigSchema.Normalize(root);
+                        var migrations = ConfigSchema.MigrateToCurrent(root);
+                        var loaded = root.Deserialize(HaoyueJsonContext.Default.HaoyueConfig);
+                        if (loaded is not null)
+                        {
+                            if (string.IsNullOrWhiteSpace(loaded.Model))
+                                MigrateLegacyProfiles(loaded, _configFile);
+                            ValidationWarnings = [.. warnings, .. migrations];
+                            HasAnomaly = false;
+                            AnomalyDetail = null;
+                            if (migrations.Count > 0)
+                            {
+                                // schema 版本升级：清空基线并立即落盘，把迁移后的文件写回磁盘。
+                                _configBaseline = null;
+                                Config = loaded;
+                                Save();
+                            }
+                            else
+                            {
+                                _configBaseline = text;
+                            }
+                            return loaded;
+                        }
+                        HandleAnomaly("配置文件反序列化结果为空");
+                    }
                 }
             }
             catch (Exception ex)

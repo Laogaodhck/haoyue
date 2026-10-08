@@ -1351,6 +1351,138 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Handshake_WithIncompatibleMajorVersion_IsRejectedWithVersionMismatchCode()
+    {
+        var token = new string('a', 64);
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            handshakeToken: token);
+
+        await connection.HandshakeWithVersionAsync(token, "99.0");
+        var rejected = await connection.ReadAsync();
+        Assert.Equal("error", rejected["event"]!.GetValue<string>());
+        var code = rejected["details"]?["code"]?.GetValue<string>();
+        Assert.Equal("versionMismatch", code);
+        Assert.Contains("protocol version mismatch", rejected["data"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Handshake_WithClientNewerMinorVersion_AcceptsWithUpgradeWarning()
+    {
+        var token = new string('a', 64);
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            handshakeToken: token);
+
+        var serverMinor = int.Parse(DaemonServer.ProtocolVersion.Split('.')[1]);
+        await connection.HandshakeWithVersionAsync(token, $"2.{serverMinor + 1}");
+        var authed = await connection.ReadAsync();
+        Assert.Equal("result", authed["event"]!.GetValue<string>());
+        var info = JsonNode.Parse(authed["data"]!.GetValue<string>())!;
+        Assert.NotNull(info["versionWarning"]);
+        Assert.Contains("升级", info["versionWarning"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Handshake_WithCompatibleVersion_AcceptsWithoutWarning()
+    {
+        var token = new string('a', 64);
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            handshakeToken: token);
+
+        await connection.HandshakeWithVersionAsync(token, DaemonServer.ProtocolVersion);
+        var authed = await connection.ReadAsync();
+        Assert.Equal("result", authed["event"]!.GetValue<string>());
+        var info = JsonNode.Parse(authed["data"]!.GetValue<string>())!;
+        Assert.Null(info["versionWarning"]);
+    }
+
+    [Theory]
+    [InlineData(410, "any detail", true)]
+    [InlineData(404, "model decommissioned by provider", true)]
+    [InlineData(404, "model not found in catalog", false)]
+    [InlineData(500, "internal server error", false)]
+    public void ApiVersionContract_ClassifiesBreakingChanges(int status, string detail, bool expectAlert)
+    {
+        var alert = Haoyue.Runtime.Providers.ApiVersionContract.ClassifyBreakingChange(status, detail);
+        Assert.Equal(expectAlert, alert is not null);
+    }
+
+    // ---------------------------------------------------------------- 失败日志分析（进化引擎 E1）端到端
+
+    /// <summary>
+    /// 集成测试：失败信号落盘（EventJournal/SQLite）→ evolution.inspect RPC →
+    /// DefectAggregator 聚合输出。覆盖 DaemonServer switch 分发 + 真实数据库往返，
+    /// 补齐此前仅单元级覆盖的缺口（测试金字塔的集成层）。
+    /// </summary>
+    [Fact]
+    public async Task EvolutionInspect_AggregatesJournaledFailures_EndToEnd()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+        var db = _runtime!.Database;
+
+        // 脚本化一个「失败回合」：bash 工具连续 3 次同样错误（达到 ClusterThreshold）+ 一次用户负反馈。
+        const string session = "sess-e2e-1";
+        db.AppendEvent(DateTimeOffset.UtcNow, nameof(Haoyue.Runtime.Events.TurnStartedEvent),
+            EventJournal.Serialize(new Haoyue.Runtime.Events.TurnStartedEvent(session, "跑构建")));
+        for (var i = 0; i < 3; i++)
+        {
+            db.AppendEvent(DateTimeOffset.UtcNow.AddSeconds(i), nameof(Haoyue.Runtime.Events.ToolCallCompletedEvent),
+                EventJournal.Serialize(new Haoyue.Runtime.Events.ToolCallCompletedEvent(
+                    $"call-{i}", "bash", Success: false, "Error: connection refused", TimeSpan.FromSeconds(1))));
+        }
+        db.AppendEvent(DateTimeOffset.UtcNow.AddSeconds(5), nameof(Haoyue.Runtime.Events.TurnCompletedEvent),
+            EventJournal.Serialize(new Haoyue.Runtime.Events.TurnCompletedEvent(session, Cancelled: false, Error: null)));
+        db.AppendEvent(DateTimeOffset.UtcNow.AddSeconds(6), nameof(Haoyue.Runtime.Events.UserFeedbackEvent),
+            EventJournal.Serialize(new Haoyue.Runtime.Events.UserFeedbackEvent(session, "negative", "构建一直失败")));
+
+        await connection.SendAsync(11, "evolution.inspect", new JsonObject { ["limit"] = 500 });
+        var reply = await connection.ReadAsync();
+        Assert.Equal("result", reply["event"]!.GetValue<string>());
+
+        var reports = JsonNode.Parse(reply["data"]!.GetValue<string>())!["reports"]!.AsArray();
+        var cluster = reports.FirstOrDefault(r => r!["kind"]!.GetValue<string>() == "ToolFailureCluster");
+        Assert.NotNull(cluster);
+        Assert.Equal("bash", cluster!["toolName"]!.GetValue<string>());
+        Assert.Equal(3, cluster["occurrences"]!.GetValue<int>());
+        Assert.Contains("connection refused", cluster["errorSummary"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+
+        var feedback = reports.FirstOrDefault(r => r!["kind"]!.GetValue<string>() == "UserNegativeFeedback");
+        Assert.NotNull(feedback);
+        Assert.Null(feedback!["toolName"]); // 反馈类报告没有工具名
+        Assert.NotNull(feedback["fingerprint"]);
+    }
+
+    [Fact]
+    public async Task EvolutionInspect_EmptyJournal_ReturnsNoReports()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(12, "evolution.inspect");
+        var reply = await connection.ReadAsync();
+        Assert.Equal("result", reply["event"]!.GetValue<string>());
+        Assert.Empty(JsonNode.Parse(reply["data"]!.GetValue<string>())!["reports"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task ConfigStatus_ExposesSchemaVersionAndValidationWarnings()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(13, "config.status");
+        var reply = await connection.ReadAsync();
+        Assert.Equal("result", reply["event"]!.GetValue<string>());
+        var status = JsonNode.Parse(reply["data"]!.GetValue<string>())!;
+        Assert.Equal(ConfigSchema.CurrentVersion, status["schemaVersion"]!.GetValue<int>());
+        Assert.False(status["hasAnomaly"]!.GetValue<bool>());
+        Assert.Empty(status["validationWarnings"]!.AsArray());
+    }
+
+    [Fact]
     public async Task Handshake_RequiredBeforeAnyOtherMethod()
     {
         var connection = await StartServerAsync(
@@ -1528,6 +1660,80 @@ public sealed class DaemonServerTests : IAsyncDisposable
         Assert.True(details[0]!["vision"]!.GetValue<bool>());
     }
 
+    [Fact]
+    public async Task UnknownMethod_ErrorCarriesContractCode()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "no.such.method", new JsonObject());
+        var error = await connection.ReadUntilAsync(
+            r => r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "error");
+        Assert.Equal("unknownMethod", error["details"]!["code"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Chat_MissingParams_ErrorCarriesInvalidParamsCode()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "chat", new JsonObject());
+        var error = await connection.ReadUntilAsync(
+            r => r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "error");
+        Assert.Equal("invalidParams", error["details"]!["code"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task InvalidEnvelope_ErrorCarriesInvalidRequestCode()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        // id 类型非法（字符串）→ 信封级错误，code 必须是 invalidRequest。
+        await connection.SendRawAsync("{\"id\":\"not-a-number\",\"method\":\"ping\"}");
+        var error = await connection.ReadUntilAsync(
+            r => r["event"]!.GetValue<string>() == "error");
+        Assert.Equal("invalidRequest", error["details"]!["code"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Contract_Export_MatchesSnapshot()
+    {
+        var repoRoot = FindRepoRoot();
+        var snapshotPath = Path.Combine(repoRoot, "contracts", "daemon-contract.json");
+        var exported = DaemonContract.ExportJson().ToJsonString();
+        if (Environment.GetEnvironmentVariable("HAOYUE_UPDATE_CONTRACT") == "1")
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(snapshotPath)!);
+            File.WriteAllText(snapshotPath, exported + "\n");
+            return;
+        }
+        Assert.True(File.Exists(snapshotPath),
+            $"契约快照缺失：设置 HAOYUE_UPDATE_CONTRACT=1 运行测试以生成 {snapshotPath}");
+        var snapshot = File.ReadAllText(snapshotPath).TrimEnd();
+        Assert.True(exported == snapshot,
+            "DaemonContract 导出与 contracts/daemon-contract.json 不一致：" +
+            "请设置 HAOYUE_UPDATE_CONTRACT=1 重新生成快照并提交，同步更新 TS 侧生成类型。");
+    }
+
+    [Fact]
+    public void Contract_AllMethods_HaveParamsSchema()
+    {
+        // 契约治理：所有方法必须显式声明参数 schema（无参方法用空对象），禁止回退 pending。
+        var pending = DaemonContract.Methods.Where(m => m.SchemaStatus != "specified").ToList();
+        Assert.True(pending.Count == 0,
+            "以下方法缺少 params schema: " + string.Join(", ", pending.Select(m => m.Name)));
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Haoyue.slnx")))
+            dir = dir.Parent!;
+        return dir?.FullName ?? throw new InvalidOperationException("未找到仓库根目录（Haoyue.slnx）");
+    }
+
     private string CreateWorkspace(string name, string? workspaceConfig = null)
     {
         var root = Path.Combine(_tempDir, name);
@@ -1594,6 +1800,13 @@ public sealed class DaemonServerTests : IAsyncDisposable
         /// <summary>Sends the mandatory handshake message the daemon expects first.</summary>
         public Task HandshakeAsync(string token, long id = 0) =>
             SendAsync(id, "handshake", new JsonObject { ["token"] = token });
+
+        /// <summary>Handshake with an explicit client protocol version (version contract).</summary>
+        public Task HandshakeWithVersionAsync(string token, string protocolVersion, long id = 0) =>
+            SendAsync(id, "handshake", new JsonObject { ["token"] = token, ["protocolVersion"] = protocolVersion });
+
+        /// <summary>Sends a raw (possibly malformed) protocol line for envelope error tests.</summary>
+        public Task SendRawAsync(string line) => _writer.WriteLineAsync(line);
 
         public async Task<JsonObject> ReadAsync()
         {

@@ -82,4 +82,28 @@ public static class LocalModels
             return path;
         return path + ".gguf";
     }
+
+    /// <summary>
+    /// Resolves the multimodal projector (mmproj) GGUF for a local model, or null when the
+    /// model stays text-only. An explicit <paramref name="model"/>.MmprojPath wins; otherwise
+    /// the models directory is scanned and exactly one *mmproj*.gguf file is accepted —
+    /// multiple candidates are ambiguous, so none is chosen automatically.
+    /// </summary>
+    public static string? ResolveMmprojPath(ProviderConfig provider, ModelConfig model)
+    {
+        if (!string.IsNullOrWhiteSpace(model.MmprojPath))
+            return Path.GetFullPath(model.MmprojPath.Trim());
+
+        try
+        {
+            var candidates = ListFiles(ResolveDirectory(provider.ModelsDirectory))
+                .Where(file => file.FileName.Contains("mmproj", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            return candidates.Count == 1 ? candidates[0].Path : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }

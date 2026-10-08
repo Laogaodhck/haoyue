@@ -15,7 +15,12 @@ using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Runtime.Daemon;
 
-internal sealed class DaemonRequestException(string message) : Exception(message);
+/// <summary>参数级请求错误。message 仅供展示，跨语言行为分支以 <see cref="Code"/> 为准。</summary>
+internal sealed class DaemonRequestException(string message, DaemonErrorCode code = DaemonErrorCode.InvalidParams)
+    : Exception(message)
+{
+    public DaemonErrorCode Code { get; } = code;
+}
 
 /// <summary>Structured administrative operations shared by desktop and editor clients.</summary>
 internal sealed class DaemonAdminApi(
@@ -107,6 +112,10 @@ internal sealed class DaemonAdminApi(
         ["detail"] = runtime.ConfigStore.AnomalyDetail,
         ["backupFile"] = runtime.ConfigStore.BackupConfigFile,
         ["configFile"] = HaoyuePaths.ConfigFile,
+        ["schemaVersion"] = ConfigSchema.CurrentVersion,
+        ["diskSchemaVersion"] = runtime.ConfigStore.Config.SchemaVersion,
+        ["validationWarnings"] = new JsonArray(
+            runtime.ConfigStore.ValidationWarnings.Select(w => (JsonNode)w).ToArray()),
     }.ToJsonString();
 
     public string RebuildConfigAndDatabase()

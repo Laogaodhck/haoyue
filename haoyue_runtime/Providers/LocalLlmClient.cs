@@ -38,21 +38,160 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 $"Local model file not found: {path}. Put the GGUF file into the provider's models directory or fix the path.",
                 retryable: false);
 
+        var images = CollectImages(request);
+        // mmproj 始终参与解析与加载签名（即使本轮纯文本），避免图片轮/文本轮交替时
+        // 签名漂移导致权重反复重载。
+        var mmprojPath = LocalModels.ResolveMmprojPath(request.Provider, request.Model);
+
         using var lease = await cache.AcquireAsync(
             path,
             BuildLoadParams(path, request.Provider),
-            LoadSignature(request.Provider),
+            LoadSignature(request.Provider) + "|" + (mmprojPath ?? "nommproj"),
+            mmprojPath,
             ct).ConfigureAwait(false);
         var weights = lease.Weights;
 
         var (contextParams, signature) = BuildContextParams(path, request.Model, request.Provider, weights);
-        var (prompt, startsInThinking) = BuildPrompt(weights, request);
+        string? marker = lease.Mtmd is null ? null : NativeApi.MtmdDefaultMarker();
+        var (prompt, startsInThinking) = BuildPrompt(weights, request, marker);
 
-        await foreach (var evt in (request.Provider.LocalPrefixReuse
-            ? StreamReusableAsync(cache, weights, contextParams, signature, prompt, startsInThinking, request, ct)
-            : StreamStatelessAsync(weights, contextParams, prompt, startsInThinking, request, ct)).ConfigureAwait(false))
+        IAsyncEnumerable<LlmStreamEvent> stream;
+        if (images.Count > 0)
+        {
+            // llama.cpp 的 CUDA 后端在 gemma4 混合架构（fused Gated DeltaNet）的非因果
+            // 图像注意力上存在病态慢路径：实测 266 个图像 token 在 3070 Ti 上需 26 分钟，
+            // 同一请求全 CPU 只要 23 秒。带图请求一律强制全 CPU context 保证可用性；
+            // 纯文本轮不受影响，继续享受 GPU 卸载加速。
+            var (cpuParams, _) = BuildContextParams(path, request.Model, request.Provider, weights, forceCpu: true);
+            stream = StreamMultimodalAsync(weights, lease.Mtmd, cpuParams, prompt, startsInThinking, images, request, ct);
+        }
+        else
+        {
+            stream = request.Provider.LocalPrefixReuse
+                ? StreamReusableAsync(cache, weights, contextParams, signature, prompt, startsInThinking, request, ct)
+                : StreamStatelessAsync(weights, contextParams, prompt, startsInThinking, request, ct);
+        }
+
+        await foreach (var evt in stream.ConfigureAwait(false))
         {
             yield return evt;
+        }
+    }
+
+    /// <summary>
+    /// Collects image attachments across the conversation in message order (user turns and
+    /// tool results both carry Images). Order matters: mtmd consumes queued media bitmaps
+    /// at the markers in the same sequence.
+    /// </summary>
+    internal static IReadOnlyList<ChatImageAttachment> CollectImages(LlmRequest request) => request.Messages
+        .SelectMany(message => message.Images ?? (IReadOnlyList<ChatImageAttachment>)[])
+        .ToList();
+
+    /// <summary>
+    /// Multimodal inference: media bitmaps are queued in conversation order, the prompt
+    /// carries an image marker per attachment, and mtmd tokenizes text+image into chunks
+    /// evaluated straight into the KV cache. Image turns do not participate in KV prefix
+    /// reuse (image chunks occupy non-token positions, so token-prefix bookkeeping would
+    /// be unsound); the context is discarded after the turn like the stateless path.
+    /// </summary>
+    private async IAsyncEnumerable<LlmStreamEvent> StreamMultimodalAsync(
+        LLamaWeights weights, MtmdWeights? mtmd, ModelParams contextParams, string prompt, bool startsInThinking,
+        IReadOnlyList<ChatImageAttachment> images, LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
+    {
+        if (mtmd is null)
+        {
+            throw new LlmException(
+                $"{request.Model.Id} received {images.Count} image(s), but no vision projector (mmproj) is " +
+                $"configured. Put a *mmproj*.gguf matching this model into the provider's models directory " +
+                $"or set model.mmprojPath; this local model cannot see images without it.",
+                retryable: false);
+        }
+
+        var context = weights.CreateContext(contextParams, NullLogger.Instance);
+        try
+        {
+            foreach (var image in images)
+            {
+                var bytes = Convert.FromBase64String(image.Data);
+                mtmd.LoadMedia(bytes);
+            }
+
+            // Tokenize 把 prompt 按 marker 切成 text/image 混合块；媒体位图按入队顺序
+            // 被 marker 位置消费。返回值为错误码（0 = 成功）。
+            var tokenizeResult = mtmd.Tokenize(prompt, true, true, out var chunks);
+            if (tokenizeResult != 0 || chunks.Size == 0)
+                throw new LlmException(
+                    $"Multimodal tokenization failed for {request.Model.Id} (code {tokenizeResult}). " +
+                    "The mmproj may not match this model file.",
+                    retryable: false);
+            var promptPositions = chunks.CountPositions();
+            var batch = new LLamaBatch();
+            var decoder = new StreamingTokenDecoder(context);
+            var inferenceParams = BuildInferenceParams(request);
+            inferenceParams.SamplingPipeline.Reset();
+            var antiprocessor = new AntipromptProcessor(inferenceParams.AntiPrompts);
+
+            // mtmd 块直接评估进 KV cache（image 块内部展开为视觉嵌入位置）。
+            // 签名: (chunks, ctx, ref new_n_past, seqId, nBatch, logitsLast)；n_batch 必须 >0。
+            var nPast = 0;
+            var evalResult = mtmd.EvaluateChunks(chunks, context.NativeHandle, ref nPast, 0, 256, true);
+            if (evalResult != 0)
+                throw new LlmException(
+                    $"Multimodal prefill failed for {request.Model.Id} (code {evalResult}).",
+                    retryable: false);
+
+            var parser = new ThinkTagParser(startsInThinking);
+            var maxTokens = inferenceParams.MaxTokens < 0 ? int.MaxValue : inferenceParams.MaxTokens;
+            var generated = 0;
+            var stopped = false;
+            for (var i = 0; i < maxTokens && !ct.IsCancellationRequested; i++)
+            {
+                var id = inferenceParams.SamplingPipeline.Sample(context.NativeHandle, batch.TokenCount - 1);
+                if (id.IsEndOfGeneration(weights.Vocab)) { stopped = true; break; }
+
+                decoder.Add(id);
+                generated++;
+                var decoded = decoder.Read();
+                if (antiprocessor.Add(decoded)) { stopped = true; break; }
+                foreach (var piece in parser.Process(decoded))
+                {
+                    if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                    else yield return new LlmTextDelta(piece.Text);
+                }
+
+                if (nPast + 1 >= context.ContextSize)
+                {
+                    // 图片轮上下文用完直接收尾，不做 KV 平移——多模态位置与 token 档案
+                    // 不对应，平移后再采样结果不可信。
+                    stopped = false;
+                    break;
+                }
+
+                batch.Clear();
+                batch.Add(id, nPast++, LLamaSeqId.Zero, true);
+                var code = await context.DecodeAsync(batch, ct).ConfigureAwait(false);
+                if (code != DecodeResult.Ok) throw new LLamaDecodeError(code);
+            }
+
+            foreach (var piece in parser.Flush())
+            {
+                if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                else yield return new LlmTextDelta(piece.Text);
+            }
+
+            var (answer, thinking) = FinalizeOutput(parser.Answer, parser.Thinking);
+            yield return new LlmCompleted(new LlmCompletion
+            {
+                Text = answer,
+                Thinking = thinking,
+                Usage = new TokenUsage(promptPositions, generated),
+                FinishReason = stopped || ct.IsCancellationRequested ? "stop" : "length",
+            });
+        }
+        finally
+        {
+            mtmd.ClearMedia();
+            context.Dispose();
         }
     }
 
@@ -297,7 +436,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         $"{provider.GpuLayers?.ToString() ?? "cpu"}|{provider.Threads?.ToString() ?? "auto"}";
 
     private static (ModelParams Params, string Signature) BuildContextParams(
-        string path, ModelConfig model, ProviderConfig provider, LLamaWeights weights)
+        string path, ModelConfig model, ProviderConfig provider, LLamaWeights weights, bool forceCpu = false)
     {
         // Registering a model with a context window larger than it was trained for would
         // silently extrapolate positions, so the effective context is clamped to the model.
@@ -307,7 +446,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         var trained = weights.ContextSize > 0 ? weights.ContextSize : 4096;
         var configured = model.ContextWindow > 0 ? model.ContextWindow : trained;
         var contextSize = (uint)Math.Max(512, Math.Min(configured, Math.Min(trained, LocalModelProbe.DefaultContextWindow)));
-        var gpuLayers = provider.GpuLayers ?? 0;
+        var gpuLayers = forceCpu ? 0 : (provider.GpuLayers ?? 0);
         var threads = provider.Threads;
         // Quantized KV caches require flash attention in llama.cpp; silently keep f16
         // when the user enabled quantization alone instead of failing every request.
@@ -337,8 +476,13 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         _ => "none",
     };
 
-    /// <summary>Renders the conversation with the chat template embedded in the GGUF file.</summary>
-    private static (string Prompt, bool StartsInThinking) BuildPrompt(LLamaWeights weights, LlmRequest request)
+    /// <summary>
+    /// Renders the conversation with the chat template embedded in the GGUF file. When
+    /// <paramref name="imageMarker"/> is set, one marker per attachment is appended to the
+    /// text of the message that carries it — mtmd replaces markers with image embeddings.
+    /// </summary>
+    private static (string Prompt, bool StartsInThinking) BuildPrompt(
+        LLamaWeights weights, LlmRequest request, string? imageMarker = null)
     {
         LLamaTemplate template;
         try
@@ -361,7 +505,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             switch (message.Role)
             {
                 case ChatRole.User:
-                    template.Add("user", message.Text);
+                    template.Add("user", WithImageMarkers(message, imageMarker));
                     break;
                 case ChatRole.System:
                     template.Add("system", message.Text);
@@ -373,13 +517,24 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                     // Tool calling stays off for local models, but a session started on
                     // another provider can still carry tool results; replay them as user
                     // turns so the information is not silently dropped.
-                    template.Add("user", $"[{message.ToolName ?? "tool"} result]\n{message.Text}");
+                    template.Add("user", $"[{message.ToolName ?? "tool"} result]\n{WithImageMarkers(message, imageMarker)}");
                     break;
             }
         }
 
         template.AddAssistant = true;
-        var prompt = Encoding.UTF8.GetString(template.Apply());
+        string prompt;
+        try
+        {
+            prompt = Encoding.UTF8.GetString(template.Apply());
+        }
+        catch (Exception ex) when (ex is not LlmException)
+        {
+            // 新模型的官方模板常超前于 llama.cpp 内置 Jinja 的能力（如 Gemma 4 的
+            // namespace / raise_exception 语法），apply 失败时按架构走 canonical 兜底渲染，
+            // 而不是让该模型在 runtime 中完全不可用。
+            prompt = RenderCanonicalPrompt(weights, request, ex, imageMarker);
+        }
 
         // DeepSeek-R1 family models reason before answering: either the template injects
         // the opening tag into the generation prompt (original R1), or the template itself
@@ -388,6 +543,92 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         var startsInThinking = trimmed.EndsWith(" thinking", StringComparison.Ordinal)
             || (TryGetChatTemplate(weights)?.Contains("</think>", StringComparison.Ordinal) ?? false);
         return (prompt, startsInThinking);
+    }
+
+    /// <summary>Message text followed by one image marker per attached image.</summary>
+    internal static string WithImageMarkers(ChatMessage message, string? imageMarker)
+    {
+        if (imageMarker is null || message.Images is not { Count: > 0 })
+            return message.Text;
+        return message.Text + string.Concat(Enumerable.Repeat(imageMarker, message.Images.Count));
+    }
+
+    /// <summary>
+    /// Chat template 无法被 llama.cpp 应用时的架构化兜底。仅对已验证格式的架构生效；
+    /// 其余架构如实抛错（带原始模板错误），绝不静默用错误格式降级模型输出质量。
+    /// </summary>
+    internal static string RenderCanonicalPrompt(
+        LLamaWeights weights, LlmRequest request, Exception templateError, string? imageMarker = null)
+    {
+        var architecture = TryGetMetadata(weights, "general.architecture");
+        if (architecture is "gemma4")
+            return RenderGemmaTurnPrompt(request.Messages, request.System, request.EnableThinking, imageMarker);
+
+        throw new LlmException(
+            $"The chat template of {request.Model.Id} (architecture: {architecture ?? "unknown"}) " +
+            $"could not be applied by the embedded llama.cpp: {templateError.Message}. " +
+            "Update LLamaSharp for template support, or convert the GGUF with a simplified template.",
+            retryable: false,
+            inner: templateError);
+    }
+
+    /// <summary>
+    /// Gemma 4 canonical 兜底渲染（对照模型内嵌官方模板的无工具/无多模态路径）：
+    /// 每个角色渲染为 "&lt;|turn&gt;role\n内容&lt;turn|&gt;\n"，系统消息仅在有内容或开启思考时出现，
+    /// 生成提示以 "&lt;|turn&gt;model\n" 结尾（开启思考时追加 "&lt;|think|&gt;\n"）。
+    /// 不含 &lt;bos&gt;——BOS 由 Tokenize(addBos: true) 统一注入，避免重复。
+    /// </summary>
+    internal static string RenderGemmaTurnPrompt(
+        IReadOnlyList<ChatMessage> messages, string? system, bool enableThinking, string? imageMarker = null)
+    {
+        var sb = new StringBuilder();
+        if (enableThinking || !string.IsNullOrWhiteSpace(system))
+        {
+            sb.Append("<|turn>system\n");
+            if (enableThinking) sb.Append("<|think|>\n");
+            if (!string.IsNullOrWhiteSpace(system))
+                sb.Append(system.Trim());
+            sb.Append("<turn|>\n");
+        }
+        foreach (var message in messages)
+        {
+            switch (message.Role)
+            {
+                case ChatRole.User:
+                    sb.Append("<|turn>user\n").Append(WithImageMarkers(message, imageMarker).Trim()).Append("<turn|>\n");
+                    break;
+                case ChatRole.System:
+                    if (!string.IsNullOrWhiteSpace(message.Text))
+                        sb.Append("<|turn>system\n").Append(message.Text.Trim()).Append("<turn|>\n");
+                    break;
+                case ChatRole.Assistant:
+                    if (message.Text.Length > 0)
+                        sb.Append("<|turn>model\n").Append(message.Text).Append("<turn|>\n");
+                    break;
+                case ChatRole.Tool:
+                    // 工具结果回放为用户轮，信息不丢失（与主模板行为一致）。
+                    sb.Append("<|turn>user\n[").Append(message.ToolName ?? "tool").Append(" result]\n")
+                      .Append(WithImageMarkers(message, imageMarker)).Append("<turn|>\n");
+                    break;
+            }
+        }
+        sb.Append("<|turn>model\n");
+        return sb.ToString();
+    }
+
+    private static string? TryGetMetadata(LLamaWeights weights, string key)
+    {
+        try
+        {
+            foreach (var (k, value) in weights.Metadata)
+                if (string.Equals(k, key, StringComparison.OrdinalIgnoreCase))
+                    return value?.ToString();
+        }
+        catch (Exception)
+        {
+            // 元数据读取失败不影响主流程。
+        }
+        return null;
     }
 
     private static string? TryGetChatTemplate(LLamaWeights weights)

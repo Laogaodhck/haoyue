@@ -295,4 +295,57 @@ public sealed class LocalModelTests : IDisposable
             writer.Write(bytes);
         }
     }
+
+    /// <summary>
+    /// Gemma 4 的官方聊天模板使用 llama.cpp 内置 Jinja 尚不支持的语法，apply 失败后
+    /// 兜底渲染器必须产出与 canonical 格式逐字符一致的提示词。
+    /// </summary>
+    public sealed class GemmaTurnPromptTests
+    {
+        [Fact]
+        public void RendersSystemUserAndModelTurns()
+        {
+            var prompt = LocalLlmClient.RenderGemmaTurnPrompt(
+            [
+                ChatMessage.User("第一问"),
+                ChatMessage.Assistant("第一答"),
+                ChatMessage.User("第二问"),
+            ], system: "你是助手", enableThinking: false);
+
+            Assert.Equal(
+                "<|turn>system\n你是助手<turn|>\n" +
+                "<|turn>user\n第一问<turn|>\n" +
+                "<|turn>model\n第一答<turn|>\n" +
+                "<|turn>user\n第二问<turn|>\n" +
+                "<|turn>model\n",
+                prompt);
+        }
+
+        [Fact]
+        public void OmitsSystemTurnWhenNoSystemAndThinkingDisabled()
+        {
+            var prompt = LocalLlmClient.RenderGemmaTurnPrompt(
+                [ChatMessage.User("你好")], system: null, enableThinking: false);
+
+            Assert.Equal("<|turn>user\n你好<turn|>\n<|turn>model\n", prompt);
+        }
+
+        [Fact]
+        public void ThinkingTokenGoesInsideTheSystemTurn()
+        {
+            var prompt = LocalLlmClient.RenderGemmaTurnPrompt(
+                [ChatMessage.User("你好")], system: "规则", enableThinking: true);
+
+            Assert.Equal("<|turn>system\n<|think|>\n规则<turn|>\n<|turn>user\n你好<turn|>\n<|turn>model\n", prompt);
+        }
+
+        [Fact]
+        public void ToolResultsAreReplayedAsUserTurns()
+        {
+            var prompt = LocalLlmClient.RenderGemmaTurnPrompt(
+                [ChatMessage.ToolResult("t1", "grep", "结果文本", success: true)], system: null, enableThinking: false);
+
+            Assert.Equal("<|turn>user\n[grep result]\n结果文本<turn|>\n<|turn>model\n", prompt);
+        }
+    }
 }

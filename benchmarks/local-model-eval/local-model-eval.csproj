@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Haoyue.Benchmarks.LocalModelEval</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- 本地推理原生后端二选一，与 haoyue_runtime 保持一致：默认 CPU；-p:LlamaBackend=Cuda12 切换。 -->
+  <ItemGroup>
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" Condition="'$(LlamaBackend)' != 'Cuda12'" />
+    <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" Condition="'$(LlamaBackend)' == 'Cuda12'" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\haoyue_runtime\haoyue_runtime.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,28 +1,17 @@
-export type DaemonEventName =
-  | 'pong'
-  | 'delta'
-  | 'thinking'
-  | 'steer'
-  | 'image_view'
-  | 'status'
-  | 'tool_start'
-  | 'tool_done'
-  | 'file_diff'
-  | 'model_start'
-  | 'usage'
-  | 'workflow'
-  | 'plan_update'
-  | 'result'
-
-  | 'done'
-  | 'cancelled'
-  | 'error'
-  | 'bye'
-  | 'schedule.updated'
-  | 'schedule.upcoming'
-  | 'evolution.reflected'
-  | 'mcp.updated'
-  | 'turn.interrupted'
+// 事件名、错误码与方法清单的唯一事实源是 contracts/daemon-contract.json
+// （由 haoyue_runtime 的 DaemonContract 导出，scripts/generate-contract.mjs 生成下方引用）。
+import type { DaemonErrorCode, DaemonEventName } from './daemon-contract.gen.js'
+import { DAEMON_ERROR_CODES } from './daemon-contract.gen.js'
+export type { DaemonEventName } from './daemon-contract.gen.js'
+export type { DaemonMethod } from './daemon-contract.gen.js'
+export {
+  DAEMON_BROADCAST_EVENTS,
+  DAEMON_ERROR_CODES,
+  DAEMON_EVENT_NAMES,
+  DAEMON_METHODS,
+  DAEMON_STREAM_EVENTS,
+  DAEMON_TERMINAL_EVENTS,
+} from './daemon-contract.gen.js'
 
 export interface DaemonMessage {
   id: number
@@ -33,6 +22,31 @@ export interface DaemonMessage {
   /** Session that owns a streamed agent event. Present for chat turn events. */
   sessionId?: string
   requestMethod?: string
+}
+
+/**
+ * daemon error 事件的契约化异常：跨语言行为分支以 code 为准（见契约 errorCodes），
+ * message 仅是人类可读展示文本，禁止对其做字符串匹配。
+ */
+export class DaemonError extends Error {
+  readonly code: DaemonErrorCode
+  /** 发起请求的方法名，便于上层按方法分类处理。 */
+  readonly method?: string
+
+  constructor(code: DaemonErrorCode, message: string, method?: string) {
+    super(message)
+    this.name = 'DaemonError'
+    this.code = code
+    this.method = method
+  }
+}
+
+/** 从 error 事件信封提取契约错误码；旧版 daemon 未携带 details.code 时回退为 unknown。 */
+export function errorCodeOf(message: DaemonMessage): DaemonErrorCode {
+  const code = message.details?.['code']
+  return typeof code === 'string' && (DAEMON_ERROR_CODES as readonly string[]).includes(code)
+    ? (code as DaemonErrorCode)
+    : 'unknown'
 }
 
 export interface DaemonState {

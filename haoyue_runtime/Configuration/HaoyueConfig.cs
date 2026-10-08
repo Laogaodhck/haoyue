@@ -5,6 +5,9 @@ namespace Haoyue.Runtime.Configuration;
 /// <summary>Root of ~/.haoyue/config.json. All model/provider data is user data — never hard-coded.</summary>
 public sealed class HaoyueConfig
 {
+    /// <summary>配置 schema 版本，由 <see cref="ConfigSchema"/> 统一管理并在加载时迁移推进。</summary>
+    public int SchemaVersion { get; set; } = ConfigSchema.CurrentVersion;
+
     public string? Provider { get; set; }
     public string? Model { get; set; }
     public double? Temperature { get; set; }
@@ -93,6 +96,12 @@ public sealed class ModelConfig
     public ModelCapabilities Capabilities { get; set; } = new();
     /// <summary>For kind "local": absolute path of the GGUF file. Empty = the provider's models directory plus the model id.</summary>
     public string? LocalPath { get; set; }
+    /// <summary>
+    /// For kind "local": absolute path of the multimodal projector (mmproj) GGUF that
+    /// enables image input. Empty auto-discovers a single *mmproj*.gguf in the models
+    /// directory; the model stays text-only when none is found.
+    /// </summary>
+    public string? MmprojPath { get; set; }
     /// <summary>USD per 1M tokens.</summary>
     public decimal InputPricePerMTok { get; set; }
     public decimal OutputPricePerMTok { get; set; }

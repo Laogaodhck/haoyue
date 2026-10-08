@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "preview": "electron-vite preview",
+    "sync:contract": "node scripts/generate-contract.mjs",
     "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
     "build": "pnpm typecheck && electron-vite build",

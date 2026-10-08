@@ -40,7 +40,8 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 ### 🤖 Multi-Provider & Models
 
 - **OpenAI-compatible / Anthropic / Google**: mainstream cloud models out of the box
-- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, KV cache quantization, Flash Attention, and cross-request KV prefix reuse
+- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, KV cache quantization, Flash Attention, and cross-request KV prefix reuse; the CUDA 12 backend delivers a measured **11× decoding speedup** (7.6 → 84.9 tok/s)
+- **Local Multimodal Vision**: companion mmproj weights are auto-discovered so local models can directly "see" images in conversations and tool screenshots — image-bearing requests automatically fall back to a CPU context to dodge an upstream CUDA slow path, while text-only turns stay at full GPU speed
 - **Smart Routing**: fast, balanced, quality, budget, and offline strategies; automatic retry with exponential backoff and circuit-breaker failover
 - **Usage Analytics**: token counts, cost, and model distribution with desktop charts
 
@@ -63,11 +64,18 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **Prompt Budget**: when injected context exceeds a 24k token total budget, contributions are dropped in inverse degrade-rank order (knowledge → skill bodies → MCP → catalogs/memory) while System/Developer messages are never dropped; every drop is announced in the session
 - **Turn Rollback (TurnScope)**: each turn keeps a step ledger and a compensation stack, so `write`/`edit` file changes can be reverted in one click (`agent.undo`); the desktop shows an undo banner after each turn; on daemon crash, startup reconciliation surfaces the restorable files of unfinished turns
 
+### 🖱️ Computer Use
+
+- **Full observe → act → verify loop**: the `computer` tool supports 18 actions (mouse move/click/drag, keyboard input, window management, scrolling, etc.), with an automatic screenshot sent back to the model after each step to verify the result
+- **Cloud and local models can both "see the screen"**: cloud vision models parse screenshots directly; local GGUF models read them through the mmproj multimodal integration — no more navigating blind via accessibility text only
+- **Coordinate self-calibration**: CoordinateMapper screen calibration + `cursor_position` self-check, DriverFaultSandbox driver fault tolerance, and a 30-step-per-turn cap as a safety net
+- **Dormant by default**: `computerUse.enabled` defaults to off; enabling it requires an explicit toggle in desktop settings, accompanied by a full-screen halo indicator
+
 ### 🖥️ Desktop App
 
 - **Modern UI**: Electron + Vue 3 + TypeScript, streaming Markdown, image preview, reasoning depth control
 - **Expert System**: built-in domain expert catalog with one-click role presets
-- **Visual Configuration**: providers, models, profiles, MCP servers, and local inference acceleration — all GUI-managed
+- **Visual Configuration**: providers, models, profiles, MCP servers, and local inference acceleration — all GUI-managed; the "Models & Providers" page shows the active model's parameters (context window / max output), capability badges (streaming / tools / thinking / vision / reasoning), and the full model catalog
 - **Scheduled Tasks**: cron-driven scheduling turns with instant desktop notifications on failure and Webhook callbacks
 - **Turn Undo & Feedback**: one-click revert of file changes; thumbs-down any assistant answer with a reason — the feedback feeds straight into the evolution signals
 
@@ -214,7 +222,7 @@ Haoyue/
 │   └── Program.cs          # Entry point
 ├── haoyue_runtime/       # Core runtime
 │   ├── Agents/             # Agent loop, context planning, TurnScope rollback
-│   ├── ComputerUse/        # Screen capture
+│   ├── ComputerUse/        # Computer-use agent (screen observation, mouse/keyboard driver, coordinate calibration, fault sandbox)
 │   ├── Configuration/      # Config management (atomic writes, reload-merge, single-writer bridge)
 │   ├── Coordination/       # File-lock coordinator
 │   ├── Daemon/             # Daemon (JSON-RPC, RPC routing, crash reconciliation)
@@ -234,10 +242,12 @@ Haoyue/
 ├── haoyue_desktop/       # Desktop app (Electron + Vue 3 + TypeScript)
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
-├── haoyue_tests/         # Runtime unit tests (399 cases)
+├── haoyue_tests/         # Runtime unit tests (435 cases, ≥70% line coverage gate)
 ├── haoyue_cli_tests/     # CLI tests
-├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index)
-├── models/               # Local GGUF models (dev environment)
+├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
+├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
+├── benchmarks/           # Local model eval harness (fluency / speed / self-correction / vision, with reports)
+├── models/               # Local GGUF models (dev environment, not committed)
 └── packaging/            # Packaging scripts and configuration
 ```
 
@@ -279,15 +289,18 @@ Each project can override providers and models, temperature and context, tool pe
       "threads": 8,
       "localPrefixReuse": true,
       "flashAttention": false,
-      "kvCacheQuantization": "none"
+      "kvCacheQuantization": "none",
+      "mmprojPath": ""
     }
   }
 }
 ```
 
-- `gpuLayers`: number of GPU-offloaded layers, default `0` (pure CPU); set `999` after installing a CUDA backend to offload everything
-- `localPrefixReuse`: reuse KV prefixes across requests — multi-step turns only decode new tokens, throughput improves significantly
+- `gpuLayers`: number of GPU-offloaded layers, default `0` (pure CPU); after building the CUDA 12 backend (`dotnet build -p:LlamaBackend=Cuda12`), set `999` to offload everything — measured 7.6 → 84.9 tok/s
+- `mmprojPath`: path to the multimodal projector weights (mmproj GGUF); when left empty, the single `*mmproj*.gguf` in the model directory is auto-discovered — it must sit next to the main model and be the companion version built for that model (e.g. gemma-4-E4B pairs with the unsloth mmproj-F16)
+- `localPrefixReuse`: reuse KV prefixes across requests — multi-step turns only decode new tokens, throughput improves significantly (measured TTFT 20.5s → 0.61s)
 - `flashAttention` / `kvCacheQuantization`: attention-kernel acceleration and KV cache quantization (`q8_0` / `q4_0`); quantization only takes effect with Flash Attention enabled
+- VRAM note: 8GB VRAM with long contexts may OOM — lower `gpuLayers` or enable KV quantization; image-bearing requests automatically switch to a CPU context (dodging the upstream CUDA multimodal slow path) while text-only turns stay at full GPU speed
 
 All of these can also be configured visually in the desktop app under "Settings → Advanced → Local Inference Acceleration".
 
@@ -364,12 +377,28 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test haoyue_tests      # runtime tests (399 cases)
+dotnet test haoyue_tests      # runtime tests (435 cases)
 dotnet test haoyue_cli_tests  # CLI tests
 
 # Desktop (requires pnpm install first)
 cd haoyue_desktop && pnpm test && pnpm typecheck
 ```
+
+haoyue_tests enforces a 70% line-coverage gate (`coverage.runsettings`); contract-snapshot drift and Runbook section completeness are also guarded by dedicated tests.
+
+## 📊 Local Model Benchmarks
+
+[`benchmarks/local-model-eval/`](benchmarks/local-model-eval/) ships a reproducible eval harness that runs through the real runtime `LocalLlmClient` path, with four modes:
+
+```bash
+dotnet run --project benchmarks/local-model-eval -- fluency     # conversational fluency
+dotnet run --project benchmarks/local-model-eval -- speed       # TTFT / tok-s
+dotnet run --project benchmarks/local-model-eval -- selfcorrect # self-correction loop
+dotnet run --project benchmarks/local-model-eval -- gputest     # GPU offload check (HAOYUE_GPU_LAYERS controls layers)
+dotnet run --project benchmarks/local-model-eval -- visiontest  # multimodal vision
+```
+
+The measured gemma-4-E4B report is available at [`本地模型评测报告-gemma-4-E4B-2026-10-07.md`](benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md) (in Chinese).
 
 ## 📚 Design Documents
 
@@ -378,8 +407,11 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - State concurrency, context boundaries, and atomicity risk review (with fix reconciliation)
 - Workflow orchestration adjudication & TurnScope design
 - Evolution engine blueprint review & landing design (E1-E4)
+- Cross-language contract governance (Contract First), test pyramid & coverage gate
 - NLP & HCI optimization assessment, knowledge base optimization notes
 - ProviderManager concurrency and parameter review
+
+Major technical decisions are documented as [ADRs (Architecture Decision Records)](haoyue_doc/adr/README.md) (7 backfilled so far), and every built-in tool and official skill has a [Runbook](haoyue_doc/runbooks/README.md) (enforced by guard tests).
 
 ## 📄 License
 

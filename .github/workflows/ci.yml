@@ -29,7 +29,7 @@ jobs:
       - name: Build
         run: dotnet build Haoyue.slnx -c Release
       - name: Test
-        run: dotnet test Haoyue.slnx -c Release --no-build --collect:"XPlat Code Coverage" --results-directory ./coverage
+        run: dotnet test Haoyue.slnx -c Release --no-build --collect:"XPlat Code Coverage;Format=cobertura" --settings haoyue_tests/coverage.runsettings --results-directory ./coverage
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:

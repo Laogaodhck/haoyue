@@ -101,6 +101,15 @@ except ImportError:  # pragma: no cover - fallback for minimal environments
 
 
 REPO_ROOT = Path(__file__).resolve().parent
+
+# 版本号解析的唯一实现是 version.py（Contract First）：
+# 这里只复用其读取函数，禁止再写第二份 Banner.cs 正则。
+sys.path.insert(0, str(REPO_ROOT))
+try:
+    from version import BANNER_FILE, VersionError, read_file_version
+except ImportError as import_error:  # pragma: no cover - 脚本被移动到仓库外时才可能发生
+    raise SystemExit(f"无法导入 version.py（版本号唯一事实源）: {import_error}")
+
 CLI_DIR = REPO_ROOT / "haoyue_cli"
 CLI_CSPROJ = CLI_DIR / "haoyue_cli.csproj"
 CLI_PROMPTS = CLI_DIR / "prompts"
@@ -285,13 +294,11 @@ def _print_failure_output(text: str, title: str) -> None:
 
 
 def read_cli_version() -> str:
-    banner = CLI_DIR / "Ui" / "Banner.cs"
-    if not banner.is_file():
-        raise BuildError(f"CLI version file is missing: {banner}")
-    match = re.search(r'public const string Version = "([^"]+)";', banner.read_text(encoding="utf-8"))
-    if not match:
-        raise BuildError(f"Could not read Haoyue CLI version from: {banner}")
-    version = match.group(1)
+    # 复用 version.py 的解析，与 version.py check/set 共享同一份 Banner.cs 正则。
+    try:
+        version = read_file_version(BANNER_FILE)
+    except VersionError as error:
+        raise BuildError(str(error)) from error
     if not VERSION_PATTERN.fullmatch(version):
         raise BuildError(f"Unsupported CLI version for npm: {version!r}")
     return version

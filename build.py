@@ -948,7 +948,47 @@ def package_desktop_linux(
             time.sleep(3 * attempt)
 
 
+def read_builder_latest_yml(output_dir: Path) -> tuple[str, str] | None:
+    """解析 electron-builder 自身生成的 latest.yml（发布清单）。
+
+    返回 (version, file_name)；清单缺失或字段不全时返回 None。这比按文件名
+    模式反查可靠：产物名由 builder 决定，格式一变则 glob 查找会静默断裂。
+    """
+    latest = output_dir / "latest.yml"
+    if not latest.is_file():
+        return None
+    version: str | None = None
+    file_name: str | None = None
+    try:
+        for line in latest.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("version:") and version is None:
+                version = stripped.split(":", 1)[1].strip().strip("\"'")
+            elif stripped.startswith("path:") and file_name is None:
+                file_name = stripped.split(":", 1)[1].strip().strip("\"'")
+    except OSError:
+        return None
+    if version and file_name:
+        return version, file_name
+    return None
+
+
 def find_installer_artifact(version: str) -> Path:
+    # 首选 builder 自身清单 latest.yml：产物名与版本均由其声明，不做任何猜测。
+    latest = read_builder_latest_yml(BUILDER_OUTPUT)
+    if latest is not None:
+        yml_version, file_name = latest
+        if yml_version != version:
+            raise BuildError(
+                f"latest.yml 版本与期望不符: yml={yml_version} expected={version} file={file_name}。"
+                f"请清理构建输出目录后重试: {BUILDER_OUTPUT}"
+            )
+        candidate = BUILDER_OUTPUT / file_name
+        if candidate.is_file():
+            return candidate
+        raise BuildError(f"latest.yml 声明的安装包不存在: {candidate}")
+
+    # 兜底：latest.yml 缺失（如自定义 target 配置）时退回文件名模式反查。
     expected = BUILDER_OUTPUT / f"Haoyue Setup {version}.exe"
     if expected.is_file():
         return expected
@@ -965,6 +1005,44 @@ def find_installer_artifact(version: str) -> Path:
         raise BuildError(f"Installer executable was not found in: {BUILDER_OUTPUT}")
     names = ", ".join(path.name for path in candidates)
     raise BuildError(f"Could not identify a unique installer executable: {names}")
+
+
+def write_build_manifest(
+    version: str,
+    platform: str,
+    target: str,
+    outputs: Sequence[Path],
+    publish_dir: Path,
+) -> Path:
+    """把本次构建产物清单写入 publish/build-manifest.json。
+
+    下游（发布脚本、CI）应读该清单取产物，而不是按文件名模式反查目录。
+    """
+    artifacts = []
+    for item in outputs:
+        if item.is_dir():
+            artifacts.append({"path": item.name, "type": "directory"})
+            continue
+        artifacts.append(
+            {
+                "path": item.name if item.parent == publish_dir else str(item),
+                "type": "file",
+                "sizeBytes": item.stat().st_size,
+            }
+        )
+    manifest = {
+        "name": "haoyue-build-manifest",
+        "version": version,
+        "platform": platform,
+        "target": target,
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "artifacts": artifacts,
+    }
+    manifest_path = publish_dir / "build-manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return manifest_path
 
 
 def create_portable_zip(source_dir: Path, output_zip_path: Path) -> Path:
@@ -1717,6 +1795,16 @@ def main() -> int:
                     )
 
             console.print(f"[bold green]✓[/bold green] {cur_platform.upper()} 应用打包与产物组装完成")
+
+        # 产物清单落盘：下游按清单取产物，替代脆弱的文件名模式反查。
+        manifest_path = write_build_manifest(
+            release_version,
+            platform,
+            "+".join(meta["target"] for meta in build_meta.values()),
+            release_outputs,
+            PUBLISH_DIR,
+        )
+        console.print(f"[dim]构建清单已写入: {manifest_path}[/dim]")
 
         target_label = " / ".join(target_labels)
         version_committed = True

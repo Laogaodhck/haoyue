@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  测试金字塔覆盖率门槛（见 haoyue_doc/adr/ 与 haoyue_doc/测试金字塔与覆盖率门槛-2026-10-07.md）。
+  用法：dotnet test haoyue_tests 收集覆盖率时用 settings 参数指向本文件。
+  阈值策略：核心业务逻辑 haoyue_runtime 行覆盖率不低于当前基线 70%（实测 70.5%，随测试补全逐步上调至 85%）。
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <Exclude>[haoyue_cli]*,[haoyue_webserver]*,[*test*]*</Exclude>
+          <Include>[haoyue_runtime*]*</Include>
+          <Threshold>70</Threshold>
+          <ThresholdType>line</ThresholdType>
+          <ThresholdStat>total</ThresholdStat>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

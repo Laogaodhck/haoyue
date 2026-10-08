@@ -26,7 +26,8 @@ namespace Haoyue.Runtime.Daemon;
 public sealed class DaemonServer : IAsyncDisposable
 {
     public const string PipeName = "haoyue";
-    public const string ProtocolVersion = "2.2";
+    /// <summary>版本契约：daemon JSONL 协议版本（唯一声明处在 <see cref="ApiVersionContract"/>）。</summary>
+    public const string ProtocolVersion = ApiVersionContract.DaemonProtocolVersion;
     public static string SocketPath => Path.Combine(HaoyuePaths.Home, "daemon.sock");
     private const int MaxImageCount = 10;
     private const int MaxImageBytes = 10 * 1024 * 1024;
@@ -388,7 +389,7 @@ public sealed class DaemonServer : IAsyncDisposable
 
                 if (request is null)
                 {
-                    await WriteAsync(writer, writerGate, 0, "error", "Invalid JSON request", ct).ConfigureAwait(false);
+                    await WriteAsync(writer, writerGate, 0, "error", "Invalid JSON request", ct, code: DaemonErrorCode.InvalidRequest).ConfigureAwait(false);
                     continue;
                 }
 
@@ -401,7 +402,7 @@ public sealed class DaemonServer : IAsyncDisposable
                 }
                 catch (InvalidOperationException)
                 {
-                    await WriteAsync(writer, writerGate, 0, "error", "Request id and method have invalid types", ct).ConfigureAwait(false);
+                    await WriteAsync(writer, writerGate, 0, "error", "Request id and method have invalid types", ct, code: DaemonErrorCode.InvalidRequest).ConfigureAwait(false);
                     continue;
                 }
 
@@ -425,7 +426,7 @@ public sealed class DaemonServer : IAsyncDisposable
                     }
                     catch (Exception ex)
                     {
-                        await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Server error: {ex.Message}", context.ConnectionCt).ConfigureAwait(false);
+                        await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Server error: {ex.Message}", context.ConnectionCt, code: DaemonErrorCode.InternalError).ConfigureAwait(false);
                     }
                 }, ct);
             }
@@ -468,18 +469,20 @@ public sealed class DaemonServer : IAsyncDisposable
             if (request is null)
             {
                 await WriteAsync(writer, writerGate, 0, "error",
-                    "authentication failed: invalid handshake message", timeout.Token).ConfigureAwait(false);
+                    "authentication failed: invalid handshake message", timeout.Token, code: DaemonErrorCode.Unauthorized).ConfigureAwait(false);
                 return false;
             }
 
             long id = 0;
             string? method = null;
             string? token = null;
+            string? clientProtocolVersion = null;
             try
             {
                 id = request["id"]?.GetValue<long>() ?? 0;
                 method = request["method"]?.GetValue<string>();
                 token = Params(request)["token"]?.GetValue<string>();
+                clientProtocolVersion = Params(request)["protocolVersion"]?.GetValue<string>();
             }
             catch (InvalidOperationException)
             {
@@ -489,12 +492,25 @@ public sealed class DaemonServer : IAsyncDisposable
                 && token is not null
                 && DaemonAuth.TokensEqual(_handshakeToken!, token))
             {
-                await WriteAsync(writer, writerGate, id, "result", ProtocolInfoJson(), timeout.Token).ConfigureAwait(false);
+                // 版本契约：客户端声明其支持的协议版本，主版本不一致时明确拒绝（Breaking Change），
+                // 次版本更高时接受但返回升级提示。旧客户端不声明版本 → 跳过校验（向后兼容）。
+                string? versionWarning = null;
+                var versionCompatible = clientProtocolVersion is null
+                    || DaemonContract.IsProtocolCompatible(ProtocolVersion, clientProtocolVersion, out versionWarning);
+                if (!versionCompatible)
+                {
+                    await WriteAsync(writer, writerGate, id, "error",
+                        $"protocol version mismatch: daemon={ProtocolVersion}, client={clientProtocolVersion}. " +
+                        "Please upgrade the haoyue client or daemon to a compatible version.",
+                        timeout.Token, code: DaemonErrorCode.VersionMismatch).ConfigureAwait(false);
+                    return false;
+                }
+                await WriteAsync(writer, writerGate, id, "result", ProtocolInfoJson(versionWarning), timeout.Token).ConfigureAwait(false);
                 return true;
             }
 
             await WriteAsync(writer, writerGate, id, "error",
-                "authentication failed: missing or invalid handshake token", timeout.Token).ConfigureAwait(false);
+                "authentication failed: missing or invalid handshake token", timeout.Token, code: DaemonErrorCode.Unauthorized).ConfigureAwait(false);
             return false;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -568,7 +584,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         // completion arrives as an EvolutionReflectionCompletedEvent.
                         if (!_reflectionGate.Wait(0))
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "反思 turn 已在进行中", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "反思 turn 已在进行中", context.ConnectionCt, code: DaemonErrorCode.Conflict).ConfigureAwait(false);
                             break;
                         }
                         try
@@ -614,7 +630,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         if (fingerprint.Length == 0 || decision is not ("adopt" or "reject"))
                         {
                             await WriteAsync(context.Writer, context.WriterGate, id, "error",
-                                "params.fingerprint 与 params.decision（adopt|reject）均为必填", context.ConnectionCt).ConfigureAwait(false);
+                                "params.fingerprint 与 params.decision（adopt|reject）均为必填", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         try
@@ -630,7 +646,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         catch (InvalidOperationException ex)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                         }
                         break;
                     }
@@ -682,12 +698,12 @@ public sealed class DaemonServer : IAsyncDisposable
                         try { images = ParseImages(parameters["images"]); }
                         catch (DaemonRequestException ex)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         if (string.IsNullOrWhiteSpace(message) && images.Count == 0)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.message or params.images is required", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.message or params.images is required", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         WorkspaceInfo workspace;
@@ -700,7 +716,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         catch (DaemonRequestException ex)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, requestedSessionId).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, requestedSessionId, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         ReasoningLevel reasoningLevel;
@@ -717,7 +733,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         catch (DaemonRequestException ex)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, requestedSessionId).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, requestedSessionId, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         var turnCancellation = CancellationTokenSource.CreateLinkedTokenSource(context.ConnectionCt);
@@ -728,7 +744,7 @@ public sealed class DaemonServer : IAsyncDisposable
                             turnCancellation.Dispose();
                             await WriteAsync(context.Writer, context.WriterGate, id, "error",
                                 "A turn is already active for this session; wait for it to finish or send guidance with agent.steer",
-                                context.ConnectionCt, sessionKey).ConfigureAwait(false);
+                                context.ConnectionCt, sessionKey, code: DaemonErrorCode.Conflict).ConfigureAwait(false);
                             break;
                         }
                         context.ActiveTurns[id] = turn;
@@ -767,12 +783,12 @@ public sealed class DaemonServer : IAsyncDisposable
                         try { images = ParseImages(parameters["images"]); }
                         catch (DaemonRequestException ex)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         if (string.IsNullOrWhiteSpace(message) && images.Count == 0)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.message or params.images is required", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.message or params.images is required", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
 
@@ -786,13 +802,13 @@ public sealed class DaemonServer : IAsyncDisposable
                                 .FirstOrDefault();
                         if (target is null)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "No active turn found for this session", context.ConnectionCt, requestedSessionId).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "No active turn found for this session", context.ConnectionCt, requestedSessionId, code: DaemonErrorCode.NotFound).ConfigureAwait(false);
                             break;
                         }
 
                         if (!target.Steering.TryEnqueue(ChatMessage.User(message, images)))
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "The active turn is already finishing", context.ConnectionCt, target.Session.Header.Id).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "The active turn is already finishing", context.ConnectionCt, target.Session.Header.Id, code: DaemonErrorCode.Conflict).ConfigureAwait(false);
                             break;
                         }
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", "guidance queued", context.ConnectionCt, target.Session.Header.Id).ConfigureAwait(false);
@@ -821,14 +837,14 @@ public sealed class DaemonServer : IAsyncDisposable
                         if (string.IsNullOrWhiteSpace(requestedSession))
                         {
                             await WriteAsync(context.Writer, context.WriterGate, id, "error",
-                                "params.sessionId is required", context.ConnectionCt).ConfigureAwait(false);
+                                "params.sessionId is required", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         if (_sessionTurns.ContainsKey(requestedSession))
                         {
                             await WriteAsync(context.Writer, context.WriterGate, id, "error",
                                 "A turn is active for this session; wait for it to finish before undoing.",
-                                context.ConnectionCt).ConfigureAwait(false);
+                                context.ConnectionCt, code: DaemonErrorCode.Conflict).ConfigureAwait(false);
                             break;
                         }
                         var ledger = _undoRegistry.Take(requestedSession);
@@ -905,7 +921,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var path = request["params"]?["path"]?.GetValue<string>();
                         if (string.IsNullOrWhiteSpace(path))
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.path is required", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.path is required", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
 
@@ -913,13 +929,13 @@ public sealed class DaemonServer : IAsyncDisposable
                         try { fullPath = Path.GetFullPath(path); }
                         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Invalid workspace path: {ex.Message}", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Invalid workspace path: {ex.Message}", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
 
                         if (!Directory.Exists(fullPath))
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Workspace directory not found: {fullPath}", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Workspace directory not found: {fullPath}", context.ConnectionCt, code: DaemonErrorCode.NotFound).ConfigureAwait(false);
                             break;
                         }
                         await _adminGate.WaitAsync(context.ConnectionCt).ConfigureAwait(false);
@@ -956,7 +972,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var rawMode = request["params"]?["mode"]?.GetValue<string>();
                         if (!TryNormalizeMode(rawMode, out var mode))
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.mode must be one of: plan, readonly, edit, auto", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.mode must be one of: plan, readonly, edit, auto", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         await _adminGate.WaitAsync(context.ConnectionCt).ConfigureAwait(false);
@@ -983,7 +999,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         if (request["params"]?["fields"] is not JsonObject fields || fields.Count == 0)
                         {
                             await WriteAsync(context.Writer, context.WriterGate, id, "error",
-                                "params.fields must be a non-empty JSON patch object", context.ConnectionCt).ConfigureAwait(false);
+                                "params.fields must be a non-empty JSON patch object", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         await _adminGate.WaitAsync(context.ConnectionCt).ConfigureAwait(false);
@@ -1303,19 +1319,19 @@ public sealed class DaemonServer : IAsyncDisposable
                         var sessionId = request["params"]?["id"]?.GetValue<string>();
                         if (string.IsNullOrEmpty(sessionId))
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.id is required", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.id is required", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         WorkspaceInfo workspace;
                         try { workspace = ResolveWorkspace(Params(request)); }
                         catch (DaemonRequestException ex)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         var loaded = _runtime.Sessions.Load(workspace, sessionId);
                         if (loaded is null)
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Session {sessionId} not found", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Session {sessionId} not found", context.ConnectionCt, code: DaemonErrorCode.NotFound).ConfigureAwait(false);
                         else
                         {
                             context.LegacySession = loaded;
@@ -1330,7 +1346,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         try { workspace = ResolveWorkspace(Params(request)); }
                         catch (DaemonRequestException ex)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         ReasoningLevel reasoningLevel;
@@ -1341,7 +1357,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         catch (DaemonRequestException ex)
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         var networkEnabled = Params(request)["networkEnabled"]?.GetValue<bool?>()
@@ -1364,7 +1380,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var modelRef = request["params"]?["model"]?.GetValue<string>();
                         if (string.IsNullOrEmpty(modelRef))
                         {
-                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.model is required", context.ConnectionCt).ConfigureAwait(false);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.model is required", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         await _adminGate.WaitAsync(context.ConnectionCt).ConfigureAwait(false);
@@ -1373,7 +1389,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         {
                             var model = _runtime.Models.Resolve(modelRef);
                             if (model is null)
-                                await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Unknown model {modelRef}", context.ConnectionCt).ConfigureAwait(false);
+                                await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Unknown model {modelRef}", context.ConnectionCt, code: DaemonErrorCode.NotFound).ConfigureAwait(false);
                             else
                             {
                                 var config = _runtime.ConfigStore.Config;
@@ -1406,8 +1422,12 @@ public sealed class DaemonServer : IAsyncDisposable
                         _shutdown.Cancel();
                         break;
 
+                    case "contract.export":
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", DaemonContract.ExportJson().ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     default:
-                        await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Unknown method: {method}", context.ConnectionCt).ConfigureAwait(false);
+                        await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Unknown method: {method}", context.ConnectionCt, code: DaemonErrorCode.UnknownMethod).ConfigureAwait(false);
                         break;
                         }
     }
@@ -1622,7 +1642,12 @@ public sealed class DaemonServer : IAsyncDisposable
             }
 
             if (failure is not null)
+            {
+                // 回合失败的终态 error 也必须携带契约错误码（details 已有 undoableFiles 时合并）。
+                terminalDetails ??= new JsonObject();
+                terminalDetails["code"] = DaemonErrorCode.InternalError.ToWire();
                 await WriteAsync(writer, writerGate, id, "error", failure.Message, connectionCt, session.Header.Id, terminalDetails).ConfigureAwait(false);
+            }
             else if (result!.Cancelled)
                 await WriteAsync(writer, writerGate, id, "cancelled", result.Text, connectionCt, session.Header.Id, terminalDetails).ConfigureAwait(false);
             else
@@ -2013,38 +2038,22 @@ public sealed class DaemonServer : IAsyncDisposable
         }.ToJsonString();
     }
 
-    private static string ProtocolInfoJson() => new JsonObject
+    // 方法清单的唯一事实源是 DaemonContract.Methods（Contract First）；
+    // 此处只做投影，禁止手工增删方法名。
+    private static string ProtocolInfoJson(string? versionWarning = null)
     {
-        ["version"] = ProtocolVersion,
-        ["transport"] = "jsonl",
-        ["capabilities"] = new JsonArray(
-            "chat", "image-input", "concurrent-turns", "reasoning-level", "agent.steer", "agent.cancel", "agent.mode", "workspace", "provider",
-            "model", "mcp", "skill", "usage", "project", "session", "global-session", "doctor", "file-locks", "routing", "schedule", "factory-reset", "prompt-optimize", "config-status", "config-rebuild"),
-        ["methods"] = new JsonArray(
-            "ping", "protocol.info", "chat", "agent.runTurn", "agent.steer", "agent.cancel",
-            "config.status", "config.rebuild",
-            "workspace.get", "workspace.open", "workspace.init", "agent.mode.get", "agent.mode.switch",
-            "routing.get", "routing.set", "advanced.get", "advanced.set",
-            "prompt.optimize",
-            "schedule.list", "schedule.create", "schedule.update", "schedule.toggle", "schedule.delete", "schedule.run",
-            "provider.list", "provider.upsert", "provider.use", "provider.remove", "provider.test", "provider.models.fetch",
-            "local.models",
-            "model.list", "model.catalog", "model.switch", "model.test", "model.status", "model.update",
-            "mcp.list", "mcp.upsert", "mcp.remove", "mcp.reload",
-            "skill.list", "skill.import", "skill.toggle",
-            "skill.official.list", "skill.official.install",
-            "expert.list",
-            "knowledge.list", "knowledge.search", "knowledge.save", "knowledge.delete", "knowledge.import",
-            "memory.get", "memory.save", "rules.list", "rules.save",
-            "usage.get", "usage.timeline", "doctor", "doctor.run",
-            "project.list", "project.upsert", "project.remove",
-            "session.list", "session.search", "session.get", "session.update", "session.archive", "session.delete",
-            "session.resume", "session.new",
-            "agent.interrupted",
-            "evolution.inspect", "evolution.reflect", "evolution.pending-list", "evolution.decide",
-            "feedback.turn",
-            "lock.list", "factory.reset", "shutdown", "events.recent"),
-    }.ToJsonString();
+        var info = new JsonObject
+        {
+            ["version"] = ProtocolVersion,
+            ["transport"] = "jsonl",
+            ["capabilities"] = new JsonArray(
+                "chat", "image-input", "concurrent-turns", "reasoning-level", "agent.steer", "agent.cancel", "agent.mode", "workspace", "provider",
+                "model", "mcp", "skill", "usage", "project", "session", "global-session", "doctor", "file-locks", "routing", "schedule", "factory-reset", "prompt-optimize", "config-status", "config-rebuild", "contract"),
+            ["methods"] = new JsonArray(DaemonContract.MethodNames.Select(name => (JsonNode)name).ToArray()),
+        };
+        if (versionWarning is not null) info["versionWarning"] = versionWarning;
+        return info.ToJsonString();
+    }
 
     /// <summary>
     /// Cancels every active turn across all connections and waits (bounded) for them
@@ -2094,15 +2103,15 @@ public sealed class DaemonServer : IAsyncDisposable
         }
         catch (DaemonRequestException ex)
         {
-            await WriteAsync(writer, writerGate, id, "error", ex.Message, ct).ConfigureAwait(false);
+            await WriteAsync(writer, writerGate, id, "error", ex.Message, ct, code: ex.Code).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
         {
-            await WriteAsync(writer, writerGate, id, "error", $"Invalid request: {ex.Message}", ct).ConfigureAwait(false);
+            await WriteAsync(writer, writerGate, id, "error", $"Invalid request: {ex.Message}", ct, code: DaemonErrorCode.InvalidRequest).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            await WriteAsync(writer, writerGate, id, "error", ex.Message, ct).ConfigureAwait(false);
+            await WriteAsync(writer, writerGate, id, "error", ex.Message, ct, code: DaemonErrorCode.InternalError).ConfigureAwait(false);
         }
         finally
         {
@@ -2121,8 +2130,12 @@ public sealed class DaemonServer : IAsyncDisposable
         string data,
         CancellationToken ct,
         string? sessionId = null,
-        JsonObject? details = null)
+        JsonObject? details = null,
+        DaemonErrorCode code = DaemonErrorCode.RequestFailed)
     {
+        // 错误事件必须携带契约错误码：调用方未显式给 details 时自动补 details.code。
+        if (eventName == "error" && details is null)
+            details = new JsonObject { ["code"] = code.ToWire() };
         var payload = new JsonObject { ["id"] = id, ["event"] = eventName, ["data"] = data };
         if (!string.IsNullOrWhiteSpace(sessionId)) payload["sessionId"] = sessionId;
         if (details is not null) payload["details"] = details;

@@ -219,6 +219,29 @@ const modelOptions = computed(() => models.value.map((model) => ({
   disabled: !model.providerEnabled
 })))
 
+const showModelCatalog = ref(false)
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  streaming: '流式',
+  tools: '工具调用',
+  thinking: '思考',
+  vision: '视觉',
+  reasoning: '推理',
+  mcp: 'MCP'
+}
+
+function capabilityChips(model: ModelInfo): string[] {
+  return Object.entries(CAPABILITY_LABELS)
+    .filter(([key]) => model.capabilities?.[key] === true)
+    .map(([, label]) => label)
+}
+
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`
+  if (value >= 1_000) return `${Math.round(value / 1_000)}K`
+  return String(value)
+}
+
 const totalUsage = computed(() => {
   let calls = 0
   let failures = 0
@@ -1222,6 +1245,54 @@ onBeforeUnmount(() => {
                 @click="modelTestState = null">
                 <X :size="13" />
               </button>
+            </div>
+          </section>
+
+          <section v-if="activeModel" class="settings-group" aria-label="模型参数">
+            <div class="model-params-header">
+              <strong>模型参数</strong>
+              <button class="secondary-button compact-button" @click="showModelCatalog = !showModelCatalog">
+                {{ showModelCatalog ? '收起全部模型' : `全部模型（${models.length}）` }}
+              </button>
+            </div>
+            <div class="model-params-grid">
+              <div class="model-param">
+                <small>上下文窗口</small>
+                <strong :title="`${activeModel.contextWindow.toLocaleString()} Tokens`">{{ formatTokens(activeModel.contextWindow) }}</strong>
+              </div>
+              <div class="model-param">
+                <small>最大输出</small>
+                <strong :title="`${activeModel.maxOutput.toLocaleString()} Tokens`">{{ formatTokens(activeModel.maxOutput) }}</strong>
+              </div>
+              <div class="model-param">
+                <small>别名</small>
+                <strong>{{ activeModel.alias || '—' }}</strong>
+              </div>
+              <div class="model-param">
+                <small>提供商</small>
+                <strong>{{ activeModel.provider }}</strong>
+              </div>
+            </div>
+            <div v-if="capabilityChips(activeModel).length || activeModel.tags.length" class="model-capabilities">
+              <span v-for="cap in capabilityChips(activeModel)" :key="cap" class="inline-badge cap-badge">{{ cap }}</span>
+              <span v-for="tag in activeModel.tags" :key="tag" class="inline-badge tag-badge">{{ tag }}</span>
+            </div>
+            <div v-if="showModelCatalog" class="model-catalog" role="list">
+              <div v-for="model in models" :key="model.ref" class="model-catalog-row"
+                :class="{ active: model.active, disabled: !model.providerEnabled }" role="listitem">
+                <div class="model-catalog-main">
+                  <strong :title="model.ref">{{ model.ref }}</strong>
+                  <small>{{ model.provider }}<template v-if="model.alias"> · {{ model.alias }}</template></small>
+                </div>
+                <div class="model-catalog-params">
+                  <span class="model-param-chip" title="上下文窗口">{{ formatTokens(model.contextWindow) }} 上下文</span>
+                  <span class="model-param-chip" title="最大输出">{{ formatTokens(model.maxOutput) }} 输出</span>
+                  <span v-for="cap in capabilityChips(model)" :key="cap" class="inline-badge cap-badge">{{ cap }}</span>
+                  <span v-for="tag in model.tags" :key="tag" class="inline-badge tag-badge">{{ tag }}</span>
+                  <span v-if="model.active" class="inline-badge active-provider-badge">活动</span>
+                  <span v-if="!model.providerEnabled" class="inline-badge disabled-provider-badge">提供商已禁用</span>
+                </div>
+              </div>
             </div>
           </section>
 

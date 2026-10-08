@@ -68,6 +68,8 @@ export interface RuntimeSession extends RuntimeSessionHeader {
 export interface RuntimeWorkspace {
   path: string
   name: string
+  /** 服务端 workspace.get 返回的项目类型标签（如 dotnet/node/python）。 */
+  projectKinds?: string[]
   mode: string
 }
 

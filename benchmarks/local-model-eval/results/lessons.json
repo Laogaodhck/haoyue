@@ -1,0 +1,16 @@
+[
+  {
+    "Fingerprint": "length_violation|字回答什,用不超过",
+    "Category": "length_violation",
+    "IssueSample": "要求不超过 30 字，实际 55 字",
+    "Strategy": "回答前先数清楚字数，严格遵守用户给出的字数上限，宁可短不可超。",
+    "Keywords": [
+      "用不超过",
+      "字回答什"
+    ],
+    "HitCount": 5,
+    "FirstSeen": "2026-10-07T21:55:46.4908885+08:00",
+    "LastSeen": "2026-10-07T22:00:10.3934964+08:00",
+    "Active": true
+  }
+]

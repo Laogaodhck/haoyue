@@ -14,6 +14,7 @@ Haoyue is a local-first, extensible general-purpose AI Agent Runtime built on **
 | **Tools, Skills, and MCP** | Includes file, search, shell, and web tools and can be extended with Skills and stdio / SSE MCP servers. |
 | **Session and workspace state** | Sessions are stored per workspace as JSONL and can be resumed, archived, or removed. Project metadata is isolated under `.haoyue/`. |
 | **Verification and repair** | Code changes can trigger checks for .NET, Node, Rust, Go, Python, and other projects, with failures returned to the Agent for repair. |
+| **Evolution engine** | Failure signals aggregate into defect reports; reflection turns draft skills and a human gate promotes them into the live library. |
 | **Diagnostics and usage** | Desktop and CLI inspect Runtime and Provider health; Desktop also aggregates calls, tokens, latency, and cost. |
 
 ## Choose a client

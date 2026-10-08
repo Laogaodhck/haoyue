@@ -60,7 +60,8 @@ export default defineConfig({
                 { text: 'CLI 命令行交互指南', link: '/doc/cli' },
                 { text: '工具生态与内置工具', link: '/doc/tools' },
                 { text: '技能体系 (Skills)', link: '/doc/skills' },
-                { text: 'Model Context Protocol (MCP)', link: '/doc/mcp' }
+                { text: 'Model Context Protocol (MCP)', link: '/doc/mcp' },
+                { text: '进化引擎（Evolution）', link: '/doc/evolution' }
               ]
             },
             {
@@ -140,7 +141,8 @@ export default defineConfig({
                 { text: 'CLI Command Reference', link: '/en/doc/cli' },
                 { text: 'Tools & Built-in System', link: '/en/doc/tools' },
                 { text: 'Skills System', link: '/en/doc/skills' },
-                { text: 'Model Context Protocol (MCP)', link: '/en/doc/mcp' }
+                { text: 'Model Context Protocol (MCP)', link: '/en/doc/mcp' },
+                { text: 'Evolution Engine', link: '/en/doc/evolution' }
               ]
             },
             {

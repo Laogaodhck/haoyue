@@ -26,7 +26,7 @@ public sealed class DocService
     private static readonly (string GroupZh, string GroupEn, string[] Slugs)[] SidebarGroups =
     [
         ("起步与概览", "Getting Started", ["index", "quickstart", "desktop", "architecture"]),
-        ("核心功能与交互", "Core Features", ["providers", "modes", "cli", "tools", "skills", "mcp"]),
+        ("核心功能与交互", "Core Features", ["providers", "modes", "cli", "tools", "skills", "mcp", "evolution"]),
         ("实战与最佳实践", "Best Practices", ["prompt-engineering", "local-models", "skill-development"]),
         ("运行时进阶机制", "Advanced Runtime", ["workspace", "verification", "scheduling", "security", "ci-cd", "configuration", "daemon", "faq"])
     ];

@@ -40,7 +40,7 @@ Haoyue 采用分层式的提示词与工程规范注入机制，允许团队通�
 在长生命周期项目中，Agent 需要记住跨会话的关键决策、历史坑点和特殊配置。
 
 ### 记忆生命周期
-- **位置**：存于 `<workspace>/.haoyue/MEMORY.md`。
+- **位置**：存于 `<workspace>/.haoyue/memory/MEMORY.md`。
 - **自动挂载**：在每次初始化 System Prompt 时，运行时会自动将 `MEMORY.md` 裁剪并注入到上下文末尾。
 - **更新策略**：Agent 可在解决重大疑难问题后，主动通过工具更新 `MEMORY.md` 沉淀经验。
 

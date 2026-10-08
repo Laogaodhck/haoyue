@@ -14,6 +14,7 @@ Haoyue 是基于 **.NET 10**、本地优先且可扩展的通用 AI Agent Runtim
 | **Tools、Skills 与 MCP** | 内置文件、搜索、Shell 和网络工具，可通过 Skills 与 stdio / SSE MCP Server 扩展。 |
 | **会话与工作区持久化** | 会话按工作区保存为 JSONL，支持恢复、归档和删除；项目元数据隔离在 `.haoyue/`。 |
 | **自动验证与修复** | 文件修改后可触发 .NET、Node、Rust、Go 或 Python 等项目的构建检查，并把错误反馈给 Agent 修复。 |
+| **进化引擎** | 失败信号聚合为缺陷报告，反思回合起草技能草稿，人工审阅后进入正式技能库。 |
 | **诊断与用量** | Desktop 和 CLI 都能检查 Runtime / Provider 状态；Desktop 汇总调用、Token、延迟和成本。 |
 
 ## 选择使用方式

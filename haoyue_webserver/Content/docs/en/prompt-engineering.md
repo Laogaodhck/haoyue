@@ -39,7 +39,7 @@ Haoyue employs a layered prompt and specification injection architecture, allowi
 
 For long-running codebases, agents need to retain cross-session context, past architectural decisions, and key lessons.
 
-- **Location**: `<workspace>/.haoyue/MEMORY.md`.
+- **Location**: `<workspace>/.haoyue/memory/MEMORY.md`.
 - **Automatic Context Fitting**: Loaded and bounded automatically into the system prompt.
 - **Evolution**: The agent can autonomously append key findings to `MEMORY.md` upon resolving major issues.
 

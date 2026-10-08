@@ -89,12 +89,14 @@ API Key 直接保存在 `~/.haoyue/config.json` 中，由 Runtime 和 Desktop �
 
 保存后可立即点击“测试”。模型请求失败时，Desktop 会展示 Provider 名称、HTTP 状态码和服务端返回的完整错误信息，而不只显示笼统的 `LLM request failed`。
 
-## MCP、Skills、诊断与用量
+## MCP、Skills、规则记忆与进化
 
 设置中心还提供：
 
 - **MCP**：配置工作区或全局的 stdio / SSE Server，保存后重新加载工具；
 - **Skills**：查看并启用或禁用已发现的技能；
+- **规则与记忆**：切换规则注入与记忆管理方式；「打开编辑器」可维护层级 AGENTS.md 规则文件与 MEMORY.md——新建规则文件（Ctrl+N）、删除规则文件、定位所在文件夹，Ctrl+S 快速保存；
+- **进化**：查看缺陷信号、手动或按间隔自动运行反思回合，审阅反思产出的技能草稿（见[进化引擎](/doc/evolution)）；
 - **诊断与用量**：检查工作区、配置和 Provider 健康状态，汇总调用、Token、延迟与成本。
 
 ![在 Desktop 中配置 MCP Server](/screenshots/desktop/mcp-servers.png)

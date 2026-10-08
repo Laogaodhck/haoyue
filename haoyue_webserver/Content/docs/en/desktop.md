@@ -89,12 +89,14 @@ The `apiKey` value is stored directly in `~/.haoyue/config.json` and is read, di
 
 Use “Test” immediately after saving. Failed model requests include the Provider, HTTP status, and complete server response instead of only a generic `LLM request failed` message.
 
-## MCP, Skills, diagnostics, and usage
+## MCP, Skills, rules & memory, evolution
 
 The settings workbench also provides:
 
 - **MCP**: configure workspace or global stdio / SSE servers and reload their tools after saving;
 - **Skills**: inspect discovered skills and enable or disable them;
+- **Rules & Memory**: toggle rule injection and the memory management mode; the editor maintains hierarchical AGENTS.md rule files and MEMORY.md — create rule files (Ctrl+N), delete them, reveal their folder, and save quickly with Ctrl+S;
+- **Evolution**: browse defect signals, run reflection turns manually or on an interval, and review the skill drafts it produces (see the [Evolution Engine](/en/doc/evolution));
 - **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost.
 
 ![Configure an MCP Server in Desktop](/screenshots/desktop/mcp-servers.png)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ArrowLeft, Brain, LoaderCircle, RefreshCw, Save, ScrollText } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ArrowLeft, Brain, FolderOpen, LoaderCircle, Plus, RefreshCw, Save, ScrollText, Trash2, X } from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { confirmAction } from '../confirmation'
 import SelectMenu from './SelectMenu.vue'
 
@@ -50,6 +50,11 @@ const savedMessage = ref('')
 /** 编辑缓冲与加载时的原始内容，用于脏检查。 */
 const content = ref('')
 const baseline = ref('')
+/** 新建规则文件的内联表单状态。 */
+const creating = ref(false)
+const newPath = ref('')
+const newPathInput = ref<HTMLInputElement | null>(null)
+const deleting = ref(false)
 
 const isRules = computed(() => tab.value === 'rules')
 const isGlobal = computed(() => !isRules.value && scope.value === 'global')
@@ -202,6 +207,95 @@ async function requestClose(): Promise<void> {
   emit('close')
 }
 
+/** 与 runtime 侧一致的轻量归一化：反斜杠转正斜杠、去掉首部斜杠与空白。 */
+function normalizeRulePath(input: string): string {
+  return input.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+}
+
+function beginCreate(): void {
+  creating.value = true
+  newPath.value = ''
+  void nextTick(() => newPathInput.value?.focus())
+}
+
+function cancelCreate(): void {
+  creating.value = false
+  newPath.value = ''
+  error.value = ''
+}
+
+async function confirmCreate(): Promise<void> {
+  const path = normalizeRulePath(newPath.value) || 'AGENTS.md'
+  if (!path.toUpperCase().endsWith('AGENTS.MD') || path.includes('..')) {
+    error.value = '规则文件必须命名为 AGENTS.md（可在其前加子目录，如 src/AGENTS.md）'
+    return
+  }
+  if (files.value.some((file) => file.path.toLowerCase() === path.toLowerCase())) {
+    // 已存在的文件直接选中，不报错也不覆盖。
+    creating.value = false
+    activePath.value = path
+    return
+  }
+  saving.value = true
+  error.value = ''
+  try {
+    const directory = path === 'AGENTS.md' ? '工作区根目录' : path.replace(/\/AGENTS\.md$/i, '')
+    await requestJson('rules.save', {
+      path,
+      content: `# ${directory} 规则\n\n- 在这里写下仅适用于 ${directory} 的工作区指令\n`
+    })
+    creating.value = false
+    newPath.value = ''
+    await loadRules()
+    activePath.value = path
+    flashSaved(`已创建 ${path}`)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function deleteRuleFile(): Promise<void> {
+  if (!activeRuleFile.value || deleting.value) return
+  const confirmed = await confirmAction({
+    title: '删除规则文件？',
+    message: dirty.value
+      ? `「${activePath.value}」将被删除，其中未保存的修改一并丢弃。`
+      : `「${activePath.value}」将被删除，此操作不可撤销。`,
+    confirmLabel: '删除',
+    danger: true
+  })
+  if (!confirmed) return
+  deleting.value = true
+  error.value = ''
+  try {
+    await requestJson('rules.delete', { path: activePath.value })
+    // 先清空缓冲再切回根规则，避免 activePath 侦听器弹出二次放弃确认。
+    content.value = ''
+    baseline.value = ''
+    activePath.value = 'AGENTS.md'
+    await loadRules()
+    flashSaved(`已删除规则文件`)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    deleting.value = false
+  }
+}
+
+/** 在系统文件管理器中定位当前编辑的规则/记忆文件；尚未落盘时退回打开父目录。 */
+function openLocation(): void {
+  if (isRules.value) {
+    if (!workspaceRoot.value) return
+    const base = workspaceRoot.value.replace(/[\\/]+$/, '')
+    const target = activeRuleFile.value ? `${base}/${activePath.value}` : base
+    void window.haoyue.showItemInFolder(target)
+    return
+  }
+  if (memoryPath.value) void window.haoyue.showItemInFolder(memoryPath.value)
+}
+
 // SelectMenu 的 v-model 直接更新 scope；这里只负责切换前脏检查与重新加载。
 watch(scope, (_next, previous) => {
   if (!props.open || isRules.value) return
@@ -232,16 +326,31 @@ watch(() => props.open, (open) => {
   error.value = ''
   savedMessage.value = ''
   suppressSwitch = false
+  creating.value = false
+  newPath.value = ''
   void loadRules()
 })
 
 function closeOnEscape(event: KeyboardEvent): void {
   if (!props.open) return
-  if (event.key === 'Escape') void requestClose()
+  if (event.key === 'Escape') {
+    // Esc 优先退出内联新建表单，其次才关闭整页。
+    if (creating.value) {
+      event.preventDefault()
+      cancelCreate()
+      return
+    }
+    void requestClose()
+  }
   // Ctrl/Cmd+S 快速保存，与设置编辑器的习惯一致。
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     event.preventDefault()
     if (dirty.value && !saving.value && !loading.value) void save()
+  }
+  // Ctrl/Cmd+N 新建规则文件（仅规则页签）。
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && isRules.value) {
+    event.preventDefault()
+    if (!creating.value) beginCreate()
   }
 }
 
@@ -282,12 +391,33 @@ onBeforeUnmount(() => {
       <SelectMenu v-else v-model="scope" :options="SCOPE_OPTIONS" label="记忆范围" class="rules-memory-picker" />
       <span v-if="dirty" class="rules-memory-dirty">未保存</span>
       <span class="rules-memory-spacer" />
+      <button v-if="isRules" class="icon-button" :title="creating ? '取消新建（Esc）' : '新建规则文件（Ctrl+N）'"
+        @click="creating ? cancelCreate() : beginCreate()">
+        <X v-if="creating" :size="16" />
+        <Plus v-else :size="16" />
+      </button>
+      <button v-if="isRules" class="icon-button" title="删除当前规则文件" :disabled="deleting || saving || !activeRuleFile"
+        @click="deleteRuleFile">
+        <Trash2 :size="16" />
+      </button>
+      <button class="icon-button" title="打开所在文件夹" @click="openLocation">
+        <FolderOpen :size="16" />
+      </button>
       <button class="icon-button" title="重新加载" :disabled="loading" @click="load">
         <RefreshCw :size="16" :class="{ spinning: loading }" />
       </button>
       <button class="secondary-button primary-action" :disabled="saving || loading || !dirty" @click="save">
         <LoaderCircle v-if="saving" class="spin" :size="14" />
         <Save v-else :size="14" /> 保存
+      </button>
+    </div>
+
+    <div v-if="creating && isRules" class="rules-memory-create">
+      <input ref="newPathInput" v-model="newPath" class="rules-memory-input" spellcheck="false"
+        placeholder="新规则路径：src/AGENTS.md；留空则创建根 AGENTS.md" @keydown.enter="confirmCreate" />
+      <button class="secondary-button primary-action" :disabled="saving" @click="confirmCreate">
+        <LoaderCircle v-if="saving" class="spin" :size="14" />
+        <Plus v-else :size="14" /> 创建
       </button>
     </div>
 
@@ -316,11 +446,12 @@ onBeforeUnmount(() => {
     </div>
 
     <footer class="rules-memory-footer">
-      {{
-        isRules
-          ? '规则在每次会话开始时注入（PromptSlot.Workspace），修改只影响之后的会话'
-          : '记忆在每次会话开始时注入（PromptSlot.Memory），Agent 与你都可以读写这份文件'
-      }}
+      <template v-if="isRules">
+        规则在每次会话开始时注入（PromptSlot.Workspace），修改只影响之后的会话 · 快捷键：Ctrl+S 保存，Ctrl+N 新建规则文件
+      </template>
+      <template v-else>
+        记忆在每次会话开始时注入（PromptSlot.Memory），Agent 与你都可以读写这份文件 · 快捷键：Ctrl+S 保存
+      </template>
     </footer>
   </section>
 </template>
@@ -437,6 +568,30 @@ onBeforeUnmount(() => {
 
 .rules-memory-spacer {
   flex: 1;
+}
+
+.rules-memory-create {
+  display: flex;
+  gap: 8px;
+  margin: 10px 22px 0;
+}
+
+.rules-memory-input {
+  flex: 1;
+  padding: 8px 12px;
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.rules-memory-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 66%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .rules-memory-hint {

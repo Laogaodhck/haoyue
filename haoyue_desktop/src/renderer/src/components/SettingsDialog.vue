@@ -32,6 +32,7 @@ import {
   SlidersHorizontal,
   ScrollText,
   Sun,
+  Telescope,
   Trash2,
   Upload,
   Wrench,
@@ -57,8 +58,18 @@ import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
+import {
+  EVOLUTION_INTERVAL_OPTIONS,
+  clampIntervalMinutes,
+  defectKindLabel,
+  formatInterval,
+  relativeTime,
+  reflectionOutcomeText,
+  type EvolutionCandidate,
+  type EvolutionDefectReport
+} from '../evolution-form'
 
-type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'inference' | 'advanced'
+type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
 
 interface ProviderInfo {
   id: string
@@ -174,6 +185,13 @@ const computerUseDriver = ref('auto')
 const replyLanguage = ref<'auto' | 'zh' | 'en'>('auto')
 const rulesEnabled = ref(true)
 const memoryMode = ref<'auto' | 'manual'>('auto')
+
+/** 进化引擎：自动反思配置、缺陷信号与待审技能草稿。 */
+const evolutionAutoReflect = ref(false)
+const evolutionIntervalMinutes = ref(360)
+const evolutionDefects = ref<EvolutionDefectReport[]>([])
+const evolutionScanned = ref(0)
+const evolutionCandidates = ref<EvolutionCandidate[]>([])
 
 /** CUDA / local inference settings; null when no local provider is configured. */
 const localInference = reactive({
@@ -293,6 +311,7 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'mcp', label: 'MCP', icon: Blocks },
   { id: 'skills', label: '技能', icon: Wrench },
   { id: 'rules-memory', label: '规则与记忆', icon: ScrollText },
+  { id: 'evolution', label: '进化', icon: Telescope },
   { id: 'diagnostics', label: '诊断与用量', icon: Activity },
   { id: 'inference', label: '推理加速', icon: Gauge },
   { id: 'advanced', label: '高级设置', icon: SlidersHorizontal }
@@ -372,6 +391,7 @@ async function loadCurrentSection(): Promise<void> {
     if (section.value === 'mcp') mcpServers.value = await requestJson<McpServerInfo[]>('mcp.list')
     if (section.value === 'skills') skills.value = await requestJson<SkillInfo[]>('skill.list')
     if (section.value === 'rules-memory') await loadRulesMemory()
+    if (section.value === 'evolution') await loadEvolution()
     if (section.value === 'diagnostics') await loadDiagnostics()
     if (section.value === 'inference' || section.value === 'advanced') await loadAdvanced()
   } catch (reason) {
@@ -450,6 +470,114 @@ async function setRulesMemory(payload: { rulesEnabled?: boolean; memoryMode?: 'a
   } finally {
     endAction()
   }
+}
+
+async function loadEvolution(): Promise<void> {
+  const [config, inspect, pending] = await Promise.all([
+    requestJson<{ autoReflect: boolean; intervalMinutes: number }>('evolution.config.get'),
+    requestJson<{ scanned: number; reports: EvolutionDefectReport[] }>('evolution.inspect'),
+    requestJson<EvolutionCandidate[]>('evolution.pending-list')
+  ])
+  evolutionAutoReflect.value = config.autoReflect
+  evolutionIntervalMinutes.value = clampIntervalMinutes(config.intervalMinutes)
+  evolutionDefects.value = inspect.reports
+  evolutionScanned.value = inspect.scanned
+  evolutionCandidates.value = pending
+}
+
+async function setEvolutionConfig(payload: { autoReflect?: boolean; intervalMinutes?: number }): Promise<void> {
+  const previous = {
+    autoReflect: evolutionAutoReflect.value,
+    intervalMinutes: evolutionIntervalMinutes.value
+  }
+  if (payload.autoReflect !== undefined) evolutionAutoReflect.value = payload.autoReflect
+  if (payload.intervalMinutes !== undefined)
+    evolutionIntervalMinutes.value = clampIntervalMinutes(payload.intervalMinutes)
+  beginAction('evolution.config')
+  try {
+    const config = await requestJson<{ autoReflect: boolean; intervalMinutes: number }>(
+      'evolution.config.set',
+      { autoReflect: evolutionAutoReflect.value, intervalMinutes: evolutionIntervalMinutes.value }
+    )
+    evolutionAutoReflect.value = config.autoReflect
+    evolutionIntervalMinutes.value = clampIntervalMinutes(config.intervalMinutes)
+    notice.value = evolutionAutoReflect.value
+      ? `自动反思已开启：每 ${formatInterval(evolutionIntervalMinutes.value)} 复盘一次缺陷信号，技能草稿仍需人工审阅`
+      : '自动反思已关闭：仅手动或定时任务触发反思回合'
+  } catch (reason) {
+    evolutionAutoReflect.value = previous.autoReflect
+    evolutionIntervalMinutes.value = previous.intervalMinutes
+    fail(reason)
+  } finally {
+    endAction()
+  }
+}
+
+async function runReflection(): Promise<void> {
+  beginAction('evolution.reflect')
+  try {
+    await requestJson<{ started: boolean }>('evolution.reflect')
+    notice.value = '反思回合已启动：正在后台复盘缺陷信号，完成后本页自动刷新'
+  } catch (reason) {
+    fail(reason)
+  } finally {
+    endAction()
+  }
+}
+
+/**
+ * Adopting installs the draft as a live skill (picked up by the next scan);
+ * rejecting discards it permanently, so only reject asks for confirmation.
+ */
+async function decideEvolutionCandidate(candidate: EvolutionCandidate, adopt: boolean): Promise<void> {
+  if (!adopt) {
+    const confirmed = await confirmAction({
+      title: '丢弃该候选技能？',
+      message: `「${candidate.skillName}」的草稿将被永久删除，同一缺陷不会再生成候选。`,
+      confirmLabel: '丢弃',
+      danger: true
+    })
+    if (!confirmed) return
+  }
+  beginAction(`evolution.decide:${candidate.fingerprint}`)
+  try {
+    await requestJson('evolution.decide', {
+      fingerprint: candidate.fingerprint,
+      decision: adopt ? 'adopt' : 'reject'
+    })
+    evolutionCandidates.value = await requestJson<EvolutionCandidate[]>('evolution.pending-list')
+    notice.value = adopt
+      ? `已采纳「${candidate.skillName}」：技能进入正式目录，下一次扫描即生效`
+      : `已丢弃「${candidate.skillName}」`
+  } catch (reason) {
+    fail(reason)
+  } finally {
+    endAction()
+  }
+}
+
+/** Reflection finished (manual or unattended): refresh the open page and surface the outcome. */
+async function refreshEvolutionAfterReflect(details: Record<string, unknown>): Promise<void> {
+  if (!props.open || section.value !== 'evolution' || action.value.startsWith('evolution.')) return
+  try {
+    evolutionCandidates.value = await requestJson<EvolutionCandidate[]>('evolution.pending-list')
+    const [inspect] = await Promise.all([
+      requestJson<{ scanned: number; reports: EvolutionDefectReport[] }>('evolution.inspect')
+    ])
+    evolutionDefects.value = inspect.reports
+    evolutionScanned.value = inspect.scanned
+  } catch {
+    return
+  }
+  const num = (key: string): number | undefined =>
+    typeof details[key] === 'number' ? (details[key] as number) : undefined
+  notice.value = reflectionOutcomeText({
+    processed: num('processed'),
+    candidates: num('candidates'),
+    noAction: num('noAction'),
+    skipped: num('skipped'),
+    error: typeof details.error === 'string' ? details.error : undefined
+  })
 }
 
 async function loadAdvanced(): Promise<void> {
@@ -1103,8 +1231,13 @@ let unsubscribeMcpEvents: (() => void) | null = null
 
 onMounted(() => {
   unsubscribeMcpEvents = window.haoyue.daemon.onEvent((message) => {
-    if (message.event !== 'mcp.updated') return
-    void refreshMcpServers()
+    if (message.event === 'mcp.updated') {
+      void refreshMcpServers()
+      return
+    }
+    if (message.event === 'evolution.reflected') {
+      void refreshEvolutionAfterReflect(message.details ?? {})
+    }
   })
 })
 
@@ -1493,6 +1626,100 @@ onBeforeUnmount(() => {
                   title="Agent 可更新 MEMORY.md" @click="setRulesMemory({ memoryMode: 'auto' })">自动</button>
                 <button :class="{ active: memoryMode === 'manual' }" :disabled="action === 'rulesMemory.set'"
                   title="MEMORY.md 仅用户可编辑" @click="setRulesMemory({ memoryMode: 'manual' })">手动</button>
+              </div>
+            </div>
+          </section>
+        </template>
+
+        <template v-else-if="section === 'evolution'">
+          <div class="settings-section-heading">
+            <div>
+              <h3>进化</h3>
+              <p>从失败信号中沉淀技能：缺陷聚合 → 反思回合 → 技能草稿 → 人工审阅后生效</p>
+            </div>
+            <div class="row-actions">
+              <button class="icon-button" title="刷新" @click="loadCurrentSection">
+                <RefreshCw :size="17" />
+              </button>
+              <button class="secondary-button" :disabled="action === 'evolution.reflect'" @click="runReflection">
+                <LoaderCircle v-if="action === 'evolution.reflect'" class="spin" :size="15" />
+                <Telescope v-else :size="15" />立即反思
+              </button>
+            </div>
+          </div>
+
+          <section class="settings-group">
+            <label class="provider-enabled-row">
+              <span>
+                <strong>自动反思</strong>
+                <small>按固定间隔在后台运行反思回合：复盘最近的失败信号并起草技能。技能草稿始终等待人工采纳，不会自动生效。</small>
+              </span>
+              <input v-model="evolutionAutoReflect" class="sr-only" type="checkbox"
+                :disabled="action === 'evolution.config'"
+                @change="setEvolutionConfig({ autoReflect: evolutionAutoReflect })" />
+              <span class="toggle-switch" aria-hidden="true"><span /></span>
+            </label>
+            <div class="settings-row">
+              <div>
+                <strong>反思间隔</strong>
+                <small>自动反思的触发周期，当前每 {{ formatInterval(evolutionIntervalMinutes) }} 复盘一次</small>
+              </div>
+              <div class="segmented-control">
+                <button v-for="option in EVOLUTION_INTERVAL_OPTIONS" :key="option.value"
+                  :class="{ active: evolutionIntervalMinutes === option.value }"
+                  :disabled="action === 'evolution.config'"
+                  @click="setEvolutionConfig({ intervalMinutes: option.value })">{{ option.label }}</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-group">
+            <div class="settings-row">
+              <div>
+                <strong>缺陷信号</strong>
+                <small>最近 {{ evolutionScanned }} 条运行事件聚合出的可改进点，反思回合会为这些信号起草技能</small>
+              </div>
+            </div>
+            <div v-if="evolutionDefects.length === 0" class="empty-settings">暂无缺陷信号——保持这样很好</div>
+            <div v-for="report in evolutionDefects" :key="report.fingerprint" class="settings-list-row">
+              <Wrench :size="17" />
+              <div class="list-main">
+                <div>
+                  <strong>{{ defectKindLabel(report.kind) }}</strong>
+                  <span v-if="report.occurrences > 1" class="inline-badge">{{ report.occurrences }} 次</span>
+                </div>
+                <small :title="report.errorSummary ?? ''">{{ report.errorSummary || report.toolName || report.fingerprint }}</small>
+              </div>
+              <span class="version-text" :title="report.lastSeen">{{ relativeTime(report.lastSeen) }}</span>
+            </div>
+          </section>
+
+          <section class="settings-group">
+            <div class="settings-row">
+              <div>
+                <strong>待审技能草稿（{{ evolutionCandidates.length }}）</strong>
+                <small>反思回合产出的候选技能等待人工裁决：采纳后进入正式技能目录，丢弃则永久删除</small>
+              </div>
+            </div>
+            <div v-if="evolutionCandidates.length === 0" class="empty-settings">没有待审的技能草稿</div>
+            <div v-for="candidate in evolutionCandidates" :key="candidate.fingerprint" class="settings-list-row">
+              <Telescope :size="17" />
+              <div class="list-main">
+                <div>
+                  <strong :title="candidate.skillName">{{ candidate.skillName }}</strong>
+                </div>
+                <small :title="candidate.summary ?? ''">{{ candidate.summary || '反思产出候选技能' }}</small>
+              </div>
+              <div class="row-controls">
+                <button class="secondary-button" :disabled="action.startsWith('evolution.decide')"
+                  @click="decideEvolutionCandidate(candidate, true)">
+                  <Check :size="14" /> 采纳
+                </button>
+                <button class="icon-button compact" title="丢弃该草稿"
+                  :disabled="action.startsWith('evolution.decide')"
+                  @click="decideEvolutionCandidate(candidate, false)">
+                  <X :size="15" />
+                </button>
               </div>
             </div>
           </section>

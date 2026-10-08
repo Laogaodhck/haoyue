@@ -118,6 +118,18 @@ haoyue mcp test
 
 `mcp test` 会连接每个已启用的 Server 并报告发现的工具数量。
 
+## 知识库
+
+```bash
+haoyue knowledge list
+haoyue knowledge search 构建
+haoyue knowledge add "构建命令" "pnpm build" --tags build,前端
+haoyue knowledge import notes.md 纪要.docx
+haoyue knowledge export backup.md
+```
+
+`add` 可以直接接管道内容（`cat notes.md | haoyue knowledge add "标题"`），`import` 自动分块、重复导入即更新，`export` 省略文件名时输出到标准输出。条目管理还有 `show` 与 `delete`，完整能力见[知识库](/doc/knowledge)。
+
 ## Daemon
 
 ```bash

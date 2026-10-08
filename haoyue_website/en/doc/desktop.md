@@ -97,6 +97,7 @@ The settings workbench also provides:
 - **Skills**: inspect discovered skills and enable or disable them;
 - **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
 - **Evolution**: defect signals at a glance, manual or scheduled reflection, adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
+- **Knowledge**: browse and revise what the agent saves — tag filtering, Markdown export, the synonym editor and file import — see the [Knowledge Base](/en/doc/knowledge);
 - **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost.
 
 ![Configure an MCP Server in Desktop](/screenshots/desktop/mcp-servers.png)

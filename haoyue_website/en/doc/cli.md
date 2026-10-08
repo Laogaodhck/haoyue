@@ -118,6 +118,18 @@ haoyue mcp test
 
 `mcp test` connects to every enabled server and reports the number of discovered tools.
 
+## Knowledge Base
+
+```bash
+haoyue knowledge list
+haoyue knowledge search build
+haoyue knowledge add "Build command" "pnpm build" --tags build,frontend
+haoyue knowledge import notes.md minutes.docx
+haoyue knowledge export backup.md
+```
+
+`add` takes piped content directly (`cat notes.md | haoyue knowledge add "Title"`), `import` chunks automatically and re-importing upserts, and `export` prints to stdout when no file name is given. Entries can also be inspected with `show` and removed with `delete` — see the [Knowledge Base](/en/doc/knowledge).
+
 ## Daemon
 
 ```bash

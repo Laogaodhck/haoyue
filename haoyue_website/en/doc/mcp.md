@@ -14,7 +14,7 @@ Haoyue acts as an MCP Client, connects to external servers, and registers discov
 
 ## Configure MCP in Desktop
 
-Open “Settings → MCP” to add a global or workspace server, pick a connection method (stdio / HTTP SSE / Streamable HTTP), fill in the command or URL, arguments, environment, and enabled state, then select “Save and reload.”
+Open the sidebar “Extensions” hub, Connectors page, to add a global or workspace server, pick a connection method (stdio / HTTP SSE / Streamable HTTP), fill in the command or URL, arguments, environment, and enabled state, then select “Save and reload.”
 
 ![Desktop MCP Server configuration](/screenshots/desktop/mcp-servers.png)
 

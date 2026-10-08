@@ -89,15 +89,19 @@ The `apiKey` value is stored directly in `~/.haoyue/config.json` and is read, di
 
 Use “Test” immediately after saving. Failed model requests include the Provider, HTTP status, and complete server response instead of only a generic `LLM request failed` message.
 
-## MCP, Skills, rules & memory, evolution
+## Extensions, rules & memory, evolution
+
+The sidebar "Extensions" entry opens a Qoder-style hub with three categories:
+
+- **Connectors (MCP)**: configure workspace or global stdio / SSE / HTTP MCP servers — one-click presets for GitHub, filesystem, web fetch, Playwright and more; tools reload after saving;
+- **Skills**: toggle and import installed skills, or grab official skills from the built-in marketplace;
+- **Experts**: a catalog of built-in domain experts — copy a prompt into a new task and the agent collaborates in that role.
 
 The settings workbench also provides:
 
-- **MCP**: configure workspace or global stdio / SSE servers and reload their tools after saving;
-- **Skills**: inspect discovered skills and enable or disable them;
 - **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
 - **Evolution**: defect signals at a glance, manual or scheduled reflection, adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
-- **Knowledge**: browse and revise what the agent saves — tag filtering, Markdown export, the synonym editor and file import — see the [Knowledge Base](/en/doc/knowledge);
+- **Knowledge Center**: browse and revise what the agent saves as notebooks → sources → entries — attribution badges, cross-notebook search, tag filtering, Markdown export and the synonym editor — see the [Knowledge Center](/en/doc/knowledge);
 - **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost.
 
 ![Configure an MCP Server in Desktop](/screenshots/desktop/mcp-servers.png)

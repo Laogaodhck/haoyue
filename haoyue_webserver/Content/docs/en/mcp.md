@@ -14,7 +14,7 @@ Haoyue acts as an MCP Client, connects to external servers, and registers discov
 
 ## Configure MCP in Desktop
 
-Open “Settings → MCP” to add a global or workspace server, pick a connection method (stdio / HTTP SSE / Streamable HTTP), fill in the command or URL, arguments, environment, and enabled state, then select “Save and reload.”
+Open the sidebar “Extensions” hub, Connectors page, to add a global or workspace server, pick a connection method (stdio / HTTP SSE / Streamable HTTP), fill in the command or URL, arguments, environment, and enabled state, then select “Save and reload.”
 
 The connection field recognizes what you paste: a bare package name (`@modelcontextprotocol/server-github` expands to `npx -y …`, `mcp-server-fetch` to `uvx …`), a full command line, or a remote URL — the transport is inferred from the content. Pasting a Claude / Cursor style JSON config fills every field automatically.
 

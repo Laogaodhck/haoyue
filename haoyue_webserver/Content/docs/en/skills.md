@@ -46,7 +46,7 @@ A Skill contributes text only and does not automatically load Skill-specific C# 
 
 ## Administration
 
-Desktop lists and toggles Skills under “Settings → Skills.” CLI commands are:
+Desktop lists and toggles Skills in the sidebar “Extensions” hub, Skills page. CLI commands are:
 
 ```bash
 haoyue skill list

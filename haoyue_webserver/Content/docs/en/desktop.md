@@ -89,12 +89,16 @@ The `apiKey` value is stored directly in `~/.haoyue/config.json` and is read, di
 
 Use “Test” immediately after saving. Failed model requests include the Provider, HTTP status, and complete server response instead of only a generic `LLM request failed` message.
 
-## MCP, Skills, rules & memory, evolution
+## Extensions, rules & memory, evolution
+
+The sidebar "Extensions" entry opens a Qoder-style extensions hub with three categories:
+
+- **Connectors (MCP)**: configure workspace or global stdio / SSE / HTTP MCP servers with one-click presets (GitHub, filesystem, web fetch, Playwright…); tools reload automatically after saving; the project properties dialog links straight here via "Manage connectors";
+- **Skills**: the "Installed" view inspects, imports (.md / .zip) and toggles discovered skills; the "Marketplace" view installs or disables official skills in one click;
+- **Experts**: browse the built-in domain-expert catalog (filter by domain) and copy an expert prompt into a new task so the agent collaborates in that role.
 
 The settings workbench also provides:
 
-- **MCP**: configure workspace or global stdio / SSE servers and reload their tools after saving;
-- **Skills**: inspect discovered skills and enable or disable them;
 - **Rules & Memory**: toggle rule injection and the memory management mode; the editor maintains hierarchical AGENTS.md rule files and MEMORY.md — create rule files (Ctrl+N), delete them, reveal their folder, and save quickly with Ctrl+S;
 - **Evolution**: browse defect signals, run reflection turns manually or on an interval, and review the skill drafts it produces (see the [Evolution Engine](/en/doc/evolution));
 - **Knowledge Center**: manage what the agent saves automatically as notebooks → sources → entries — notebook grouping, text/URL/file sources, attribution badges, cross-notebook search, exact tag filtering, Markdown export and a synonym-table editor (see the [Knowledge Center](/en/doc/knowledge));

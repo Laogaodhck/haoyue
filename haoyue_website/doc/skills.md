@@ -46,7 +46,7 @@ Skill Prompt 作为文本注入，不会自动携带专属 C# 工具。需要工
 
 ## 管理
 
-Desktop 在“设置 → Skills”中列出并切换状态。CLI 使用：
+Desktop 在侧栏「扩展」的「技能」页列出并切换状态。CLI 使用：
 
 ```bash
 haoyue skill list

@@ -89,15 +89,19 @@ API Key 直接保存在 `~/.haoyue/config.json` 中，由 Runtime 和 Desktop �
 
 保存后可立即点击“测试”。模型请求失败时，Desktop 会展示 Provider 名称、HTTP 状态码和服务端返回的完整错误信息，而不只显示笼统的 `LLM request failed`。
 
-## MCP、Skills、规则记忆与进化
+## 扩展、规则记忆与进化
+
+侧栏「扩展」打开 Qoder 式扩展中心，三大类目一站式管理：
+
+- **连接器（MCP）**：配置工作区或全局的 stdio / SSE / HTTP MCP Server，GitHub、文件系统、网页抓取、Playwright 等预设一键接入，保存后自动重载工具；
+- **技能**：「已安装」视图启停与导入技能，「技能市场」一键安装官方技能；
+- **专家**：内置领域专家目录，复制提示词到新任务即可让 Agent 以该角色协作。
 
 设置中心还提供：
 
-- **MCP**：配置工作区或全局的 stdio / SSE Server，保存后重新加载工具；
-- **Skills**：查看并启用或禁用已发现的技能；
 - **规则与记忆**：管理层级 AGENTS.md 规则文件与长期记忆 MEMORY.md——编辑器支持新建（Ctrl+N）、删除规则文件和定位所在文件夹，Ctrl+S 快速保存，保存前自动脏检查；
 - **进化**：缺陷信号一览、手动或定时自动反思、技能草稿的采纳与丢弃，详见[进化引擎](/doc/evolution)；
-- **知识库**：Agent 自动沉淀的经验可翻阅、修订——标签筛选、导出备份、同义词表编辑与文件批量导入，详见[知识库](/doc/knowledge)；
+- **知识中心**：以「笔记本 → 来源 → 条目」管理 Agent 自动沉淀的经验——出处徽标、跨笔记本检索、标签筛选、导出备份与同义词表编辑，详见[知识中心](/doc/knowledge)；
 - **诊断与用量**：检查工作区、配置和 Provider 健康状态，汇总调用、Token、延迟与成本。
 
 ![在 Desktop 中配置 MCP Server](/screenshots/desktop/mcp-servers.png)

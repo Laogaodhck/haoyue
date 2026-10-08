@@ -14,7 +14,7 @@ Haoyue 作为 MCP Client 连接外部 Server，并把发现的工具和 Prompt �
 
 ## 在 Desktop 中配置
 
-打开“设置 → MCP”，可以添加全局或当前工作区 Server，选择连接方式（stdio / HTTP SSE / Streamable HTTP）、填写命令或 URL、参数、环境变量和启用状态，然后“保存并重载”。
+打开侧栏「扩展」的「连接器」页，可以添加全局或当前工作区 Server，选择连接方式（stdio / HTTP SSE / Streamable HTTP）、填写命令或 URL、参数、环境变量和启用状态，然后“保存并重载”。
 
 连接内容一栏支持智能识别：直接粘贴包名（如 `@modelcontextprotocol/server-github` 自动补全为 `npx -y …`、`mcp-server-fetch` 自动补全为 `uvx …`）、完整命令行或远程 URL，保存时按内容自动判定传输方式；也支持直接粘贴 Claude / Cursor 风格的 JSON 配置，字段会自动填充。
 

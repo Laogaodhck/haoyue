@@ -95,7 +95,7 @@ The sidebar "Extensions" entry opens a Qoder-style hub with three categories:
 
 - **Connectors (MCP)**: configure workspace or global stdio / SSE / HTTP MCP servers — one-click presets for GitHub, filesystem, web fetch, Playwright and more; tools reload after saving;
 - **Skills**: toggle and import installed skills, or grab official skills from the built-in marketplace;
-- **Experts**: a catalog of built-in domain experts — copy a prompt into a new task and the agent collaborates in that role.
+- **Experts**: a catalog of built-in domain experts — bind one in a click from the detail page ("Start a new task with this expert", badge shown above the composer, removable anytime), or copy the prompt to the start of a conversation.
 
 The settings workbench also provides:
 

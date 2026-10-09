@@ -23,9 +23,13 @@ haoyue --resume <session-id>
 
 # 仅为本次运行覆盖模型，不修改保存的 Profile
 haoyue --model "anthropic/claude-sonnet-5" "审查认证代码"
+
+# 绑定专家 persona：新会话直接绑定；配合 --continue/--resume 时切换专家
+haoyue --expert fullstack-engineer "实现购物车接口"
+haoyue chat --expert code-reviewer --continue
 ```
 
-交互过程中，第一次 `Ctrl+C` 取消活动 turn；空闲时再次使用退出程序。
+交互过程中，第一次 `Ctrl+C` 取消活动 turn；空闲时再次使用退出程序。横幅与 `/session` 会显示当前绑定的专家。
 
 ## Session
 
@@ -99,6 +103,10 @@ haoyue init
 haoyue skill list
 haoyue skill enable code-review
 haoyue skill disable code-review
+
+# 内置专家目录：浏览 persona，配合 chat --expert <id> 绑定
+haoyue expert list
+haoyue expert show fullstack-engineer
 
 haoyue mcp list
 haoyue mcp test

@@ -23,9 +23,13 @@ haoyue --resume <session-id>
 
 # Override the model for this run without changing the stored Profile
 haoyue --model "anthropic/claude-sonnet-5" "Review the authentication code"
+
+# Bind an expert persona: applied to a new session; rebinds when combined with --continue/--resume
+haoyue --expert fullstack-engineer "Implement the cart API"
+haoyue chat --expert code-reviewer --continue
 ```
 
-During interactive use, the first `Ctrl+C` cancels the active turn. Use it again while idle to exit.
+During interactive use, the first `Ctrl+C` cancels the active turn. Use it again while idle to exit. The banner and `/session` show the currently bound expert.
 
 ## Sessions
 
@@ -99,6 +103,10 @@ haoyue init
 haoyue skill list
 haoyue skill enable code-review
 haoyue skill disable code-review
+
+# Built-in expert catalog: browse personas, bind with chat --expert <id>
+haoyue expert list
+haoyue expert show fullstack-engineer
 
 haoyue mcp list
 haoyue mcp test

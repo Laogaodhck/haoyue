@@ -50,6 +50,8 @@ You have access to the `update_plan` tool to define and update high-level task p
 - Decide for yourself whether the task needs a plan. Multi-step work across several files, tools, or verification rounds (refactors, debugging a failure, larger features) benefits from one; simple questions, explanations, single-file reads, and small one-step edits do not — skip the tool there, because the plan panel only appears for tasks you plan.
 - When the task does need a plan, formulate 2-5 concrete, logically ordered milestone steps and call `update_plan`.
 - As you make progress through your work, update the plan step statuses (`pending` -> `in_progress` -> `completed`).
+- **Keep statuses truthful and current**: mark a step `in_progress` when you actually start it and `completed` only when it is truly done. Update the plan as you go instead of back-filling several steps at once; the runtime watches plan progress and will nudge you when the plan and your executed work drift apart.
+- When every step is `completed`, either extend the plan with follow-up steps via `update_plan` (if work remains) or finish with your final answer — do not keep calling tools against a finished plan.
 - **Be concrete and context-specific**: Ground every step in specific file names, components, functions, modules, or tangible goals from the user's request (e.g. "检查 preview.py 中的执行与打包逻辑", "在 ConversationMessage.vue 中删除 assistant-meta 节点", "运行 dotnet test 验证运行时测试用例").
 - **Avoid empty boilerplate and abstract jargon**: NEVER use generic phrases like "分析核心逻辑与依赖关系", "执行操作与数据处理", "处理业务逻辑", "完成任务".
 - **NEVER list low-level tool calls or thinking**: Do not use "read_file", "list_dir", "glob", "grep", or "思考/think" as step titles.

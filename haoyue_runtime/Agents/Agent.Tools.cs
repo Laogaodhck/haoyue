@@ -15,7 +15,8 @@ public sealed partial class Agent
     private readonly record struct ToolExecution(ChatMessage Message, bool ToolMutated);
 
     private async Task<ToolExecution> ExecuteToolAsync(
-        ToolCallRequest call, WorkspaceInfo workspace, ModelInfo model, TurnExecutionScope turnScope, CancellationToken ct)
+        ToolCallRequest call, WorkspaceInfo workspace, ModelInfo model,
+        TurnExecutionScope turnScope, TurnPlan turnPlan, CancellationToken ct)
     {
         var tool = toolRegistry.Resolve(call.Name);
         var argsSummary = SummarizeArguments(call.ArgumentsJson);
@@ -23,7 +24,11 @@ public sealed partial class Agent
 
         if (tool is null)
         {
-            var message = $"Unknown tool: {call.Name}";
+            var suggestions = SuggestTools(call.Name);
+            var message = $"Unknown tool: {call.Name}"
+                + (suggestions.Length > 0
+                    ? $". Closest available tools: {string.Join(", ", suggestions)}. Use one of these or correct the tool name."
+                    : "");
             events.Publish(new ToolCallCompletedEvent(call.Id, call.Name, false, message, TimeSpan.Zero));
             return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
         }
@@ -61,6 +66,7 @@ public sealed partial class Agent
             Coordinator = fileLocks,
             Owner = lockScope.Owner,
             TurnScope = turnScope,
+            PlanTracker = turnPlan,
         };
 
         var stopwatch = Stopwatch.StartNew();
@@ -107,6 +113,52 @@ public sealed partial class Agent
     }
 
     // ---------------------------------------------------------------- misc
+
+    /// <summary>
+    /// Closest registered tool names for an unknown tool call: edit-distance plus
+    /// prefix overlap, top 3. Turns "Unknown tool: read_fille" into an actionable
+    /// suggestion instead of a dead end the model retries blindly.
+    /// </summary>
+    private string[] SuggestTools(string name)
+    {
+        var maxDistance = Math.Max(2, name.Length / 3);
+        return toolRegistry.All
+            .Select(t => (Name: t.Name, Distance: LevenshteinDistance(name, t.Name, maxDistance)))
+            .Where(c => c.Distance <= maxDistance
+                        || c.Name.StartsWith(name, StringComparison.OrdinalIgnoreCase)
+                        || name.StartsWith(c.Name, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(c => c.Distance)
+            .ThenBy(c => c.Name, StringComparer.Ordinal)
+            .Select(c => c.Name)
+            .Take(3)
+            .ToArray();
+    }
+
+    /// <summary>Levenshtein distance with an early ceiling: past it, int.MaxValue.</summary>
+    private static int LevenshteinDistance(string source, string target, int ceiling)
+    {
+        source = source.ToLowerInvariant();
+        target = target.ToLowerInvariant();
+        if (source == target) return 0;
+        if (Math.Abs(source.Length - target.Length) > ceiling) return int.MaxValue;
+        var previous = new int[target.Length + 1];
+        var current = new int[target.Length + 1];
+        for (var j = 0; j <= target.Length; j++) previous[j] = j;
+        for (var i = 1; i <= source.Length; i++)
+        {
+            current[0] = i;
+            var rowMin = current[0];
+            for (var j = 1; j <= target.Length; j++)
+            {
+                var cost = source[i - 1] == target[j - 1] ? 0 : 1;
+                current[j] = Math.Min(Math.Min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
+                if (current[j] < rowMin) rowMin = current[j];
+            }
+            if (rowMin > ceiling) return int.MaxValue;
+            (previous, current) = (current, previous);
+        }
+        return previous[target.Length];
+    }
 
     private static string SummarizeArguments(string argumentsJson)
     {

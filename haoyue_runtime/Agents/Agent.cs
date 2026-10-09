@@ -51,6 +51,12 @@ public sealed partial class Agent(
     /// <summary>Identical failed tool calls (same tool + normalized args) tolerated before a strategy nudge is injected.</summary>
     internal const int RepeatedFailureNudgeThreshold = 2;
 
+    /// <summary>Same-signature failures that escalate to a one-shot "change your approach" notice.</summary>
+    internal const int StrategyPivotFailureThreshold = RepeatedFailureNudgeThreshold * 2;
+
+    /// <summary>Tool calls with zero mutations and no plan tolerated before a no-progress nudge (edit/auto modes only).</summary>
+    internal const int NoProgressToolCallThreshold = 8;
+
     /// <summary>
     /// Runtime notices (step budget, output truncation, empty answer, context compaction,
     /// repeated tool failure, steering …) are injected as user-role messages whose text
@@ -134,10 +140,23 @@ public sealed partial class Agent(
         // their pre-turn content for user-confirmed undo after the turn ends.
         var turnScope = new TurnExecutionScope(session.Header.Id, workspace.Root);
 
+        // Per-turn plan state: update_plan writes here (via ToolContext.PlanTracker) and
+        // the guard below turns plan drift into targeted corrective notices.
+        var turnPlan = new TurnPlan();
+        var planGuard = new PlanNudgeGuard();
+
+        // Self-recovery tracking: total tool calls feed the no-progress guard; the flags
+        // keep every one-shot corrective notice from firing twice in one turn.
+        var toolCallCount = 0;
+        var strategyPivotNudged = false;
+        var noProgressNudged = false;
+        var readOnlyMode = AgentModeExtensions.Parse(workspace.Config?.Mode ?? agentConfig.Mode).IsReadOnly();
+
         void HandleToolResult(ToolCallRequest call, ToolExecution execution)
         {
             mutated |= execution.ToolMutated;
             turnHasImagesFlag |= execution.Message.Images is { Count: > 0 };
+            toolCallCount++;
             sessionStore.Append(session, execution.Message);
             if (execution.Message.ToolSuccess)
             {
@@ -157,6 +176,14 @@ public sealed partial class Agent(
                     $">>> [repeated tool failure] 工具 {call.Name} 已用相同参数连续失败 {consecutiveFailures} 次。请停止原样重试：先用读取类工具确认文件与环境的当前状态，再调整参数或换一种方法完成任务。"));
                 events.Publish(new WarningEvent(
                     $"工具 {call.Name} 连续失败 {consecutiveFailures} 次，已注入策略纠偏提示。"));
+            }
+            if (consecutiveFailures == StrategyPivotFailureThreshold && !strategyPivotNudged)
+            {
+                strategyPivotNudged = true;
+                sessionStore.Append(session, ChatMessage.User(
+                    $">>> [strategy pivot] 工具 {call.Name} 已用相同参数连续失败 {consecutiveFailures} 次，当前方法大概率不可行。请彻底改变思路：换用其他工具或方式完成这一步、先阅读相关文件与文档弄清上下文、或重新拆解问题，而不是继续微调同样的参数。"));
+                events.Publish(new WarningEvent(
+                    $"工具 {call.Name} 连续失败 {consecutiveFailures} 次，已注入换策略提示。"));
             }
         }
 
@@ -192,7 +219,8 @@ public sealed partial class Agent(
                     {
                         wrapUpRequested = true;
                         sessionStore.Append(session, ChatMessage.User(
-                            ">>> [step budget] 已达到本回合最大步数上限。请立即停止调用工具，直接总结当前进展、已完成的改动与未完成事项，给出最终回答。"));
+                            ">>> [step budget] 已达到本回合最大步数上限。请立即停止调用工具，直接总结当前进展、已完成的改动与未完成事项，给出最终回答。"
+                            + AgentNotices.RenderLedgerSummary(turnScope.Steps)));
                         events.Publish(new StatusEvent("Step budget reached; wrapping up"));
                         continue;
                     }
@@ -295,6 +323,7 @@ public sealed partial class Agent(
 
                 if (completion.ToolCalls.Count > 0)
                 {
+                    var planToolCalls = completion.ToolCalls.Count(c => c.Name == "update_plan");
                     var readOnlyBatch = new List<ToolCallRequest>();
                     foreach (var call in completion.ToolCalls)
                     {
@@ -309,24 +338,47 @@ public sealed partial class Agent(
                             if (readOnlyBatch.Count > 0)
                             {
                                 foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
-                                var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, ct))).ConfigureAwait(false);
+                                var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct))).ConfigureAwait(false);
                                 for (var i = 0; i < batchResults.Length; i++)
                                     HandleToolResult(readOnlyBatch[i], batchResults[i]);
                                 readOnlyBatch.Clear();
                             }
 
                             PublishWorkflow(step, "tool", call.Name);
-                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, turnScope, ct).ConfigureAwait(false));
+                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, turnScope, turnPlan, ct).ConfigureAwait(false));
                         }
                     }
 
                     if (readOnlyBatch.Count > 0)
                     {
                         foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
-                        var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, ct))).ConfigureAwait(false);
+                        var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct))).ConfigureAwait(false);
                         for (var i = 0; i < batchResults.Length; i++)
                             HandleToolResult(readOnlyBatch[i], batchResults[i]);
                     }
+
+                    // Plan discipline: compare the executed work against the declared plan
+                    // and nudge when they drift (finished-but-still-working / stale statuses).
+                    var planNudge = planGuard.Evaluate(turnPlan, completion.ToolCalls.Count, planToolCalls);
+                    if (planNudge is not null)
+                    {
+                        sessionStore.Append(session, ChatMessage.User(planNudge.Notice));
+                        events.Publish(new WarningEvent(planNudge.Warning));
+                    }
+
+                    // No-progress guard: lots of tool work with zero file changes and no plan
+                    // usually means aimless exploration. Skipped in read-only modes, where
+                    // pure research is the job, and after the budget wrap-up took over.
+                    if (!noProgressNudged && toolCallCount >= NoProgressToolCallThreshold
+                        && !mutated && !turnPlan.HasPlan && !readOnlyMode && !wrapUpRequested)
+                    {
+                        noProgressNudged = true;
+                        sessionStore.Append(session, ChatMessage.User(
+                            $">>> [no progress] 本回合已调用 {toolCallCount} 次工具但没有产生任何文件改动，也没有制定计划。请自我检查：用 update_plan 把剩余工作拆解为明确步骤；若任务只需要调研，直接总结发现并回答用户；若当前方法行不通，换一种思路。"));
+                        events.Publish(new WarningEvent(
+                            $"已连续调用 {toolCallCount} 次工具但无任何文件改动，已注入进度自检提示。"));
+                    }
+
                     PublishSteering(guidance);
                     continue;
                 }

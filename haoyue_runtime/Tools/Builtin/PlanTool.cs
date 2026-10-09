@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Prompts;
 
@@ -61,12 +62,30 @@ public sealed class PlanTool(IPromptProvider prompts) : BuiltinTool(prompts)
         var explanation = GetString(arguments, "explanation");
         var stepsJson = stepsNode.ToJsonString();
 
-        context.Events.Publish(new PlanUpdatedEvent(stepsJson, explanation));
-        var completed = stepsNode.Count(s => (s?["status"]?.GetValue<string>()) is "completed" or "done");
-        var summary = $"Plan updated: {completed}/{stepsNode.Count} steps completed";
+        var steps = new List<TurnPlanStep>();
+        foreach (var node in stepsNode)
+        {
+            if (node is not JsonObject item) continue;
+            var title = item["title"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(title)) continue;
+            var status = item["status"]?.GetValue<string>();
+            steps.Add(new TurnPlanStep(
+                title.Trim(),
+                string.IsNullOrWhiteSpace(status) ? "pending" : status.Trim(),
+                item["detail"]?.GetValue<string>()));
+        }
 
-        return Task.FromResult(ToolResult.Ok(
-            $"Plan updated successfully with {stepsNode.Count} steps ({completed} completed).",
-            summary));
+        context.PlanTracker?.Update(steps, explanation);
+        context.Events.Publish(new PlanUpdatedEvent(stepsJson, explanation));
+        var completed = steps.Count(s => s.Completed);
+        var summary = $"Plan updated: {completed}/{steps.Count} steps completed";
+
+        // Echo the runtime-observed plan state so the model sees its own progress on the
+        // next step without having to reconstruct it from history.
+        var output = $"Plan updated successfully with {steps.Count} steps ({completed} completed).";
+        if (context.PlanTracker is not null)
+            output += $"\n当前计划状态：\n{context.PlanTracker.Render()}";
+
+        return Task.FromResult(ToolResult.Ok(output, summary));
     }
 }

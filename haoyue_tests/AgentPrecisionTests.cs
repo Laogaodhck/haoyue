@@ -11,8 +11,8 @@ using Haoyue.Runtime.Workspaces;
 namespace Haoyue.Tests;
 
 /// <summary>
-/// Agent 输出精度与命中率保障：空回答兜底、重复失败策略纠偏、步数预算收尾与回合级
-/// 指标报告。全部通过脚本化 LLM 客户端离线驱动，不依赖真实模型。
+/// Agent 输出精度与命中率保障：空回答兜底、重复失败策略纠偏、计划纠偏、步数预算
+/// 收尾与回合级指标报告。全部通过脚本化 LLM 客户端离线驱动，不依赖真实模型。
 /// </summary>
 public sealed class AgentPrecisionTests
 {
@@ -72,8 +72,192 @@ public sealed class AgentPrecisionTests
         var result = await harness.RunAsync("多读几次文件");
 
         Assert.Equal("收尾总结：已确认文件内容", result.Text);
-        Assert.NotNull(harness.Session.Messages.SingleOrDefault(m =>
-            m.Role == ChatRole.User && m.Text.Contains("[step budget]")));
+        var budget = harness.Session.Messages.Single(m =>
+            m.Role == ChatRole.User && m.Text.Contains("[step budget]"));
+        Assert.Contains("执行台账", budget.Text);
+        Assert.Contains("1 个步骤", budget.Text);
+    }
+
+    [Fact]
+    public async Task PlanFinished_StillToolCalling_InjectsNudgeOnce()
+    {
+        var existing = Path.Combine(Path.GetTempPath(), $"haoyue-existing-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(existing, "content");
+        var args = $$"""{"path":"{{existing.Replace("\\", "\\\\")}}"}""";
+        var planArgs = $$"""{"steps":[{"title":"读取目标文件","status":"completed"}],"explanation":"任务收尾"}""";
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            ToolCall("p1", "update_plan", planArgs),
+            ToolCall("c1", "read_file", args),
+            new LlmCompletion { Text = "计划已完成，直接收尾" }));
+
+        var result = await harness.RunAsync("按计划读取文件");
+
+        Assert.Equal("计划已完成，直接收尾", result.Text);
+        var nudges = harness.Session.Messages
+            .Where(m => m.Role == ChatRole.User && m.Text.Contains("[plan finished]"))
+            .ToList();
+        Assert.Single(nudges);
+        Assert.Contains("update_plan", nudges[0].Text);
+
+        var planResult = harness.Session.Messages.Single(m => m.Role == ChatRole.Tool && m.ToolCallId == "p1");
+        Assert.Contains("进度：1/1 已完成", planResult.Text);
+    }
+
+    [Fact]
+    public async Task PlanFinished_ConcludingAfterPlanUpdate_DoesNotNudge()
+    {
+        var planArgs = $$"""{"steps":[{"title":"总结任务","status":"completed"}]}""";
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            ToolCall("p1", "update_plan", planArgs),
+            new LlmCompletion { Text = "全部完成" }));
+
+        var result = await harness.RunAsync("完成任务");
+
+        Assert.Equal("全部完成", result.Text);
+        Assert.DoesNotContain(harness.Session.Messages, m => m.Text.Contains("[plan finished]"));
+    }
+
+    [Fact]
+    public async Task PlanStale_NoStatusUpdates_InjectsNudgeOnce()
+    {
+        var existing = Path.Combine(Path.GetTempPath(), $"haoyue-existing-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(existing, "content");
+        var args = $$"""{"path":"{{existing.Replace("\\", "\\\\")}}"}""";
+        var planArgs = $$"""{"steps":[{"title":"步骤一","status":"in_progress"},{"title":"步骤二","status":"pending"}]}""";
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            ToolCall("p1", "update_plan", planArgs),
+            ToolCall("c1", "read_file", args),
+            ToolCall("c2", "read_file", args),
+            ToolCall("c3", "read_file", args),
+            ToolCall("c4", "read_file", args),
+            new LlmCompletion { Text = "补充状态后完成" }));
+
+        var result = await harness.RunAsync("按计划执行多步读取");
+
+        Assert.Equal("补充状态后完成", result.Text);
+        var nudges = harness.Session.Messages
+            .Where(m => m.Role == ChatRole.User && m.Text.Contains("[plan stale]"))
+            .ToList();
+        Assert.Single(nudges);
+        Assert.Contains("4 次", nudges[0].Text);
+    }
+
+    [Fact]
+    public async Task PlanStale_StatusUpdateResetsStalenessCounter()
+    {
+        var existing = Path.Combine(Path.GetTempPath(), $"haoyue-existing-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(existing, "content");
+        var args = $$"""{"path":"{{existing.Replace("\\", "\\\\")}}"}""";
+        var planArgs = $$"""{"steps":[{"title":"步骤一","status":"in_progress"},{"title":"步骤二","status":"pending"}]}""";
+        var refreshedArgs = $$"""{"steps":[{"title":"步骤一","status":"completed"},{"title":"步骤二","status":"in_progress"}]}""";
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            ToolCall("p1", "update_plan", planArgs),
+            ToolCall("c1", "read_file", args),
+            ToolCall("c2", "read_file", args),
+            ToolCall("c3", "read_file", args),
+            ToolCall("p2", "update_plan", refreshedArgs),
+            ToolCall("c4", "read_file", args),
+            ToolCall("c5", "read_file", args),
+            ToolCall("c6", "read_file", args),
+            new LlmCompletion { Text = "完成" }));
+
+        var result = await harness.RunAsync("按计划执行并同步状态");
+
+        Assert.Equal("完成", result.Text);
+        Assert.DoesNotContain(harness.Session.Messages, m => m.Text.Contains("[plan stale]"));
+    }
+
+    [Fact]
+    public async Task StrategyPivot_AfterFourConsecutiveSameFailures_InjectsOnce()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"haoyue-missing-{Guid.NewGuid():N}.txt");
+        var args = $$"""{"path":"{{missing.Replace("\\", "\\\\")}}"}""";
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            ToolCall("c1", "read_file", args),
+            ToolCall("c2", "read_file", args),
+            ToolCall("c3", "read_file", args),
+            ToolCall("c4", "read_file", args),
+            new LlmCompletion { Text = "换了一种思路后完成" }));
+
+        var result = await harness.RunAsync("反复读取同一个不存在的文件");
+
+        Assert.Equal("换了一种思路后完成", result.Text);
+        var repeated = harness.Session.Messages
+            .Where(m => m.Role == ChatRole.User && m.Text.Contains("[repeated tool failure]")).ToList();
+        Assert.Single(repeated);
+        var pivots = harness.Session.Messages
+            .Where(m => m.Role == ChatRole.User && m.Text.Contains("[strategy pivot]")).ToList();
+        Assert.Single(pivots);
+        Assert.Contains("read_file", pivots[0].Text);
+        Assert.Contains("4 次", pivots[0].Text);
+    }
+
+    [Fact]
+    public async Task NoProgress_EditModeWithoutPlanOrChanges_InjectsOnce()
+    {
+        var existing = Path.Combine(Path.GetTempPath(), $"haoyue-existing-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(existing, "content");
+        var args = $$"""{"path":"{{existing.Replace("\\", "\\\\")}}"}""";
+        var pair = new LlmCompletion
+        {
+            ToolCalls =
+            [
+                new ToolCallRequest("a", "read_file", args),
+                new ToolCallRequest("b", "read_file", args),
+            ],
+        };
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            pair, pair, pair, pair,
+            new LlmCompletion { Text = "调研结束，直接总结" }));
+
+        var result = await harness.RunAsync("反复确认文件内容");
+
+        Assert.Equal("调研结束，直接总结", result.Text);
+        var nudges = harness.Session.Messages
+            .Where(m => m.Role == ChatRole.User && m.Text.Contains("[no progress]")).ToList();
+        Assert.Single(nudges);
+        Assert.Contains("8 次", nudges[0].Text);
+        Assert.Contains("update_plan", nudges[0].Text);
+    }
+
+    [Fact]
+    public async Task NoProgress_ReadOnlyMode_SkipsNudge()
+    {
+        var existing = Path.Combine(Path.GetTempPath(), $"haoyue-existing-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(existing, "content");
+        var args = $$"""{"path":"{{existing.Replace("\\", "\\\\")}}"}""";
+        var pair = new LlmCompletion
+        {
+            ToolCalls =
+            [
+                new ToolCallRequest("a", "read_file", args),
+                new ToolCallRequest("b", "read_file", args),
+            ],
+        };
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            pair, pair, pair, pair,
+            new LlmCompletion { Text = "只读调研完成" }));
+        harness.Store.Config.Agent.Mode = "readonly";
+
+        var result = await harness.RunAsync("只读模式下反复调研");
+
+        Assert.Equal("只读调研完成", result.Text);
+        Assert.DoesNotContain(harness.Session.Messages, m => m.Text.Contains("[no progress]"));
+    }
+
+    [Fact]
+    public async Task UnknownTool_SuggestsClosestRegisteredName()
+    {
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            ToolCall("c1", "read_fille", "{}"),
+            new LlmCompletion { Text = "修正工具名后完成" }));
+
+        var result = await harness.RunAsync("调用一个拼错的工具");
+
+        Assert.Equal("修正工具名后完成", result.Text);
+        var toolMessage = harness.Session.Messages.Single(m => m.Role == ChatRole.Tool && m.ToolCallId == "c1");
+        Assert.Contains("Unknown tool: read_fille", toolMessage.Text);
+        Assert.Contains("read_file", toolMessage.Text);
     }
 
     [Fact]

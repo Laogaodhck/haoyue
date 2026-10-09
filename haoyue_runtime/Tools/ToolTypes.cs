@@ -25,6 +25,11 @@ public sealed class ToolContext
     /// Null in contexts without a turn scope (direct tool invocations in tests).
     /// </summary>
     public Haoyue.Runtime.Agents.TurnExecutionScope? TurnScope { get; init; }
+    /// <summary>
+    /// Per-turn plan state written by update_plan so the runtime can observe plan
+    /// progress and inject plan-discipline nudges. Null without a turn scope.
+    /// </summary>
+    public Haoyue.Runtime.Agents.TurnPlan? PlanTracker { get; init; }
 
     public string ResolvePath(string path)
     {

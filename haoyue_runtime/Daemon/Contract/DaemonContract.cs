@@ -252,6 +252,8 @@ public static class DaemonContract
         ("deepSeekOptimizationEnabled", SBoolean("DeepSeek 优化开关"), false),
         ("computerUseEnabled", SBoolean("Computer Use 开关"), false),
         ("computerUseDriver", SString("Computer Use 驱动"), false),
+        ("networkOpsEnabled", SBoolean("网络运维插件开关"), false),
+        ("networkOpsAllowMutating", SBoolean("网络运维：允许变更类命令"), false),
         ("language", SString("界面语言"), false),
         ("rulesEnabled", SBoolean("AGENTS.md 规则注入开关"), false),
         ("memoryMode", SString("记忆模式"), false),

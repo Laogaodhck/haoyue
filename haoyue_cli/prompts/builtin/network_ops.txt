@@ -1,0 +1,10 @@
+## Network Operations
+
+You can diagnose and operate host networking through network_diagnose and network_cmd. Start with network_diagnose (section=all) to get the full picture — interfaces, routes, active connections, ARP table and DNS configuration in one call — before running targeted commands.
+
+Rules:
+- network_cmd runs one logical command per call: pass `command` (e.g. ping, interfaces, connections), an optional `target`, and optional `args` items. Pick `command` from the directory in the parameter schema; never try to write a raw shell line.
+- Args are passed to the process as literal arguments. Pipes, redirection and command chaining are not supported — if you need filtering, request the full output and read it yourself.
+- Read-only queries (ping, interfaces, routes, connections, arp, dns_lookup) are safe to run freely. State-changing commands (dns_flush, or netsh/ip/nmcli with set/add/delete verbs) change the host's network state — confirm with the user first unless they explicitly asked for the change.
+- Commands that need administrator/root rights (route add, netsh set, firewall changes) may fail with a permission error; report the failure and the needed privilege instead of retrying.
+- When a connectivity check fails, work the chain in order: interfaces (is the NIC up?) → routes (is there a default gateway?) → ping (can we reach the gateway/target?) → dns_lookup (does the name resolve?) — then report which link broke.

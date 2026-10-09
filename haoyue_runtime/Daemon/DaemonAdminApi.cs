@@ -145,6 +145,8 @@ internal sealed class DaemonAdminApi(
         ["deepSeekOptimizationEnabled"] = runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled,
         ["computerUseEnabled"] = runtime.ConfigStore.Config.ComputerUse?.Enabled ?? false,
         ["computerUseDriver"] = runtime.ConfigStore.Config.ComputerUse?.Driver ?? "auto",
+        ["networkOpsEnabled"] = runtime.ConfigStore.Config.NetworkOps?.Enabled ?? false,
+        ["networkOpsAllowMutating"] = runtime.ConfigStore.Config.NetworkOps?.AllowMutating ?? true,
         ["language"] = runtime.ConfigStore.Config.Agent.Language,
         ["rulesEnabled"] = runtime.ConfigStore.Config.Agent.RulesEnabled,
         ["memoryMode"] = runtime.ConfigStore.Config.Agent.MemoryMode,
@@ -253,7 +255,7 @@ internal sealed class DaemonAdminApi(
         }.ToJsonString();
     }
 
-    public string SetAdvancedConfig(JsonObject parameters)
+    public async Task<string> SetAdvancedConfigAsync(JsonObject parameters, CancellationToken ct)
     {
         if (parameters["networkEnabled"] is JsonValue netVal && netVal.TryGetValue<bool>(out var netEnabled))
         {
@@ -275,17 +277,35 @@ internal sealed class DaemonAdminApi(
             runtime.ConfigStore.Config.ComputerUse.Enabled = cuEnabled;
             if (cuEnabled)
             {
-                runtime.Extensions.InitializeAll(runtime);
+                await runtime.Extensions.EnableAsync(runtime, "computer_use").ConfigureAwait(false);
             }
             else
             {
-                _ = runtime.Extensions.DisposeAsync();
+                await runtime.Extensions.DisableAsync("computer_use").ConfigureAwait(false);
             }
         }
 
         if (parameters["computerUseDriver"] is JsonValue driverVal && driverVal.TryGetValue<string>(out var driverStr))
         {
             runtime.ConfigStore.Config.ComputerUse.Driver = driverStr;
+        }
+
+        if (parameters["networkOpsEnabled"] is JsonValue noVal && noVal.TryGetValue<bool>(out var noEnabled))
+        {
+            runtime.ConfigStore.Config.NetworkOps.Enabled = noEnabled;
+            if (noEnabled)
+            {
+                await runtime.Extensions.EnableAsync(runtime, "network_ops").ConfigureAwait(false);
+            }
+            else
+            {
+                await runtime.Extensions.DisableAsync("network_ops").ConfigureAwait(false);
+            }
+        }
+
+        if (parameters["networkOpsAllowMutating"] is JsonValue namVal && namVal.TryGetValue<bool>(out var namEnabled))
+        {
+            runtime.ConfigStore.Config.NetworkOps.AllowMutating = namEnabled;
         }
 
         if (parameters["language"] is JsonValue languageVal && languageVal.TryGetValue<string>(out var language))

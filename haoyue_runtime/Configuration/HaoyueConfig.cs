@@ -17,6 +17,7 @@ public sealed class HaoyueConfig
     public AgentConfig Agent { get; set; } = new();
     public McpConfig Mcp { get; set; } = new();
     public Haoyue.Runtime.ComputerUse.ComputerUseConfig ComputerUse { get; set; } = new();
+    public Haoyue.Runtime.NetworkOps.NetworkOpsConfig NetworkOps { get; set; } = new();
     public EvolutionConfig Evolution { get; set; } = new();
 
 

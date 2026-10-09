@@ -1152,7 +1152,7 @@ public sealed class DaemonServer : IAsyncDisposable
 
                     case "advanced.set":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
-                            _ => Task.FromResult(_admin.SetAdvancedConfig(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                            token => _admin.SetAdvancedConfigAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
                     case "prompt.optimize":

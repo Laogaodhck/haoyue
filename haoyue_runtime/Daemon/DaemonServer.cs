@@ -324,12 +324,14 @@ public sealed class DaemonServer : IAsyncDisposable
         }
 
         var security = new PipeSecurity();
+        // CreateNewInstance 是并发第二个服务端实例的前提（MaxAllowedServerInstances），
+        // 缺了它会在已有一条活跃连接时抛 UnauthorizedAccessException（1.3.15 回归）。
         security.AddAccessRule(new PipeAccessRule(
             WindowsIdentity.GetCurrent().User!,
-            PipeAccessRights.ReadWrite, AccessControlType.Allow));
+            PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance, AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
-            PipeAccessRights.ReadWrite, AccessControlType.Allow));
+            PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance, AccessControlType.Allow));
         return NamedPipeServerStreamAcl.Create(
             pipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous, inBufferSize: 0, outBufferSize: 0, security);

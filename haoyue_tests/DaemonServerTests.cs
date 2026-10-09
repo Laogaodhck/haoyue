@@ -1935,6 +1935,37 @@ public sealed class DaemonServerTests : IAsyncDisposable
         }
     }
 
+    [Fact]
+    public async Task CreatePipeServer_AcceptsTwoConcurrentClients()
+    {
+        // 并发回归：ACL 需含 CreateNewInstance，否则已有一条活跃连接时创建第二个
+        // 服务端实例抛 UnauthorizedAccessException，桌面占用期间其他客户端永远连不上。
+        var pipeName = $"haoyue-concurrent-{Guid.NewGuid():N}";
+        var server1 = DaemonServer.CreatePipeServer(pipeName);
+        var server2 = DaemonServer.CreatePipeServer(pipeName);
+        try
+        {
+            using var client1 = new NamedPipeClientStream(
+                ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            using var client2 = new NamedPipeClientStream(
+                ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+
+            await client1.ConnectAsync(_serverCts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+            await server1.WaitForConnectionAsync(_serverCts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+
+            await client2.ConnectAsync(_serverCts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+            await server2.WaitForConnectionAsync(_serverCts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(client1.IsConnected);
+            Assert.True(client2.IsConnected);
+        }
+        finally
+        {
+            server1.Dispose();
+            server2.Dispose();
+        }
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

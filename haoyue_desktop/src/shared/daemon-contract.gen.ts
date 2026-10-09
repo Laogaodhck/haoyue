@@ -104,6 +104,8 @@ export const DAEMON_METHODS = [
   'routing.set',
   'advanced.get',
   'advanced.set',
+  'agent.config.get',
+  'agent.config.set',
   'prompt.optimize',
   'provider.list',
   'provider.upsert',

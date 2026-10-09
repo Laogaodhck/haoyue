@@ -1868,6 +1868,25 @@ public sealed class DaemonServerTests : IAsyncDisposable
             "以下方法缺少 params schema: " + string.Join(", ", pending.Select(m => m.Name)));
     }
 
+    [Fact]
+    public void Contract_DispatchCases_AllRegistered()
+    {
+        // 契约治理：DaemonServer 分发 switch 的每个 case 都必须登记进 DaemonContract，
+        // 否则方法会绕过契约（无 TS 类型、无文档导出、快照测试也检测不到）。
+        var serverPath = Path.Combine(FindRepoRoot(), "haoyue_runtime", "Daemon", "DaemonServer.cs");
+        var source = File.ReadAllText(serverPath);
+        var cases = System.Text.RegularExpressions.Regex.Matches(source, @"case\s+""([a-z][A-Za-z0-9.]*)""\s*:")
+            .Select(m => m.Groups[1].Value)
+            .Distinct()
+            .ToList();
+        Assert.True(cases.Count > 50, $"分发 case 解析异常，仅匹配到 {cases.Count} 个，疑似源码结构变化");
+
+        var registered = DaemonContract.Methods.Select(m => m.Name).ToHashSet(StringComparer.Ordinal);
+        var unregistered = cases.Where(name => !registered.Contains(name)).ToList();
+        Assert.True(unregistered.Count == 0,
+            "以下分发 case 未登记进 DaemonContract（契约漂移）：\n" + string.Join("\n", unregistered));
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

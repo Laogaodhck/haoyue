@@ -355,6 +355,12 @@ public static class DaemonContract
             ("deepSeekOptimizationEnabled", SBoolean("DeepSeek 优化开关"), false))),
         M("advanced.get", "config", "查询高级配置", parameters: EmptyParams),
         M("advanced.set", "config", "更新高级配置", parameters: AdvancedSet),
+        M("agent.config.get", "config", "查询智能体设置", parameters: EmptyParams),
+        M("agent.config.set", "config", "部分更新智能体设置（未传字段保持原值）", parameters: SObject(
+            ("networkEnabled", SBoolean("网页搜索（联网工具）开关"), false),
+            ("delegationEnabled", SBoolean("探索者智能体（delegate_task 委派）开关"), false),
+            ("autoVerify", SBoolean("自动验证与修复开关"), false),
+            ("visionModel", SString("图像回合优先使用的模型 ref；空串恢复自动选择"), false))),
         M("prompt.optimize", "config", "提示词优化（无状态改写）", parameters: SObject(
             ("text", SString("待优化提示词"), true),
             ("model", SString("改写用模型 ref，缺省活跃模型"), false))),

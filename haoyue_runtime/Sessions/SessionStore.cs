@@ -23,7 +23,8 @@ public interface ISessionStore
     AgentSession Create(
         WorkspaceInfo workspace,
         ReasoningLevel reasoningLevel = ReasoningLevel.High,
-        bool networkEnabled = true);
+        bool networkEnabled = true,
+        string? expertId = null);
     AgentSession Fork(
         WorkspaceInfo workspace,
         string sourceSessionId,
@@ -51,7 +52,8 @@ public interface ISessionStore
         string? title = null,
         bool? archived = null,
         ReasoningLevel? reasoningLevel = null,
-        bool? networkEnabled = null);
+        bool? networkEnabled = null,
+        string? expertId = null);
     SessionHeader RecordUsage(WorkspaceInfo workspace, string sessionId, SessionUsage usage);
     void Delete(WorkspaceInfo workspace, string sessionId);
     void DeleteAll(WorkspaceInfo workspace);
@@ -78,7 +80,8 @@ public sealed class SessionStore : ISessionStore
     public AgentSession Create(
         WorkspaceInfo workspace,
         ReasoningLevel reasoningLevel = ReasoningLevel.High,
-        bool networkEnabled = true)
+        bool networkEnabled = true,
+        string? expertId = null)
     {
         EnsureLegacyImported(workspace);
         var id = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..6];
@@ -89,6 +92,7 @@ public sealed class SessionStore : ISessionStore
             Workspace = workspace.IsGlobal ? null : Path.GetFullPath(workspace.Root),
             ReasoningLevel = reasoningLevel,
             NetworkEnabled = networkEnabled,
+            ExpertId = expertId,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -129,6 +133,7 @@ public sealed class SessionStore : ISessionStore
                 Archived = false,
                 ReasoningLevel = sourceHeader.ReasoningLevel,
                 NetworkEnabled = sourceHeader.NetworkEnabled,
+                ExpertId = sourceHeader.ExpertId,
                 CreatedAt = now,
                 UpdatedAt = now,
             };
@@ -241,7 +246,7 @@ public sealed class SessionStore : ISessionStore
             SELECT id, title, workspace, archived, reasoning_level, network_enabled,
                    llm_rounds, execution_steps, input_tokens, total_input_tokens,
                    cached_input_tokens, output_tokens, output_elapsed_ms,
-                   created_at, updated_at
+                   created_at, updated_at, expert_id
             FROM sessions
             WHERE scope = $scope {(includeArchived ? "" : "AND archived = 0")}
             ORDER BY updated_at DESC;
@@ -270,7 +275,7 @@ public sealed class SessionStore : ISessionStore
             SELECT s.id, s.title, s.workspace, s.archived, s.reasoning_level, s.network_enabled,
                    s.llm_rounds, s.execution_steps, s.input_tokens, s.total_input_tokens,
                    s.cached_input_tokens, s.output_tokens, s.output_elapsed_ms,
-                   s.created_at, s.updated_at,
+                   s.created_at, s.updated_at, s.expert_id,
                    (CASE WHEN s.title LIKE $rawPattern ESCAPE '\' THEN 1 ELSE 0 END) +
                    (SELECT COUNT(*) FROM messages m
                     WHERE m.scope = s.scope AND m.session_id = s.id
@@ -294,7 +299,7 @@ public sealed class SessionStore : ISessionStore
         while (reader.Read())
         {
             var header = ReadHeader(reader);
-            hits.Add(new SessionSearchHit(header, reader.GetInt32(15)));
+            hits.Add(new SessionSearchHit(header, reader.GetInt32(16)));
         }
         return hits;
     }
@@ -478,7 +483,8 @@ public sealed class SessionStore : ISessionStore
         string? title = null,
         bool? archived = null,
         ReasoningLevel? reasoningLevel = null,
-        bool? networkEnabled = null)
+        bool? networkEnabled = null,
+        string? expertId = null)
     {
         ValidateSessionId(sessionId);
         EnsureLegacyImported(workspace);
@@ -509,6 +515,13 @@ public sealed class SessionStore : ISessionStore
             {
                 assignments.Add("network_enabled = $networkEnabled");
                 command.Parameters.AddWithValue("$networkEnabled", networkEnabled.Value ? 1 : 0);
+            }
+            // expertId uses "" as the explicit "unbind" sentinel; null leaves it untouched.
+            if (expertId is not null)
+            {
+                assignments.Add("expert_id = $expertId");
+                command.Parameters.AddWithValue("$expertId",
+                    string.IsNullOrWhiteSpace(expertId) ? DBNull.Value : expertId.Trim());
             }
             command.CommandText = $"""
                 UPDATE sessions SET {string.Join(", ", assignments)}
@@ -709,10 +722,12 @@ public sealed class SessionStore : ISessionStore
             INSERT {(ignoreConflict ? "OR IGNORE" : "")} INTO sessions(
                 scope, id, workspace, title, archived, reasoning_level, network_enabled,
                 llm_rounds, execution_steps, input_tokens, total_input_tokens,
-                cached_input_tokens, output_tokens, output_elapsed_ms, created_at, updated_at)
+                cached_input_tokens, output_tokens, output_elapsed_ms, created_at, updated_at,
+                expert_id)
             VALUES($scope, $id, $workspace, $title, $archived, $reasoningLevel, $networkEnabled,
                    $llmRounds, $executionSteps, $inputTokens, $totalInputTokens,
-                   $cachedInputTokens, $outputTokens, $outputElapsedMs, $createdAt, $updatedAt);
+                   $cachedInputTokens, $outputTokens, $outputElapsedMs, $createdAt, $updatedAt,
+                   $expertId);
             """;
         command.Parameters.AddWithValue("$scope", scope);
         command.Parameters.AddWithValue("$id", header.Id);
@@ -730,6 +745,7 @@ public sealed class SessionStore : ISessionStore
         command.Parameters.AddWithValue("$outputElapsedMs", header.OutputElapsedMs);
         command.Parameters.AddWithValue("$createdAt", header.CreatedAt.ToString("O"));
         command.Parameters.AddWithValue("$updatedAt", header.UpdatedAt.ToString("O"));
+        command.Parameters.AddWithValue("$expertId", (object?)header.ExpertId ?? DBNull.Value);
         return command.ExecuteNonQuery() > 0;
     }
 
@@ -740,7 +756,7 @@ public sealed class SessionStore : ISessionStore
             SELECT id, title, workspace, archived, reasoning_level, network_enabled,
                    llm_rounds, execution_steps, input_tokens, total_input_tokens,
                    cached_input_tokens, output_tokens, output_elapsed_ms,
-                   created_at, updated_at
+                   created_at, updated_at, expert_id
             FROM sessions WHERE scope = $scope AND id = $sessionId;
             """;
         command.Parameters.AddWithValue("$scope", scope);
@@ -749,6 +765,8 @@ public sealed class SessionStore : ISessionStore
         return reader.Read() ? ReadHeader(reader) : null;
     }
 
+    // Ordinal contract: every SELECT feeding this mapper ends with expert_id at
+    // ordinal 15 (Search's match_count trailing aggregate reads ordinal 16).
     private static SessionHeader ReadHeader(SqliteDataReader reader) => new()
     {
         Id = reader.GetString(0),
@@ -766,6 +784,7 @@ public sealed class SessionStore : ISessionStore
         OutputElapsedMs = reader.GetInt64(12),
         CreatedAt = DateTimeOffset.Parse(reader.GetString(13)),
         UpdatedAt = DateTimeOffset.Parse(reader.GetString(14)),
+        ExpertId = reader.IsDBNull(15) ? null : reader.GetString(15),
     };
 
     private static string TitleFrom(string text) =>

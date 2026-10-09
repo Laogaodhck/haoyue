@@ -4,6 +4,7 @@ using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Events;
+using Haoyue.Runtime.Experts;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Sessions;
 using System.Text;
@@ -11,7 +12,7 @@ using System.Text;
 namespace Haoyue.Cli;
 
 /// <summary>Interactive REPL and one-shot chat entry points, wired to the live renderer.</summary>
-public sealed class ChatLoop (HaoyueRuntime runtime)
+public sealed class ChatLoop (HaoyueRuntime runtime, string? expertId = null)
 {
     private static readonly SlashCommand[] ReplCommands =
     [
@@ -163,14 +164,23 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
     private AgentSession ResolveSession (bool continueLast, string? resumeId)
     {
         if (resumeId is not null)
-            return runtime.Sessions.Load(runtime.Workspace, resumeId)
-                   ?? throw new InvalidOperationException($"Session '{resumeId}' not found in {runtime.Workspace.SessionsDir}.");
+            return ApplyExpert(runtime.Sessions.Load(runtime.Workspace, resumeId)
+                   ?? throw new InvalidOperationException($"Session '{resumeId}' not found in {runtime.Workspace.SessionsDir}."));
         if (continueLast)
         {
             var latest = runtime.Sessions.LoadLatest(runtime.Workspace);
-            if (latest is not null) return latest;
+            if (latest is not null) return ApplyExpert(latest);
         }
-        return runtime.Sessions.Create(runtime.Workspace);
+        return runtime.Sessions.Create(runtime.Workspace, expertId: expertId);
+    }
+
+    // --expert on a resumed session rebinds the persona for the rest of the run.
+    private AgentSession ApplyExpert (AgentSession session)
+    {
+        if (expertId is null || session.Header.ExpertId == expertId) return session;
+        session.Header.ExpertId = expertId;
+        runtime.Sessions.UpdateMetadata(runtime.Workspace, session.Header.Id, expertId: expertId);
+        return session;
     }
 
     private string GetModeDisplay () =>
@@ -225,6 +235,9 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
             Resumed: resumed));
         foreach (var line in banner)
             renderer.WriteLine(line);
+        var expert = ExpertCatalog.Find(session.Header.ExpertId ?? expertId);
+        if (expert is not null)
+            renderer.WriteLine($"  expert: {expert.Avatar} {expert.Name} ({expert.Id})".Style(Ansi.Gray));
     }
 
     private async Task ConnectMcpQuietlyAsync (TerminalRenderer renderer)
@@ -270,7 +283,7 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
             }
 
             case "/clear" or "/new":
-                session = runtime.Sessions.Create(runtime.Workspace);
+                session = runtime.Sessions.Create(runtime.Workspace, expertId: expertId);
                 renderer.WriteLine($"new session {session.Header.Id}".Style(Ansi.Gray));
                 return false;
 
@@ -429,6 +442,11 @@ public sealed class ChatLoop (HaoyueRuntime runtime)
 
             case "/session":
                 renderer.WriteLine($"session {session.Header.Id} · {session.Messages.Count} messages · {session.FilePath}".Style(Ansi.Dim));
+                if (session.Header.ExpertId is { } boundExpert)
+                {
+                    var bound = ExpertCatalog.Find(boundExpert);
+                    renderer.WriteLine($"expert: {(bound is null ? boundExpert : $"{bound.Avatar} {bound.Name} ({bound.Id})")}".Style(Ansi.Dim));
+                }
                 return false;
 
             case "/help":

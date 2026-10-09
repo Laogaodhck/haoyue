@@ -12,6 +12,8 @@ public sealed class SessionHeader
     public ReasoningLevel ReasoningLevel { get; set; } = ReasoningLevel.High;
     /// <summary>Per-session "联网" toggle; controls web_search + web_fetch together.</summary>
     public bool NetworkEnabled { get; set; } = true;
+    /// <summary>Bound expert persona id (ExpertCatalog); null = default persona.</summary>
+    public string? ExpertId { get; set; }
     public long LlmRounds { get; set; }
     public long ExecutionSteps { get; set; }
     public long InputTokens { get; set; }

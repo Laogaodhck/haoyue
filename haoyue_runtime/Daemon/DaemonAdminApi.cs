@@ -2044,6 +2044,7 @@ internal sealed class DaemonAdminApi(
             ["archived"] = session.Header.Archived,
             ["reasoningLevel"] = session.Header.ReasoningLevel.ToWireValue(),
             ["networkEnabled"] = session.Header.NetworkEnabled,
+            ["expertId"] = session.Header.ExpertId,
             ["llmRounds"] = session.Header.LlmRounds,
             ["executionSteps"] = session.Header.ExecutionSteps,
             ["inputTokens"] = session.Header.InputTokens,
@@ -2070,11 +2071,24 @@ internal sealed class DaemonAdminApi(
         var networkEnabled = parameters.ContainsKey("networkEnabled")
             ? parameters["networkEnabled"]?.GetValue<bool?>() ?? true
             : (bool?)null;
+        string? expertId = null;
+        if (parameters.ContainsKey("expertId"))
+        {
+            var requested = parameters["expertId"]?.GetValue<string>();
+            // "" (or whitespace) unbinds; any other value must match the catalog.
+            if (string.IsNullOrWhiteSpace(requested))
+                expertId = "";
+            else if (ExpertCatalog.Find(requested) is null)
+                throw new DaemonRequestException(
+                    $"Unknown expert '{requested.Trim()}' — run expert.list for valid ids");
+            else
+                expertId = requested.Trim();
+        }
         try
         {
             var header = runtime.Sessions.UpdateMetadata(
                 workspace, id, title: title, reasoningLevel: reasoningLevel,
-                networkEnabled: networkEnabled);
+                networkEnabled: networkEnabled, expertId: expertId);
             return JsonSerializer.Serialize(header, HaoyueJsonContext.Default.SessionHeader);
         }
         catch (Exception ex) when (ex is FileNotFoundException or InvalidDataException or ArgumentException)

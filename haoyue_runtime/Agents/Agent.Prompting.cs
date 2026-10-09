@@ -1,4 +1,5 @@
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Experts;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Skills;
@@ -13,7 +14,7 @@ public sealed partial class Agent
 
     private async Task<string> ComposeSystemPromptAsync(
         WorkspaceInfo workspace, ModelInfo model, IReadOnlyList<ITool> tools, bool networkEnabled,
-        string? skillTriggerContext = null, CancellationToken ct = default)
+        string? skillTriggerContext = null, string? expertId = null, CancellationToken ct = default)
     {
         var memory = workspaceManager.LoadMemory(workspace);
         var agentsMd = workspaceManager.LoadAgentInstructions(workspace);
@@ -58,6 +59,19 @@ public sealed partial class Agent
             WorkspaceConfig = workspace.Config,
         };
         var basePrompt = await promptComposer.ComposeAsync(context, ct).ConfigureAwait(false);
+        var expert = ExpertCatalog.Find(expertId);
+        if (expert is not null)
+        {
+            basePrompt += $"""
+
+## 专家模式
+
+你现在以「{expert.Avatar} {expert.Name}（{expert.Id}）」的专家身份与用户协作，该身份优先于默认人格。
+以下是此专家的角色设定与工作准则：
+
+{expert.Prompt.Trim()}
+""";
+        }
         return basePrompt;
     }
 

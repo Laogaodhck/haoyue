@@ -315,6 +315,7 @@ public sealed class HaoyueDatabase
         EnsureColumn(connection, "sessions", "cached_input_tokens", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, "sessions", "output_tokens", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, "sessions", "output_elapsed_ms", "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn(connection, "sessions", "expert_id", "TEXT NULL");
 
         // 知识中心（笔记本 + 来源）：老库只加列不重建，回填在 KnowledgeStore 首次访问时进行。
         EnsureColumn(connection, "knowledge", "notebook_id", "INTEGER NULL");

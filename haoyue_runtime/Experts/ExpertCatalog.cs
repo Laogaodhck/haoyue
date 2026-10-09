@@ -201,4 +201,9 @@ public static class ExpertCatalog
 - 图表选型服务问题：趋势用折线、构成用堆叠、对比用条形，避免误导性坐标轴。
 """),
     ];
+
+    public static ExpertProfile? Find(string? id) =>
+        string.IsNullOrWhiteSpace(id)
+            ? null
+            : Entries.FirstOrDefault(entry => entry.Id == id.Trim());
 }

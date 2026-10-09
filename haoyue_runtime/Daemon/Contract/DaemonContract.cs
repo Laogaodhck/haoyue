@@ -239,6 +239,7 @@ public static class DaemonContract
             ("workspace", SString("工作区路径"), false),
             ("global", SBoolean("使用全局工作区"), false),
             ("reasoningLevel", SString("推理深度", ReasoningValues), false),
+            ("expertId", SString("绑定专家 persona id（expert.list 可查；空串解除绑定）"), false),
         };
         if (includeSteer) builder.Add(("requestId", SInteger("目标回合请求 id"), false));
         return SObject(builder.ToArray());
@@ -514,7 +515,8 @@ public static class DaemonContract
             ("id", SString("会话 id"), true),
             ("title", SString("新标题"), false),
             ("reasoningLevel", SString("推理深度", ReasoningValues), false),
-            ("networkEnabled", SBoolean("联网开关"), false))),
+            ("networkEnabled", SBoolean("联网开关"), false),
+            ("expertId", SString("绑定专家 persona id（空串解除绑定）"), false))),
         M("session.archive", "session", "归档会话", parameters: SessionExt(
             ("id", SString("会话 id"), true),
             ("archived", SBoolean("true 归档 / false 恢复，缺省 true"), false))),
@@ -523,7 +525,8 @@ public static class DaemonContract
         M("session.resume", "session", "恢复会话为连接的遗留会话", parameters: SessionExt(
             ("id", SString("会话 id"), true))),
         M("session.new", "session", "新建会话", parameters: SessionExt(
-            ("reasoningLevel", SString("推理深度", ReasoningValues), false))),
+            ("reasoningLevel", SString("推理深度", ReasoningValues), false),
+            ("expertId", SString("绑定专家 persona id（expert.list 可查）"), false))),
 
         // project
         M("project.list", "project", "列出注册项目", parameters: EmptyParams),

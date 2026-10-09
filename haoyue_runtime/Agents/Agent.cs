@@ -222,17 +222,19 @@ public sealed partial class Agent(
                 var requiresVision = turnHasImages && model.Model.Capabilities.Vision;
                 var effectiveNetworkEnabled = session.Header.NetworkEnabled && agentConfig.NetworkEnabled;
                 var tools = ActiveTools(workspace, model, effectiveNetworkEnabled, skillTriggerContext);
+                var expertId = session.Header.ExpertId;
                 var promptKey = string.Join('|',
                     model.Provider.Id, model.Model.Id, effectiveNetworkEnabled, tools.Count,
                     string.Join(",", tools.Select(t => t.Name)),
                     workspace.Config?.Mode ?? agentConfig.Mode,
                     workspace.Config?.Personality ?? agentConfig.Personality,
                     OutputLanguage.Resolve(workspace.Config, agentConfig),
-                    ShouldVerify(workspace, agentConfig));
+                    ShouldVerify(workspace, agentConfig),
+                    expertId ?? "");
                 if (promptKey != cachedPromptKey)
                 {
                     cachedSystemPrompt = await ComposeSystemPromptAsync(
-                        workspace, model, tools, effectiveNetworkEnabled, skillTriggerContext, ct).ConfigureAwait(false);
+                        workspace, model, tools, effectiveNetworkEnabled, skillTriggerContext, expertId, ct).ConfigureAwait(false);
                     cachedPromptKey = promptKey;
                 }
                 var systemPrompt = cachedSystemPrompt;

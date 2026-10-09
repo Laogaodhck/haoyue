@@ -11,6 +11,7 @@ using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
 using Haoyue.Runtime.Evolution;
 using Haoyue.Runtime.Events;
+using Haoyue.Runtime.Experts;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
 using Haoyue.Runtime.Sessions;
@@ -831,15 +832,20 @@ public sealed class DaemonServer : IAsyncDisposable
                             break;
                         }
                         ReasoningLevel reasoningLevel;
+                        string? expertId;
                         try
                         {
                             reasoningLevel = ParseReasoningLevel(
                                 parameters["reasoningLevel"], turnSession.Header.ReasoningLevel);
-                            if (turnSession.Header.ReasoningLevel != reasoningLevel)
+                            expertId = ParseExpertId(parameters["expertId"], turnSession.Header.ExpertId);
+                            if (turnSession.Header.ReasoningLevel != reasoningLevel
+                                || turnSession.Header.ExpertId != expertId)
                             {
                                 turnSession.Header.ReasoningLevel = reasoningLevel;
+                                turnSession.Header.ExpertId = expertId;
                                 _runtime.Sessions.UpdateMetadata(
-                                    workspace, turnSession.Header.Id, reasoningLevel: reasoningLevel);
+                                    workspace, turnSession.Header.Id,
+                                    reasoningLevel: reasoningLevel, expertId: expertId);
                             }
                         }
                         catch (DaemonRequestException ex)
@@ -1543,7 +1549,19 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         var networkEnabled = Params(request)["networkEnabled"]?.GetValue<bool?>()
                             ?? _runtime.ConfigStore.Config.Agent.NetworkEnabled;
-                        context.LegacySession = _runtime.Sessions.Create(workspace, reasoningLevel, networkEnabled);
+                        string? expertId;
+                        try
+                        {
+                            // Absent node → null (no expert); "" would also unbind, but a
+                            // fresh session has nothing to unbind.
+                            expertId = ParseExpertId(Params(request)["expertId"], null);
+                        }
+                        catch (DaemonRequestException ex)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message, context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
+                            break;
+                        }
+                        context.LegacySession = _runtime.Sessions.Create(workspace, reasoningLevel, networkEnabled, expertId);
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", context.LegacySession.Header.Id, context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }
@@ -2272,6 +2290,22 @@ public sealed class DaemonServer : IAsyncDisposable
         if (ReasoningLevelExtensions.TryParse(value, out var level)) return level;
         throw new DaemonRequestException(
             "params.reasoningLevel must be one of: none, low, medium, high, max, xhigh, ultra");
+    }
+
+    /// <summary>
+    /// expertId: absent → keep the session's current binding; "" → unbind;
+    /// otherwise must match an ExpertCatalog id. Returns the resolved id (null = none).
+    /// </summary>
+    private static string? ParseExpertId(JsonNode? node, string? current)
+    {
+        if (node is null) return current;
+        if (node is not JsonValue jsonValue || !jsonValue.TryGetValue<string>(out var text))
+            throw new DaemonRequestException("params.expertId must be a string (expert id from expert.list)");
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        if (ExpertCatalog.Find(text) is null)
+            throw new DaemonRequestException(
+                $"Unknown expert '{text.Trim()}' — run expert.list for valid ids");
+        return text.Trim();
     }
 
     private string WorkspaceJson(WorkspaceInfo workspace)

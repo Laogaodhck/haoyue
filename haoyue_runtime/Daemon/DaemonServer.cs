@@ -67,9 +67,11 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly SemaphoreSlim _reflectionGate = new(1, 1);
     private readonly IEventSubscription _runtimeEvents;
     private readonly Task _scheduleEventsTask;
-    // Unattended auto-reflection (E2): armed from EvolutionConfig; disposed/rearmed on
+    // Unattended auto-reflection (E2): a 5-minute poll armed from EvolutionConfig —
+    // interval mode and pending-defect threshold mode coexist; disposed/rearmed on
     // config changes. The reflection turn itself stays human-gated for adoption.
     private Timer? _autoReflectTimer;
+    private DateTimeOffset _lastReflectAt = DateTimeOffset.UtcNow;
 
     // Configuration and workspace administration remains serialized, while agent turns
     // execute concurrently in isolated runtime instances.
@@ -558,15 +560,18 @@ public sealed class DaemonServer : IAsyncDisposable
                     case "evolution.inspect":
                     {
                         // Evolution engine E1: read-only aggregation of journaled failure
-                        // signals into structured defect reports (see Evolution/DefectAggregator).
+                        // signals into structured defect reports, enriched with a health
+                        // score, per-day trend and kind/tool distributions (see Evolution/).
                         var limit = Params(request)["limit"]?.GetValue<int>() ?? DefectAggregator.DefaultScanLimit;
                         var aggregator = new DefectAggregator(_runtime.Database);
+                        var reportList = aggregator.Aggregate(limit, _evolution.ReflectionSessionIds());
                         var reports = new JsonArray();
-                        foreach (var report in aggregator.Aggregate(limit, _evolution.ReflectionSessionIds()))
+                        foreach (var report in reportList)
                             reports.Add(new JsonObject
                             {
                                 ["fingerprint"] = report.Fingerprint,
                                 ["kind"] = report.Kind.ToString(),
+                                ["severity"] = report.Severity,
                                 ["firstSeen"] = report.FirstSeen.ToString("O"),
                                 ["lastSeen"] = report.LastSeen.ToString("O"),
                                 ["occurrences"] = report.Occurrences,
@@ -574,11 +579,35 @@ public sealed class DaemonServer : IAsyncDisposable
                                 ["errorSummary"] = report.ErrorSummary,
                                 ["sessionId"] = report.SessionId,
                             });
+                        var health = EvolutionAnalytics.ComputeHealth(reportList);
+                        var trend = new JsonArray();
+                        foreach (var point in EvolutionAnalytics.ComputeTrend(_runtime.Database))
+                            trend.Add(new JsonObject
+                            {
+                                ["date"] = point.Date,
+                                ["toolFailures"] = point.ToolFailures,
+                                ["gaps"] = point.Gaps,
+                                ["verificationFailures"] = point.VerificationFailures,
+                                ["feedback"] = point.Feedback,
+                                ["corrections"] = point.Corrections,
+                                ["cancels"] = point.Cancels,
+                                ["retries"] = point.Retries,
+                            });
+                        var distribution = EvolutionAnalytics.ComputeDistribution(reportList);
+                        var byKind = new JsonObject();
+                        foreach (var (kind, count) in distribution.ByKind)
+                            byKind[kind] = count;
+                        var topTools = new JsonArray();
+                        foreach (var (tool, count) in distribution.TopTools)
+                            topTools.Add(new JsonObject { ["tool"] = tool, ["count"] = count });
                         var result = new JsonObject
                         {
                             ["scanned"] = Math.Clamp(limit, 1, EventJournal.RetainedEvents),
                             ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O"),
                             ["reports"] = reports,
+                            ["health"] = new JsonObject { ["score"] = health.Score, ["grade"] = health.Grade },
+                            ["trend"] = trend,
+                            ["distribution"] = new JsonObject { ["byKind"] = byKind, ["topTools"] = topTools },
                         };
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", result.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
                         break;
@@ -606,7 +635,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         _ = Task.Run(async () =>
                         {
-                            try { await _reflection.RunAsync(_shutdown.Token).ConfigureAwait(false); }
+                            try { await _reflection.RunAsync("manual", _shutdown.Token).ConfigureAwait(false); }
                             finally { _reflectionGate.Release(); }
                         }, _shutdown.Token);
                         break;
@@ -616,6 +645,10 @@ public sealed class DaemonServer : IAsyncDisposable
                     {
                         var candidates = new JsonArray();
                         foreach (var candidate in _reflection.ListCandidates())
+                        {
+                            var files = new JsonArray();
+                            foreach (var file in candidate.Files ?? Array.Empty<ReflectionRunner.CandidateFile>())
+                                files.Add(new JsonObject { ["name"] = file.Name, ["content"] = file.Content });
                             candidates.Add(new JsonObject
                             {
                                 ["fingerprint"] = candidate.Fingerprint,
@@ -624,7 +657,10 @@ public sealed class DaemonServer : IAsyncDisposable
                                 ["candidateDir"] = candidate.CandidateDir,
                                 ["summary"] = candidate.Summary,
                                 ["createdAt"] = candidate.CreatedAt.ToString("O"),
+                                ["status"] = candidate.Status,
+                                ["files"] = files,
                             });
+                        }
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", candidates.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }
@@ -634,15 +670,16 @@ public sealed class DaemonServer : IAsyncDisposable
                         var parameters = Params(request);
                         var fingerprint = parameters["fingerprint"]?.GetValue<string>()?.Trim() ?? "";
                         var decision = parameters["decision"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "";
-                        if (fingerprint.Length == 0 || decision is not ("adopt" or "reject"))
+                        var promptOverride = parameters["prompt"]?.GetValue<string>()?.Trim();
+                        if (fingerprint.Length == 0 || decision is not ("adopt" or "reject" or "defer"))
                         {
                             await WriteAsync(context.Writer, context.WriterGate, id, "error",
-                                "params.fingerprint 与 params.decision（adopt|reject）均为必填", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
+                                "params.fingerprint 与 params.decision（adopt|reject|defer）均为必填", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
                             break;
                         }
                         try
                         {
-                            var record = _reflection.Decide(fingerprint, decision == "adopt");
+                            var record = _reflection.Decide(fingerprint, decision, promptOverride);
                             var decided = new JsonObject
                             {
                                 ["fingerprint"] = record.Fingerprint,
@@ -667,6 +704,63 @@ public sealed class DaemonServer : IAsyncDisposable
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
                             _ => Task.FromResult(_admin.SetEvolutionConfig(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
+
+                    case "evolution.history":
+                    {
+                        var limit = Params(request)["limit"]?.GetValue<int>() ?? 20;
+                        var runs = new JsonArray();
+                        foreach (var run in _evolution.ListRuns(limit))
+                            runs.Add(new JsonObject
+                            {
+                                ["id"] = run.Id,
+                                ["sessionId"] = run.SessionId,
+                                ["trigger"] = run.Trigger,
+                                ["processed"] = run.Processed,
+                                ["candidates"] = run.Candidates,
+                                ["noAction"] = run.NoAction,
+                                ["skipped"] = run.Skipped,
+                                ["failed"] = run.Failed,
+                                ["error"] = run.Error,
+                                ["createdAt"] = run.CreatedAt.ToString("O"),
+                            });
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", runs.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "evolution.stats":
+                    {
+                        // Effectiveness tracking: adoption rate, per-skill usage and whether
+                        // the originating defect has resurfaced since adoption.
+                        var aggregator = new DefectAggregator(_runtime.Database);
+                        var reportList = aggregator.Aggregate(DefectAggregator.DefaultScanLimit, _evolution.ReflectionSessionIds());
+                        var stats = EvolutionAnalytics.ComputeStats(_runtime.Database, _evolution, reportList);
+                        var skills = new JsonArray();
+                        foreach (var skill in stats.Skills)
+                            skills.Add(new JsonObject
+                            {
+                                ["fingerprint"] = skill.Fingerprint,
+                                ["skillName"] = skill.SkillName,
+                                ["adoptedAt"] = skill.AdoptedAt.ToString("O"),
+                                ["kind"] = skill.Kind,
+                                ["usageCount"] = skill.UsageCount,
+                                ["resolved"] = skill.Resolved,
+                            });
+                        var result = new JsonObject
+                        {
+                            ["runs"] = stats.Runs,
+                            ["candidatesProduced"] = stats.CandidatesProduced,
+                            ["adopted"] = stats.Adopted,
+                            ["rejected"] = stats.Rejected,
+                            ["deferred"] = stats.Deferred,
+                            ["noAction"] = stats.NoAction,
+                            ["failed"] = stats.Failed,
+                            ["adoptionRate"] = stats.AdoptionRate,
+                            ["skills"] = skills,
+                            ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O"),
+                        };
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", result.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
 
                     case "feedback.turn":
                     {
@@ -1522,7 +1616,7 @@ public sealed class DaemonServer : IAsyncDisposable
     private void OnMcpStatusChanged() => _ = BroadcastMcpStatusAsync();
 
     /// <summary>
-    /// Rearms the unattended auto-reflection timer from the current evolution config.
+    /// Rearms the unattended auto-reflection poll from the current evolution config.
     /// Called at construction and again whenever SetEvolutionConfig persists changes.
     /// </summary>
     private void ScheduleAutoReflect()
@@ -1530,10 +1624,45 @@ public sealed class DaemonServer : IAsyncDisposable
         _autoReflectTimer?.Dispose();
         _autoReflectTimer = null;
         var config = _runtime.ConfigStore.Config.Evolution;
-        if (!config.AutoReflect) return;
-        var interval = TimeSpan.FromMinutes(Math.Clamp(config.IntervalMinutes, 30, 10080));
+        if (!config.AutoReflect && !config.ThresholdEnabled) return;
+        _lastReflectAt = DateTimeOffset.UtcNow;
         _autoReflectTimer = new Timer(
-            _ => StartAutoReflectTurn(), null, interval, interval);
+            _ => AutoReflectTick(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+    }
+
+    /// <summary>
+    /// Polls whether an unattended reflection is due: either the configured interval
+    /// elapsed, or enough pending defect signals accumulated (threshold mode, with a
+    /// 30-minute throttle). Whichever condition comes first wins.
+    /// </summary>
+    private void AutoReflectTick()
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        var config = _runtime.ConfigStore.Config.Evolution;
+        var now = DateTimeOffset.UtcNow;
+        var dueByInterval = config.AutoReflect &&
+            now - _lastReflectAt >= TimeSpan.FromMinutes(Math.Clamp(config.IntervalMinutes, 30, 10080));
+        var dueByThreshold = false;
+        if (!dueByInterval && config.ThresholdEnabled &&
+            now - _lastReflectAt >= TimeSpan.FromMinutes(30))
+        {
+            try
+            {
+                var pending = new DefectAggregator(_runtime.Database)
+                    .Aggregate(DefectAggregator.DefaultScanLimit, _evolution.ReflectionSessionIds())
+                    .Count(r => _evolution.Get(r.Fingerprint) is not { } existing ||
+                                !EvolutionStatus.BlocksRetry(existing.Status));
+                dueByThreshold = pending >= Math.Clamp(config.ThresholdSignals, 1, 50);
+            }
+            catch (Exception)
+            {
+                // A poll tick must never kill the daemon process; the next tick retries.
+                return;
+            }
+        }
+        if (!dueByInterval && !dueByThreshold) return;
+        _lastReflectAt = now;
+        StartAutoReflectTurn(dueByInterval ? "auto" : "threshold");
     }
 
     /// <summary>
@@ -1541,13 +1670,13 @@ public sealed class DaemonServer : IAsyncDisposable
     /// reflection still in flight) are silently skipped — the next tick retries, and
     /// outcomes reach clients through the evolution.reflected broadcast either way.
     /// </summary>
-    private void StartAutoReflectTurn()
+    private void StartAutoReflectTurn(string trigger)
     {
         if (_shutdown.IsCancellationRequested) return;
         if (!_reflectionGate.Wait(0)) return;
         _ = Task.Run(async () =>
         {
-            try { await _reflection.RunAsync(_shutdown.Token).ConfigureAwait(false); }
+            try { await _reflection.RunAsync(trigger, _shutdown.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
             finally { _reflectionGate.Release(); }
         }, _shutdown.Token);

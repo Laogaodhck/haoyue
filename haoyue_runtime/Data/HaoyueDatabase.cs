@@ -291,6 +291,19 @@ public sealed class HaoyueDatabase
             );
 
             CREATE INDEX IF NOT EXISTS ix_evolution_status ON evolution_log(status);
+
+            CREATE TABLE IF NOT EXISTS evolution_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NULL,
+                trigger TEXT NOT NULL,
+                processed INTEGER NOT NULL DEFAULT 0,
+                candidates INTEGER NOT NULL DEFAULT 0,
+                no_action INTEGER NOT NULL DEFAULT 0,
+                skipped INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                error TEXT NULL,
+                created_at TEXT NOT NULL
+            );
             """;
         command.ExecuteNonQuery();
 

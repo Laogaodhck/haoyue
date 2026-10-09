@@ -16,6 +16,8 @@ public static class EvolutionStatus
     public const string Rejected = "rejected";
     /// <summary>The reflection turn itself failed; the fingerprint is retried on the next run.</summary>
     public const string Failed = "failed";
+    /// <summary>Human parked the candidate; still actionable (adopt/reject) but visually held back.</summary>
+    public const string Deferred = "deferred";
 
     /// <summary>Only a failed attempt lets a later reflection run retry the fingerprint.</summary>
     public static bool BlocksRetry(string status) => status != Failed;
@@ -113,9 +115,68 @@ public sealed class EvolutionStore(HaoyueDatabase database)
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT DISTINCT session_id FROM evolution_log WHERE session_id IS NOT NULL;";
         var ids = new List<string>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read()) ids.Add(reader.GetString(0));
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) ids.Add(reader.GetString(0));
         return ids;
+    }
+
+    /// <summary>One completed reflection pass, for the evolution.history listing.</summary>
+    public sealed record EvolutionRun(
+        long Id,
+        string? SessionId,
+        string Trigger,
+        int Processed,
+        int Candidates,
+        int NoAction,
+        int Skipped,
+        int Failed,
+        string? Error,
+        DateTimeOffset CreatedAt);
+
+    public void RecordRun(EvolutionRun run)
+    {
+        using var connection = database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO evolution_runs
+                (session_id, trigger, processed, candidates, no_action, skipped, failed, error, created_at)
+            VALUES ($session, $trigger, $processed, $candidates, $noAction, $skipped, $failed, $error, $created);
+            """;
+        command.Parameters.AddWithValue("$session", (object?)run.SessionId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$trigger", run.Trigger);
+        command.Parameters.AddWithValue("$processed", run.Processed);
+        command.Parameters.AddWithValue("$candidates", run.Candidates);
+        command.Parameters.AddWithValue("$noAction", run.NoAction);
+        command.Parameters.AddWithValue("$skipped", run.Skipped);
+        command.Parameters.AddWithValue("$failed", run.Failed);
+        command.Parameters.AddWithValue("$error", (object?)run.Error ?? DBNull.Value);
+        command.Parameters.AddWithValue("$created", run.CreatedAt.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<EvolutionRun> ListRuns(int limit = 20)
+    {
+        using var connection = database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT id, session_id, trigger, processed, candidates, no_action, skipped, failed, error, created_at " +
+            "FROM evolution_runs ORDER BY id DESC LIMIT $limit;";
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 200));
+        var runs = new List<EvolutionRun>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            runs.Add(new EvolutionRun(
+                reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt32(3),
+                reader.GetInt32(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                DateTimeOffset.Parse(reader.GetString(9))));
+        return runs;
     }
 
     private static EvolutionRecord ReadRow(SqliteDataReader reader) => new(

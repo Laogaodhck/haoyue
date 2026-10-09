@@ -317,6 +317,8 @@ internal sealed class DaemonAdminApi(
     {
         ["autoReflect"] = runtime.ConfigStore.Config.Evolution.AutoReflect,
         ["intervalMinutes"] = runtime.ConfigStore.Config.Evolution.IntervalMinutes,
+        ["thresholdEnabled"] = runtime.ConfigStore.Config.Evolution.ThresholdEnabled,
+        ["thresholdSignals"] = runtime.ConfigStore.Config.Evolution.ThresholdSignals,
     }.ToJsonString();
 
     public string SetEvolutionConfig(JsonObject parameters)
@@ -329,6 +331,16 @@ internal sealed class DaemonAdminApi(
         if (parameters["intervalMinutes"] is JsonValue intervalVal && intervalVal.TryGetValue<int>(out var interval))
         {
             runtime.ConfigStore.Config.Evolution.IntervalMinutes = Math.Clamp(interval, 30, 10080);
+        }
+
+        if (parameters["thresholdEnabled"] is JsonValue thresholdVal && thresholdVal.TryGetValue<bool>(out var thresholdEnabled))
+        {
+            runtime.ConfigStore.Config.Evolution.ThresholdEnabled = thresholdEnabled;
+        }
+
+        if (parameters["thresholdSignals"] is JsonValue signalsVal && signalsVal.TryGetValue<int>(out var signals))
+        {
+            runtime.ConfigStore.Config.Evolution.ThresholdSignals = Math.Clamp(signals, 1, 50);
         }
 
         runtime.ConfigStore.Save();

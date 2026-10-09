@@ -82,20 +82,35 @@ public sealed class ReflectionRunner
     /// <summary>
     /// Runs one reflection pass. A pass still running from a previous trigger is
     /// rejected immediately (mirrors the scheduler's single-flight discipline).
+    /// Every completed pass — empty, failed, or successful — lands in the
+    /// evolution_runs history tagged with its <paramref name="trigger"/>.
     /// </summary>
-    public async Task<ReflectionRunResult> RunAsync(CancellationToken ct)
+    public async Task<ReflectionRunResult> RunAsync(string trigger, CancellationToken ct)
     {
         if (!await _gate.WaitAsync(0, ct).ConfigureAwait(false))
             return new ReflectionRunResult(0, 0, 0, 0, 0, null, "反思 turn 已在进行中");
+        ReflectionRunResult result;
         try
         {
-            return await RunCoreAsync(ct).ConfigureAwait(false);
+            result = await RunCoreAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            RecordRun(trigger, new ReflectionRunResult(0, 0, 0, 0, 0, null, ex.Message));
+            throw;
         }
         finally
         {
             _gate.Release();
         }
+        RecordRun(trigger, result);
+        return result;
     }
+
+    private void RecordRun(string trigger, ReflectionRunResult result) =>
+        _store.RecordRun(new EvolutionStore.EvolutionRun(
+            0, result.SessionId, trigger, result.Processed, result.Candidates,
+            result.NoAction, result.Skipped, result.Failed, result.Error, DateTimeOffset.UtcNow));
 
     private async Task<ReflectionRunResult> RunCoreAsync(CancellationToken ct)
     {
@@ -217,40 +232,80 @@ public sealed class ReflectionRunner
 
     // ---------------------------------------------------------------- approval (P3)
 
-    /// <summary>One candidate awaiting human review.</summary>
+    /// <summary>One draft file bundled with a candidate for client-side preview.</summary>
+    public sealed record CandidateFile(string Name, string Content);
+
+    /// <summary>One draft awaiting human review (candidate or deferred).</summary>
     public sealed record CandidateSummary(
         string Fingerprint, string Kind, string SkillName, string? CandidateDir,
-        string? Summary, DateTimeOffset CreatedAt);
+        string? Summary, DateTimeOffset CreatedAt, string Status,
+        IReadOnlyList<CandidateFile>? Files = null);
 
-    /// <summary>Lists recorded candidates whose directories still exist on disk.</summary>
+    /// <summary>Lists recorded drafts (candidate or deferred) whose directories still exist.</summary>
     public IReadOnlyList<CandidateSummary> ListCandidates()
     {
-        return _store.List(EvolutionStatus.Candidate)
-            .Where(r => r.CandidateDir is not null && Directory.Exists(r.CandidateDir))
+        return _store.List(null)
+            .Where(r => (r.Status == EvolutionStatus.Candidate || r.Status == EvolutionStatus.Deferred) &&
+                        r.CandidateDir is not null && Directory.Exists(r.CandidateDir))
             .Select(r => new CandidateSummary(
-                r.Fingerprint, r.Kind, SkillNameOf(r.CandidateDir!),
-                r.CandidateDir, r.Summary, r.CreatedAt))
+                r.Fingerprint, r.Kind, EvolutionAnalytics.SkillNameFromDir(r.CandidateDir) ?? "-",
+                r.CandidateDir, r.Summary, r.CreatedAt, r.Status,
+                ReadDraftFiles(r.CandidateDir!)))
             .ToList();
+    }
+
+    private const int MaxDraftFileChars = 20_000;
+    private static readonly string[] DraftFileNames = ["skill.yaml", "skill.yml", "prompt.txt", "rationale.md"];
+
+    private static IReadOnlyList<CandidateFile>? ReadDraftFiles(string candidateDir)
+    {
+        var files = new List<CandidateFile>();
+        foreach (var name in DraftFileNames)
+        {
+            try
+            {
+                var text = File.ReadAllText(Path.Combine(candidateDir, name));
+                if (text.Length > MaxDraftFileChars)
+                    text = text[..MaxDraftFileChars] + "…（已截断）";
+                files.Add(new CandidateFile(name, text));
+            }
+            catch (IOException) { }
+        }
+        return files.Count > 0 ? files : null;
     }
 
     /// <summary>
     /// Applies a human decision. Adopt moves the candidate directory into the live
-    /// skills root (SkillManager hot-loads it on the next scan); reject deletes the
-    /// draft. Both close the fingerprint so the defect is never re-processed.
+    /// skills root (SkillManager hot-loads it on the next scan), optionally with a
+    /// human-edited prompt written over the draft's prompt.txt; reject deletes the
+    /// draft; defer parks it (still adoptable/rejectable later). Adopt and reject
+    /// close the fingerprint so the defect is never re-processed.
     /// </summary>
-    public EvolutionRecord Decide(string fingerprint, bool adopt)
+    public EvolutionRecord Decide(string fingerprint, string decision, string? promptOverride = null)
     {
         var record = _store.Get(fingerprint)
             ?? throw new InvalidOperationException("未找到该进化指纹的记录");
-        if (record.Status != EvolutionStatus.Candidate)
+        if (record.Status is not (EvolutionStatus.Candidate or EvolutionStatus.Deferred))
             throw new InvalidOperationException($"该记录状态为 {record.Status}，不可审批");
+
+        if (decision == "defer")
+        {
+            return record.Status == EvolutionStatus.Deferred
+                ? record
+                : _store.Decide(fingerprint, EvolutionStatus.Deferred)!;
+        }
+        if (decision is not ("adopt" or "reject"))
+            throw new InvalidOperationException($"未知决策：{decision}（应为 adopt / reject / defer）");
 
         var dir = record.CandidateDir;
         if (dir is not null && Directory.Exists(dir))
         {
-            if (adopt)
+            if (decision == "adopt")
             {
-                var skillName = SkillNameOf(dir);
+                if (!string.IsNullOrWhiteSpace(promptOverride))
+                    File.WriteAllText(Path.Combine(dir, "prompt.txt"), promptOverride);
+                var skillName = EvolutionAnalytics.SkillNameFromDir(dir)
+                    ?? throw new InvalidOperationException($"候选目录命名异常，请手动处理：{dir}");
                 var destination = Path.Combine(_skillsRoot, skillName);
                 if (Directory.Exists(destination))
                     throw new InvalidOperationException($"技能目录已存在，请手动处理：{destination}");
@@ -264,13 +319,8 @@ public sealed class ReflectionRunner
             }
         }
 
-        return _store.Decide(fingerprint, adopt ? EvolutionStatus.Adopted : EvolutionStatus.Rejected)!;
+        return _store.Decide(fingerprint, decision == "adopt" ? EvolutionStatus.Adopted : EvolutionStatus.Rejected)!;
     }
-
-    /// <summary>Candidate dirs are named "&lt;skillName&gt;-&lt;fingerprint8&gt;".</summary>
-    private static string SkillNameOf(string candidateDir) =>
-        Path.GetFileName(candidateDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-        [..^9]; // strip "-" + 8 fingerprint chars
 
     /// <summary>Default turn host: an isolated runtime sharing daemon infrastructure.</summary>
     private async Task<AgentTurnResult> RunIsolatedTurnAsync(
@@ -298,7 +348,7 @@ public sealed class ReflectionRunner
         for (var i = 0; i < reports.Count; i++)
         {
             var r = reports[i];
-            sb.AppendLine($"{i + 1}. 指纹 {r.Fingerprint} | 类型 {r.Kind} | 工具 {r.ToolName ?? "-"} | 次数 {r.Occurrences} | 会话 {r.SessionId ?? "-"}");
+            sb.AppendLine($"{i + 1}. 指纹 {r.Fingerprint} | 类型 {r.Kind} | 严重度 {r.Severity ?? "-"} | 工具 {r.ToolName ?? "-"} | 次数 {r.Occurrences} | 会话 {r.SessionId ?? "-"}");
             sb.AppendLine($"   时间 {r.FirstSeen:yyyy-MM-dd HH:mm} ~ {r.LastSeen:yyyy-MM-dd HH:mm}");
             if (!string.IsNullOrEmpty(r.ErrorSummary))
                 sb.AppendLine($"   错误摘要：{r.ErrorSummary}");

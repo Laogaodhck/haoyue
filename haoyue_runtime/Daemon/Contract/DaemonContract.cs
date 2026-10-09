@@ -534,17 +534,23 @@ public static class DaemonContract
             ("keepSessions", SBoolean("true 保留会话历史，缺省 false"), false))),
 
         // evolution
-        M("evolution.inspect", "evolution", "聚合失败信号的缺陷报告", parameters: SObject(
+        M("evolution.inspect", "evolution", "聚合失败信号的缺陷报告（含健康分、趋势与分布）", parameters: SObject(
             ("limit", SInteger("扫描事件条数，缺省 DefaultScanLimit"), false))),
         M("evolution.reflect", "evolution", "发起反思回合产出技能草稿", parameters: EmptyParams),
-        M("evolution.pending-list", "evolution", "待审技能草稿清单", parameters: EmptyParams),
-        M("evolution.decide", "evolution", "人工终审技能草稿", parameters: SObject(
+        M("evolution.pending-list", "evolution", "待审技能草稿清单（含状态与草稿文件内容）", parameters: EmptyParams),
+        M("evolution.decide", "evolution", "人工终审技能草稿（adopt 前可用 prompt 改写提示词）", parameters: SObject(
             ("fingerprint", SString("缺陷指纹"), true),
-            ("decision", SString("裁决", "adopt", "reject"), true))),
+            ("decision", SString("裁决", "adopt", "reject", "defer"), true),
+            ("prompt", SString("adopt 时改写技能提示词（可选）"), false))),
+        M("evolution.history", "evolution", "反思回合历史（触发方式与处理结果）", parameters: SObject(
+            ("limit", SInteger("返回条数，缺省 20"), false))),
+        M("evolution.stats", "evolution", "进化效果统计（采纳率、技能使用与缺陷复发）", parameters: EmptyParams),
         M("evolution.config.get", "evolution", "读取自动反思配置", parameters: EmptyParams),
         M("evolution.config.set", "evolution", "更新自动反思配置", parameters: SObject(
             ("autoReflect", SBoolean("是否按间隔自动运行反思回合"), false),
-            ("intervalMinutes", SInteger("自动反思间隔（分钟，30..10080）"), false))),
+            ("intervalMinutes", SInteger("自动反思间隔（分钟，30..10080）"), false),
+            ("thresholdEnabled", SBoolean("缺陷数达标即自动反思（与定时并存）"), false),
+            ("thresholdSignals", SInteger("触发反思的缺陷数阈值（1..50）"), false))),
 
         // diagnostics
         M("doctor", "diagnostics", "健康检查（人类可读文本）", parameters: EmptyParams),

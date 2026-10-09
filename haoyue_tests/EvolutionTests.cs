@@ -82,6 +82,7 @@ public sealed class EvolutionTests : IDisposable
     {
         Assert.False(EvolutionStatus.BlocksRetry(EvolutionStatus.Failed));
         Assert.True(EvolutionStatus.BlocksRetry(EvolutionStatus.Candidate));
+        Assert.True(EvolutionStatus.BlocksRetry(EvolutionStatus.Deferred));
         Assert.True(EvolutionStatus.BlocksRetry(EvolutionStatus.NoAction));
         Assert.True(EvolutionStatus.BlocksRetry(EvolutionStatus.Rejected));
     }
@@ -152,7 +153,7 @@ public sealed class EvolutionTests : IDisposable
                 false, null));
         });
 
-        var result = await runner.RunAsync(CancellationToken.None);
+        var result = await runner.RunAsync("manual", CancellationToken.None);
 
         Assert.Null(result.Error);
         Assert.Equal(1, turns);
@@ -186,9 +187,9 @@ public sealed class EvolutionTests : IDisposable
                 "```json\n{\"action\":\"no-action\",\"summary\":\"环境问题\"}\n```", false, null));
         });
 
-        var first = await runner.RunAsync(CancellationToken.None);
+        var first = await runner.RunAsync("manual", CancellationToken.None);
         Assert.Equal(1, first.NoAction);
-        var second = await runner.RunAsync(CancellationToken.None);
+        var second = await runner.RunAsync("manual", CancellationToken.None);
 
         Assert.Equal(1, turns); // turn not re-run
         Assert.Equal(0, second.Processed);
@@ -211,11 +212,11 @@ public sealed class EvolutionTests : IDisposable
         };
         var runner = NewRunner(store, runnerDelegate);
 
-        var first = await runner.RunAsync(CancellationToken.None);
+        var first = await runner.RunAsync("manual", CancellationToken.None);
         Assert.NotNull(first.Error);
         Assert.Equal(EvolutionStatus.Failed, store.List(EvolutionStatus.Failed).Single().Status);
 
-        var second = await runner.RunAsync(CancellationToken.None);
+        var second = await runner.RunAsync("manual", CancellationToken.None);
         Assert.Equal(2, turns);
         Assert.Equal(1, second.NoAction); // failed rows do not block the retry
         Assert.Equal(0, second.Skipped);
@@ -231,7 +232,7 @@ public sealed class EvolutionTests : IDisposable
             return Task.FromResult(new AgentTurnResult("", false, null));
         });
 
-        var result = await runner.RunAsync(CancellationToken.None);
+        var result = await runner.RunAsync("manual", CancellationToken.None);
 
         Assert.Equal(0, turns);
         Assert.Equal(0, result.Processed);
@@ -264,6 +265,59 @@ public sealed class EvolutionTests : IDisposable
         Assert.True(EventJournal.IsPersistent(new EvolutionReflectionCompletedEvent("s1", 1, 1, 0, 0)));
     }
 
+    // ---------------------------------------------------------------- signal kinds (E1)
+
+    [Fact]
+    public void Aggregate_RetriesCorrectionsAndCancels_BecomeTheirOwnReports()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-20);
+        // Provider instability: 3 retries of the same model+error inside the window.
+        for (var i = 0; i < 3; i++)
+            Append(new ProviderRetryEvent("openai/gpt-4o", i + 1, "429 too many requests", TimeSpan.FromSeconds(1)),
+                start.AddMinutes(i));
+        // User corrections: 3 steers in one session.
+        Append(new TurnStartedEvent("s1", "任务"), start.AddMinutes(5));
+        for (var i = 0; i < 3; i++)
+            Append(new UserSteerEvent("换个方式"), start.AddMinutes(6 + i));
+        // Cancels: 2 cancelled turns in one session.
+        for (var i = 0; i < 2; i++)
+        {
+            Append(new TurnStartedEvent("s2", "任务"), start.AddMinutes(10 + i * 2));
+            Append(new TurnCompletedEvent("s2", true, null), start.AddMinutes(11 + i * 2));
+        }
+
+        var reports = new DefectAggregator(_runtime.Database).Aggregate();
+
+        Assert.Contains(reports, r => r.Kind == DefectKind.ProviderInstability && r.Occurrences == 3);
+        Assert.Contains(reports, r => r.Kind == DefectKind.UserCorrection && r.Occurrences == 3);
+        Assert.Contains(reports, r => r.Kind == DefectKind.TurnCancelled && r.Occurrences == 2);
+        Assert.All(reports, r => Assert.Equal("medium", r.Severity));
+    }
+
+    [Fact]
+    public void Analytics_HealthDistributionAndTrend_AreDerivedFromReportsAndJournal()
+    {
+        var reports = new List<DefectReport>
+        {
+            new("f1", DefectKind.UserNegativeFeedback, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1, null, "差", "s1", "high"),
+            new("f2", DefectKind.ToolFailureCluster, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 3, "bash", "err", "s1", "medium"),
+        };
+
+        var health = EvolutionAnalytics.ComputeHealth(reports);
+        Assert.Equal(82, health.Score); // 100 - feedback 10 - tool cluster 8
+        Assert.Equal("良", health.Grade);
+
+        var distribution = EvolutionAnalytics.ComputeDistribution(reports);
+        Assert.Equal(2, distribution.ByKind.Count);
+        Assert.Equal(("bash", 3), distribution.TopTools[0]);
+
+        Append(new UserFeedbackEvent("s1", "negative", "不对"), DateTimeOffset.Now);
+        var trend = EvolutionAnalytics.ComputeTrend(_runtime.Database, 7);
+        Assert.Equal(7, trend.Count);
+        Assert.Equal(1, trend[^1].Feedback);
+        Assert.Equal(0, trend[0].Feedback);
+    }
+
     // ---------------------------------------------------------------- approval (P3)
 
     private async Task<string> SeedCandidateAsync(string skillName = "fix-bash-retry")
@@ -282,7 +336,7 @@ public sealed class EvolutionTests : IDisposable
                 $"```json\n{{\"action\":\"new-skill\",\"skillName\":\"{skillName}\",\"summary\":\"新增技能\"}}\n```",
                 false, null));
         });
-        await runner.RunAsync(CancellationToken.None);
+        await runner.RunAsync("manual", CancellationToken.None);
         return store.List(EvolutionStatus.Candidate).Single().Fingerprint;
     }
 
@@ -294,12 +348,12 @@ public sealed class EvolutionTests : IDisposable
         var dir = runner.ListCandidates().Single().CandidateDir!;
         Assert.True(Directory.Exists(dir));
 
-        var record = runner.Decide(fingerprint, adopt: false);
+        var record = runner.Decide(fingerprint, "reject");
 
         Assert.Equal(EvolutionStatus.Rejected, record.Status);
         Assert.False(Directory.Exists(dir));
         Assert.Empty(runner.ListCandidates());
-        Assert.Throws<InvalidOperationException>(() => runner.Decide(fingerprint, adopt: true));
+        Assert.Throws<InvalidOperationException>(() => runner.Decide(fingerprint, "adopt"));
     }
 
     [Fact]
@@ -309,7 +363,7 @@ public sealed class EvolutionTests : IDisposable
         var skillsRoot = Path.Combine(_dir, "skills-root");
         var runner = NewRunner(NewStore(), skillsRoot: skillsRoot);
 
-        var record = runner.Decide(fingerprint, adopt: true);
+        var record = runner.Decide(fingerprint, "adopt");
 
         Assert.Equal(EvolutionStatus.Adopted, record.Status);
         Assert.True(Directory.Exists(Path.Combine(skillsRoot, "my-evolved-skill")));
@@ -327,11 +381,68 @@ public sealed class EvolutionTests : IDisposable
         var runner = NewRunner(NewStore(), skillsRoot: skillsRoot);
         var candidateDir = runner.ListCandidates().Single().CandidateDir!;
 
-        Assert.Throws<InvalidOperationException>(() => runner.Decide(fingerprint, adopt: true));
+        Assert.Throws<InvalidOperationException>(() => runner.Decide(fingerprint, "adopt"));
 
         // Candidate draft must survive a failed adoption.
         Assert.True(Directory.Exists(candidateDir));
         Assert.Equal(EvolutionStatus.Candidate, NewStore().Get(fingerprint)!.Status);
+    }
+
+    // ---------------------------------------------------------------- history + lifecycle
+
+    [Fact]
+    public async Task ReflectionRun_IsRecordedToHistory_WithItsTrigger()
+    {
+        SeedBashFailureCluster();
+        var store = NewStore();
+        var runner = NewRunner(store, (workspace, session, prompt, ct) =>
+            Task.FromResult(new AgentTurnResult(
+                "```json\n{\"action\":\"no-action\",\"summary\":\"环境问题\"}\n```", false, null)));
+
+        await runner.RunAsync("threshold", CancellationToken.None);
+        await runner.RunAsync("manual", CancellationToken.None); // nothing pending; still recorded
+
+        var runs = store.ListRuns();
+        Assert.Equal(2, runs.Count);
+        Assert.Equal("manual", runs[0].Trigger); // newest first
+        Assert.Equal("threshold", runs[1].Trigger);
+        Assert.Equal(1, runs[1].Processed);
+        Assert.Equal(1, runs[1].NoAction);
+        Assert.Null(runs[1].Error);
+    }
+
+    [Fact]
+    public async Task Decide_Defer_ParksCandidate_ThenAdoptStillWorks()
+    {
+        var fingerprint = await SeedCandidateAsync();
+        var skillsRoot = Path.Combine(_dir, "skills-root");
+        var runner = NewRunner(NewStore(), skillsRoot: skillsRoot);
+
+        var deferred = runner.Decide(fingerprint, "defer");
+        Assert.Equal(EvolutionStatus.Deferred, deferred.Status);
+
+        // Deferred drafts remain listed (with previewable files) and adoptable.
+        var listed = runner.ListCandidates().Single();
+        Assert.Equal(EvolutionStatus.Deferred, listed.Status);
+        Assert.NotNull(listed.Files);
+        Assert.Contains(listed.Files!, f => f.Name == "prompt.txt");
+
+        var record = runner.Decide(fingerprint, "adopt");
+        Assert.Equal(EvolutionStatus.Adopted, record.Status);
+        Assert.Empty(runner.ListCandidates());
+    }
+
+    [Fact]
+    public async Task Decide_AdoptWithPromptOverride_RewritesPromptBeforePromotion()
+    {
+        var fingerprint = await SeedCandidateAsync("overwritten-skill");
+        var skillsRoot = Path.Combine(_dir, "skills-root");
+        var runner = NewRunner(NewStore(), skillsRoot: skillsRoot);
+
+        runner.Decide(fingerprint, "adopt", "人工改写后的提示词");
+
+        var prompt = File.ReadAllText(Path.Combine(skillsRoot, "overwritten-skill", "prompt.txt"));
+        Assert.Equal("人工改写后的提示词", prompt);
     }
 
     // ---------------------------------------------------------------- feedback (P4)
@@ -370,7 +481,7 @@ public sealed class EvolutionTests : IDisposable
                 "```json\n{\"action\":\"no-action\",\"summary\":\"一次性失误\"}\n```", false, null));
         });
 
-        var result = await runner.RunAsync(CancellationToken.None);
+        var result = await runner.RunAsync("manual", CancellationToken.None);
 
         Assert.Equal(1, result.NoAction);
         Assert.Empty(await Task.FromResult(runner.ListCandidates()));

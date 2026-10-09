@@ -244,6 +244,10 @@ public sealed class EvolutionConfig
     public bool AutoReflect { get; set; }
     /// <summary>自动反思间隔（分钟），读写时夹紧到 30..10080（7 天）。</summary>
     public int IntervalMinutes { get; set; } = 360;
+    /// <summary>缺陷阈值触发：待处理缺陷达到 <see cref="ThresholdSignals"/> 时提前自动反思（30 分钟节流）。</summary>
+    public bool ThresholdEnabled { get; set; }
+    /// <summary>阈值触发的待处理缺陷数下限（1..50）。</summary>
+    public int ThresholdSignals { get; set; } = 5;
 }
 
 public sealed class McpServerConfig

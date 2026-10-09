@@ -52,6 +52,7 @@ root.Add(MemoryCommands.Build());
 root.Add(RulesCommands.Build());
 root.Add(ExpertCommands.Build());
 root.Add(ScheduleCommands.Build());
+root.Add(EvolutionCommands.Build());
 root.Add(DaemonCommand.Build());
 
 return await root.Parse(args).InvokeAsync();

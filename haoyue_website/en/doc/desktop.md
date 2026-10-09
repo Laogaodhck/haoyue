@@ -93,7 +93,7 @@ Use “Test” immediately after saving. Failed model requests include the Provi
 
 The sidebar "Extensions" entry opens a Qoder-style hub with three categories:
 
-- **Connectors (MCP)**: configure workspace or global stdio / SSE / HTTP MCP servers — one-click presets for GitHub, filesystem, web fetch, Playwright and more; tools reload after saving;
+- **Connectors (MCP)**: manage connected MCP servers as cards with direct enable/disable and a detail view per server; one-click presets in the "Popular MCP" catalog, custom servers with local command / remote URL connections and OAuth / access-token auth; tools reload after saving;
 - **Skills**: toggle and import installed skills, or grab official skills from the built-in marketplace;
 - **Experts**: a catalog of built-in domain experts — bind one in a click from the detail page ("Start a new task with this expert", badge shown above the composer, removable anytime), or copy the prompt to the start of a conversation.
 

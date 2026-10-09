@@ -93,7 +93,7 @@ Use “Test” immediately after saving. Failed model requests include the Provi
 
 The sidebar "Extensions" entry opens a Qoder-style extensions hub with three categories:
 
-- **Connectors (MCP)**: configure workspace or global stdio / SSE / HTTP MCP servers with one-click presets (GitHub, filesystem, web fetch, Playwright…); tools reload automatically after saving; the project properties dialog links straight here via "Manage connectors";
+- **Connectors (MCP)**: manage connected MCP servers as cards — status and tool count at a glance, with direct enable/disable and a detail view per server; the "Popular MCP" catalog offers one-click setup (GitHub, filesystem, web fetch, Playwright…), or add a custom server manually. The detail page covers local command / remote URL connections, automatic OAuth or access-token authentication, and advanced options (scope, timeout, tool trust) in a collapsible section; tools reload automatically after saving; the project properties dialog links straight here via "Manage connectors";
 - **Skills**: the "Installed" view inspects, imports (.md / .zip) and toggles discovered skills; the "Marketplace" view installs or disables official skills in one click;
 - **Experts**: browse the built-in domain-expert catalog (filter by domain). On the detail page, click "Start a new task with this expert" to bind it in one click — an expert badge appears above the composer and can be removed anytime; you can still copy the expert prompt into a new task manually.
 

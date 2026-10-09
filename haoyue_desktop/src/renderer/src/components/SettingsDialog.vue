@@ -22,6 +22,7 @@ import {
   Save,
   Settings2,
   SlidersHorizontal,
+  Sparkles,
   ScrollText,
   Sun,
   Telescope,
@@ -70,7 +71,7 @@ import {
   type EvolutionTrendPoint
 } from '../evolution-form'
 
-type SettingsSection = 'general' | 'models' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
+type SettingsSection = 'general' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
 
 interface ProviderInfo {
   id: string
@@ -248,7 +249,26 @@ const modelOptions = computed(() => models.value.map((model) => ({
   disabled: !model.providerEnabled
 })))
 
+const visionModelOptions = computed(() => [
+  { value: '', label: '自动', description: '使用路由链中第一个支持视觉的模型处理图像回合' },
+  ...models.value
+    .filter((model) => model.capabilities?.vision === true)
+    .map((model) => ({
+      value: model.ref,
+      label: model.ref,
+      description: `${model.contextWindow.toLocaleString()} 上下文 · ${model.provider}`,
+      disabled: !model.providerEnabled
+    }))
+])
+
 const showModelCatalog = ref(false)
+
+/** 智能体设置：视觉子智能体模型、探索者委派与自动验证。visionModel 为空表示自动选择。 */
+const agentConfig = reactive({
+  visionModel: '',
+  delegationEnabled: true,
+  autoVerify: false
+})
 
 const CAPABILITY_LABELS: Record<string, string> = {
   streaming: '流式',
@@ -315,6 +335,7 @@ function cacheHitRate(item: UsageInfo): number {
 const sections: Array<{ id: SettingsSection; label: string; icon: typeof Settings2 }> = [
   { id: 'general', label: '常规', icon: Settings2 },
   { id: 'models', label: '模型与提供商', icon: Bot },
+  { id: 'agent', label: '智能体', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Blocks },
   { id: 'skills', label: '技能', icon: Wrench },
   { id: 'rules-memory', label: '规则与记忆', icon: ScrollText },
@@ -374,6 +395,7 @@ async function loadCurrentSection(): Promise<void> {
   try {
     if (section.value === 'general') await loadGeneral()
     if (section.value === 'models') await loadModels()
+    if (section.value === 'agent') await loadAgent()
     if (section.value === 'skills') skills.value = await requestJson<SkillInfo[]>('skill.list')
     if (section.value === 'rules-memory') await loadRulesMemory()
     if (section.value === 'evolution') await loadEvolution()
@@ -892,6 +914,107 @@ async function loadModels(): Promise<void> {
   providers.value = providerData
   models.value = modelData
   selectedModel.value = modelData.find((model) => model.active)?.ref ?? modelData[0]?.ref ?? ''
+}
+
+async function loadAgent(): Promise<void> {
+  const [config] = await Promise.all([
+    requestJson<{
+      networkEnabled: boolean
+      delegationEnabled: boolean
+      visionModel: string
+      autoVerify: boolean
+    }>('agent.config.get'),
+    loadModels()
+  ])
+  networkEnabled.value = config.networkEnabled
+  agentConfig.delegationEnabled = config.delegationEnabled
+  agentConfig.visionModel = config.visionModel
+  agentConfig.autoVerify = config.autoVerify
+}
+
+async function saveAgentConfig(params: Record<string, unknown>): Promise<{
+  networkEnabled: boolean
+  delegationEnabled: boolean
+  visionModel: string
+  autoVerify: boolean
+}> {
+  return requestJson('agent.config.set', params)
+}
+
+async function toggleAgentNetwork(): Promise<void> {
+  beginAction('agent.config.set:network')
+  try {
+    const config = await saveAgentConfig({ networkEnabled: networkEnabled.value })
+    networkEnabled.value = config.networkEnabled
+    notice.value = networkEnabled.value
+      ? '已开启网页搜索（智能体可使用 web_search 与 web_fetch 等网络工具）'
+      : '已关闭网页搜索（智能体强制处于离线模式）'
+  } catch (reason) {
+    fail(reason)
+    try {
+      const config = await requestJson<{ networkEnabled: boolean }>('agent.config.get')
+      networkEnabled.value = config.networkEnabled
+    } catch { /* keep last known state */ }
+  } finally {
+    endAction()
+  }
+}
+
+async function toggleDelegation(): Promise<void> {
+  beginAction('agent.config.set:delegation')
+  try {
+    const config = await saveAgentConfig({ delegationEnabled: agentConfig.delegationEnabled })
+    agentConfig.delegationEnabled = config.delegationEnabled
+    notice.value = agentConfig.delegationEnabled
+      ? '已开启探索者智能体（独立子任务可委派给子智能体）'
+      : '已关闭探索者智能体（子任务由主智能体自行完成）'
+  } catch (reason) {
+    fail(reason)
+    try {
+      const config = await requestJson<{ delegationEnabled: boolean }>('agent.config.get')
+      agentConfig.delegationEnabled = config.delegationEnabled
+    } catch { /* keep last known state */ }
+  } finally {
+    endAction()
+  }
+}
+
+async function toggleAgentAutoVerify(): Promise<void> {
+  beginAction('agent.config.set:autoVerify')
+  try {
+    const config = await saveAgentConfig({ autoVerify: agentConfig.autoVerify })
+    agentConfig.autoVerify = config.autoVerify
+    notice.value = agentConfig.autoVerify
+      ? '已开启自动验证与修复（修改文件后自动运行构建验证）'
+      : '已关闭自动验证与修复'
+  } catch (reason) {
+    fail(reason)
+    try {
+      const config = await requestJson<{ autoVerify: boolean }>('agent.config.get')
+      agentConfig.autoVerify = config.autoVerify
+    } catch { /* keep last known state */ }
+  } finally {
+    endAction()
+  }
+}
+
+async function setVisionModel(): Promise<void> {
+  beginAction('agent.config.set:vision')
+  try {
+    const config = await saveAgentConfig({ visionModel: agentConfig.visionModel })
+    agentConfig.visionModel = config.visionModel
+    notice.value = agentConfig.visionModel
+      ? `图像回合将优先使用 ${agentConfig.visionModel} 处理`
+      : '视觉子智能体模型已恢复自动选择'
+  } catch (reason) {
+    fail(reason)
+    try {
+      const config = await requestJson<{ visionModel: string }>('agent.config.get')
+      agentConfig.visionModel = config.visionModel
+    } catch { /* keep last known state */ }
+  } finally {
+    endAction()
+  }
 }
 
 async function loadDiagnostics(): Promise<void> {
@@ -2066,6 +2189,71 @@ onBeforeUnmount(() => {
                 <small>推理加速参数仅对本地 GGUF 模型提供商生效；请先在「模型与提供商」中添加 kind 为
                   local 的提供商并注册 GGUF 模型，此区域将自动出现。</small>
               </span>
+            </label>
+          </section>
+        </template>
+
+        <template v-else-if="section === 'agent'">
+          <div class="settings-section-heading">
+            <div>
+              <h3>智能体</h3>
+              <p>配置智能体的模型选择与自主行为边界</p>
+            </div>
+          </div>
+
+          <section class="settings-group" aria-label="模型">
+            <div class="settings-row">
+              <div><strong>根模型</strong><small>智能体日常对话与任务执行使用的活动模型</small></div>
+              <div class="row-actions model-actions">
+                <SelectMenu v-model="selectedModel" class="settings-select model-select" :options="modelOptions"
+                  label="根模型" :menu-min-width="330" />
+                <button class="secondary-button primary-action" :disabled="!selectedModel || action === 'model.switch'"
+                  @click="switchModel">使用</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div><strong>视觉子智能体模型</strong><small>处理图像回合（聊天附件、屏幕截图）的模型；仅列出支持视觉能力的模型，自动 = 使用路由链中第一个支持视觉的模型</small></div>
+              <div class="row-actions model-actions">
+                <SelectMenu v-model="agentConfig.visionModel" class="settings-select model-select"
+                  :options="visionModelOptions" label="视觉子智能体模型" :menu-min-width="330" />
+                <button class="secondary-button primary-action" :disabled="action === 'agent.config.set:vision'"
+                  @click="setVisionModel">保存</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-group" aria-label="行为">
+            <label class="provider-enabled-row">
+              <span>
+                <strong>网页搜索</strong>
+                <small>允许智能体使用网页搜索 (web_search) 与网页抓取 (web_fetch)
+                  等网络工具；关闭后所有任务强制处于离线模式，禁止外部网络请求。</small>
+              </span>
+              <input v-model="networkEnabled" class="sr-only" type="checkbox"
+                :disabled="action === 'agent.config.set:network'" @change="toggleAgentNetwork" />
+              <span class="toggle-switch" aria-hidden="true"><span /></span>
+            </label>
+            <label class="provider-enabled-row">
+              <span>
+                <strong>探索者智能体</strong>
+                <small>允许智能体通过 delegate_task 把独立子任务委派给子智能体并行探索；
+                  关闭后 delegate_task 将从工具列表隐藏，所有子任务由主智能体自行完成。</small>
+              </span>
+              <input v-model="agentConfig.delegationEnabled" class="sr-only" type="checkbox"
+                :disabled="action === 'agent.config.set:delegation'" @change="toggleDelegation" />
+              <span class="toggle-switch" aria-hidden="true"><span /></span>
+            </label>
+          </section>
+
+          <section class="settings-group" aria-label="自动验证">
+            <label class="provider-enabled-row">
+              <span>
+                <strong>自动验证与修复</strong>
+                <small>项目任务修改文件后自动运行构建/测试验证命令，失败时把错误反馈给智能体修复。</small>
+              </span>
+              <input v-model="agentConfig.autoVerify" class="sr-only" type="checkbox"
+                :disabled="action === 'agent.config.set:autoVerify'" @change="toggleAgentAutoVerify" />
+              <span class="toggle-switch" aria-hidden="true"><span /></span>
             </label>
           </section>
         </template>

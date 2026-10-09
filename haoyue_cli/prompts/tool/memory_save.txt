@@ -1,0 +1,5 @@
+Persist a durable fact, preference, or convention to the workspace memory.
+
+Use it when you learn something worth carrying across tasks: the user's stated preferences, project conventions that are written nowhere, environment quirks that cost time to discover, or decisions that future tasks must respect. One memory is one short sentence — prefer several precise notes over one long paragraph.
+
+Do not save task-specific progress (the conversation already carries it), secrets or credentials, or anything neither stated by the user nor verified by you. The memory is injected into future turns of this workspace automatically; the tool result confirms the exact line written.

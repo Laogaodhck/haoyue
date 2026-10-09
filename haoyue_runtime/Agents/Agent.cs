@@ -57,6 +57,9 @@ public sealed partial class Agent(
     /// <summary>Tool calls with zero mutations and no plan tolerated before a no-progress nudge (edit/auto modes only).</summary>
     internal const int NoProgressToolCallThreshold = 8;
 
+    /// <summary>Identical successful calls (same tool + args, no mutation between) tolerated before a redundant-call nudge.</summary>
+    internal const int RedundantCallThreshold = 3;
+
     /// <summary>
     /// Runtime notices (step budget, output truncation, empty answer, context compaction,
     /// repeated tool failure, steering …) are injected as user-role messages whose text
@@ -134,6 +137,10 @@ public sealed partial class Agent(
         // normalized arguments usually mean the model is stuck retrying a dead end.
         var failureSignature = "";
         var consecutiveFailures = 0;
+        // Same-signature success streak: identical repeated reads/globs usually mean the
+        // model is spinning. Reset by a different call, a failure, or any mutation.
+        var successSignature = "";
+        var successStreak = 0;
 
         // Per-turn execution ledger + compensation stack (retrospective, not a
         // prospective plan): every tool execution appends a step; file tools register
@@ -150,7 +157,19 @@ public sealed partial class Agent(
         var toolCallCount = 0;
         var strategyPivotNudged = false;
         var noProgressNudged = false;
+        var redundantCallNudged = false;
+        var answerCompletenessNudged = false;
         var readOnlyMode = AgentModeExtensions.Parse(workspace.Config?.Mode ?? agentConfig.Mode).IsReadOnly();
+
+        // Planning hint: nudge complex-looking inputs toward a declared plan before the
+        // first model step. Conservative heuristic (length + sequencing markers), only
+        // in edit/auto modes, once per turn — simple tasks proceed untouched.
+        if (!readOnlyMode && AgentHeuristics.LooksLikeMultiStepTask(userInput))
+        {
+            sessionStore.Append(session, ChatMessage.User(
+                ">>> [planning hint] 这个任务看起来包含多个步骤或目标。建议先调用 update_plan 把工作拆解为 2-5 个具体的里程碑步骤，再逐步执行并保持状态同步；如果实际很简单，直接开始即可，不必先计划。"));
+            events.Publish(new StatusEvent("Planning hint injected"));
+        }
 
         void HandleToolResult(ToolCallRequest call, ToolExecution execution)
         {
@@ -162,8 +181,32 @@ public sealed partial class Agent(
             {
                 consecutiveFailures = 0;
                 failureSignature = "";
+                var successCall = $"{call.Name}|{ToolArguments.Sanitize(call.ArgumentsJson)}";
+                if (successCall == successSignature) successStreak++;
+                else
+                {
+                    successSignature = successCall;
+                    successStreak = 1;
+                }
+                if (execution.ToolMutated)
+                {
+                    // A mutation invalidates whatever the earlier identical calls observed:
+                    // re-reading the same file after editing it is legitimate.
+                    successSignature = "";
+                    successStreak = 0;
+                }
+                else if (successStreak == RedundantCallThreshold && !redundantCallNudged)
+                {
+                    redundantCallNudged = true;
+                    sessionStore.Append(session, ChatMessage.User(
+                        $">>> [redundant call] 工具 {call.Name} 已用相同参数成功执行 {successStreak} 次，结果大概率没有变化。请勿原样重复调用：若需要新信息，请调整参数或换用其他工具；若只是确认状态，请基于已有结果继续。"));
+                    events.Publish(new WarningEvent(
+                        $"工具 {call.Name} 以相同参数重复成功执行 {successStreak} 次，已注入冗余调用提示。"));
+                }
                 return;
             }
+            successSignature = "";
+            successStreak = 0;
             var signature = $"{call.Name}|{ToolArguments.Sanitize(call.ArgumentsJson)}";            if (signature == failureSignature) consecutiveFailures++;
             else
             {
@@ -450,6 +493,19 @@ public sealed partial class Agent(
                         continue;
                     }
                 }
+
+                // Answer completeness: a turn that changed files should tell the user what
+                // changed. If the final answer names none of the touched files, ask once.
+                if (mutated && !answerCompletenessNudged && completion.Text.Length > 0
+                    && !AgentHeuristics.MentionsAnyChange(completion.Text, turnScope.Changes))
+                {
+                    answerCompletenessNudged = true;
+                    var names = string.Join("、", turnScope.Changes.Take(5).Select(c => Path.GetFileName(c.AbsolutePath)));
+                    sessionStore.Append(session, ChatMessage.User(
+                        $">>> [answer completeness] 本回合修改了 {turnScope.Changes.Count} 个文件（{names}），但最终回答没有提到这些改动。请补充：改动了哪些文件、各自做了什么。"));
+                    events.Publish(new WarningEvent("最终回答未提及已修改的文件，已注入回答完整性提示。"));
+                    continue;
+                }
                 var lateGuidance = AppendSteering(session, steering);
                 if (lateGuidance.Count > 0)
                 {
@@ -497,6 +553,14 @@ public sealed partial class Agent(
 
             PublishSteering(AppendSteering(session, steering));
             steering?.Complete();
+
+            // Interrupted turns leave their executed trace in the session so the next
+            // "continue" turn knows what already happened — no silent half-state.
+            if (turnScope.Steps.Count > 0 && (error is not null || cancelled))
+            {
+                sessionStore.Append(session, ChatMessage.User(
+                    $">>> [turn interrupted] 本回合{(cancelled ? "被用户中断" : "因错误终止")}。中断前已执行的步骤：\n{turnScope.RenderTrace()}\n继续任务时请基于以上进度，不要重复已完成的工作。"));
+            }
 
             // Deposit the undo ledger and tell clients what can be reverted. A failed or
             // cancelled turn gets an explicit warning; a successful turn carries the file

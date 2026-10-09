@@ -23,6 +23,32 @@ internal static class AgentNotices
 internal sealed record PlanNudge(string Notice, string Warning);
 
 /// <summary>
+/// Heuristic: does this input read like a multi-step task? Deliberately conservative —
+/// 40+ characters plus two or more sequencing markers (explicit connectors like
+/// 然后/接着, or sentence breaks). Only drives the once-per-turn planning hint, so a
+/// false positive costs the model one ignorable notice.
+/// </summary>
+internal static class AgentHeuristics
+{
+    private static readonly string[] SequenceConnectors =
+        ["然后", "接着", "之后", "随后", "首先", "其次", "最后", "同时", "另外", "以及"];
+
+    public static bool LooksLikeMultiStepTask(string input)
+    {
+        var trimmed = input.Trim();
+        if (trimmed.Length < 40) return false;
+        var connectorHits = SequenceConnectors.Count(m => trimmed.Contains(m, StringComparison.Ordinal));
+        var sentenceBreaks = trimmed.Count(c => c is '。' or '！' or '？' or '；' or ';' or '\n');
+        return connectorHits >= 2 || sentenceBreaks >= 2;
+    }
+
+    /// <summary>True when the text already names at least one changed file (case-insensitive).</summary>
+    public static bool MentionsAnyChange(string text, IReadOnlyList<UndoableFileChange> changes) =>
+        changes.Count == 0
+        || changes.Any(c => text.Contains(Path.GetFileName(c.AbsolutePath), StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>
 /// Per-turn plan-discipline guard: tracks how many tool calls ran since the last
 /// update_plan and which corrective nudges already fired, so the agent loop can inject
 /// one focused notice per situation — at most once per turn each.

@@ -245,6 +245,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
         foreach (var tool in new ITool[]
                  {
                      new PlanTool(prompts),
+                     new MemorySaveTool(prompts),
                      new ReadFileTool(prompts),
                      new WriteFileTool(prompts),
                      new EditFileTool(prompts),

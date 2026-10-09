@@ -1,6 +1,6 @@
 # Built-in Tools and Extensions
 
-The Runtime currently registers nine built-in tools. File and command tools require a concrete workspace, while web tools remain available in directory-free global tasks.
+The Runtime currently registers ten built-in tools. File and command tools require a concrete workspace, while web tools remain available in directory-free global tasks.
 
 ## Built-in tools
 
@@ -15,6 +15,7 @@ The Runtime currently registers nine built-in tools. File and command tools requ
 | `bash` | Runs a shell command in the workspace | yes | yes |
 | `web_search` | Searches Google, Bing, or Baidu | no | no |
 | `web_fetch` | Extracts text from an HTTP or HTTPS page | no | no |
+| `update_plan` | Defines and updates task plan milestones; the result echoes plan progress | no | no |
 
 Descriptions are loaded from `prompts/tool/<name>.txt`, while arguments are validated through JSON Schema. Output budgets adapt to the model context window and remain capped by `agent.maxToolOutputChars`.
 
@@ -73,6 +74,21 @@ The current tool uses text matching rather than line-number patches:
 - `plan` and `readonly` filter tools whose `Mutating` value is `true`.
 - `edit` and `auto` allow mutations, which can trigger build verification.
 - A workspace can disable tools by name through `disabledTools`.
+
+## Task planning and runtime self-correction
+
+Every agent turn carries a self-correction loop. The plan declared via `update_plan` is written into the runtime (no longer a UI-only side channel), and tool results echo the current plan state (step statuses and progress), so the model never has to rebuild progress from history. The runtime keeps comparing the executed work against the declared plan and injects targeted corrective notices when they drift:
+
+| Notice | Trigger | Purpose |
+| --- | --- | --- |
+| `[plan finished]` | All plan steps completed, yet other tools keep running | Ask the model to extend the plan or deliver the final answer |
+| `[plan stale]` | 4 consecutive tool calls without a plan update | Ask for a status refresh |
+| `[repeated tool failure]` | Same tool with same arguments failed twice in a row | Stop blind retries; verify the environment first |
+| `[strategy pivot]` | Same call failed 4 times in a row | Change the approach instead of tweaking parameters |
+| `[no progress]` | 8 tool calls with zero file changes and no plan (edit / auto modes only) | Make a plan or summarize findings |
+| `[step budget]` | `agent.maxSteps` reached | Forced wrap-up, with an execution ledger (step count, outcomes, failed tools) |
+
+Notices are injected as user messages prefixed with `>>> [`, at most once per kind per turn; in `plan` / `readonly` modes pure research is legitimate work, so `[no progress]` never fires. Calling an unregistered tool returns the closest registered tool names (edit distance plus prefix match, up to 3), so the model can fix the name in one step.
 
 ## Custom C# tools
 

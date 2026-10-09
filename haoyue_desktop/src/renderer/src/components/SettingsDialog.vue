@@ -3,32 +3,23 @@ import {
   Activity,
   ArrowLeft,
   Blocks,
-  BookOpen,
   Bot,
-  Brain,
-  BrainCircuit,
   Check,
   Circle,
   Clock,
-  Database,
   FolderOpen,
   Gauge,
-  GitBranch,
-  Globe,
   GripVertical,
   History,
   KeyRound,
   LoaderCircle,
   Moon,
   Monitor,
-  MonitorPlay,
-  MessageSquare,
   Plug,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
-  Search,
   Settings2,
   SlidersHorizontal,
   ScrollText,
@@ -41,20 +32,10 @@ import {
   X,
   Zap
 } from '@lucide/vue'
-import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { confirmAction } from '../confirmation'
-import {
-  MCP_PRESETS,
-  buildMcpTogglePayload,
-  mcpStatusText,
-  transportLabel,
-  type McpFormValue,
-  type McpPreset,
-  type McpScope,
-  type McpServerSummary
-} from '../mcp-form'
 import ExpertsPanel from './ExpertsPanel.vue'
-import McpEditorDialog from './McpEditorDialog.vue'
+import McpPanel from './McpPanel.vue'
 import type { ModelDetailConfig } from './ModelConfigModal.vue'
 import FieldLabel from './FieldLabel.vue'
 import OfficialSkillsPanel from './OfficialSkillsPanel.vue'
@@ -140,8 +121,6 @@ interface ModelInfo {
   tags: string[]
   capabilities: Record<string, boolean | string>
 }
-
-type McpServerInfo = McpServerSummary
 
 interface SkillInfo {
   name: string
@@ -246,7 +225,6 @@ const error = ref('')
 const notice = ref('')
 const providers = ref<ProviderInfo[]>([])
 const models = ref<ModelInfo[]>([])
-const mcpServers = ref<McpServerInfo[]>([])
 const skills = ref<SkillInfo[]>([])
 const checks = ref<HealthCheck[]>([])
 const usage = ref<UsageInfo[]>([])
@@ -254,10 +232,6 @@ const usageDays = ref<number>(14)
 const timeline = ref<TimelinePoint[]>([])
 const selectedModel = ref('')
 const providerEditorOpen = ref(false)
-const mcpEditorOpen = ref(false)
-const editingMcpServer = ref<McpServerSummary | null>(null)
-const mcpPreset = ref<McpFormValue | null>(null)
-const mcpDialogError = ref('')
 const editingProviderId = ref<string | null>(null)
 
 const providerForm = reactive<ProviderFormValue>({
@@ -357,36 +331,6 @@ const extensionSections: Array<{ id: SettingsSection; label: string; icon: typeo
   { id: 'experts', label: '专家', icon: Users }
 ]
 
-/** GitHub brand mark; lucide no longer ships brand icons. */
-const GithubMark = defineComponent({
-  props: { size: { type: Number, default: 15 } },
-  setup: (props) => () => h('svg', {
-    viewBox: '0 0 16 16',
-    width: props.size,
-    height: props.size,
-    fill: 'currentColor',
-    'aria-hidden': 'true'
-  }, [h('path', {
-    d: 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z'
-  })])
-})
-
-/** Per-preset icons shown on the MCP one-click template buttons. */
-const mcpPresetIcons: Record<string, unknown> = {
-  github: GithubMark,
-  filesystem: FolderOpen,
-  fetch: Globe,
-  memory: Brain,
-  'sequential-thinking': BrainCircuit,
-  git: GitBranch,
-  playwright: MonitorPlay,
-  'brave-search': Search,
-  context7: BookOpen,
-  postgres: Database,
-  slack: MessageSquare,
-  time: Clock
-}
-
 const pageTitle = computed(() => props.page === 'extensions' ? '扩展' : '设置')
 const visibleSections = computed(() =>
   props.page === 'extensions' ? extensionSections : sections)
@@ -430,7 +374,6 @@ async function loadCurrentSection(): Promise<void> {
   try {
     if (section.value === 'general') await loadGeneral()
     if (section.value === 'models') await loadModels()
-    if (section.value === 'mcp') mcpServers.value = await requestJson<McpServerInfo[]>('mcp.list')
     if (section.value === 'skills') skills.value = await requestJson<SkillInfo[]>('skill.list')
     if (section.value === 'rules-memory') await loadRulesMemory()
     if (section.value === 'evolution') await loadEvolution()
@@ -1227,108 +1170,6 @@ async function removeInferencePreset(preset: InferencePreset): Promise<void> {
   persistInferencePresets()
 }
 
-// Saving or toggling an MCP server reconnects every enabled server, so allow
-// headroom for slow servers while still guaranteeing the UI never waits forever.
-const MCP_ADMIN_TIMEOUT_MS = 120_000
-
-/** Rows whose toggle request is still in flight; the switch shows progress at once. */
-const pendingMcpToggles = ref<string[]>([])
-
-function mcpServerKey(server: { scope: string; name: string }): string {
-  return `${server.scope}:${server.name}`
-}
-
-function mcpServerPending(server: { scope: string; name: string; connecting?: boolean }): boolean {
-  return server.connecting === true || pendingMcpToggles.value.includes(mcpServerKey(server))
-}
-
-function newMcpServer(): void {
-  editingMcpServer.value = null
-  mcpPreset.value = null
-  mcpDialogError.value = ''
-  mcpEditorOpen.value = true
-}
-
-/** Opens the editor prefilled from a one-click preset; credentials stay user-provided. */
-function newPresetMcpServer(preset: McpPreset): void {
-  editingMcpServer.value = null
-  mcpPreset.value = preset.createForm({ workspacePath: props.workspacePath })
-  mcpDialogError.value = ''
-  mcpEditorOpen.value = true
-}
-
-function editMcpServer(server: McpServerInfo): void {
-  editingMcpServer.value = server
-  mcpDialogError.value = ''
-  mcpEditorOpen.value = true
-}
-
-function closeMcpEditor(): void {
-  mcpEditorOpen.value = false
-  editingMcpServer.value = null
-  mcpPreset.value = null
-  mcpDialogError.value = ''
-}
-
-async function saveMcpServer(payload: { name: string; scope: McpScope; server: Record<string, unknown> }): Promise<void> {
-  beginAction('mcp.save')
-  mcpDialogError.value = ''
-  try {
-    mcpServers.value = await requestJson<McpServerInfo[]>('mcp.upsert', payload, MCP_ADMIN_TIMEOUT_MS)
-    closeMcpEditor()
-    notice.value = 'MCP 配置已保存并重载'
-  } catch (reason) {
-    mcpDialogError.value = reason instanceof Error ? reason.message : String(reason)
-  } finally {
-    endAction()
-  }
-}
-
-async function toggleMcp(server: McpServerInfo): Promise<void> {
-  const key = mcpServerKey(server)
-  beginAction(`mcp.toggle:${server.name}`)
-  pendingMcpToggles.value = [...pendingMcpToggles.value, key]
-  try {
-    mcpServers.value = await requestJson<McpServerInfo[]>('mcp.upsert', {
-      name: server.name,
-      scope: server.scope,
-      server: buildMcpTogglePayload(server)
-    }, MCP_ADMIN_TIMEOUT_MS)
-  } catch (reason) {
-    fail(reason)
-  } finally {
-    pendingMcpToggles.value = pendingMcpToggles.value.filter((entry) => entry !== key)
-    endAction()
-  }
-}
-
-async function removeMcp(server: McpServerInfo): Promise<void> {
-  if (!await confirmAction({
-    title: '删除 MCP 服务器', message: `删除 MCP 服务器 “${server.name}”？`, confirmLabel: '删除', danger: true
-  })) return
-  beginAction('mcp.remove')
-  try {
-    mcpServers.value = await requestJson<McpServerInfo[]>(
-      'mcp.remove', { name: server.name, scope: server.scope }, MCP_ADMIN_TIMEOUT_MS)
-  } catch (reason) {
-    fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
-async function reloadMcp(): Promise<void> {
-  beginAction('mcp.reload')
-  try {
-    mcpServers.value = await requestJson<McpServerInfo[]>('mcp.reload', {}, MCP_ADMIN_TIMEOUT_MS)
-    notice.value = mcpServers.value.some((server) => server.connecting) ? 'MCP 正在重新加载…' : 'MCP 已重新加载'
-  } catch (reason) {
-    fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
 async function toggleSkill(skill: SkillInfo): Promise<void> {
   beginAction(`skill.toggle:${skill.name}`)
   try {
@@ -1384,31 +1225,10 @@ watch(section, (next) => {
   void loadCurrentSection()
 })
 
-/**
- * Enabling a server returns immediately and connects in the background, so the
- * runtime broadcasts `mcp.updated` once the real status is known.
- */
-async function refreshMcpServers(): Promise<void> {
-  if (!props.open || section.value !== 'mcp') return
-  if (action.value.startsWith('mcp.')) return // never clobber an in-flight mutation
-  try {
-    mcpServers.value = await requestJson<McpServerInfo[]>('mcp.list')
-    if (notice.value === 'MCP 正在重新加载…' && !mcpServers.value.some((server) => server.connecting)) {
-      notice.value = 'MCP 已重新加载'
-    }
-  } catch {
-    // Transient failure: the list keeps its previous content.
-  }
-}
-
-let unsubscribeMcpEvents: (() => void) | null = null
+let unsubscribeDaemonEvents: (() => void) | null = null
 
 onMounted(() => {
-  unsubscribeMcpEvents = window.haoyue.daemon.onEvent((message) => {
-    if (message.event === 'mcp.updated') {
-      void refreshMcpServers()
-      return
-    }
+  unsubscribeDaemonEvents = window.haoyue.daemon.onEvent((message) => {
     if (message.event === 'evolution.reflected') {
       void refreshEvolutionAfterReflect(message.details ?? {})
     }
@@ -1416,8 +1236,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  unsubscribeMcpEvents?.()
-  unsubscribeMcpEvents = null
+  unsubscribeDaemonEvents?.()
+  unsubscribeDaemonEvents = null
 })
 </script>
 
@@ -1668,63 +1488,7 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-else-if="section === 'mcp'">
-          <div class="settings-section-heading">
-            <div>
-              <h3>{{ page === 'extensions' ? '连接器（MCP）' : 'MCP 服务器' }}</h3>
-              <div class="settings-stat-chips">
-                <span class="stat-chip">
-                  <span class="status-dot" :class="{ online: mcpServers.some((server) => server.connected) }" />
-                  {{ mcpServers.filter((server) => server.connected).length }} / {{ mcpServers.length }} 已连接
-                </span>
-                <span class="stat-chip">{{ mcpServers.reduce((sum, server) => sum + server.toolCount, 0) }} 个工具</span>
-              </div>
-            </div>
-            <div class="row-actions">
-              <button class="icon-button" title="重新加载" :disabled="action === 'mcp.reload'" @click="reloadMcp">
-                <RefreshCw :class="{ spin: action === 'mcp.reload' }" :size="17" />
-              </button>
-              <button v-for="preset in MCP_PRESETS" :key="preset.id" class="secondary-button"
-                :title="preset.description" @click="newPresetMcpServer(preset)">
-                <component :is="mcpPresetIcons[preset.id] ?? Plug" :size="15" /> {{ preset.label }}
-              </button>
-              <button class="secondary-button" @click="newMcpServer">
-                <Plus :size="15" /> {{ page === 'extensions' ? '连接器' : '服务器' }}
-              </button>
-            </div>
-          </div>
-
-          <section class="settings-list">
-            <div v-if="mcpServers.length === 0" class="empty-settings">
-              {{ page === 'extensions' ? '尚未配置连接器，可从上方预设一键添加' : '尚未配置 MCP 服务器' }}
-            </div>
-            <div v-for="server in mcpServers" :key="`${server.scope}:${server.name}`" class="settings-list-row">
-              <span class="status-dot" :class="{ online: server.connected }" />
-              <div class="list-main">
-                <div>
-                  <strong :title="server.name">{{ server.name }}</strong>
-                  <span class="inline-badge">{{ server.scope === 'workspace' ? '工作区' : '全局' }}</span>
-                </div>
-                <small :title="server.error">{{ mcpStatusText(server) }} · {{ transportLabel(server.transport) }}</small>
-              </div>
-              <div class="row-controls">
-                <button class="switch-control" :class="{ active: server.enabled, pending: mcpServerPending(server) }"
-                  :disabled="mcpServerPending(server)"
-                  :aria-label="mcpServerPending(server) ? '正在连接' : (server.enabled ? '禁用' : '启用')"
-                  @click="toggleMcp(server)">
-                  <LoaderCircle v-if="mcpServerPending(server)" class="spin" :size="12" /><span v-else />
-                </button>
-                <button class="icon-button compact" title="编辑" @click="editMcpServer(server)">
-                  <Settings2 :size="15" />
-                </button>
-                <button class="icon-button compact danger-icon" title="删除" @click="removeMcp(server)">
-                  <Trash2 :size="15" />
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <McpEditorDialog :open="mcpEditorOpen" :server="editingMcpServer" :preset="mcpPreset"
-            :saving="action === 'mcp.save'" :error="mcpDialogError" @close="closeMcpEditor" @save="saveMcpServer" />
+          <McpPanel :workspace-path="workspacePath" />
         </template>
 
         <template v-else-if="section === 'skills'">

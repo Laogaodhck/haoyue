@@ -285,6 +285,8 @@ export interface McpPreset {
   id: string
   label: string
   description: string
+  /** Who publishes the underlying server; shown in the preset catalog. */
+  publisher?: string
   /** Returns a fresh form value on every call so entry points never share mutable state. */
   createForm: (context?: McpPresetContext) => McpFormValue
 }
@@ -303,12 +305,14 @@ export const MCP_PRESETS: McpPreset[] = [
     id: 'github',
     label: 'GitHub',
     description: '接入 GitHub MCP Server：浏览仓库、Issue、PR 与代码搜索；需自行填写个人访问令牌',
+    publisher: 'GitHub',
     createForm: () => presetForm('github', 'npx -y @modelcontextprotocol/server-github', `${GITHUB_TOKEN_ENV_KEY}=`)
   },
   {
     id: 'filesystem',
     label: '文件系统',
     description: '让 Agent 读写工作区目录中的文件；如需其他目录，保存前修改最后一个参数',
+    publisher: 'MCP 官方',
     createForm: (context) =>
       presetForm('filesystem', `npx -y @modelcontextprotocol/server-filesystem "${context?.workspacePath?.trim() || '.'}"`)
   },
@@ -316,60 +320,70 @@ export const MCP_PRESETS: McpPreset[] = [
     id: 'fetch',
     label: '网页抓取',
     description: '抓取网页并转为 Markdown 供 Agent 阅读；需要本机安装 uv（Python 工具链）',
+    publisher: 'MCP 官方',
     createForm: () => presetForm('fetch', 'uvx mcp-server-fetch')
   },
   {
     id: 'memory',
     label: '记忆图谱',
     description: '基于知识图谱的长期记忆，跨会话记住实体与关系；无需任何配置',
+    publisher: 'MCP 官方',
     createForm: () => presetForm('memory', 'npx -y @modelcontextprotocol/server-memory')
   },
   {
     id: 'sequential-thinking',
     label: '顺序思考',
     description: '提供逐步推理与思路修订工具，适合把复杂问题拆解后再行动；无需任何配置',
+    publisher: 'MCP 官方',
     createForm: () => presetForm('sequential-thinking', 'npx -y @modelcontextprotocol/server-sequential-thinking')
   },
   {
     id: 'git',
     label: 'Git',
     description: '对 Git 仓库做只读分析（历史、分支、状态、差异）；需要本机安装 uv 与 Git',
+    publisher: 'MCP 官方',
     createForm: () => presetForm('git', 'uvx mcp-server-git')
   },
   {
     id: 'playwright',
     label: '浏览器自动化',
     description: '基于 Playwright 驱动真实浏览器：导航、点击、填表与截图；首次运行自动下载浏览器内核',
+    publisher: 'Microsoft',
     createForm: () => presetForm('playwright', 'npx -y @playwright/mcp', '', 'playwright')
   },
   {
     id: 'brave-search',
     label: '网页搜索',
     description: 'Brave Search 网页与新闻搜索；需自行填写 API Key（brave.com/search/api 免费申请）',
+    publisher: 'Brave',
     createForm: () => presetForm('brave-search', 'npx -y @modelcontextprotocol/server-brave-search', 'BRAVE_API_KEY=')
   },
   {
     id: 'context7',
     label: '框架文档',
     description: '检索主流库与框架的最新官方文档（React、Vue、Next.js、Tailwind 等）；无需任何配置',
+    publisher: 'Upstash',
     createForm: () => presetForm('context7', 'npx -y @upstash/context7-mcp', '', 'context7')
   },
   {
     id: 'postgres',
     label: 'PostgreSQL',
     description: '以只读方式查询 PostgreSQL 的表结构与数据；保存前把连接串替换为你的数据库地址',
+    publisher: 'MCP 官方',
     createForm: () => presetForm('postgres', 'npx -y @modelcontextprotocol/server-postgres postgresql://user:password@localhost:5432/postgres')
   },
   {
     id: 'slack',
     label: 'Slack',
     description: '读取频道历史、列成员与发送消息；需 Bot Token（api.slack.com/apps 创建）与 Team ID',
+    publisher: 'Slack',
     createForm: () => presetForm('slack', 'npx -y @modelcontextprotocol/server-slack', 'SLACK_BOT_TOKEN=\nSLACK_TEAM_ID=')
   },
   {
     id: 'time',
     label: '时间与时区',
     description: '查询各时区当前时间并进行换算，适合跨时区协作场景；无需任何配置',
+    publisher: 'MCP 官方',
     createForm: () => presetForm('time', 'uvx mcp-server-time')
   }
 ]
@@ -524,14 +538,4 @@ export function buildMcpTogglePayload(server: McpServerSummary): Record<string, 
     url: remote ? server.url ?? '' : '',
     enabled: !server.enabled
   }
-}
-
-/** Status line for one server row. */
-export function mcpStatusText(
-  server: Pick<McpServerSummary, 'connected' | 'connecting' | 'enabled' | 'toolCount' | 'error'>
-): string {
-  if (server.connected) return `${server.toolCount} 个工具`
-  if (server.connecting) return '连接中…'
-  if (!server.enabled) return '已禁用'
-  return server.error?.trim() || '未连接'
 }

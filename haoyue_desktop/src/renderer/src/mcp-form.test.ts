@@ -13,7 +13,6 @@ import {
   inferMcpName,
   mcpFormError,
   mcpFormFromServer,
-  mcpStatusText,
   normalizeConnection,
   normalizeTransport,
   parseCredentialRows,
@@ -372,17 +371,6 @@ describe('credential rows', () => {
   it('keeps empty values as the keep-stored-value marker', () => {
     // The daemon interprets an empty value as "unchanged"; deleting a row drops the key.
     expect(credentialRowsToText([{ key: 'TOKEN', value: '' }])).toBe('TOKEN=')
-  })
-})
-
-describe('mcpStatusText', () => {
-  it('prefers connection, tool count, disabled state, then the error', () => {
-    expect(mcpStatusText({ connected: true, enabled: true, toolCount: 3 })).toBe('3 个工具')
-    expect(mcpStatusText({ connected: false, connecting: true, enabled: true, toolCount: 0 })).toBe('连接中…')
-    expect(mcpStatusText({ connected: false, enabled: false, toolCount: 0, error: 'disabled' })).toBe('已禁用')
-    expect(mcpStatusText({ connected: false, enabled: true, toolCount: 0, error: 'connection refused' }))
-      .toBe('connection refused')
-    expect(mcpStatusText({ connected: false, enabled: true, toolCount: 0 })).toBe('未连接')
   })
 })
 

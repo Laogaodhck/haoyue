@@ -96,6 +96,8 @@ The Desktop settings workbench uses structured methods to manage the same config
 
 | Method | Description |
 | --- | --- |
+| `agent.config.get` | Returns the agent settings (`networkEnabled`, `delegationEnabled`, `visionModel`, `autoVerify`) |
+| `agent.config.set` | Partially updates agent settings (omitted keys keep their stored values); `visionModel` takes a model ref that must declare the vision capability, or an empty string to restore automatic selection |
 | `provider.list/upsert/use/remove/test` | Manages and probes providers |
 | `mcp.list/upsert/remove/reload` | Manages and reconnects MCP servers and tool registrations |
 | `skill.list/toggle` | Lists and enables or disables skills |

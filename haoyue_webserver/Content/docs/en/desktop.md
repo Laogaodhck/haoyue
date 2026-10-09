@@ -99,6 +99,7 @@ The sidebar "Extensions" entry opens a Qoder-style extensions hub with three cat
 
 The settings workbench also provides:
 
+- **Agent**: centralize model selection and behavior boundaries — root model, vision sub-agent model (automatic or a specific vision-capable model), web search, the explorer agent (delegate_task delegation toggle), and auto-verify & repair;
 - **Rules & Memory**: toggle rule injection and the memory management mode; the editor maintains hierarchical AGENTS.md rule files and MEMORY.md — create rule files (Ctrl+N), delete them, reveal their folder, and save quickly with Ctrl+S;
 - **Evolution**: browse defect signals, run reflection turns manually or on an interval, and review the skill drafts it produces (see the [Evolution Engine](/en/doc/evolution));
 - **Knowledge Center**: manage what the agent saves automatically as notebooks → sources → entries — notebook grouping, text/URL/file sources, attribution badges, cross-notebook search, exact tag filtering, Markdown export and a synonym-table editor (see the [Knowledge Center](/en/doc/knowledge));

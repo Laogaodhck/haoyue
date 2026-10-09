@@ -101,6 +101,8 @@ Desktop 设置中心通过结构化方法管理与 CLI 相同的配置，不直�
 | --- | --- |
 | `routing.get` | 返回 `{ "failoverEnabled": true }`，读取失败转移开关 |
 | `routing.set` | 参数 `{ "failoverEnabled": false }`，保存失败转移开关 |
+| `agent.config.get` | 返回智能体设置（`networkEnabled`、`delegationEnabled`、`visionModel`、`autoVerify`） |
+| `agent.config.set` | 部分更新智能体设置（未传字段保持原值）；`visionModel` 传模型引用（须声明视觉能力，否则拒绝）或空串恢复自动选择 |
 | `schedule.list` | 列出全部计划任务（含下次运行时间与上次结果） |
 | `schedule.create` / `schedule.update` | 参数 `{ "name", "prompt", "cron", "workspace"? , "enabled"? }`；`cron` 为 5 段表达式（分 时 日 月 周，本地时区），非法表达式返回错误 |
 | `schedule.toggle` | 参数 `{ "id", "enabled" }`，启用/暂停任务 |

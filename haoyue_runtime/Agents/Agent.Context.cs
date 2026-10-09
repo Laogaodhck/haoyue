@@ -42,6 +42,32 @@ public sealed partial class Agent
             .ToList();
     }
 
+    // ---------------------------------------------------------------- vision model selection
+
+    /// <summary>
+    /// Picks the model for a turn that contains images: the configured vision model when
+    /// usable (resolved, enabled, vision-capable), otherwise the first vision-capable
+    /// candidate in the routing chain. Null when nothing qualifies.
+    /// </summary>
+    internal static ModelInfo? PickVisionModel(ModelInfo? preferred, IReadOnlyList<ModelInfo> candidates)
+    {
+        if (preferred is not null && preferred.Provider.Enabled && preferred.Model.Capabilities.Vision)
+            return preferred;
+        return candidates.FirstOrDefault(candidate => candidate.Model.Capabilities.Vision);
+    }
+
+    private ModelInfo ResolveVisionModel(WorkspaceInfo workspace)
+    {
+        var preferredRef = configStore.Config.Agent.VisionModel;
+        var preferred = string.IsNullOrWhiteSpace(preferredRef)
+            ? null
+            : providerManager.ResolveModel(preferredRef);
+        return PickVisionModel(preferred, providerManager.BuildCandidates(workspace.Config))
+            ?? throw new LlmException(
+                "No configured model supports image understanding.",
+                retryable: false);
+    }
+
     private async Task CompactContextAsync(
         AgentSession session,
         WorkspaceInfo workspace,

@@ -283,13 +283,7 @@ public sealed partial class Agent(
                 // and tool results such as capture_screen. Images from earlier turns must
                 // not drag a text-only turn onto a vision model or re-upload on follow-ups.
                 var turnHasImages = turnHasImagesFlag;
-                var model = turnHasImages
-                    ? providerManager.BuildCandidates(workspace.Config)
-                        .FirstOrDefault(candidate => candidate.Model.Capabilities.Vision)
-                      ?? throw new LlmException(
-                          "No configured model supports image understanding.",
-                          retryable: false)
-                    : providerManager.ResolveActive(workspace.Config);
+                var model = turnHasImages ? ResolveVisionModel(workspace) : providerManager.ResolveActive(workspace.Config);
                 var requiresVision = turnHasImages && model.Model.Capabilities.Vision;
                 var effectiveNetworkEnabled = session.Header.NetworkEnabled && agentConfig.NetworkEnabled;
                 var tools = ActiveTools(workspace, model, effectiveNetworkEnabled, skillTriggerContext);

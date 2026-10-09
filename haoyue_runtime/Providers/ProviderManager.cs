@@ -16,6 +16,9 @@ public interface IProviderManager
     /// <summary>Ordered failover chain starting with the active model.</summary>
     IReadOnlyList<ModelInfo> BuildCandidates(WorkspaceConfig? workspace = null);
 
+    /// <summary>Resolves a model by its <c>provider/model</c> reference; null when unknown.</summary>
+    ModelInfo? ResolveModel(string reference);
+
     /// <summary>
     /// Streams a completion with retry (exponential backoff + jitter), circuit breaking and
     /// automatic provider failover. Once the first token arrives the stream is committed and
@@ -79,6 +82,8 @@ public sealed class ProviderManager(
                 retryable: false);
         return candidates[0];
     }
+
+    public ModelInfo? ResolveModel(string reference) => registry.Resolve(reference);
 
     public IReadOnlyList<ModelInfo> BuildCandidates(WorkspaceConfig? workspace = null)
     {

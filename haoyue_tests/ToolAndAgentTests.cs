@@ -1,9 +1,12 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Coordination;
 using Haoyue.Runtime.Data;
+using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Mcp;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Providers;
@@ -90,6 +93,27 @@ public sealed class ToolAndAgentTests
     {
         var plain = new List<ChatMessage> { ChatMessage.User("text only") };
         Assert.Same(plain, Agent.WithoutImages(plain));
+    }
+
+    [Fact]
+    public void PickVisionModel_PrefersConfiguredVisionCandidate_WithSaneFallback()
+    {
+        static ModelInfo Model(string id, bool vision, bool enabled = true) => new(
+            new ProviderConfig { Id = "p", Kind = "openai", Enabled = enabled },
+            new ModelConfig { Id = id, Capabilities = new ModelCapabilities { Vision = vision } });
+
+        var text = Model("text", vision: false);
+        var vision = Model("vision", vision: true);
+
+        // 配置的视觉模型可用时优先使用。
+        Assert.Equal("vision", Agent.PickVisionModel(vision, [text, vision])!.Model.Id);
+        // 配置引用不再支持视觉时，回落到路由链中第一个视觉候选。
+        Assert.Equal("vision", Agent.PickVisionModel(text, [text, vision])!.Model.Id);
+        // 配置引用的提供商被禁用时同样回落。
+        Assert.Equal("vision",
+            Agent.PickVisionModel(Model("vision", vision: true, enabled: false), [text, vision])!.Model.Id);
+        // 没有任何视觉候选时返回 null，由调用方抛出明确错误。
+        Assert.Null(Agent.PickVisionModel(null, [text]));
     }
 
     [Fact]
@@ -582,6 +606,136 @@ public sealed class ToolAndAgentTests
         {
             // The SQLite connection pool keeps state.db open even after the runtime
             // is disposed; release pooled handles before cleaning up the temp dir.
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public async Task GlobalTurn_DelegationToggle_ControlsDelegateTaskSentToProvider()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "haoyue-agent-test", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var store = new ConfigStore(Path.Combine(dir, "config.json"), Path.Combine(dir, "state.json"));
+            store.Config.Providers.Clear();
+            store.Config.Providers.Add(new ProviderConfig
+            {
+                Id = "openai",
+                Kind = "openai",
+                BaseUrl = "https://test.local/v1",
+                Models = [new ModelConfig { Id = "gpt-test", ContextWindow = 128_000 }],
+            });
+            var capture = new CapturingClientFactory();
+            var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(dir, "global"));
+
+            await using var runtime = HaoyueRuntime.CreateIsolated(globalWorkspace, configureServices: services =>
+            {
+                services.AddSingleton<IConfigStore>(store);
+                services.AddSingleton(new HaoyueDatabase(Path.Combine(dir, "state.db")));
+                services.AddSingleton<ILlmHttpFactory>(new LlmHttpFactory());
+                services.AddSingleton<ILlmClientFactory>(capture);
+                services.AddSingleton(new CircuitBreaker(store.Config.Routing.Retry));
+            });
+
+            // 默认开启：delegate_task 出现在工具列表中。
+            var session = runtime.Sessions.Create(globalWorkspace);
+            await runtime.Agent.RunTurnAsync(session, globalWorkspace, "你好", CancellationToken.None);
+            var defaultNames = capture.LastRequest!.Tools.Select(tool => tool.Name).ToList();
+            Assert.Contains("delegate_task", defaultNames);
+            Assert.Contains("read_file", defaultNames);
+
+            // 探索者智能体开关关闭后：delegate_task 隐藏，其余工具不受影响。
+            capture.Reset();
+            store.Config.Agent.DelegationEnabled = false;
+            var withoutDelegation = runtime.Sessions.Create(globalWorkspace);
+            await runtime.Agent.RunTurnAsync(withoutDelegation, globalWorkspace, "你好", CancellationToken.None);
+            var filteredNames = capture.LastRequest!.Tools.Select(tool => tool.Name).ToList();
+            Assert.DoesNotContain("delegate_task", filteredNames);
+            Assert.Contains("read_file", filteredNames);
+            Assert.Contains("write_file", filteredNames);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public async Task AgentConfigSet_ValidatesVisionModelAndPersistsPartialUpdates()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "haoyue-agent-test", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var store = new ConfigStore(Path.Combine(dir, "config.json"), Path.Combine(dir, "state.json"));
+            store.Config.Providers.Clear();
+            store.Config.Providers.Add(new ProviderConfig
+            {
+                Id = "openai",
+                Kind = "openai",
+                BaseUrl = "https://test.local/v1",
+                Models = [new ModelConfig { Id = "text-only", ContextWindow = 128_000 }],
+            });
+            store.Config.Providers.Add(new ProviderConfig
+            {
+                Id = "visionp",
+                Kind = "openai",
+                BaseUrl = "https://test.local/v1",
+                Models = [new ModelConfig
+                {
+                    Id = "v1",
+                    ContextWindow = 128_000,
+                    Capabilities = new ModelCapabilities { Vision = true },
+                }],
+            });
+            var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(dir, "global"));
+            await using var runtime = HaoyueRuntime.CreateIsolated(globalWorkspace, configureServices: services =>
+            {
+                services.AddSingleton<IConfigStore>(store);
+                services.AddSingleton(new HaoyueDatabase(Path.Combine(dir, "state.db")));
+                services.AddSingleton<ILlmHttpFactory>(new LlmHttpFactory());
+                services.AddSingleton(new CircuitBreaker(store.Config.Routing.Retry));
+            });
+            var admin = new DaemonAdminApi(runtime, globalWorkspace, new FileLockCoordinator());
+
+            // 未知模型被拒绝。
+            var unknown = Assert.Throws<DaemonRequestException>(() => admin.SetAgentConfig(
+                new JsonObject { ["visionModel"] = "openai/missing" }));
+            Assert.Contains("Unknown model", unknown.Message);
+
+            // 未声明视觉能力的模型被拒绝，且不落盘。
+            var notVision = Assert.Throws<DaemonRequestException>(() => admin.SetAgentConfig(
+                new JsonObject { ["visionModel"] = "openai/text-only" }));
+            Assert.Contains("不支持图像理解", notVision.Message);
+            Assert.Null(store.Config.Agent.VisionModel);
+
+            // 部分更新：只改委派开关，其余字段保持存储值。
+            var updated = JsonNode.Parse(admin.SetAgentConfig(
+                new JsonObject { ["delegationEnabled"] = false }))!.AsObject();
+            Assert.False(updated["delegationEnabled"]!.GetValue<bool>());
+            Assert.Equal("", updated["visionModel"]!.GetValue<string>());
+            Assert.True(store.Config.Agent.NetworkEnabled);
+            Assert.False(store.Config.Agent.DelegationEnabled);
+
+            // 合法视觉模型写入 ref；空串恢复自动选择（配置落盘为 null）。
+            updated = JsonNode.Parse(admin.SetAgentConfig(
+                new JsonObject { ["visionModel"] = "visionp/v1" }))!.AsObject();
+            Assert.Equal("visionp/v1", updated["visionModel"]!.GetValue<string>());
+            updated = JsonNode.Parse(admin.SetAgentConfig(
+                new JsonObject { ["visionModel"] = "" }))!.AsObject();
+            Assert.Equal("", updated["visionModel"]!.GetValue<string>());
+            Assert.Null(store.Config.Agent.VisionModel);
+
+            // GetAgentConfig 与存储一致。
+            var current = JsonNode.Parse(admin.GetAgentConfig())!.AsObject();
+            Assert.False(current["delegationEnabled"]!.GetValue<bool>());
+            Assert.Equal("", current["visionModel"]!.GetValue<string>());
+        }
+        finally
+        {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (Directory.Exists(dir)) Directory.Delete(dir, true);
         }

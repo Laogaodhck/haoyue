@@ -98,6 +98,10 @@ public sealed partial class Agent
         if (!networkEnabled)
             available = available.Where(tool => !tool.RequiresNetwork).ToList();
 
+        // 探索者智能体开关：关闭后隐藏 delegate_task，子任务由主智能体自行完成。
+        if (!configStore.Config.Agent.DelegationEnabled)
+            available = available.Where(tool => tool.Name != AgentDelegator.DelegateToolName).ToList();
+
         if (!model.Model.Capabilities.Vision)
             available = available.Where(tool => !tool.RequiresVision).ToList();
 

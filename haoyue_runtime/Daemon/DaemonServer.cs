@@ -1152,6 +1152,15 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.SetRoutingConfig(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "agent.config.get":
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", _admin.GetAgentConfig(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "agent.config.set":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SetAgentConfig(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "advanced.get":
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", _admin.GetAdvancedConfig(), context.ConnectionCt).ConfigureAwait(false);
                         break;

@@ -228,6 +228,17 @@ public sealed class AgentConfig
     /// and the agent prompt enforces offline operation across all workspaces.
     /// </summary>
     public bool NetworkEnabled { get; set; } = true;
+    /// <summary>
+    /// Model ref preferred for turns that contain images (chat attachments, capture_screen
+    /// results). Empty = automatic: the first vision-capable candidate in the routing chain
+    /// is used. A stale or non-vision reference falls back to the automatic selection.
+    /// </summary>
+    public string? VisionModel { get; set; }
+    /// <summary>
+    /// When false, delegate_task is hidden from the tool view, so the agent cannot spawn
+    /// sub-agents and finishes every subtask inline.
+    /// </summary>
+    public bool DelegationEnabled { get; set; } = true;
 }
 
 public sealed class McpConfig

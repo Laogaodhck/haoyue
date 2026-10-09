@@ -138,6 +138,56 @@ internal sealed class DaemonAdminApi(
         ["deepSeekOptimizationEnabled"] = runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled,
     }.ToJsonString();
 
+    /// <summary>Agent behavior config shown on the desktop 智能体 settings page.</summary>
+    public string GetAgentConfig() => new JsonObject
+    {
+        ["networkEnabled"] = runtime.ConfigStore.Config.Agent.NetworkEnabled,
+        ["delegationEnabled"] = runtime.ConfigStore.Config.Agent.DelegationEnabled,
+        ["visionModel"] = runtime.ConfigStore.Config.Agent.VisionModel ?? "",
+        ["autoVerify"] = runtime.ConfigStore.Config.Agent.AutoVerify,
+    }.ToJsonString();
+
+    /// <summary>
+    /// Partial update for the 智能体 page: absent keys keep their stored value.
+    /// visionModel accepts "" (automatic selection) or a model ref, which must
+    /// resolve and declare the vision capability.
+    /// </summary>
+    public string SetAgentConfig(JsonObject parameters)
+    {
+        var agent = runtime.ConfigStore.Config.Agent;
+
+        if (parameters["networkEnabled"] is JsonValue networkValue && networkValue.TryGetValue<bool>(out var network))
+            agent.NetworkEnabled = network;
+
+        if (parameters["delegationEnabled"] is JsonValue delegationValue && delegationValue.TryGetValue<bool>(out var delegation))
+            agent.DelegationEnabled = delegation;
+
+        if (parameters["autoVerify"] is JsonValue autoVerifyValue && autoVerifyValue.TryGetValue<bool>(out var autoVerify))
+            agent.AutoVerify = autoVerify;
+
+        if (parameters["visionModel"] is JsonValue visionValue)
+        {
+            if (!visionValue.TryGetValue<string>(out var visionRef))
+                throw new DaemonRequestException("params.visionModel must be a string (\"\" for automatic selection)");
+            visionRef = visionRef.Trim();
+            if (visionRef.Length > 0)
+            {
+                var model = runtime.Models.Resolve(visionRef)
+                            ?? throw new DaemonRequestException($"Unknown model: {visionRef}");
+                if (!model.Model.Capabilities.Vision)
+                    throw new DaemonRequestException($"{model.Ref} 不支持图像理解（capabilities.vision 为 false），请选择支持视觉的模型");
+                agent.VisionModel = model.Ref;
+            }
+            else
+            {
+                agent.VisionModel = null;
+            }
+        }
+
+        runtime.ConfigStore.Save();
+        return GetAgentConfig();
+    }
+
     public string GetAdvancedConfig() => new JsonObject
     {
         ["networkEnabled"] = runtime.ConfigStore.Config.Agent.NetworkEnabled,

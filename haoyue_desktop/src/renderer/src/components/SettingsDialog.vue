@@ -200,6 +200,8 @@ const failoverEnabled = ref(true)
 const deepSeekOptimizationEnabled = ref(false)
 const computerUseEnabled = ref(false)
 const computerUseDriver = ref('auto')
+const networkOpsEnabled = ref(false)
+const networkOpsAllowMutating = ref(true)
 const replyLanguage = ref<'auto' | 'zh' | 'en'>('auto')
 const rulesEnabled = ref(true)
 const memoryMode = ref<'auto' | 'manual'>('auto')
@@ -708,6 +710,8 @@ async function loadAdvanced(): Promise<void> {
     deepSeekOptimizationEnabled: boolean
     computerUseEnabled?: boolean
     computerUseDriver?: string
+    networkOpsEnabled?: boolean
+    networkOpsAllowMutating?: boolean
     localInference?: {
       providerId: string
       gpuLayers: number
@@ -721,6 +725,8 @@ async function loadAdvanced(): Promise<void> {
   deepSeekOptimizationEnabled.value = config.deepSeekOptimizationEnabled
   computerUseEnabled.value = config.computerUseEnabled ?? false
   computerUseDriver.value = config.computerUseDriver ?? 'auto'
+  networkOpsEnabled.value = config.networkOpsEnabled ?? false
+  networkOpsAllowMutating.value = config.networkOpsAllowMutating ?? true
   if (config.localInference) {
     localInference.providerId = config.localInference.providerId
     localInference.gpuLayers = config.localInference.gpuLayers
@@ -787,6 +793,47 @@ async function toggleComputerUse(): Promise<void> {
       const config = await requestJson<{ computerUseEnabled: boolean }>('advanced.get')
       computerUseEnabled.value = config.computerUseEnabled ?? false
     } catch { /* keep last known state */ }
+  } finally {
+    endAction()
+  }
+}
+
+async function toggleNetworkOps(): Promise<void> {
+  beginAction('advanced.set:networkOps')
+  try {
+    const config = await requestJson<{ networkOpsEnabled: boolean }>('advanced.set', {
+      networkOpsEnabled: networkOpsEnabled.value
+    })
+    networkOpsEnabled.value = config.networkOpsEnabled
+    notice.value = networkOpsEnabled.value
+      ? '已启用网络运维插件，Agent 获得网络诊断与运维命令能力'
+      : '已禁用网络运维插件，相关工具已注销'
+  } catch (reason) {
+    fail(reason)
+    try {
+      const config = await requestJson<{ networkOpsEnabled: boolean }>('advanced.get')
+      networkOpsEnabled.value = config.networkOpsEnabled ?? false
+    } catch { /* keep last known state */ }
+  } finally {
+    endAction()
+  }
+}
+
+async function toggleNetworkOpsMutating(): Promise<void> {
+  const previous = networkOpsAllowMutating.value
+  networkOpsAllowMutating.value = !previous
+  beginAction('advanced.set:networkOpsMutating')
+  try {
+    const config = await requestJson<{ networkOpsAllowMutating: boolean }>('advanced.set', {
+      networkOpsAllowMutating: networkOpsAllowMutating.value
+    })
+    networkOpsAllowMutating.value = config.networkOpsAllowMutating
+    notice.value = networkOpsAllowMutating.value
+      ? '网络运维已允许变更类命令（route、netsh set、DNS 缓存刷新等）'
+      : '网络运维已限制为只读查询，变更类命令将被拒绝'
+  } catch (reason) {
+    networkOpsAllowMutating.value = previous
+    fail(reason)
   } finally {
     endAction()
   }
@@ -2286,6 +2333,27 @@ onBeforeUnmount(() => {
               </span>
               <input v-model="computerUseEnabled" class="sr-only" type="checkbox"
                 :disabled="action === 'advanced.set:computerUse'" @change="toggleComputerUse" />
+              <span class="toggle-switch" aria-hidden="true"><span /></span>
+            </label>
+          </section>
+
+          <section class="settings-group">
+            <label class="provider-enabled-row">
+              <span>
+                <strong>网络运维插件 (Network Ops)</strong>
+                <small>允许 Agent 运行网络诊断与运维命令：一键诊断（接口 / 路由 / 连接 / ARP / DNS）、ping、traceroute、netstat、nslookup、netsh、ip 等全命令集（Windows 与 Linux 自动映射）。命令经白名单目录执行，参数不经 Shell，杜绝注入。</small>
+              </span>
+              <input v-model="networkOpsEnabled" class="sr-only" type="checkbox"
+                :disabled="action === 'advanced.set:networkOps'" @change="toggleNetworkOps" />
+              <span class="toggle-switch" aria-hidden="true"><span /></span>
+            </label>
+            <label v-if="networkOpsEnabled" class="provider-enabled-row">
+              <span>
+                <strong>允许变更类网络命令</strong>
+                <small>关闭后仅允许只读查询（ping、netstat、nslookup 等）；route add、netsh set、DNS 缓存刷新等变更命令将被拒绝。</small>
+              </span>
+              <input v-model="networkOpsAllowMutating" class="sr-only" type="checkbox"
+                :disabled="action === 'advanced.set:networkOpsMutating'" @change="toggleNetworkOpsMutating" />
               <span class="toggle-switch" aria-hidden="true"><span /></span>
             </label>
           </section>

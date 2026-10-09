@@ -130,6 +130,18 @@ haoyue knowledge export backup.md
 
 `add` 可以直接接管道内容（`cat notes.md | haoyue knowledge add "标题"`），`import` 自动分块、重复导入即更新，`export` 省略文件名时输出到标准输出。条目管理还有 `show` 与 `delete`，完整能力见[知识库](/doc/knowledge)。
 
+## 进化
+
+```bash
+haoyue evolve defects   # 健康分 + 缺陷明细
+haoyue evolve pending   # 待审草稿清单
+haoyue evolve history   # 反思回合历史
+haoyue evolve stats     # 采纳率与技能使用统计
+haoyue evolve decide abc123 adopt --prompt "改写后的技能提示词"
+```
+
+`decide` 的指纹支持唯一前缀匹配，裁决取 `adopt | reject | defer`。发起反思回合由 Desktop 或自动反思负责，CLI 覆盖检视与人工闸门，详见[进化引擎](/doc/evolution)。
+
 ## Daemon
 
 ```bash

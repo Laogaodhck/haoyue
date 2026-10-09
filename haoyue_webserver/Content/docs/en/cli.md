@@ -120,6 +120,24 @@ haoyue knowledge export backup.md
 
 `add` accepts piped content (`cat notes.md | haoyue knowledge add "Title"`); `import` chunks automatically and upserts per file name; `export` prints to stdout when the file name is omitted. See the [Knowledge Base](/en/doc/knowledge).
 
+## Evolution
+
+```bash
+# Aggregate defect reports with the health score and a detail table
+haoyue evolve defects
+
+# List pending drafts, replay reflection history, show effectiveness stats
+haoyue evolve pending
+haoyue evolve history
+haoyue evolve stats
+
+# Final verdict: fingerprints accept a unique prefix; adopt takes --prompt to rewrite the skill prompt
+haoyue evolve decide <fingerprint> adopt|reject|defer
+haoyue evolve decide abc123 adopt --prompt "The rewritten skill prompt"
+```
+
+Starting a reflection turn is done from Desktop, the `evolution.reflect` IPC, or auto reflection; the CLI `evolve` group covers inspection and the human gate. See the [Evolution Engine](/en/doc/evolution).
+
 ## Daemon
 
 ```bash

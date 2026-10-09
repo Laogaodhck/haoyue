@@ -1,6 +1,6 @@
 {
   "name": "haoyue-cli",
-  "version": "1.3.8",
+  "version": "1.3.9",
   "description": "Haoyue AI coding agent CLI, distributed as a self-contained .NET binary.",
   "license": "SEE LICENSE IN LICENSE",
   "bin": {
@@ -12,7 +12,7 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "haoyue-cli-win-x64": "1.3.8"
+    "haoyue-cli-win-x64": "1.3.9"
   },
   "preferGlobal": true,
   "engines": {

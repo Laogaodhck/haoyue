@@ -7,7 +7,7 @@ namespace Haoyue.Cli.Ui;
 /// </summary>
 public static class Banner
 {
-    public const string Version = "1.3.13";
+    public const string Version = "1.3.14";
 
     // Haoyue Cyber Cyan to Violet gradient colors
     private static readonly (int R, int G, int B) Cyan = (34, 211, 238);

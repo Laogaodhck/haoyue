@@ -56,6 +56,8 @@ public static class ConfigSchema
         New("agent.language", "enum", "auto", allowed: ["auto", "zh", "en"], view: ViewBoth),
         New("agent.memoryMode", "enum", "auto", allowed: ["auto", "manual"]),
         New("agent.networkEnabled", "bool", true),
+        New("agent.visionModel", "string", null),
+        New("agent.delegationEnabled", "bool", true),
 
         // routing
         New("routing.failoverEnabled", "bool", true),

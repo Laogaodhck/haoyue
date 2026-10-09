@@ -37,6 +37,11 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             throw new LlmException(
                 $"Local model file not found: {path}. Put the GGUF file into the provider's models directory or fix the path.",
                 retryable: false);
+        if (LocalModels.IsProjectorFileName(Path.GetFileName(path)))
+            throw new LlmException(
+                $"{request.Model.Id} 指向的是多模态投影器文件（mmproj），不是聊天模型，无法加载。"
+                + "投影器会被同目录的主模型自动识别使用；请在模型列表中移除该条目。",
+                retryable: false);
 
         var images = CollectImages(request);
         // mmproj 始终参与解析与加载签名（即使本轮纯文本），避免图片轮/文本轮交替时

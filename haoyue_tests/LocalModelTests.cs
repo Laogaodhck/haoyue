@@ -75,6 +75,63 @@ public sealed class LocalModelTests : IDisposable
     }
 
     [Fact]
+    public void Scan_SkipsMultimodalProjectorFiles()
+    {
+        WriteGguf("plain.gguf");
+        WriteGguf("model-mmproj-F16.gguf");
+
+        var models = LocalModelProbe.Scan(_dir);
+
+        // 投影器文件不能作为聊天模型加载，扫描注册不得把它列入模型。
+        var model = Assert.Single(models);
+        Assert.Equal("plain.gguf", model.ModelId);
+    }
+
+    [Fact]
+    public void ScanIds_SkipsProjectorFiles()
+    {
+        WriteGguf("chat-model.gguf");
+        WriteGguf("chat-model-mmproj-F16.gguf");
+
+        Assert.Equal(["chat-model.gguf"], LocalModels.ScanIds(_dir));
+    }
+
+    [Fact]
+    public void Registry_HidesLocalProjectorEntriesFromCatalogAndResolve()
+    {
+        var store = new ConfigStore(
+            Path.Combine(_dir, "registry-config.json"), Path.Combine(_dir, "registry-state.json"));
+        store.Config.Providers.Clear();
+        store.Config.Providers.Add(new ProviderConfig
+        {
+            Id = "local", Kind = "local", ModelsDirectory = _dir,
+            Models =
+            [
+                new ModelConfig { Id = "chat.gguf", LocalPath = Path.Combine(_dir, "chat.gguf") },
+                new ModelConfig { Id = "mmproj.gguf", LocalPath = Path.Combine(_dir, "mmproj.gguf") },
+            ],
+        });
+        var registry = new ModelRegistry(store);
+
+        // 遗留配置里误注册的投影器条目不再进入模型目录，也不可被解析切换。
+        Assert.DoesNotContain(registry.All(), m => m.Model.Id == "mmproj.gguf");
+        Assert.Contains(registry.All(), m => m.Model.Id == "chat.gguf");
+        Assert.Null(registry.Resolve("local/mmproj.gguf"));
+    }
+
+    [Fact]
+    public async Task StreamAsync_RejectsProjectorFileWithClearError()
+    {
+        var projector = WriteGguf("vision-mmproj.gguf");
+        var provider = new ProviderConfig { Id = "local", Kind = "local", ModelsDirectory = _dir };
+        var client = new LocalLlmClient(new LocalModelCache());
+
+        var error = await Assert.ThrowsAsync<LlmException>(() => DrainAsync(client, provider,
+            new ModelConfig { Id = "vision-mmproj.gguf", LocalPath = projector }));
+        Assert.Contains("投影器", error.Message);
+    }
+
+    [Fact]
     public void ToConfig_AdvertisesLocalModelsWithoutToolCalling()
     {
         WriteGguf("registered.gguf");

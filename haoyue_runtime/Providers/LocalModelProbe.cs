@@ -28,11 +28,16 @@ public static class LocalModelProbe
     /// <summary>Context window registered for a scanned model unless its header asks for less.</summary>
     public const int DefaultContextWindow = 32_768;
 
-    /// <summary>Lists the local GGUF files of a directory together with their header metadata.</summary>
+    /// <summary>
+    /// Lists the local GGUF files of a directory together with their header metadata.
+    /// Projector files (mmproj) are excluded — they cannot be loaded as chat models, so
+    /// registering them would only produce entries that fail on first use.
+    /// </summary>
     public static IReadOnlyList<LocalModelInfo> Scan(string? configuredDirectory = null)
     {
         var directory = LocalModels.ResolveDirectory(configuredDirectory);
         return LocalModels.ListFiles(directory)
+            .Where(file => !LocalModels.IsProjectorFileName(file.FileName))
             .Select(file =>
             {
                 var header = GgufProbe.Read(file.Path);

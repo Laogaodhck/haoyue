@@ -61,11 +61,25 @@ public static class LocalModels
     }
 
     /// <summary>
+    /// True for multimodal projector files (mmproj). They carry the vision encoder, not a
+    /// chat model — llama.cpp cannot generate text from them, so scans must not register
+    /// them and loaders must reject them. The same convention drives ResolveMmprojPath.
+    /// </summary>
+    public static bool IsProjectorFileName(string fileName) =>
+        !string.IsNullOrWhiteSpace(fileName)
+        && fileName.Contains("mmproj", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Model ids for a provider's GGUF files, which are their file names. This lets the
     /// shared "fetch model list" flow work for local providers as it does for remote ones.
+    /// Projector files are excluded: they are picked up as the mmproj of the main models
+    /// and would only produce models that fail at load time.
     /// </summary>
     public static IReadOnlyList<string> ScanIds(string? configuredDirectory) =>
-        ListFiles(ResolveDirectory(configuredDirectory)).Select(file => file.FileName).ToList();
+        ListFiles(ResolveDirectory(configuredDirectory))
+            .Where(file => !IsProjectorFileName(file.FileName))
+            .Select(file => file.FileName)
+            .ToList();
 
     /// <summary>
     /// Absolute path of the GGUF file backing a local model entry. Registered entries may

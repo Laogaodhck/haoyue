@@ -583,6 +583,17 @@ internal sealed class DaemonAdminApi(
                 throw new DaemonRequestException(
                     $"Local model file not found: {string.Join(", ", missing.Select(entry => entry.Id))}");
             }
+            var projectors = provider.Models
+                .Where(model => LocalModels.IsProjectorFileName(model.LocalPath ?? model.Id))
+                .Select(model => model.Id)
+                .ToList();
+            if (projectors.Count > 0)
+            {
+                // mmproj files hold the vision encoder, not a chat model; loading one always
+                // fails, so reject the registration instead of shipping a broken entry.
+                throw new DaemonRequestException(
+                    $"这些文件是多模态投影器（mmproj），不能注册为聊天模型，会被同目录主模型自动识别：{string.Join(", ", projectors)}");
+            }
         }
 
         // Validation passed: publish the new provider via an atomic list swap
@@ -754,6 +765,15 @@ internal sealed class DaemonAdminApi(
             var path = Providers.LocalModels.ResolveModelPath(model.Provider, model.Model);
             var file = new FileInfo(path);
             status["path"] = path;
+            if (Providers.LocalModels.IsProjectorFileName(Path.GetFileName(path)))
+            {
+                // 投影器文件永远无法作为聊天模型加载：预检直接按不可用报告，
+                // 让前端「加载验证」给出可操作的原因而不是等真实加载报错。
+                status["exists"] = false;
+                status["sizeBytes"] = file.Exists ? file.Length : 0;
+                status["reason"] = "该文件是多模态投影器（mmproj），仅用作视觉投影器，不能作为聊天模型加载。请在提供商编辑中移除该条目。";
+                return status.ToJsonString();
+            }
             status["exists"] = file.Exists;
             status["sizeBytes"] = file.Exists ? file.Length : 0;
             if (!file.Exists)

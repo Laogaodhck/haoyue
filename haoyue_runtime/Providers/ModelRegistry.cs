@@ -26,6 +26,11 @@ public sealed class ModelRegistry(IConfigStore configStore) : IModelRegistry
             .Where(p => includeDisabledProviders || p.Enabled)
             .OrderBy(p => p.Priority)
             .SelectMany(p => p.Models.Select(m => new ModelInfo(p, m)))
+            // Configs written before projector-aware scanning may still carry mmproj files
+            // registered as chat models; they can never load, so keep them out of the
+            // catalog and the fallback chain (the provider editor still lists them for removal).
+            .Where(m => !(m.Provider.IsLocal
+                && LocalModels.IsProjectorFileName(m.Model.LocalPath ?? m.Model.Id)))
             .ToList();
 
     public ModelInfo? Resolve(string reference)

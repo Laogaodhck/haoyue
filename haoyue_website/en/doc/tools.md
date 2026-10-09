@@ -1,6 +1,6 @@
 # Built-in Tools and Extensions
 
-The Runtime currently registers ten built-in tools. File and command tools require a concrete workspace, while web tools remain available in directory-free global tasks.
+The Runtime currently registers eleven built-in tools. File and command tools require a concrete workspace, while web tools remain available in directory-free global tasks.
 
 ## Built-in tools
 
@@ -16,6 +16,7 @@ The Runtime currently registers ten built-in tools. File and command tools requi
 | `web_search` | Searches Google, Bing, or Baidu | no | no |
 | `web_fetch` | Extracts text from an HTTP or HTTPS page | no | no |
 | `update_plan` | Defines and updates task plan milestones; the result echoes plan progress | no | no |
+| `memory_save` | Appends a dated durable note to the workspace memory (MEMORY.md) | no | yes |
 
 Descriptions are loaded from `prompts/tool/<name>.txt`, while arguments are validated through JSON Schema. Output budgets adapt to the model context window and remain capped by `agent.maxToolOutputChars`.
 
@@ -59,9 +60,13 @@ The current tool uses text matching rather than line-number patches:
 
 ## Task planning and self-correction
 
-Haoyue's agent does more than draw a plan on screen — the milestones declared through `update_plan` are written into the runtime, and tool results echo the current plan state and progress, so the model can always "see" where it stands. The runtime keeps comparing executed work against the declared plan and steps in when they drift: a finished plan that keeps calling tools earns a nudge to extend or wrap up; many tool calls without a status refresh earn a reminder to update the plan; a call that keeps failing gets a gentle "stop retrying blindly" at twice, and a straight "change your approach" at four; and plenty of tool calls with nothing to show for it — in edit or auto mode, with no plan in sight — triggers a direction check.
+Haoyue's agent does more than draw a plan on screen — the milestones declared through `update_plan` are written into the runtime, and tool results echo the current plan state and progress, so the model can always "see" where it stands. The runtime keeps comparing executed work against the declared plan and steps in when they drift: inputs that read like multi-step tasks get a planning suggestion before the first model step (edit and auto modes only); a finished plan that keeps calling tools earns a nudge to extend or wrap up; many tool calls without a status refresh earn a reminder to update the plan; a call that keeps failing gets a gentle "stop retrying blindly" at twice and a straight "change your approach" at four; identical repeated "successful" reads get called out too — the result has not changed, stop spinning; plenty of tool calls with nothing to show for it trigger a direction check (pure research in read-only modes is exempt); and a turn that changed files without mentioning any of them in the answer is asked to say what actually changed.
 
-The step-budget wrap-up notice also grew teeth: it now carries an execution ledger stating how many steps ran, how they fared, and which tools kept failing, so an interrupted turn still leaves a readable account of itself. And calling a tool that does not exist no longer dead-ends — the error names the closest registered tools.
+The step-budget wrap-up notice also grew teeth: it now carries an execution ledger stating how many steps ran, how they fared, and which tools kept failing, so an interrupted turn still leaves a readable account of itself. When a turn dies to an error or a user interruption, the executed trace stays in the session — the next "continue" picks up exactly where things stopped. And calling a tool that does not exist no longer dead-ends: the error names the closest registered tools.
+
+## Workspace memory
+
+A `memory_save` tool lets the agent write down what is worth keeping across tasks: the user's stated preferences, project conventions documented nowhere, environment quirks that took half a day to pin down. Each memory is one dated sentence, appended to `.haoyue/MEMORY.md` and deduplicated by content — the same file can be edited by hand at any time and is never overwritten by the agent. Saved memories are injected into every future turn's system prompt, so they survive across tasks and sessions.
 
 ## Custom C# tools
 

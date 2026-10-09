@@ -1,6 +1,6 @@
 # Built-in Tools and Extensions
 
-The Runtime currently registers ten built-in tools. File and command tools require a concrete workspace, while web tools remain available in directory-free global tasks.
+The Runtime currently registers eleven built-in tools. File and command tools require a concrete workspace, while web tools remain available in directory-free global tasks.
 
 ## Built-in tools
 
@@ -16,6 +16,7 @@ The Runtime currently registers ten built-in tools. File and command tools requi
 | `web_search` | Searches Google, Bing, or Baidu | no | no |
 | `web_fetch` | Extracts text from an HTTP or HTTPS page | no | no |
 | `update_plan` | Defines and updates task plan milestones; the result echoes plan progress | no | no |
+| `memory_save` | Appends a dated durable note to the workspace memory (MEMORY.md) | no | yes |
 
 Descriptions are loaded from `prompts/tool/<name>.txt`, while arguments are validated through JSON Schema. Output budgets adapt to the model context window and remain capped by `agent.maxToolOutputChars`.
 
@@ -81,14 +82,19 @@ Every agent turn carries a self-correction loop. The plan declared via `update_p
 
 | Notice | Trigger | Purpose |
 | --- | --- | --- |
+| `[planning hint]` | Input looks multi-step (length + sequencing heuristics, edit / auto only) | Suggest decomposing the goal via `update_plan` at turn start |
 | `[plan finished]` | All plan steps completed, yet other tools keep running | Ask the model to extend the plan or deliver the final answer |
 | `[plan stale]` | 4 consecutive tool calls without a plan update | Ask for a status refresh |
 | `[repeated tool failure]` | Same tool with same arguments failed twice in a row | Stop blind retries; verify the environment first |
 | `[strategy pivot]` | Same call failed 4 times in a row | Change the approach instead of tweaking parameters |
 | `[no progress]` | 8 tool calls with zero file changes and no plan (edit / auto modes only) | Make a plan or summarize findings |
+| `[redundant call]` | Same tool with same arguments succeeded 3 times (no mutation between) | Stop spinning; build on the results already in hand |
+| `[answer completeness]` | The turn changed files, but the final answer names none of them | Ask for a summary of what changed |
 | `[step budget]` | `agent.maxSteps` reached | Forced wrap-up, with an execution ledger (step count, outcomes, failed tools) |
 
-Notices are injected as user messages prefixed with `>>> [`, at most once per kind per turn; in `plan` / `readonly` modes pure research is legitimate work, so `[no progress]` never fires. Calling an unregistered tool returns the closest registered tool names (edit distance plus prefix match, up to 3), so the model can fix the name in one step.
+Notices are injected as user messages prefixed with `>>> [`, at most once per kind per turn; in `plan` / `readonly` modes pure research is legitimate work, so `[no progress]` and `[planning hint]` never fire. Calling an unregistered tool returns the closest registered tool names (edit distance plus prefix match, up to 3), so the model can fix the name in one step.
+
+When a turn ends through an error or a user interruption, the executed step trace is written into the session as `[turn interrupted]`, so the next "continue" turn builds on the interrupted progress instead of repeating finished work. The agent can also persist user preferences, project conventions, and environment quirks across tasks through `memory_save`, which appends a deduplicated dated note to the workspace memory (`.haoyue/MEMORY.md`); the memory is injected into every future turn's system prompt, and hand edits to the same file are never overwritten.
 
 ## Custom C# tools
 

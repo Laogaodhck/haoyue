@@ -10,6 +10,7 @@ using Haoyue.Runtime.Experts;
 using Haoyue.Runtime.Mcp;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
+using Haoyue.Runtime.Secrets;
 using Haoyue.Runtime.Skills;
 using Haoyue.Runtime.Workspaces;
 
@@ -571,7 +572,7 @@ internal sealed class DaemonAdminApi(
         if (parameters["clearApiKey"]?.GetValue<bool>() == true)
             provider.ApiKey = null;
         else if (OptionalString(parameters, "apiKey") is { } apiKey)
-            provider.ApiKey = apiKey;
+            provider.ApiKey = SecretResolver.Encrypt($"provider/{provider.Id}", apiKey);
 
         if (parameters["modelDetails"] is JsonArray modelDetails)
         {
@@ -2265,7 +2266,7 @@ internal sealed class DaemonAdminApi(
         ["name"] = provider.DisplayName,
         ["kind"] = provider.Kind,
         ["baseUrl"] = provider.BaseUrl,
-        ["apiKey"] = provider.ApiKey,
+        ["apiKey"] = provider.ResolveApiKey(),
         ["apiKeyConfigured"] = !string.IsNullOrWhiteSpace(provider.ResolveApiKey()),
         ["models"] = Strings(provider.Models.Select(model => model.Id)),
         ["modelDetails"] = new JsonArray(provider.Models.Select(m => (JsonNode)new JsonObject

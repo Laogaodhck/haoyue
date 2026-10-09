@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Haoyue.Runtime.Secrets;
 
 namespace Haoyue.Runtime.Configuration;
 
@@ -282,9 +283,9 @@ public sealed class ConfigStore : IConfigStore
                             ValidationWarnings = [.. warnings, .. migrations];
                             HasAnomaly = false;
                             AnomalyDetail = null;
-                            if (migrations.Count > 0)
+                            if (migrations.Count > 0 || MigrateProviderApiKeys(loaded))
                             {
-                                // schema 版本升级：清空基线并立即落盘，把迁移后的文件写回磁盘。
+                                // schema 版本升级或密钥迁移：清空基线并立即落盘，把迁移后的文件写回磁盘。
                                 _configBaseline = null;
                                 Config = loaded;
                                 Save();
@@ -317,6 +318,28 @@ public sealed class ConfigStore : IConfigStore
         Config = seeded;
         Save();
         return seeded;
+    }
+
+    /// <summary>
+    /// 启动迁移：把历史明文 Provider ApiKey 改写为 secret: 加密引用。Encrypt 幂等
+    /// （已是 secret: 前缀或本平台无加密方案时原样返回），因此只在真正发生加密时
+    /// 返回 true 并由调用方落盘，避免每次启动重复写配置文件。
+    /// </summary>
+    private static bool MigrateProviderApiKeys(HaoyueConfig config)
+    {
+        var migrated = false;
+        foreach (var provider in config.Providers)
+        {
+            if (string.IsNullOrEmpty(provider.ApiKey) || SecretResolver.IsSecret(provider.ApiKey))
+                continue;
+            var encrypted = SecretResolver.Encrypt($"provider/{provider.Id}", provider.ApiKey);
+            if (!string.Equals(encrypted, provider.ApiKey, StringComparison.Ordinal))
+            {
+                provider.ApiKey = encrypted;
+                migrated = true;
+            }
+        }
+        return migrated;
     }
 
     private void HandleAnomaly(string detail)

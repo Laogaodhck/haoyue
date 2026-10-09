@@ -3,6 +3,7 @@ using Haoyue.Runtime;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Providers;
+using Haoyue.Runtime.Secrets;
 using Spectre.Console;
 
 namespace Haoyue.Cli.Commands;
@@ -150,7 +151,7 @@ public static class ProviderCommands
                 Id = id!.Trim(),
                 Kind = kind.Trim().ToLowerInvariant(),
                 BaseUrl = baseUrl.Trim(),
-                ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey,
+                ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : SecretResolver.Encrypt($"provider/{id!.Trim()}", apiKey),
                 ModelsDirectory = string.IsNullOrWhiteSpace(modelsDirectory) ? null : modelsDirectory.Trim(),
             };
             provider.Models = [.. provider.IsLocal
@@ -240,7 +241,8 @@ public static class ProviderCommands
             }
 
             if (parse.GetValue(baseUrlOption) is { } baseUrl) provider.BaseUrl = baseUrl;
-            if (parse.GetValue(apiKeyOption) is { } apiKey) provider.ApiKey = apiKey;
+            if (parse.GetValue(apiKeyOption) is { } apiKey)
+                provider.ApiKey = SecretResolver.Encrypt($"provider/{provider.Id}", apiKey);
             if (parse.GetValue(enabledOption) is { } enabled) provider.Enabled = enabled;
             if (parse.GetValue(priorityOption) is { } priority) provider.Priority = priority;
             if (parse.GetValue(timeoutOption) is { } timeout) provider.TimeoutSeconds = timeout;

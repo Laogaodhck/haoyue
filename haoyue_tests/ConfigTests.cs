@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Secrets;
 
 namespace Haoyue.Tests;
 
@@ -53,7 +54,8 @@ public sealed class ConfigTests : IDisposable
         var reloaded = NewStore();
         var provider = Assert.Single(reloaded.Config.Providers, p => p.Id == "test");
         Assert.Equal("test", provider.Id);
-        Assert.Equal("config-secret", provider.ApiKey);
+        // 重载触发密钥迁移：磁盘值已改为 secret: 引用，使用方视角（ResolveApiKey）仍还原明文。
+        Assert.Equal("config-secret", provider.ResolveApiKey());
         Assert.Equal(9000, provider.Models[0].ContextWindow);
         Assert.Equal("one", provider.Models[0].Alias);
         Assert.Equal(1.5m, provider.Models[0].InputPricePerMTok);
@@ -132,6 +134,55 @@ public sealed class ConfigTests : IDisposable
 
         var reloaded = NewStore();
         Assert.True(reloaded.Config.Routing.DeepSeekOptimizationEnabled);
+    }
+
+    [Fact]
+    public void Load_MigratesPlaintextApiKey_ToSecretReference()
+    {
+        // 模拟旧版配置文件：Provider ApiKey 以明文落盘。加载时必须迁移为 secret: 引用，
+        // 磁盘上不再出现明文；ResolveApiKey（请求发送视角）仍能取回明文。
+        var configFile = Path.Combine(_dir, "config.json");
+        File.WriteAllText(configFile, """
+        {
+            "schemaVersion": 1,
+            "providers": [
+                { "id": "p1", "kind": "openai", "baseUrl": "https://example.test/v1", "apiKey": "sk-plaintext-key" }
+            ],
+            "provider": "p1",
+            "model": "m1"
+        }
+        """);
+
+        var store = NewStore();
+        var provider = Assert.Single(store.Config.Providers);
+        Assert.Equal("sk-plaintext-key", provider.ResolveApiKey());
+
+        var onDisk = File.ReadAllText(configFile);
+        if (OperatingSystem.IsMacOS())
+        {
+            // macOS 没有实现凭据加密方案（与 MCP 凭据一致），迁移为 no-op。
+            Assert.Equal("sk-plaintext-key", provider.ApiKey);
+            return;
+        }
+        Assert.StartsWith(SecretResolver.Prefix, provider.ApiKey);
+        Assert.DoesNotContain("sk-plaintext-key", onDisk);
+
+        // 已迁移的配置再次加载是幂等的（不再触发写盘），密钥仍可解析。
+        var reloaded = NewStore();
+        Assert.Equal("sk-plaintext-key", reloaded.Config.Providers.Single().ResolveApiKey());
+    }
+
+    [Fact]
+    public void ResolveApiKey_ResolvesSecretReference_AndPassesThroughPlaintext()
+    {
+        var provider = new ProviderConfig { Id = "p", ApiKey = "legacy-plain" };
+        Assert.Equal("legacy-plain", provider.ResolveApiKey());
+
+        if (OperatingSystem.IsMacOS()) return; // macOS 无加密方案，跳过往返断言
+
+        provider.ApiKey = SecretResolver.Encrypt("provider/p", "sk-live");
+        Assert.StartsWith(SecretResolver.Prefix, provider.ApiKey);
+        Assert.Equal("sk-live", provider.ResolveApiKey());
     }
 
     [Fact]

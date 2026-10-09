@@ -1,4 +1,5 @@
 using Haoyue.Runtime.Providers;
+using Haoyue.Runtime.Secrets;
 
 namespace Haoyue.Runtime.Configuration;
 
@@ -85,8 +86,13 @@ public sealed class ProviderConfig
     /// <summary>True when this provider's models run in-process from GGUF files instead of over HTTP.</summary>
     public bool IsLocal => Kind.Equals("local", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Returns the API key explicitly stored in the configuration file.</summary>
-    public string? ResolveApiKey() => ApiKey;
+    /// <summary>
+    /// Resolves the stored API key: a "secret:" reference (DPAPI / keyring / file
+    /// store) is decrypted back to plaintext, a legacy plaintext value passes
+    /// through unchanged. Unresolvable secrets return null — callers must treat
+    /// that as "credential lost" rather than sending ciphertext to a server.
+    /// </summary>
+    public string? ResolveApiKey() => SecretResolver.Resolve(ApiKey);
 }
 
 public sealed class ModelConfig

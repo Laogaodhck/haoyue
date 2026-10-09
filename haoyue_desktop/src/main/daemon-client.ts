@@ -35,6 +35,13 @@ export function readDaemonToken(): string | null {
   }
 }
 
+/**
+ * Per-user pipe suffix, mirroring DaemonServer.PipeUserSuffix (same USERNAME
+ * source, same sanitizer) so the Electron client and the C# daemon agree on
+ * the endpoint without an extra handshake.
+ */
+const pipeUser = (process.env.USERNAME ?? '').replace(/[^A-Za-z0-9._-]/g, '-') || 'local'
+
 export class DaemonClient extends EventEmitter {
   private socket: Socket | null = null
   private bufferChunks: string[] = []
@@ -47,7 +54,7 @@ export class DaemonClient extends EventEmitter {
   private generation = 0
 
   constructor(readonly endpoint = process.platform === 'win32'
-    ? String.raw`\\.\pipe\haoyue`
+    ? String.raw`\\.\pipe\haoyue-${pipeUser}`
     : join(homedir(), '.haoyue', 'daemon.sock')) {
     super()
   }

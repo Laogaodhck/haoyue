@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Net.Sockets;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -26,7 +28,13 @@ namespace Haoyue.Runtime.Daemon;
 /// </summary>
 public sealed class DaemonServer : IAsyncDisposable
 {
-    public const string PipeName = "haoyue";
+    /// <summary>
+    /// Per-user pipe name: two local accounts never compete for the same endpoint.
+    /// Both ends (C# daemon / CLI and the Electron client) derive the suffix from
+    /// the USERNAME environment variable with one shared sanitizer, so they agree
+    /// without an extra handshake.
+    /// </summary>
+    public static string PipeName => $"haoyue-{PipeUserSuffix()}";
     /// <summary>版本契约：daemon JSONL 协议版本（唯一声明处在 <see cref="ApiVersionContract"/>）。</summary>
     public const string ProtocolVersion = ApiVersionContract.DaemonProtocolVersion;
     public static string SocketPath => Path.Combine(HaoyuePaths.Home, "daemon.sock");
@@ -283,11 +291,48 @@ public sealed class DaemonServer : IAsyncDisposable
 
     private async Task ServeNamedPipeAsync(CancellationToken ct)
     {
-        var pipe = new NamedPipeServerStream(
-            PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        var pipe = CreatePipeServer();
         await pipe.WaitForConnectionAsync(ct).ConfigureAwait(false);
         _ = Task.Run(() => RunPipeConnectionAsync(pipe, ct));
+    }
+
+    internal static string PipeUserSuffix() => SanitizePipeUser(Environment.GetEnvironmentVariable("USERNAME"));
+
+    /// <summary>Keeps only characters that are legal in a pipe name; empty input falls back to "local".</summary>
+    internal static string SanitizePipeUser(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "local";
+        var builder = new StringBuilder(raw.Length);
+        foreach (var ch in raw)
+            builder.Append(char.IsAsciiLetterOrDigit(ch) || ch is '.' or '_' or '-' ? ch : '-');
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Named pipes default to an ACL that lets Everyone connect. Restrict access to
+    /// the current user and SYSTEM so another local account cannot open our endpoint;
+    /// the handshake token stays the actual authentication on top of this.
+    /// </summary>
+    internal static NamedPipeServerStream CreatePipeServer(string? pipeName = null)
+    {
+        pipeName ??= PipeName;
+        if (!OperatingSystem.IsWindows())
+        {
+            return new NamedPipeServerStream(
+                pipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        }
+
+        var security = new PipeSecurity();
+        security.AddAccessRule(new PipeAccessRule(
+            WindowsIdentity.GetCurrent().User!,
+            PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        return NamedPipeServerStreamAcl.Create(
+            pipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous, inBufferSize: 0, outBufferSize: 0, security);
     }
 
     private async Task ServeUnixSocketLoopAsync(CancellationToken ct)

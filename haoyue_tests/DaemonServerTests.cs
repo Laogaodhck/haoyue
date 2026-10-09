@@ -10,6 +10,7 @@ using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Sessions;
+using Haoyue.Runtime.Secrets;
 using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Tests;
@@ -657,7 +658,9 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var reloadedStore = new ConfigStore(
             Path.Combine(_tempDir, "config.json"),
             Path.Combine(_tempDir, "state.json"));
-        Assert.Equal("secret-test-key", reloadedStore.Config.FindProvider("local")!.ApiKey);
+        var storedKey = reloadedStore.Config.FindProvider("local")!.ApiKey;
+        Assert.True(SecretResolver.IsSecret(storedKey), "Provider ApiKey 应以 secret: 引用落盘而非明文");
+        Assert.Equal("secret-test-key", reloadedStore.Config.FindProvider("local")!.ResolveApiKey());
 
         await connection.SendAsync(112, "provider.upsert", new JsonObject
         {
@@ -1885,6 +1888,51 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var unregistered = cases.Where(name => !registered.Contains(name)).ToList();
         Assert.True(unregistered.Count == 0,
             "以下分发 case 未登记进 DaemonContract（契约漂移）：\n" + string.Join("\n", unregistered));
+    }
+
+    [Fact]
+    public void PipeUserSuffix_SanitizesIllegalCharacters()
+    {
+        Assert.Equal("john.doe", DaemonServer.SanitizePipeUser("john.doe"));
+        Assert.Equal("user-name", DaemonServer.SanitizePipeUser("user name"));
+        Assert.Equal("user-name", DaemonServer.SanitizePipeUser("user\\name"));
+        Assert.Equal("local", DaemonServer.SanitizePipeUser(""));
+        Assert.Equal("local", DaemonServer.SanitizePipeUser(null));
+        Assert.Equal("local", DaemonServer.SanitizePipeUser("   "));
+    }
+
+    [Fact]
+    public async Task CreatePipeServer_RestrictsAclToCurrentUser()
+    {
+        // 独立测试管道名：真实 PipeName 可能与正在运行的桌面 daemon 冲突。
+        var pipeName = $"haoyue-acl-test-{Guid.NewGuid():N}";
+        var server = DaemonServer.CreatePipeServer(pipeName);
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                var security = server.GetAccessControl();
+                var sids = security.GetAccessRules(true, false, typeof(System.Security.Principal.SecurityIdentifier))
+                    .Cast<System.IO.Pipes.PipeAccessRule>()
+                    .Select(rule => rule.IdentityReference.Value)
+                    .ToList();
+                // 当前用户与 SYSTEM 允许读写；Everyone (S-1-1-0) 不得出现。
+                Assert.Contains(System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value, sids);
+                Assert.DoesNotContain("S-1-1-0", sids);
+            }
+
+            // 行为回归：同用户客户端仍能正常连接。
+            using var client = new NamedPipeClientStream(
+                ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            var connectTask = client.ConnectAsync(_serverCts.Token);
+            await server.WaitForConnectionAsync(_serverCts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+            await connectTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(client.IsConnected);
+        }
+        finally
+        {
+            server.Dispose();
+        }
     }
 
     private static string FindRepoRoot()

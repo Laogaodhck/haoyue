@@ -41,3 +41,10 @@ Haoyue 内置了基于文件锁（File Lock）与进程租约的协调机制：
 
 - **一键网络工具隔离**：在会话级别支持切换 `NetworkEnabled` 开关。当网络关闭时，`web_search`、`web_fetch` 等网络请求工具在提示词中被彻底隐藏且被运行时拦截。
 - **纯离线运行**：配合本地 Ollama 或 vLLM 模型，Haoyue 可以在 100% 断网的内网军工/金融隔离环境中稳定运行，零数据出境。
+
+---
+
+## 5. 凭据加密存储与本地 IPC 隔离
+
+- **Provider API Key 静态加密**：`~/.haoyue/config.json` 中的 Provider `apiKey` 以 `secret:` 加密引用落盘（Windows 使用 DPAPI；Linux 优先 Secret Service，无密钥环时退回 `~/.haoyue/secrets.json` AES-GCM 加密文件）。历史明文 Key 在 Runtime 启动时自动迁移为加密引用，CLI 与桌面端写入新 Key 时即时加密，配置文件中不再出现明文凭据。`provider.list` 会把引用解密后返回，供 Desktop 显示和编辑；不可解析的引用按"凭据丢失"处理返回 null，密文不会外发给模型服务。
+- **按用户隔离的命名管道**：Windows 端点为 `\\.\pipe\haoyue-<用户名>`，管道 ACL 仅授予当前用户与 SYSTEM 读写权限，同机其他本地账户无法打开该端点；其上的握手 token（`~/.haoyue/daemon.token`）仍是实际认证凭据。

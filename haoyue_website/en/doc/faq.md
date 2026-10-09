@@ -12,14 +12,14 @@ Check these items in order:
 
 1. Confirm that `resources\runtime\haoyue.exe` exists.
 2. Make sure the release directory was not split and security software did not quarantine the Runtime.
-3. Check whether an incompatible old Daemon owns `\\.\pipe\haoyue`.
+3. Check whether an incompatible old Daemon owns `\\.\pipe\haoyue-<username>`.
 4. Run the checks again under “Settings → Diagnostics & Usage” and read the complete error.
 
 Desktop connects and reconnects automatically; users do not start the Runtime manually. For a source checkout, run `build.cmd` in the repository root to create a complete release.
 
 ### Why is the API key field empty?
 
-- When the configuration stores `apiKey` directly, Desktop reads and displays its actual value.
+- When the configuration stores an `apiKey` (an encrypted `secret:` reference), Desktop resolves and displays its actual value.
 - API keys are read only from the `apiKey` field in `~/.haoyue/config.json`; environment-variable injection is not supported.
 
 If a directly stored key disappears after one turn, verify that Desktop and the Daemon run under the same user account and read the same `~/.haoyue/config.json`. Check the active Profile and Provider in diagnostics, and avoid running an older Runtime that rewrites the same configuration simultaneously.

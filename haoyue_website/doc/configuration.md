@@ -105,7 +105,7 @@ Haoyue 使用全局配置保存 Provider、模型、Profile、路由和 Agent �
 ### Provider Key
 
 - `kind` 只能是 `openai` 或 `anthropic`。
-- `apiKey` 直接保存凭据；Desktop 会直接显示和编辑该值。Runtime 只读取配置文件中的 `apiKey`，不会从环境变量读取 API Key。
+- `apiKey` 以 `secret:` 加密引用保存（Windows DPAPI / Linux 密钥环）；Desktop 会解密显示并编辑该值。Runtime 只读取配置文件中的 `apiKey`，不会从环境变量读取 API Key。
 - `organization`、`proxy`、`headers`、`timeoutSeconds` 可按服务需要设置。
 - `promptCaching` 默认启用；Anthropic 协议会发送原生缓存检查点，不兼容的第三方网关可关闭。
 - `reasoningEffortMap` 可覆盖统一档位到 Provider 参数的映射，例如 `{ "ultra": "xhigh" }`。

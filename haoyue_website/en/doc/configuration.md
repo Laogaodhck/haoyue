@@ -100,7 +100,7 @@ This example uses the current field names:
 ### Provider keys
 
 - `kind` must be `openai` or `anthropic`.
-- `apiKey` stores the credential directly, and Desktop displays and edits it. Runtime reads API keys only from this configuration field and never from environment variables.
+- `apiKey` stores the credential as an encrypted `secret:` reference (Windows DPAPI / Linux keyring), and Desktop resolves, displays, and edits it. Runtime reads API keys only from this configuration field and never from environment variables.
 - `organization`, `proxy`, `headers`, and `timeoutSeconds` can be set when required by the service.
 - `promptCaching` defaults to enabled; Anthropic requests emit native cache checkpoints and incompatible third-party gateways can opt out.
 - `reasoningEffortMap` can override neutral levels with Provider wire values, for example `{ "ultra": "xhigh" }`.

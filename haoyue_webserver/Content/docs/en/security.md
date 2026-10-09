@@ -41,3 +41,10 @@ Haoyue integrates a built-in cross-process lock coordinator:
 
 - **Session Network Toggles**: Disabling network access immediately strips web tools (`web_search`, `web_fetch`) from the prompt prefix and rejects network calls.
 - **100% Air-Gapped Operation**: Paired with local Ollama or vLLM backends, Haoyue operates reliably in isolated enterprise networks with zero external data transmission.
+
+---
+
+## 5. Credential Encryption & Local IPC Isolation
+
+- **Provider API keys encrypted at rest**: Provider `apiKey` values in `~/.haoyue/config.json` are stored as `secret:` encrypted references (Windows DPAPI; Linux prefers Secret Service and falls back to the AES-GCM-encrypted `~/.haoyue/secrets.json` when no keyring is available). Legacy plaintext keys migrate automatically at runtime startup, and keys entered through the CLI or Desktop are encrypted on write, so plaintext credentials never appear in the configuration file. `provider.list` resolves references back to plaintext for Desktop display and editing; unresolvable references are treated as "credential lost" and return null — ciphertext is never forwarded to a model service.
+- **Per-user named pipe**: The Windows endpoint is `\\.\pipe\haoyue-<username>` with a pipe ACL granting read/write only to the current user and SYSTEM, so other local accounts cannot open the endpoint; the handshake token (`~/.haoyue/daemon.token`) remains the actual authentication on top.

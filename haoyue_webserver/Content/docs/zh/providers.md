@@ -31,11 +31,11 @@ DeepSeek、Azure OpenAI、企业网关或其他兼容服务可以通过新增 `k
 
 1. 点击“+ Provider”或编辑现有项。
 2. 选择 `openai` 或 `anthropic` 协议，填写 ID、名称、Base URL 和模型 ID。
-3. 直接填写 API Key；该 Key 会保存到配置文件中。
+3. 直接填写 API Key；该 Key 会以 `secret:` 加密引用保存到配置文件中。
 4. 根据需要配置代理、超时、优先级、提示词缓存和启用状态。
 5. 保存后点击“测试”；确认可用后切换活动 Provider 或模型。
 
-`apiKey` 直接写入配置文件，由 Desktop 读取、显示和修改。Runtime 不会从环境变量读取 API Key。
+`apiKey` 以 `secret:` 加密引用写入配置文件（Windows DPAPI / Linux 密钥环），由 Desktop 解密显示和修改。Runtime 不会从环境变量读取 API Key。
 
 请求失败时，Runtime 会保留 Provider 名称、HTTP 状态和响应正文。例如协议不兼容、工具调用消息缺少对应结果、模型 ID 错误等 400 响应会完整展示，方便按服务端提示修复。
 
@@ -73,7 +73,7 @@ Provider 是数组，模型属于对应 Provider：
 }
 ```
 
-需要直接保存 Key 时可使用 `"apiKey": "sk-..."`，但不要把包含凭据的个人全局配置提交到仓库。
+手写配置中的明文 `apiKey` 会在 Runtime 启动时自动迁移为加密引用；无论如何不要把包含凭据的个人全局配置提交到仓库。
 
 `promptCaching` 默认启用。OpenAI-compatible 服务使用服务端的自动前缀缓存；Anthropic 协议还会在稳定的 System Prompt 和工具定义后写入 `cache_control` 检查点。若某个旧的 Anthropic-compatible 网关不接受该字段，可在 Desktop 中关闭此项或设置 `"promptCaching": false`。默认 Prompt 不包含动态时间，工具定义也会按名称稳定排序，避免每轮请求改变缓存前缀。
 

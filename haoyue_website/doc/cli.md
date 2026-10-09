@@ -156,6 +156,6 @@ haoyue evolve decide abc123 adopt --prompt "改写后的技能提示词"
 haoyue daemon
 ```
 
-Windows 端点固定为 `\\.\pipe\haoyue`；Linux / macOS 使用 `~/.haoyue/daemon.sock`。Daemon 不接受自定义 `--pipe` 参数。Desktop 会自动启动和关闭自己管理的 Daemon，手动执行通常仅用于协议开发或调试。
+Windows 端点固定为 `\\.\pipe\haoyue-<用户名>`；Linux / macOS 使用 `~/.haoyue/daemon.sock`。Daemon 不接受自定义 `--pipe` 参数。Desktop 会自动启动和关闭自己管理的 Daemon，手动执行通常仅用于协议开发或调试。
 
 协议方法见 [Daemon 与 IPC 2.1](/doc/daemon)。

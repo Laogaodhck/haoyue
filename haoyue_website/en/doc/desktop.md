@@ -76,15 +76,15 @@ Project tasks show the complete workspace path and shortcuts for opening the dir
 Open “Settings → Models & Providers” to:
 
 - create, edit, test, enable, or remove Providers;
-- view and edit API keys stored explicitly in the configuration;
-- store and manage the API key directly in the configuration;
+- view and edit API keys stored in the configuration (resolved for display, encrypted at rest);
+- store and manage the API key in the configuration;
 - manage models, Base URL, proxy, timeout, and priority;
 - create Profiles and switch the active model or routing strategy.
 
 ![Haoyue Desktop model and Provider management](/screenshots/desktop/providers-and-models.png)
 
 ::: tip API key visibility
-The `apiKey` value is stored directly in `~/.haoyue/config.json` and is read, displayed, and edited by Desktop. Runtime does not read API keys from environment variables.
+The `apiKey` value is stored in `~/.haoyue/config.json` as an encrypted `secret:` reference (Windows DPAPI / Linux keyring); no plaintext appears in the configuration file. Desktop resolves it for display via `provider.list` and re-encrypts on edit. Runtime does not read API keys from environment variables.
 :::
 
 Use “Test” immediately after saving. Failed model requests include the Provider, HTTP status, and complete server response instead of only a generic `LLM request failed` message.
@@ -116,7 +116,7 @@ Desktop connects automatically on startup and performs a bounded reconnect seque
 Check the following first:
 
 1. Verify that `resources\runtime\haoyue.exe` exists in the release folder.
-2. Check that an incompatible or stale Daemon is not occupying `\\.\pipe\haoyue`.
+2. Check that an incompatible or stale Daemon is not occupying `\\.\pipe\haoyue-<username>`.
 3. Run the checks again from “Diagnostics & Usage.”
 4. For a source checkout, run `build.cmd` to stage the Runtime required by Desktop.
 

@@ -76,15 +76,15 @@ AI 正在输出时仍可继续输入。点击“发送”会把消息加入发�
 打开“设置 → 模型与 Provider”可以：
 
 - 新建、编辑、测试、启用或删除 Provider；
-- 直接查看和修改显式保存在配置中的 API Key；
-- 直接在配置文件中保存和管理 API Key；
+- 直接查看和修改保存在配置中的 API Key（解密显示，落盘为加密引用）；
+- 在配置文件中保存和管理 API Key；
 - 管理模型列表、Base URL、代理、超时和优先级；
 - 创建 Profile，并切换活动模型或路由策略。
 
 ![Haoyue Desktop 的模型与 Provider 管理](/screenshots/desktop/providers-and-models.png)
 
 ::: tip API Key 的显示规则
-API Key 直接保存在 `~/.haoyue/config.json` 中，由 Runtime 和 Desktop 读取、显示和编辑。Runtime 不会从环境变量读取 API Key。
+API Key 以 `secret:` 加密引用保存在 `~/.haoyue/config.json` 中（Windows DPAPI / Linux 密钥环），配置文件中不出现明文；Desktop 通过 `provider.list` 解密显示，编辑后即时重新加密。Runtime 不会从环境变量读取 API Key。
 :::
 
 保存后可立即点击“测试”。模型请求失败时，Desktop 会展示 Provider 名称、HTTP 状态码和服务端返回的完整错误信息，而不只显示笼统的 `LLM request failed`。
@@ -116,7 +116,7 @@ Desktop 会在启动时自动建立连接，并在连接丢失时进行有限次
 常见检查项：
 
 1. 确认发布目录中存在 `resources\runtime\haoyue.exe`。
-2. 确认没有损坏或不兼容的旧 Daemon 占用 `\\.\pipe\haoyue`。
+2. 确认没有损坏或不兼容的旧 Daemon 占用 `\\.\pipe\haoyue-<用户名>`。
 3. 在设置的“诊断与用量”中重新检查 Runtime 和 Provider。
 4. 源码运行时，先执行 `build.cmd` 生成 Desktop 所需的 Runtime。
 

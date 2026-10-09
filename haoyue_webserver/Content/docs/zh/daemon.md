@@ -4,7 +4,7 @@ Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放
 
 ## 连接地址
 
-- Windows Named Pipe：`\\.\pipe\haoyue`
+- Windows Named Pipe：`\\.\pipe\haoyue-<用户名>`（按当前用户命名，ACL 限定本人与 SYSTEM）
 - Linux / macOS Unix Socket：`~/.haoyue/daemon.sock`
 
 请求和响应都必须以换行符结尾。一次连接可以在 Agent 输出过程中继续发送控制请求。
@@ -95,7 +95,7 @@ Session 方法可传 `workspace` 指向具体项目，也可传 `global: true` �
 
 ## Desktop 管理方法
 
-Desktop 设置中心通过结构化方法管理与 CLI 相同的配置，不直接读取配置文件。显式存储的 Provider `apiKey` 会通过 `provider.list` 返回，以便 Desktop 直接显示和编辑。Runtime 不会从环境变量读取 API Key；MCP 环境变量仍仅返回键名，不返回值。
+Desktop 设置中心通过结构化方法管理与 CLI 相同的配置，不直接读取配置文件。Provider `apiKey` 以 `secret:` 加密引用落盘，`provider.list` 解密后返回，以便 Desktop 直接显示和编辑。Runtime 不会从环境变量读取 API Key；MCP 环境变量仍仅返回键名，不返回值。
 
 | 方法 | 说明 |
 | --- | --- |

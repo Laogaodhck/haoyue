@@ -4,7 +4,7 @@ The Haoyue Daemon exposes the Runtime to desktop clients, IDE plugins, and other
 
 ## Endpoints
 
-- Windows Named Pipe: `\\.\pipe\haoyue`
+- Windows Named Pipe: `\\.\pipe\haoyue-<username>` (named per current user; ACL restricted to that user and SYSTEM)
 - Linux / macOS Unix Socket: `~/.haoyue/daemon.sock`
 
 Every request and response must end with a newline. A connection remains able to send control requests while an Agent turn is streaming.
@@ -92,7 +92,7 @@ Session methods accept `workspace` for a concrete project or `global: true` for 
 
 ## Desktop Administration Methods
 
-The Desktop settings workbench uses structured methods to manage the same configuration as the CLI without reading configuration files directly. An explicitly stored Provider `apiKey` is returned by `provider.list` so Desktop can display and edit it. Runtime does not read API keys from environment variables. MCP environment variables expose names only, never values.
+The Desktop settings workbench uses structured methods to manage the same configuration as the CLI without reading configuration files directly. Provider `apiKey` values are stored as encrypted `secret:` references and resolved by `provider.list` so Desktop can display and edit them. Runtime does not read API keys from environment variables. MCP environment variables expose names only, never values.
 
 | Method | Description |
 | --- | --- |

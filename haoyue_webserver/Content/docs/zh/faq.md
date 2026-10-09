@@ -12,14 +12,14 @@
 
 1. `resources\runtime\haoyue.exe` 是否存在；
 2. 发布目录是否被拆散，或安全软件是否隔离了 Runtime；
-3. 是否有不兼容的旧 Daemon 占用 `\\.\pipe\haoyue`；
+3. 是否有不兼容的旧 Daemon 占用 `\\.\pipe\haoyue-<用户名>`；
 4. 在“设置 → 诊断与用量”重新检查并查看完整错误。
 
 Desktop 会自动尝试连接和重连，不需要手动运行 Runtime。从源码开发时，可先执行根目录 `build.cmd` 生成完整发布包。
 
 ### 为什么 API Key 输入框为空？
 
-- 如果配置中直接保存了 `apiKey`，Desktop 会读取并显示真实内容。
+- 如果配置中保存了 `apiKey`（以 `secret:` 加密引用落盘），Desktop 会解密并显示真实内容。
 - API Key 只从 `~/.haoyue/config.json` 的 `apiKey` 字段读取，不支持通过环境变量注入。
 
 如果显式保存的 Key 在一次对话后消失，请先确认启动的 Desktop 与 Daemon 使用同一用户账户和 `~/.haoyue/config.json`，再打开诊断页查看活动 Profile 与 Provider。不要同时运行会改写同一配置的旧版本 Runtime。

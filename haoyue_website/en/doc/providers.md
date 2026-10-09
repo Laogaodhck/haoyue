@@ -31,11 +31,11 @@ Open “Settings → Models & Providers” to manage Providers, Profiles, and th
 
 1. Select “+ Provider” or edit an existing entry.
 2. Choose the `openai` or `anthropic` protocol and enter the ID, name, Base URL, and model IDs.
-3. Enter the API key directly; it is stored in the configuration file.
+3. Enter the API key directly; it is stored in the configuration file as an encrypted `secret:` reference.
 4. Configure proxy, timeout, priority, prompt caching, and enabled state as needed.
 5. Save and select “Test,” then activate the Provider or model.
 
-The `apiKey` value is stored explicitly in the configuration and is read, displayed, and edited directly by Desktop. Runtime does not read API keys from environment variables.
+The `apiKey` value is stored in the configuration as an encrypted `secret:` reference (Windows DPAPI / Linux keyring) and is resolved, displayed, and edited by Desktop. Runtime does not read API keys from environment variables.
 
 On request failure, the Runtime preserves the Provider name, HTTP status, and response body. Protocol mismatches, missing tool results, invalid model IDs, and other 400 responses are shown in full so the server's concrete guidance remains available.
 
@@ -73,7 +73,7 @@ Providers are stored as an array, with models nested under their Provider:
 }
 ```
 
-Use `"apiKey": "sk-..."` to store a key directly, but never commit a personal global configuration containing credentials.
+A plaintext `apiKey` written by hand into the configuration migrates automatically to an encrypted reference at Runtime startup; either way, never commit a personal global configuration containing credentials.
 
 `promptCaching` is enabled by default. OpenAI-compatible services keep using their automatic prefix caches; the Anthropic protocol additionally places `cache_control` checkpoints after the stable system prompt and tool definitions. Disable it in Desktop or set `"promptCaching": false` when an older Anthropic-compatible gateway rejects that field. The default prompts contain no dynamic timestamp, and tool definitions are sorted by name so the cached prefix remains byte-stable across steps.
 

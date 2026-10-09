@@ -178,6 +178,9 @@ function localModelValidationError(): string {
   if (!isLocalKind()) return ''
   const invalid = modelList.value.find((m) => !m.id.trim().toLowerCase().endsWith('.gguf'))
   if (invalid) return `本地模型必须为 .gguf 文件：${invalid.id}`
+  // mmproj 文件是视觉投影器，加载必然失败；主模型会自动识别同目录的投影器。
+  const projector = modelList.value.find((m) => m.id.toLowerCase().includes('mmproj'))
+  if (projector) return `mmproj 文件是视觉投影器，不能注册为聊天模型（主模型会自动识别）：${projector.id}`
   return ''
 }
 

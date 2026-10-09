@@ -1,14 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFECT_KIND_LABELS,
   EVOLUTION_INTERVAL_OPTIONS,
   EVOLUTION_MAX_INTERVAL_MINUTES,
   EVOLUTION_MIN_INTERVAL_MINUTES,
+  TREND_KEYS,
   clampIntervalMinutes,
+  clampThresholdSignals,
   defectKindLabel,
+  formatDateOnly,
   formatInterval,
   reflectionOutcomeText,
-  relativeTime
+  relativeTime,
+  severityClass,
+  severityLabel,
+  triggerLabel,
+  trendMax,
+  trendTitle,
+  trendTotal
 } from './evolution-form'
+import type { EvolutionTrendPoint } from './evolution-form'
 
 describe('defectKindLabel', () => {
   it('maps every runtime DefectKind to a Chinese label', () => {
@@ -16,10 +27,34 @@ describe('defectKindLabel', () => {
     expect(defectKindLabel('VerificationStruggle')).toBe('验证链受困')
     expect(defectKindLabel('CapabilityGap')).toBe('能力缺口')
     expect(defectKindLabel('UserNegativeFeedback')).toBe('用户负反馈')
+    expect(defectKindLabel('ProviderInstability')).toBe('提供商不稳')
+    expect(defectKindLabel('UserCorrection')).toBe('用户纠偏')
+    expect(defectKindLabel('TurnCancelled')).toBe('回合中断')
+    expect(Object.keys(DEFECT_KIND_LABELS)).toHaveLength(7)
   })
 
   it('falls back to the raw kind for unknown values', () => {
     expect(defectKindLabel('SomethingNew')).toBe('SomethingNew')
+  })
+})
+
+describe('severityLabel', () => {
+  it('maps severity values and treats missing as medium', () => {
+    expect(severityLabel('high')).toBe('高')
+    expect(severityLabel('medium')).toBe('中')
+    expect(severityLabel(null)).toBe('中')
+    expect(severityLabel(undefined)).toBe('中')
+    expect(severityClass('high')).toBe('severity-high')
+    expect(severityClass('medium')).toBe('')
+  })
+})
+
+describe('triggerLabel', () => {
+  it('maps every reflection trigger', () => {
+    expect(triggerLabel('manual')).toBe('手动')
+    expect(triggerLabel('auto')).toBe('定时')
+    expect(triggerLabel('threshold')).toBe('阈值')
+    expect(triggerLabel('unknown')).toBe('unknown')
   })
 })
 
@@ -36,6 +71,15 @@ describe('clampIntervalMinutes', () => {
   it('rounds fractional minutes and repairs non-finite input', () => {
     expect(clampIntervalMinutes(45.6)).toBe(46)
     expect(clampIntervalMinutes(Number.NaN)).toBe(EVOLUTION_MIN_INTERVAL_MINUTES)
+  })
+})
+
+describe('clampThresholdSignals', () => {
+  it('clamps to the runtime bounds (1..50) and repairs non-finite input', () => {
+    expect(clampThresholdSignals(5)).toBe(5)
+    expect(clampThresholdSignals(0)).toBe(1)
+    expect(clampThresholdSignals(99)).toBe(50)
+    expect(clampThresholdSignals(Number.NaN)).toBe(1)
   })
 })
 
@@ -74,6 +118,13 @@ describe('relativeTime', () => {
   })
 })
 
+describe('formatDateOnly', () => {
+  it('renders the date part and keeps invalid input as-is', () => {
+    expect(formatDateOnly('2026-10-08T07:00:00Z')).toBe('2026-10-08')
+    expect(formatDateOnly('not-a-date')).toBe('not-a-date')
+  })
+})
+
 describe('reflectionOutcomeText', () => {
   it('reports failures first', () => {
     expect(reflectionOutcomeText({ error: 'provider offline' })).toBe('反思失败：provider offline')
@@ -93,5 +144,36 @@ describe('reflectionOutcomeText', () => {
     for (const option of EVOLUTION_INTERVAL_OPTIONS) {
       expect(option.value).toBe(clampIntervalMinutes(option.value))
     }
+  })
+})
+
+describe('trend helpers', () => {
+  const points: EvolutionTrendPoint[] = [
+    {
+      date: '2026-10-01', toolFailures: 0, gaps: 0, verificationFailures: 0,
+      feedback: 0, corrections: 0, cancels: 0, retries: 0
+    },
+    {
+      date: '2026-10-02', toolFailures: 3, gaps: 1, verificationFailures: 0,
+      feedback: 1, corrections: 0, cancels: 2, retries: 4
+    }
+  ]
+  const [empty, busy] = points
+
+  it('sums all seven signal kinds per day', () => {
+    expect(TREND_KEYS).toHaveLength(7)
+    expect(trendTotal(empty!)).toBe(0)
+    expect(trendTotal(busy!)).toBe(11)
+  })
+
+  it('takes the peak across days and never returns zero', () => {
+    expect(trendMax(points)).toBe(11)
+    expect(trendMax([empty!])).toBe(1)
+  })
+
+  it('builds a human-readable hover title', () => {
+    expect(trendTitle(busy!)).toBe(
+      '2026-10-02：工具失败 3 · 能力缺口 1 · 验证受困 0 · 负反馈 1 · 纠偏 0 · 中断 2 · 重试 4'
+    )
   })
 })

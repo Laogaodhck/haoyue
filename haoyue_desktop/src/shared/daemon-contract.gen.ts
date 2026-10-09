@@ -176,6 +176,8 @@ export const DAEMON_METHODS = [
   'evolution.reflect',
   'evolution.pending-list',
   'evolution.decide',
+  'evolution.history',
+  'evolution.stats',
   'evolution.config.get',
   'evolution.config.set',
   'doctor',

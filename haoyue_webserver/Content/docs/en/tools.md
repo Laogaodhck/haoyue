@@ -18,6 +18,40 @@ The Runtime currently registers nine built-in tools. File and command tools requ
 
 Descriptions are loaded from `prompts/tool/<name>.txt`, while arguments are validated through JSON Schema. Output budgets adapt to the model context window and remain capped by `agent.maxToolOutputChars`.
 
+## Network Ops plugin
+
+After enabling the toggle in Advanced Settings, the Runtime registers two model-callable network tools (controlled by `network_ops.enabled`, off by default):
+
+| Tool | Purpose | Mutating |
+| --- | --- | --- |
+| `network_diagnose` | One-shot health snapshot bundling interfaces / routes / connections / ARP / DNS; `section` selects a single part | no |
+| `network_cmd` | Runs one command from the ops directory with optional `target` and per-item `args` | per command |
+
+The command directory maps logical names across platforms — the model picks a command, never a raw shell line:
+
+| Command | Windows | Linux | Mutating |
+| --- | --- | --- | --- |
+| `ping` | `ping` (defaults `-n 4`) | `ping` (defaults `-c 4`) | no |
+| `traceroute` | `tracert` | `traceroute` | no |
+| `interfaces` | `ipconfig /all` | `ip addr show` | no |
+| `routes` | `route print` | `ip route show` | no |
+| `connections` | `netstat -ano` | `ss -tulpn` (falls back to `netstat`) | no |
+| `arp` | `arp -a` | `ip neigh show` | no |
+| `dns_lookup` | `nslookup` | `nslookup` | no |
+| `dns_flush` | `ipconfig /flushdns` | `resolvectl flush-caches` | yes |
+| `getmac` | `getmac /fo list /v` | — | no |
+| `netsh` | `netsh <args>` | — | verb-based |
+| `ip` | — | `ip <args>` | verb-based |
+| `nmcli` | — | `nmcli <args>` | verb-based |
+| `ethtool` | — | `ethtool <iface>` | no |
+
+Safety model:
+
+- **No shell**: `args` items reach the child process through argv, so pipes, redirection, and command chaining are structurally impossible — injection-proof by construction.
+- **Read/write split**: `dns_flush` and any `netsh` / `ip` / `nmcli` invocation carrying verbs such as `set`, `add`, `delete`, or `flush` counts as mutating; `networkOps.allowMutating=false` rejects those.
+- **Mode interplay**: `network_cmd` is flagged Mutating, so `plan` and `readonly` modes filter the whole tool automatically.
+- **Graceful degradation**: missing binaries (e.g. traceroute not installed) or insufficient privileges return readable guidance instead of throwing.
+
 ## `edit_file` arguments
 
 The current tool uses text matching rather than line-number patches:

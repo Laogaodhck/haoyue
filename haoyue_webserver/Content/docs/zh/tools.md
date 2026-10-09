@@ -18,6 +18,40 @@ Runtime 当前注册 9 个内置工具。文件和命令工具需要可用的工
 
 工具描述从 `prompts/tool/<name>.txt` 加载，可以随 Prompt 更新；参数由 JSON Schema 校验。工具输出预算会根据模型上下文窗口调整，并受 `agent.maxToolOutputChars` 上限保护。
 
+## 网络运维插件 (Network Ops)
+
+在 高级设置 中开启「网络运维插件」后，Runtime 会注册两个模型可调用的网络工具（`network_ops.enabled` 配置项控制，默认关闭）：
+
+| 工具 | 作用 | 修改状态 |
+| --- | --- | --- |
+| `network_diagnose` | 一键诊断：接口 / 路由 / 活动连接 / ARP / DNS 五个部分聚合报告，可用 `section` 单选 | 否 |
+| `network_cmd` | 运行命令目录中的单个运维命令，支持 `target` 与逐项 `args` | 是（按命令分级） |
+
+命令目录跨平台映射，模型只需选择逻辑命令，不必拼写平台命令：
+
+| 逻辑命令 | Windows | Linux | 变更类 |
+| --- | --- | --- | --- |
+| `ping` | `ping`（默认 `-n 4`） | `ping`（默认 `-c 4`） | 否 |
+| `traceroute` | `tracert` | `traceroute` | 否 |
+| `interfaces` | `ipconfig /all` | `ip addr show` | 否 |
+| `routes` | `route print` | `ip route show` | 否 |
+| `connections` | `netstat -ano` | `ss -tulpn`（回退 `netstat`） | 否 |
+| `arp` | `arp -a` | `ip neigh show` | 否 |
+| `dns_lookup` | `nslookup` | `nslookup` | 否 |
+| `dns_flush` | `ipconfig /flushdns` | `resolvectl flush-caches` | 是 |
+| `getmac` | `getmac /fo list /v` | — | 否 |
+| `netsh` | `netsh <args>` | — | 按动词判定 |
+| `ip` | — | `ip <args>` | 按动词判定 |
+| `nmcli` | — | `nmcli <args>` | 按动词判定 |
+| `ethtool` | — | `ethtool <接口>` | 否 |
+
+安全模型：
+
+- **不经 Shell**：`args` 逐项通过 argv 传给子进程，管道、重定向与命令链在结构上不可行，杜绝注入；
+- **变更分级**：`dns_flush` 与 `netsh` / `ip` / `nmcli` 中含 `set`、`add`、`delete`、`flush` 等动词的调用视为变更类，`networkOps.allowMutating=false` 时拒绝执行；
+- **模式联动**：`network_cmd` 标记为 Mutating，`plan` / `readonly` 模式自动屏蔽整个工具；
+- **降级友好**：命令缺失（如 traceroute 未安装）或权限不足时返回可读提示而非抛错。
+
 ## `edit_file` 参数
 
 当前 `edit_file` 使用文本匹配，而不是行号 Patch：

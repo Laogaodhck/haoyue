@@ -18,6 +18,22 @@ The Runtime currently registers nine built-in tools. File and command tools requ
 
 Descriptions are loaded from `prompts/tool/<name>.txt`, while arguments are validated through JSON Schema. Output budgets adapt to the model context window and remain capped by `agent.maxToolOutputChars`.
 
+## Network Ops plugin
+
+Flip on the Network Ops toggle in Advanced Settings and Haoyue gains a complete network diagnostics and operations toolkit, exposed to the model as two tools:
+
+- **`network_diagnose`**: a one-shot health check. Interfaces, routes, active connections, the ARP table and DNS configuration arrive in a single report — no need to run five commands to find out why the network is down;
+- **`network_cmd`**: directory-based command execution. The model picks a logical command from the directory, adds a target and arguments, and the adapter smooths out every Windows/Linux difference.
+
+The directory covers the full ops command set: `ping`, `traceroute` (tracert), `interfaces` (ipconfig / ip addr), `routes`, `connections` (netstat / ss), `arp`, `dns_lookup`, `dns_flush`, `getmac`, `ethtool`, plus the complete `netsh` subtree on Windows and `ip` / `nmcli` on Linux.
+
+Safety is the foundation of this plugin:
+
+- **Arguments never touch a shell** — they go through argv one item at a time, so pipes and command chaining are structurally impossible and injection has nothing to grab onto;
+- **Read/write split** — `dns_flush` and any `netsh` / `ip` / `nmcli` call carrying verbs like `set`, `add` or `delete` counts as mutating; disable "allow mutating commands" and they are all rejected;
+- **Mode interplay** — `plan` and `readonly` modes filter the whole plugin automatically;
+- **Says what's missing** — traceroute not installed or insufficient privileges produce a readable hint, not a stack trace.
+
 ## `edit_file` arguments
 
 The current tool uses text matching rather than line-number patches:

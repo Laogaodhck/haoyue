@@ -2006,6 +2006,43 @@ select:focus-visible {
   cursor: default;
 }
 
+/* Expert persona badge above the composer: shows the bound expert and offers unbind. */
+.expert-badge-row {
+  display: flex;
+  width: min(100%, 940px);
+  justify-content: flex-start;
+  margin: 0 auto 8px;
+}
+
+.expert-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  color: var(--accent);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 999px;
+}
+
+.expert-badge-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.expert-badge-remove:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 /* Evolution engine banner: candidate skill drafts awaiting human review (P3). */
 .evolution-banner {
   display: flex;

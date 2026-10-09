@@ -38,6 +38,7 @@ export interface RuntimeSessionHeader {
   updatedAt: string
   reasoningLevel?: string
   networkEnabled?: boolean
+  expertId?: string
   llmRounds?: number
   executionSteps?: number
   inputTokens?: number

@@ -128,6 +128,8 @@ export async function reloadThreadSession(
     thread.title = saved.title || thread.title
     thread.archived = Boolean(saved.archived)
     thread.reasoningLevel = normalizeReasoningLevel(saved.reasoningLevel)
+    thread.expertId = saved.expertId || undefined
+    if (!saved.expertId) thread.expertLabel = undefined
     thread.stats = sessionStats(saved)
   } catch {
     thread.sessionLoaded = false

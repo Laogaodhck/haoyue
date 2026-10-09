@@ -191,6 +191,7 @@ const emit = defineEmits<{
   reconnect: []
   openRulesMemory: []
   runtimeChanged: []
+  startExpert: [expert: { id: string, name: string, avatar: string }]
 }>()
 
 const section = ref<SettingsSection>('general')
@@ -1782,10 +1783,10 @@ onBeforeUnmount(() => {
           <div class="settings-section-heading">
             <div>
               <h3>专家</h3>
-              <p>内置领域专家：复制提示词到新任务，让 Agent 以该角色协作</p>
+              <p>内置领域专家：一键绑定到新任务，或将提示词粘贴到对话开头</p>
             </div>
           </div>
-          <ExpertsPanel />
+          <ExpertsPanel @start="(expert) => emit('startExpert', expert)" />
         </template>
 
         <template v-else-if="section === 'rules-memory'">

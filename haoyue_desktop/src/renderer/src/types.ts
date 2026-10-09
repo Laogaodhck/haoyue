@@ -132,6 +132,10 @@ export interface ThreadItem {
   reasoningLevel?: ReasoningLevel
   /** Per-task "联网" toggle; controls web_search + web_fetch together. */
   networkEnabled?: boolean
+  /** Bound expert persona id (ExpertCatalog); shown as a composer badge and sent with the first turn. */
+  expertId?: string
+  /** Expert display metadata for the badge (denormalized from expert.list). */
+  expertLabel?: string
   /** Messages waiting for the current agent turn to finish. */
   queuedMessages?: QueuedMessage[]
   /** Prevents multiple queued messages from starting at the same time. */

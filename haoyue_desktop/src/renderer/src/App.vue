@@ -21,6 +21,7 @@ import {
   Telescope,
   TerminalSquare,
   Trash2,
+  Sparkles,
   Undo2,
   X
 } from '@lucide/vue'
@@ -709,6 +710,49 @@ function openExtensions(section: 'mcp' | 'skills' | 'experts' = 'mcp'): void {
   activePage.value = 'extensions'
 }
 
+const expertNames = ref<Record<string, string>>({})
+
+async function expertLabelFor(id: string): Promise<string> {
+  if (expertNames.value[id]) return expertNames.value[id]
+  try {
+    const response = await window.haoyue.daemon.request('expert.list', {})
+    const experts = JSON.parse(response.data) as Array<{ id: string, name: string, avatar: string }>
+    const map: Record<string, string> = {}
+    for (const expert of experts) map[expert.id] = `${expert.avatar} ${expert.name}`
+    expertNames.value = map
+  } catch {
+    // 目录拉取失败时回退为原始 id 展示
+  }
+  return expertNames.value[id] ?? id
+}
+
+function startExpertTask(expert: { id: string, name: string, avatar: string }): void {
+  closePage()
+  newTask(selectedProjectId.value || undefined)
+  const thread = activeThread.value
+  if (!thread) return
+  thread.expertId = expert.id
+  thread.expertLabel = `${expert.avatar} ${expert.name}`
+  void nextTick(() => composer.value?.focus())
+}
+
+async function removeExpert(thread: ThreadItem): Promise<void> {
+  const hadSession = Boolean(thread.sessionId)
+  thread.expertId = undefined
+  thread.expertLabel = undefined
+  if (hadSession && daemonState.value.connected) {
+    try {
+      await window.haoyue.daemon.request('session.update', {
+        id: thread.sessionId,
+        ...sessionScope(thread, projects.value.find((item) => item.id === thread.projectId)),
+        expertId: ''
+      })
+    } catch (error) {
+      void window.haoyue?.notify?.('解除专家失败', error instanceof Error ? error.message : String(error))
+    }
+  }
+}
+
 function openArchivedTasks(): void {
   activePropertiesProject.value = null
   taskSettingsThreadId.value = ''
@@ -1027,6 +1071,9 @@ async function selectThread(id: string): Promise<void> {
       thread.archived = Boolean(saved.archived)
       thread.reasoningLevel = normalizeReasoningLevel(saved.reasoningLevel)
       thread.networkEnabled = saved.networkEnabled ?? true
+      thread.expertId = saved.expertId || undefined
+      if (saved.expertId) void expertLabelFor(saved.expertId).then((label) => { thread.expertLabel = label })
+      else thread.expertLabel = undefined
       thread.stats = sessionStats(saved)
     }
   } catch (error) {
@@ -1399,7 +1446,8 @@ async function runMessageTurn(
       const sessionResponse = await window.haoyue.daemon.request('session.new', {
         ...scope,
         reasoningLevel,
-        networkEnabled: thread.networkEnabled ?? true
+        networkEnabled: thread.networkEnabled ?? true,
+        ...(thread.expertId ? { expertId: thread.expertId } : {})
       })
       thread.sessionId = sessionResponse.data
       thread.sessionLoaded = true
@@ -1418,6 +1466,7 @@ async function runMessageTurn(
       images: plainImages(images),
       sessionId: thread.sessionId,
       reasoningLevel,
+      ...(thread.expertId ? { expertId: thread.expertId } : {}),
       ...scope
     }, { timeoutMs: CHAT_FIRST_EVENT_TIMEOUT_MS })
     rememberFinishedRequest(thread, response.id)
@@ -1990,6 +2039,16 @@ watch(theme, applyTheme)
 
             <TaskStepList :steps="activeThreadTurnSteps" :running="activeThread?.running"
               :phase="activeThread?.phase" />
+            <div v-if="activeThread?.expertId" class="expert-badge-row">
+              <span class="expert-badge" :title="`Agent 将以专家「${activeThread.expertLabel || activeThread.expertId}」的角色协作`">
+                <Sparkles :size="13" aria-hidden="true" />
+                <span>专家：{{ activeThread.expertLabel || activeThread.expertId }}</span>
+                <button type="button" class="expert-badge-remove" title="解除专家绑定"
+                  @click="activeThread && removeExpert(activeThread)">
+                  <X :size="12" aria-hidden="true" />
+                </button>
+              </span>
+            </div>
             <!-- 空状态修复：无任务时输入框保持可用，发送时由 sendMessage 自动创建任务。 -->
             <Composer ref="composer" :busy="busy"
               :disabled="conversationLoading" :model="activeModel"
@@ -2016,6 +2075,7 @@ watch(theme, applyTheme)
       :initial-section="activePage === 'settings' ? settingsSection : extensionsSection" @close="closePage"
       @change-theme="applyTheme" @reconnect="reconnectDaemon"
       @open-rules-memory="openRulesMemory"
+      @start-expert="startExpertTask"
       @runtime-changed="refreshRuntimeState" />
 
     <KnowledgeBaseDialog :open="activePage === 'knowledge'" @close="closePage" />

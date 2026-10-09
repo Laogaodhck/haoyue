@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Check, Copy, LoaderCircle, RefreshCw, Search, Users } from '@lucide/vue'
+import { ArrowLeft, Check, Copy, LoaderCircle, RefreshCw, Search, Sparkles, Users } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 /** 专家条目，由 daemon 的 expert.list 接口返回（runtime 内置专家目录）。 */
@@ -13,6 +13,8 @@ interface Expert {
   skills: string[]
   prompt: string
 }
+
+const emit = defineEmits<{ start: [expert: Expert] }>()
 
 const experts = ref<Expert[]>([])
 const loading = ref(false)
@@ -77,6 +79,10 @@ async function copyPrompt(): Promise<void> {
   } catch {
     copied.value = false
   }
+}
+
+function startWithExpert(expert: Expert): void {
+  emit('start', expert)
 }
 
 function closeOnEscape(event: KeyboardEvent): void {
@@ -160,6 +166,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
             <span v-for="domain in selected.domains" :key="domain" class="inline-badge">{{ domain }}</span>
           </div>
         </div>
+        <button class="secondary-button primary-action experts-start-button" type="button" @click="startWithExpert(selected)">
+          <Sparkles :size="15" />
+          以此专家开始新任务
+        </button>
       </div>
 
       <p v-if="error" class="experts-error">{{ error }}</p>
@@ -187,7 +197,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
             </button>
           </div>
           <pre class="experts-prompt-preview">{{ selected.prompt }}</pre>
-          <p class="experts-prompt-hint">将提示词粘贴到新任务的对话开头，即可让 Agent 以该专家的角色协作。</p>
+          <p class="experts-prompt-hint">也可以点击上方「以此专家开始新任务」一键绑定，或将提示词粘贴到对话开头。</p>
         </section>
       </div>
     </div>
@@ -383,6 +393,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEscape))
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 16px;
+}
+
+.experts-start-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
 }
 
 .experts-detail-hero-copy h3 {

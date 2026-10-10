@@ -1,0 +1,6 @@
+Generate one image from a text description and save it into the workspace.
+
+- prompt (required): what the image should show. Describe subject, style, composition and any text to render concretely.
+- file_name (optional): file name without extension; a timestamped default is used otherwise.
+
+Uses the configured image-capable provider (OpenAI-compatible images/generations). The generated file is written under .haoyue/outputs/images/ and the result message contains its absolute path — read that path afterwards if you need to verify or describe the image. Requires an image-capable provider; the tool is hidden when none is configured.

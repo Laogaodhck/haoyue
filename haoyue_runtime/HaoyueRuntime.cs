@@ -64,9 +64,10 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     /// <summary>
     /// Creates an isolated runtime for one concurrent agent turn. The daemon uses one
     /// instance per task so workspace prompts, skills, MCP registrations and event
-    /// subscriptions cannot leak between tasks.
+    /// subscriptions cannot leak between tasks. Public since benchmark harnesses and
+    /// external embedders run turns through the same pathway.
     /// </summary>
-    internal static HaoyueRuntime CreateIsolated(
+    public static HaoyueRuntime CreateIsolated(
         WorkspaceInfo workspace,
         IFileLockCoordinator? coordinator = null,
         string? turnOwner = null,
@@ -237,6 +238,35 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
         // needs the behavioral rules: when to consult and when to persist.
         registry.Register(new PromptContribution("knowledge", PromptSlot.Memory, (_, _) =>
             ValueTask.FromResult<string?>(prompts.TryGet("builtin/knowledge")), DegradeRank: 40));
+
+        // 记忆分层·项目事实层（FactsStore）：带来源/置信度/过期时间的短句事实，
+        // 注入排在 MEMORY.md 之后（DegradeRank 11 vs 10，预算紧张时先丢事实层）。
+        // 低置信事实显式标注「待确认」，避免模型把推断当定论。
+        registry.Register(new PromptContribution("project-facts", PromptSlot.Memory, DegradeRank: 11, Resolver: (ctx, _) =>
+        {
+            if (ctx.WorkspaceRoot is null) return ValueTask.FromResult<string?>(null);
+            List<FactEntry> facts;
+            try
+            {
+                var store = new FactsStore();
+                store.PurgeExpiredForRoot(ctx.WorkspaceRoot);
+                facts = [.. store.ListActiveForRoot(ctx.WorkspaceRoot)];
+            }
+            catch (Exception)
+            {
+                return ValueTask.FromResult<string?>(null);
+            }
+            if (facts.Count == 0) return ValueTask.FromResult<string?>(null);
+            var lines = facts
+                .OrderByDescending(f => f.Confidence)
+                .Select(f => $"- [{f.Topic ?? "general"}] ({f.Source}, 置信度 {f.Confidence:0.0}{(f.Confidence < 0.7 ? "，待确认" : "")}) {f.Content}");
+            var text = "## 项目事实（自动沉淀，带来源与置信度）\n"
+                + string.Join("\n", lines)
+                + "\n\n以上为自动沉淀的项目事实：置信度低（待确认）的条目使用前请先核实；与当前任务无关的事实可忽略。需要沉淀新事实时使用 fact_save 工具。";
+            return ValueTask.FromResult<string?>(prompts.TryGet("builtin/facts") is { } template
+                ? template.Replace("{{facts}}", string.Join("\n", lines))
+                : text);
+        }));
     }
 
     private void RegisterBuiltinTools()
@@ -256,10 +286,20 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                      new WebSearchTool(prompts),
                      new WebFetchTool(prompts),
                      new CaptureScreenTool(prompts),
-                     new KnowledgeSearchTool(Knowledge, prompts),
+                     new KnowledgeSearchTool(
+                         Knowledge,
+                         _services.GetRequiredService<KnowledgeSemanticIndex>(),
+                         _services.GetRequiredService<IConfigStore>(),
+                         prompts),
                      new KnowledgeSaveTool(Knowledge, prompts),
                      new KnowledgeForgetTool(Knowledge, prompts),
                      new DelegateTool(prompts, _services.GetRequiredService<IAgentDelegator>()),
+                     new DelegateTasksTool(prompts, _services.GetRequiredService<IAgentDelegator>()),
+                     new FactSaveTool(prompts),
+                     new ImageGenTool(
+                         prompts,
+                         _services.GetRequiredService<IConfigStore>(),
+                         _services.GetRequiredService<ILlmHttpFactory>()),
                      new DeclareSkillTool(_services.GetRequiredService<ISkillManager>(), prompts),
                  })
             Tools.Register(tool);
@@ -315,6 +355,7 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<IWorkspaceManager, WorkspaceManager>();
         services.AddSingleton<HaoyueDatabase>();
         services.AddSingleton<KnowledgeStore>();
+        services.AddSingleton<KnowledgeSemanticIndex>();
         services.AddSingleton<ISessionStore, SessionStore>();
         services.AddSingleton<IProjectStore, ProjectStore>();
         services.AddSingleton<IScheduleStore, ScheduleStore>();

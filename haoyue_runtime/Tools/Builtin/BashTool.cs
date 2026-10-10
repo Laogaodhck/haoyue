@@ -1,4 +1,4 @@
-using System.Text;
+using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using CliWrap;
 using CliWrap.Buffered;
@@ -35,6 +35,24 @@ public sealed class BashTool(IPromptProvider prompts) : BuiltinTool(prompts)
         cts.CancelAfter(timeout);
 
         var (shell, shellArgs) = ResolveShell(command);
+        var (risk, riskReasons) = BashRiskClassifier.Classify(command);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var sandbox = OperatingSystem.IsWindows() && context.Agent.BashSandbox.Enabled
+            ? context.Agent.BashSandbox
+            : null;
+
+        if (sandbox is not null)
+        {
+            var outcome = await ExecuteSandboxedAsync(sandbox, shell, shellArgs, cwd, timeout, cts.Token, ct).ConfigureAwait(false);
+            stopwatch.Stop();
+            Audit(context, command, cwd, risk, riskReasons, outcome.Outcome, outcome.ExitCode, stopwatch.ElapsedMilliseconds, sandboxed: true);
+            return FormatResult(
+                command,
+                context.Truncate(outcome.Output, "command output"),
+                outcome.ExitCode ?? -1,
+                outcome.Outcome == "timeout" ? $"Command timed out after {timeout.TotalSeconds:0}s: {Shorten(command)}" : null);
+        }
+
         try
         {
             var result = await Cli.Wrap(shell)
@@ -42,25 +60,93 @@ public sealed class BashTool(IPromptProvider prompts) : BuiltinTool(prompts)
                 .WithWorkingDirectory(cwd)
                 .WithValidation(CommandResultValidation.None)
                 .ExecuteBufferedAsync(cts.Token);
+            stopwatch.Stop();
 
-            var output = new StringBuilder();
-            if (result.StandardOutput.Length > 0) output.Append(result.StandardOutput);
-            if (result.StandardError.Length > 0)
-            {
-                if (output.Length > 0) output.AppendLine();
-                output.Append(result.StandardError);
-            }
+            Audit(context, command, cwd, risk, riskReasons, "completed", result.ExitCode, stopwatch.ElapsedMilliseconds);
 
-            var text = output.Length == 0 ? "(no output)" : context.Truncate(output.ToString(), "command output");
-            var summary = $"{Shorten(command)} → exit {result.ExitCode}";
-            return result.ExitCode == 0
-                ? ToolResult.Ok(text, summary)
-                : new ToolResult { Success = false, Output = $"Exit code {result.ExitCode}\n{text}", Summary = summary };
+            var text = result.StandardOutput.Length > 0
+                ? result.StandardOutput + (result.StandardError.Length > 0 ? "\n" + result.StandardError : "")
+                : result.StandardError.ToString();
+            return FormatResult(command, context.Truncate(text, "command output"), result.ExitCode, null);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            stopwatch.Stop();
+            Audit(context, command, cwd, risk, riskReasons, "timeout", null, stopwatch.ElapsedMilliseconds);
             return ToolResult.Fail($"Command timed out after {timeout.TotalSeconds:0}s: {Shorten(command)}");
         }
+    }
+
+    /// <summary>沙箱路径：System.Diagnostics.Process + Job Object。kill-on-close 保证超时命令
+    /// 的整棵进程树被终止；内存/进程数/UI 限制由内核强制。</summary>
+    private static async Task<(string Outcome, int? ExitCode, string Output)> ExecuteSandboxedAsync(
+        Configuration.BashSandboxConfig sandbox, string shell, string[] shellArgs,
+        string cwd, TimeSpan timeout, CancellationToken linkedCt, CancellationToken outerCt)
+    {
+        using var job = new WindowsJobObject(sandbox.MemoryLimitMb, sandbox.MaxProcesses, sandbox.UiRestrictions);
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = shell,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = cwd,
+        };
+        foreach (var argument in shellArgs) startInfo.ArgumentList.Add(argument);
+
+        using var process = new System.Diagnostics.Process { StartInfo = startInfo };
+        if (!process.Start())
+            return ("failed", null, "process failed to start");
+
+        if (!job.Assign(process.Handle))
+            return ("failed", null, $"job assignment failed (Win32 error {Marshal.GetLastWin32Error()})");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        try
+        {
+            await process.WaitForExitAsync(linkedCt).ConfigureAwait(false);
+            var stdout = await stdoutTask.ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            var output = (stdout.Length > 0 ? stdout : "") + (stderr.Length > 0 ? (stdout.Length > 0 ? "\n" : "") + stderr : "");
+            return ("completed", process.ExitCode, output);
+        }
+        catch (OperationCanceledException) when (!outerCt.IsCancellationRequested)
+        {
+            // 超时：using 块随即释放 job，KILL_ON_JOB_CLOSE 终止整棵进程树。
+            return ("timeout", null, "");
+        }
+    }
+
+    private static ToolResult FormatResult(string command, string text, int exitCode, string? failure)
+    {
+        if (failure is not null)
+            return ToolResult.Fail(failure);
+
+        var trimmed = text.Length == 0 ? "(no output)" : text;
+        var summary = $"{Shorten(command)} → exit {exitCode}";
+        return exitCode == 0
+            ? ToolResult.Ok(trimmed, summary)
+            : new ToolResult { Success = false, Output = $"Exit code {exitCode}\n{trimmed}", Summary = summary };
+    }
+
+    /// <summary>G6 审计：每条执行的命令都落一条 JSONL 记录（命令、风险分级、结果、是否沙箱）。</summary>
+    private static void Audit(
+        ToolContext context, string command, string cwd,
+        BashRisk risk, string[] reasons, string outcome, int? exitCode, long elapsedMs, bool sandboxed = false)
+    {
+        if (context.Workspace is null) return;
+        BashAuditLog.Append(context.Workspace, new BashAuditRecord(
+            DateTime.UtcNow.ToString("o"),
+            command,
+            cwd,
+            risk.ToString().ToLowerInvariant(),
+            reasons,
+            outcome,
+            exitCode,
+            elapsedMs,
+            sandboxed));
     }
 
     private static (string Shell, string[] Args) ResolveShell(string command)

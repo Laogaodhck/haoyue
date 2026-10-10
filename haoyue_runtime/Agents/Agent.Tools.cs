@@ -56,6 +56,20 @@ public sealed partial class Agent
         }
         var arguments = parsedArguments.Obj;
 
+        // Mandatory execution gate (P0): unlike the prompt-level permission notice this
+        // runtime policy cannot be talked around by the model. It applies in every mode,
+        // to the main agent and to sub-agents, right before the tool is invoked.
+        var policyDecision = _toolPolicy.Evaluate(
+            tool, arguments, configStore.Config.Agent.ToolPolicy);
+        if (policyDecision.Verdict == ToolPolicyVerdict.Denied)
+        {
+            var message = $"Tool execution blocked by policy ({policyDecision.Rule}): {policyDecision.Reason} "
+                + "如确需执行，请提示用户在配置 agent.toolPolicy.allow 中显式放行，或调整命令后重试。";
+            events.Publish(new WarningEvent($"工具 {call.Name} 被执行策略拒绝（{policyDecision.Rule}）"));
+            events.Publish(new ToolCallCompletedEvent(call.Id, call.Name, false, message, TimeSpan.Zero));
+            return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
+        }
+
         var context = new ToolContext
         {
             Workspace = workspace,

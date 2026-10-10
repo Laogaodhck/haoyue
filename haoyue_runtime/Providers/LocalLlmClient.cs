@@ -21,13 +21,57 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     public string Kind => "local";
 
     /// <summary>
-    /// Local GGUF embeddings need a separate LLamaEmbedder context with its own
-    /// memory cost; kept out of this batch so the client layer stays honest —
-    /// callers degrade to null instead of receiving a half-working path.
+    /// In-process GGUF embeddings: acquires the shared weights lease, builds a
+    /// dedicated embedding context (small window — embeddings do not need chat KV)
+    /// and embeds inputs sequentially. Throws on a missing/broken model file so the
+    /// semantic search layer degrades to lexical instead of returning garbage.
     /// </summary>
-    public Task<EmbeddingResult?> EmbedAsync(
+    public async Task<EmbeddingResult?> EmbedAsync(
         Configuration.ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default)
-        => Task.FromResult<EmbeddingResult?>(null);
+    {
+        if (inputs.Count == 0) return new EmbeddingResult([], model ?? "");
+        var modelConfig = model is not null
+            ? provider.Models.FirstOrDefault(m => string.Equals(m.Id, model, StringComparison.OrdinalIgnoreCase))
+            : provider.Models.FirstOrDefault(m => m.Capabilities.Embedding);
+        if (modelConfig is null)
+            throw new LlmException(
+                $"Local provider '{provider.Id}' has no embedding-capable model registered"
+                + (model is null ? "" : $" (requested: '{model}')")
+                + ". Add the model entry with capabilities.embedding = true.",
+                retryable: false);
+        var path = LocalModels.ResolveModelPath(provider, modelConfig);
+        if (!File.Exists(path))
+            throw new LlmException(
+                $"Local embedding model file not found: {path}. Put the GGUF file into the provider's models directory or fix the path.",
+                retryable: false);
+
+        using var lease = await cache.AcquireAsync(
+            path,
+            BuildLoadParams(path, provider),
+            LoadSignature(provider),
+            null,
+            ct).ConfigureAwait(false);
+        var weights = lease.Weights;
+
+        using var embedder = new LLamaEmbedder(weights, new ModelParams(path)
+        {
+            // Embedding contexts stay small: no chat history, no generation.
+            ContextSize = 2048,
+            GpuLayerCount = provider.GpuLayers ?? 0,
+            Threads = provider.Threads is { } embedThreads ? Math.Max(1, embedThreads) : null,
+            UseMemorymap = true,
+        }, NullLogger.Instance);
+
+        var vectors = new List<float[]>(inputs.Count);
+        foreach (var input in inputs)
+        {
+            ct.ThrowIfCancellationRequested();
+            var embeddings = await embedder.GetEmbeddings(input, ct).ConfigureAwait(false);
+            // 均值池化模型返回单向量；无池化模型按 token 返回——取末位向量（因果嵌入的标准做法）。
+            vectors.Add(embeddings[^1]);
+        }
+        return new EmbeddingResult(vectors, modelConfig?.Id ?? Path.GetFileNameWithoutExtension(path));
+    }
 
     public async IAsyncEnumerable<LlmStreamEvent> StreamAsync(
         LlmRequest request, [EnumeratorCancellation] CancellationToken ct)

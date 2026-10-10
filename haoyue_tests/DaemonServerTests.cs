@@ -64,6 +64,66 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task TaskStart_RunsInBackground_AndBroadcastsTaskUpdated()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("后台完成", false, null)));
+
+        await connection.SendAsync(1, "task.start", new JsonObject { ["message"] = "跑后台任务" });
+
+        // task.updated 广播与 result 响应的先后不定（stub 回合可能先于响应完成），
+        // 在同一循环里同时等两类帧，避免 ReadUntilAsync 把广播帧丢弃。
+        JsonObject? start = null;
+        JsonObject? broadcast = null;
+        while (start is null || broadcast is null)
+        {
+            var frame = await connection.ReadAsync();
+            if (frame["id"]?.GetValue<long>() == 1 && frame["event"]?.GetValue<string>() == "result")
+                start = frame;
+            else if (frame["event"]?.GetValue<string>() == "task.updated")
+                broadcast = frame;
+        }
+
+        var task = JsonNode.Parse(start!["data"]!.GetValue<string>())!;
+        var taskId = task["id"]!.GetValue<string>();
+        Assert.StartsWith("bg-", taskId);
+        Assert.Equal("completed", broadcast!["details"]!["status"]!.GetValue<string>());
+        Assert.Equal(taskId, broadcast["details"]!["taskId"]!.GetValue<string>());
+
+        await connection.SendAsync(2, "task.get", new JsonObject { ["id"] = taskId });
+        var got = await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 2 && r["event"]!.GetValue<string>() == "result");
+        var info = JsonNode.Parse(got["data"]!.GetValue<string>())!;
+        Assert.Equal("completed", info["status"]!.GetValue<string>());
+        Assert.Equal("后台完成", info["output"]!.GetValue<string>());
+        Assert.NotNull(info["sessionId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task TaskGet_UnknownId_ReturnsError()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "task.get", new JsonObject { ["id"] = "bg-nope" });
+        var error = await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "error");
+        Assert.Contains("not found", error["data"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task TaskStart_EmptyPrompt_ReturnsInvalidParams()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "task.start", new JsonObject());
+        var error = await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "error");
+        Assert.Equal("invalidParams", error["details"]!["code"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Chat_RejectsSecondConcurrentTurnOnSameSession()
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -36,10 +36,12 @@ public sealed partial class Agent(
     IFileLockCoordinator fileLocks,
     FileLockScope lockScope,
     ISkillManager? skills = null,
-    TurnUndoRegistry? undoRegistry = null)
+    TurnUndoRegistry? undoRegistry = null,
+    IToolExecutionPolicy? toolPolicy = null)
 {
     private readonly ISkillManager? _skills = skills;
     private readonly TurnUndoRegistry? _undoRegistry = undoRegistry;
+    private readonly IToolExecutionPolicy _toolPolicy = toolPolicy ?? new Tools.ToolExecutionPolicy();
 
     /// <summary>
     /// Optional daemon hook: invoked for every mutating step so the crash journal can

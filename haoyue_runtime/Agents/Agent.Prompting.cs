@@ -98,9 +98,16 @@ public sealed partial class Agent
         if (!networkEnabled)
             available = available.Where(tool => !tool.RequiresNetwork).ToList();
 
-        // 探索者智能体开关：关闭后隐藏 delegate_task，子任务由主智能体自行完成。
+        // 探索者智能体开关：关闭后隐藏两个委派工具，子任务由主智能体自行完成。
         if (!configStore.Config.Agent.DelegationEnabled)
-            available = available.Where(tool => tool.Name != AgentDelegator.DelegateToolName).ToList();
+            available = available.Where(tool =>
+                tool.Name != AgentDelegator.DelegateToolName
+                && tool.Name != AgentDelegator.ParallelDelegateToolName).ToList();
+
+        // 多模态输出：没有任何图像能力提供商时隐藏 image_generate，模型不会看到
+        // 一个必然失败的工具。
+        if (Tools.Builtin.ImageGenTool.ResolveEndpoint(configStore.Config) is null)
+            available = available.Where(tool => tool.Name != "image_generate").ToList();
 
         if (!model.Model.Capabilities.Vision)
             available = available.Where(tool => !tool.RequiresVision).ToList();

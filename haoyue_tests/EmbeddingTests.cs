@@ -118,13 +118,15 @@ public class EmbeddingTests : IDisposable
     }
 
     [Fact]
-    public async Task LocalClient_EmbedAsync_DegradesToNull()
+    public async Task LocalClient_EmbedAsync_MissingModelRegistration_ThrowsClearConfigError()
     {
         var client = new LocalLlmClient(new LocalModelCache());
 
-        var result = await client.EmbedAsync(OpenAiProvider(), ["hello"], "gguf-model");
-
-        Assert.Null(result);
+        // 本地提供商未注册 embedding 模型 → 明确的配置错误（而非静默 null），
+        // 语义检索层据此整体降级到词法检索。
+        var error = await Assert.ThrowsAsync<LlmException>(
+            () => client.EmbedAsync(OpenAiProvider(), ["hello"], "gguf-model"));
+        Assert.Contains("embedding-capable model", error.Message);
     }
 
     // ---------------------------------------------------------------- routing layer

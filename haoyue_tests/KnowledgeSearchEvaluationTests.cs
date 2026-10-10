@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
+using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Tools.Builtin;
@@ -133,7 +134,14 @@ public class KnowledgeSearchEvaluationTests
         store.Save(HaoyueDatabase.ScopeKey(context.Workspace), "端口冲突",
             "daemon 默认端口 7860 被占用时用 --port 参数换一个", "端口,port");
 
-        var tool = new KnowledgeSearchTool(store, new FilePromptProvider());
+        var db2 = new HaoyueDatabase(Path.Combine(Path.GetTempPath(), "haoyue-kb-eval-sem-" + Guid.NewGuid().ToString("N") + ".db"));
+        var tool = new KnowledgeSearchTool(
+            store,
+            new KnowledgeSemanticIndex(db2, new LlmHttpFactory()),
+            new ConfigStore(
+                Path.Combine(Path.GetTempPath(), "haoyue-kb-eval-cfg-" + Guid.NewGuid().ToString("N")),
+                Path.Combine(Path.GetTempPath(), "haoyue-kb-eval-cfg-" + Guid.NewGuid().ToString("N"))),
+            new FilePromptProvider());
         var result = await tool.ExecuteAsync(
             new JsonObject { ["query"] = "端口被占用怎么办" }, context, CancellationToken.None);
 

@@ -20,6 +20,8 @@ public sealed class HaoyueConfig
     public Haoyue.Runtime.ComputerUse.ComputerUseConfig ComputerUse { get; set; } = new();
     public Haoyue.Runtime.NetworkOps.NetworkOpsConfig NetworkOps { get; set; } = new();
     public EvolutionConfig Evolution { get; set; } = new();
+    public KnowledgeConfig Knowledge { get; set; } = new();
+    public ImageGenConfig ImageGen { get; set; } = new();
 
 
     public ProviderConfig? FindProvider(string id) =>
@@ -245,6 +247,49 @@ public sealed class AgentConfig
     /// sub-agents and finishes every subtask inline.
     /// </summary>
     public bool DelegationEnabled { get; set; } = true;
+    /// <summary>
+    /// 子代理嵌套深度上限（1..4）。默认 1 = 子代理不能再委派；调大后每层子代理
+    /// 仍持有一层配额。并行批次（delegate_tasks）的子代理一律不能再委派。
+    /// </summary>
+    public int DelegationMaxDepth { get; set; } = 1;
+    /// <summary>
+    /// 工具执行强制策略（运行时闸门，先于工具执行评估，模型无法绕过）。
+    /// 与提示层的 system/permissions 不同，本策略在参数解析后、工具调用前强制执行。
+    /// </summary>
+    public Haoyue.Runtime.Tools.ToolPolicyConfig ToolPolicy { get; set; } = new();
+    /// <summary>Windows 进程级沙箱（Job Object）。默认关闭；启用后 bash 子进程树受内存/进程数/UI 限制并有 kill-on-close 兜底。网络隔离不在 Job Object 能力范围内。</summary>
+    public BashSandboxConfig BashSandbox { get; set; } = new();
+}
+
+/// <summary>bash 进程级沙箱配置（Windows Job Object）。</summary>
+public sealed class BashSandboxConfig
+{
+    /// <summary>启用沙箱（仅 Windows 生效；其他平台自动回退直接执行）。</summary>
+    public bool Enabled { get; set; }
+    /// <summary>作业内存上限（MB，按进程计）。0 = 不限制。</summary>
+    public int MemoryLimitMb { get; set; } = 2048;
+    /// <summary>作业内活动进程数上限。0 = 不限制。</summary>
+    public int MaxProcesses { get; set; } = 256;
+    /// <summary>UI 限制（剪贴板读写、系统参数、显示设置、关机、桌面切换、全局原子表）。</summary>
+    public bool UiRestrictions { get; set; } = true;
+}
+
+/// <summary>知识库配置：语义检索（embedding）层。</summary>
+public sealed class KnowledgeConfig
+{
+    /// <summary>语义检索总开关。关闭或未配置可用 embedding 模型时，检索自动退回纯词法方案。</summary>
+    public bool SemanticEnabled { get; set; } = true;
+    /// <summary>embedding 模型引用（"providerId/modelId"）。空 = 自动选用第一个 Capabilities.Embedding 的 HTTP 提供商模型。</summary>
+    public string? EmbeddingModel { get; set; }
+}
+
+/// <summary>图像生成配置（多模态输出）。未配置可用图像模型时 image_generate 工具自动隐藏。</summary>
+public sealed class ImageGenConfig
+{
+    /// <summary>图像模型引用（"providerId/modelId"）。空 = 自动选用第一个 Capabilities.Image 的 HTTP 提供商模型。</summary>
+    public string? Model { get; set; }
+    /// <summary>生成尺寸（传给 images/generations 的 size）。提供商不支持时由端点裁定。</summary>
+    public string Size { get; set; } = "1024x1024";
 }
 
 public sealed class McpConfig

@@ -169,6 +169,18 @@ public sealed partial class KnowledgeStore(HaoyueDatabase database)
 
     public IReadOnlyList<KnowledgeEntry> Search(string scope, string query, int limit = 8, string? tag = null)
     {
+        var entries = LoadScope(scope);
+
+        if (!string.IsNullOrWhiteSpace(tag))
+            entries = entries.Where(entry => HasTag(entry.Tags, tag)).ToList();
+
+        return KnowledgeSearchRanker.Rank(entries, query, limit);
+    }
+
+    /// <summary>All entries in one scope, unfiltered — the semantic index runs its own
+    /// scoring over this candidate set.</summary>
+    public IReadOnlyList<KnowledgeEntry> LoadScope(string scope)
+    {
         using var connection = database.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT id, title, content, tags, created_at, updated_at FROM knowledge WHERE scope = $scope;";
@@ -181,11 +193,7 @@ public sealed partial class KnowledgeStore(HaoyueDatabase database)
                 reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.GetString(5)));
         }
-
-        if (!string.IsNullOrWhiteSpace(tag))
-            entries = entries.Where(entry => HasTag(entry.Tags, tag)).ToList();
-
-        return KnowledgeSearchRanker.Rank(entries, query, limit);
+        return entries;
     }
 
     public IReadOnlyList<KnowledgeEntry> List(string scope, int limit = 100)

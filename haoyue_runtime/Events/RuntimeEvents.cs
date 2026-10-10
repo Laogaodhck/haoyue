@@ -135,3 +135,8 @@ public sealed record EvolutionReflectionCompletedEvent(
 public sealed record UserFeedbackEvent(
     string SessionId, string Kind, string? Reason = null) : RuntimeEvent;
 
+/// <summary>后台任务（BackgroundTaskService）状态迁移广播：启动后的每次终态迁移都会发布，
+/// 前端据此刷新任务列表；任务进度本身复用回合级流式事件经 events.recent 重放。</summary>
+public sealed record BackgroundTaskEvent(
+    string TaskId, string Status, string? SessionId = null, string? Error = null) : RuntimeEvent;
+

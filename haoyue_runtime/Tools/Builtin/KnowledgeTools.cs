@@ -1,11 +1,21 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Prompts;
 
 namespace Haoyue.Runtime.Tools.Builtin;
 
-public sealed class KnowledgeSearchTool(KnowledgeStore knowledge, IPromptProvider prompts) : BuiltinTool(prompts)
+/// <summary>
+/// Knowledge search with an optional semantic layer: when an embedding-capable
+/// provider is configured the query is answered by hybrid (lexical + cosine) ranking,
+/// otherwise the plain lexical path runs unchanged.
+/// </summary>
+public sealed class KnowledgeSearchTool(
+    KnowledgeStore knowledge,
+    KnowledgeSemanticIndex semantic,
+    IConfigStore configStore,
+    IPromptProvider prompts) : BuiltinTool(prompts)
 {
     public override bool RequiresWorkspace => false;
     public override string Name => "knowledge_search";
@@ -15,19 +25,19 @@ public sealed class KnowledgeSearchTool(KnowledgeStore knowledge, IPromptProvide
         ("query", ToolSchema.String("Search terms (Chinese or English). Entries containing any term are returned, best matches first."), true),
         ("limit", ToolSchema.Integer("Maximum entries to return, default 8"), false));
 
-    public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
+    public override async Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
         var query = GetString(arguments, "query");
         if (string.IsNullOrWhiteSpace(query))
-            return Task.FromResult(ToolResult.Fail("query is required."));
+            return ToolResult.Fail("query is required.");
 
         var limit = Math.Clamp(GetInt(arguments, "limit") ?? 8, 1, 20);
         var scope = HaoyueDatabase.ScopeKey(context.Workspace);
-        var matches = knowledge.Search(scope, query, limit);
+        var matches = await SearchAsync(scope, query, limit, ct).ConfigureAwait(false);
         if (matches.Count == 0)
-            return Task.FromResult(ToolResult.Ok(
+            return ToolResult.Ok(
                 "No knowledge entries matched. Use knowledge_save to record useful findings for future sessions.",
-                "No knowledge matches"));
+                "No knowledge matches");
 
         var sb = new StringBuilder();
         foreach (var entry in matches)
@@ -38,7 +48,29 @@ public sealed class KnowledgeSearchTool(KnowledgeStore knowledge, IPromptProvide
             var content = entry.Content.Length > 600 ? entry.Content[..600] + "…" : entry.Content;
             sb.Append("   ").AppendLine(content);
         }
-        return Task.FromResult(ToolResult.Ok(sb.ToString().TrimEnd(), $"{matches.Count} knowledge entries matched"));
+        return ToolResult.Ok(sb.ToString().TrimEnd(), $"{matches.Count} knowledge entries matched");
+    }
+
+    private async Task<IReadOnlyList<KnowledgeEntry>> SearchAsync(string scope, string query, int limit, CancellationToken ct)
+    {
+        var entries = knowledge.LoadScope(scope);
+        var route = semantic.CreateRoute(configStore.Config);
+        if (route is null)
+            return KnowledgeSearchRanker.Rank(entries, query, limit);
+
+        try
+        {
+            return await semantic.SearchHybridAsync(
+                scope, entries, query, limit, route.Client, route.CacheKey, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return KnowledgeSearchRanker.Rank(entries, query, limit);
+        }
     }
 }
 

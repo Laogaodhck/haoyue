@@ -143,6 +143,7 @@ public sealed class HaoyueDatabase
             DROP TABLE IF EXISTS migrations;
             DROP TABLE IF EXISTS kb_sources;
             DROP TABLE IF EXISTS kb_notebooks;
+            DROP TABLE IF EXISTS knowledge_vectors;
             DROP TABLE IF EXISTS knowledge;
             DROP TABLE IF EXISTS events;
             """;
@@ -242,6 +243,16 @@ public sealed class HaoyueDatabase
                 ON knowledge(scope, updated_at DESC);
             CREATE INDEX IF NOT EXISTS ix_knowledge_scope_title
                 ON knowledge(scope, title);
+
+            CREATE TABLE IF NOT EXISTS knowledge_vectors (
+                scope TEXT NOT NULL,
+                entry_id INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                vector BLOB NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (scope, entry_id, model)
+            );
 
             CREATE TABLE IF NOT EXISTS kb_notebooks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

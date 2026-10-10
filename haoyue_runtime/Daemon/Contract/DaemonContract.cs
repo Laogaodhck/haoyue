@@ -120,7 +120,7 @@ public static class DaemonContract
     /// <summary>服务端主动广播事件（不属于任何请求的响应）。</summary>
     public static readonly string[] BroadcastEvents =
     [
-        "schedule.updated", "schedule.upcoming", "evolution.reflected", "mcp.updated", "turn.interrupted",
+        "schedule.updated", "schedule.upcoming", "task.updated", "evolution.reflected", "mcp.updated", "turn.interrupted",
     ];
 
     private static readonly Lazy<IReadOnlyList<DaemonMethodDoc>> _methods = new(BuildCatalog);
@@ -402,6 +402,15 @@ public static class DaemonContract
         M("schedule.toggle", "schedule", "启停定时任务", parameters: IdParams),
         M("schedule.delete", "schedule", "删除定时任务", parameters: IdParams),
         M("schedule.run", "schedule", "立即执行一次定时任务", parameters: IdParams),
+
+        // task（后台任务队列：完整 agent 回合转后台执行，状态经 task.updated 广播）
+        M("task.start", "task", "提交后台 agent 回合（立即返回任务快照）", parameters: SObject(
+            ("message", SString("后台任务的提示词"), true),
+            ("title", SString("会话标题（可选）"), false),
+            ("workspace", SString("工作区路径（缺省为全局工作区）"), false))),
+        M("task.get", "task", "查询单个后台任务", parameters: IdParams),
+        M("task.list", "task", "列出后台任务（新→旧）", parameters: EmptyParams),
+        M("task.cancel", "task", "取消运行中的后台任务", parameters: IdParams),
 
         // mcp
         M("mcp.list", "mcp", "列出 MCP 服务器", parameters: EmptyParams),

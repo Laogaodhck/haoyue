@@ -547,6 +547,8 @@ public sealed class CoreTests : IDisposable
         var db = new HaoyueDatabase(Path.Combine(_dir, "kb-tools.db"));
         var store = new KnowledgeStore(db);
         var prompts = new FilePromptProvider();
+        var searchToolDeps = (new KnowledgeSemanticIndex(db, new LlmHttpFactory()),
+            (IConfigStore)new ConfigStore(Path.Combine(_dir, "cfg.json"), Path.Combine(_dir, "state.json")));
         var context = new ToolContext
         {
             Workspace = NewWorkspace("kb-tools-ws"),
@@ -564,14 +566,14 @@ public sealed class CoreTests : IDisposable
             context, CancellationToken.None);
         Assert.True(save.Success);
 
-        var search = await new KnowledgeSearchTool(store, prompts).ExecuteAsync(
+        var search = await new KnowledgeSearchTool(store, searchToolDeps.Item1, searchToolDeps.Item2, prompts).ExecuteAsync(
             new JsonObject { ["query"] = "打包" },
             context, CancellationToken.None);
         Assert.True(search.Success);
         Assert.Contains("build.py", search.Output);
         Assert.Contains("Tags: build,release", search.Output);
 
-        var miss = await new KnowledgeSearchTool(store, prompts).ExecuteAsync(
+        var miss = await new KnowledgeSearchTool(store, searchToolDeps.Item1, searchToolDeps.Item2, prompts).ExecuteAsync(
             new JsonObject { ["query"] = "不存在的内容" },
             context, CancellationToken.None);
         Assert.True(miss.Success);

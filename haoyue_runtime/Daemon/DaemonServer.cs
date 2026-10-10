@@ -71,6 +71,7 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly CircuitBreaker _sharedBreaker;
     private readonly LocalModelCache _sharedLocalModels = new();
     private readonly ScheduleService _scheduler;
+    private readonly BackgroundTaskService _backgroundTasks;
     private readonly EvolutionStore _evolution;
     private readonly ReflectionRunner _reflection;
     private readonly SemaphoreSlim _reflectionGate = new(1, 1);
@@ -195,6 +196,11 @@ public sealed class DaemonServer : IAsyncDisposable
             runtime.Schedules, runtime, _fileLocks, _sharedHttp, _sharedBreaker,
             runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct),
             sharedLocalModels: _sharedLocalModels);
+        // 后台任务队列与调度任务共用同一套隔离回合通道与共享基础设施；测试用同一个
+        // stub turn runner，保持 harness 确定性。
+        _backgroundTasks = new BackgroundTaskService(
+            runtime, _fileLocks, _sharedHttp, _sharedBreaker, _sharedLocalModels,
+            runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct));
         // Evolution engine: reflection reuses the daemon's shared turn pathway so
         // tests can stub it exactly like scheduled turns.
         _evolution = new EvolutionStore(runtime.Database);
@@ -203,7 +209,7 @@ public sealed class DaemonServer : IAsyncDisposable
             runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct),
             _sharedLocalModels);
         _runtimeEvents = _runtime.Events.Subscribe();
-        _scheduleEventsTask = BroadcastScheduleEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
+        _scheduleEventsTask = BroadcastHostEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
         _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token);
         _admin.McpStatusChanged += OnMcpStatusChanged;
         _admin.EvolutionConfigChanged += ScheduleAutoReflect;
@@ -225,6 +231,7 @@ public sealed class DaemonServer : IAsyncDisposable
         }
         _runtimeEvents.Dispose();
         await _scheduler.DisposeAsync().ConfigureAwait(false);
+        _backgroundTasks.Dispose();
         _sharedHttp.Dispose();
         _sharedLocalModels.Dispose();
         _shutdown.Dispose();
@@ -1248,6 +1255,78 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.RunSchedule(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "task.start":
+                    {
+                        var parameters = Params(request);
+                        var prompt = parameters["message"]?.GetValue<string>()
+                                     ?? parameters["prompt"]?.GetValue<string>()
+                                     ?? "";
+                        if (string.IsNullOrWhiteSpace(prompt))
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                "params.message is required", context.ConnectionCt,
+                                code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
+                            break;
+                        }
+                        WorkspaceInfo taskWorkspace;
+                        try
+                        {
+                            taskWorkspace = ResolveWorkspace(parameters);
+                        }
+                        catch (DaemonRequestException ex)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", ex.Message,
+                                context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
+                            break;
+                        }
+                        var task = _backgroundTasks.Start(
+                            taskWorkspace, prompt, parameters["title"]?.GetValue<string>());
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            JsonSerializer.Serialize(task, HaoyueJsonContext.Compact.BackgroundTaskInfo),
+                            context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "task.get":
+                    {
+                        var taskId = Params(request)["id"]?.GetValue<string>();
+                        var task = taskId is null ? null : _backgroundTasks.Get(taskId);
+                        if (task is null)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                $"Background task not found: {taskId}", context.ConnectionCt,
+                                code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
+                            break;
+                        }
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            JsonSerializer.Serialize(task, HaoyueJsonContext.Compact.BackgroundTaskInfo),
+                            context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "task.list":
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            JsonSerializer.Serialize(_backgroundTasks.List(), HaoyueJsonContext.Compact.ListBackgroundTaskInfo),
+                            context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "task.cancel":
+                    {
+                        var taskId = Params(request)["id"]?.GetValue<string>();
+                        var cancelled = taskId is null ? null : _backgroundTasks.Cancel(taskId);
+                        if (cancelled is null)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                $"Background task not found or already finished: {taskId}",
+                                context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
+                            break;
+                        }
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            JsonSerializer.Serialize(cancelled, HaoyueJsonContext.Compact.BackgroundTaskInfo),
+                            context.ConnectionCt).ConfigureAwait(false);
+                        break;
+                    }
+
                     case "provider.list":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.ListProviders()), context.ConnectionCt).ConfigureAwait(false);
@@ -1772,7 +1851,7 @@ public sealed class DaemonServer : IAsyncDisposable
         }
     }
 
-    private async Task BroadcastScheduleEventsAsync(ChannelReader<RuntimeEvent> reader, CancellationToken ct)
+    private async Task BroadcastHostEventsAsync(ChannelReader<RuntimeEvent> reader, CancellationToken ct)
     {
         await foreach (var evt in reader.ReadAllAsync(ct).ConfigureAwait(false))
         {
@@ -1802,6 +1881,19 @@ public sealed class DaemonServer : IAsyncDisposable
                 };
                 if (!string.IsNullOrWhiteSpace(reflected.Error)) reflectedDetails["error"] = reflected.Error;
                 await BroadcastAsync(0, "evolution.reflected", "进化引擎反思完成", ct, reflectedDetails)
+                    .ConfigureAwait(false);
+                continue;
+            }
+            if (evt is BackgroundTaskEvent backgroundTask)
+            {
+                var bgDetails = new JsonObject
+                {
+                    ["taskId"] = backgroundTask.TaskId,
+                    ["status"] = backgroundTask.Status,
+                };
+                if (!string.IsNullOrWhiteSpace(backgroundTask.SessionId)) bgDetails["sessionId"] = backgroundTask.SessionId;
+                if (!string.IsNullOrWhiteSpace(backgroundTask.Error)) bgDetails["error"] = backgroundTask.Error;
+                await BroadcastAsync(0, "task.updated", backgroundTask.TaskId, ct, bgDetails)
                     .ConfigureAwait(false);
                 continue;
             }

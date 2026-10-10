@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Prompts;
 
 namespace Haoyue.Runtime.Tools.Builtin;
@@ -273,8 +274,13 @@ public sealed class WebSearchTool(IPromptProvider prompts) : BuiltinTool(prompts
     }
 }
 
-/// <summary>Fetches web page content, strips HTML markup, and returns readable markdown-like text.</summary>
-public sealed class WebFetchTool(IPromptProvider prompts) : BuiltinTool(prompts)
+/// <summary>
+/// Fetches web page content, strips HTML markup, and returns readable markdown-like text.
+/// 外部网站访问受「允许的网站」白名单约束（config.web.allowedSites）：列表非空时仅放行
+/// 列表中的站点与 localhost（127.x / ::1 同理），支持 https://*.example.com 子域通配；
+/// 列表为空则不限制。每次执行现读配置，桌面端增删立即生效。
+/// </summary>
+public sealed class WebFetchTool(IPromptProvider prompts, IConfigStore configStore) : BuiltinTool(prompts)
 {
     public override bool RequiresWorkspace => false;
     public override bool RequiresNetwork => true;
@@ -304,6 +310,16 @@ public sealed class WebFetchTool(IPromptProvider prompts) : BuiltinTool(prompts)
             !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
             url = "https://" + url;
+        }
+
+        // 允许的网站：与 sysinfo/bash 沙箱一样属运行时强制（模型无法绕过）。
+        var rules = WebSiteAllowlist.Parse(configStore.Config.Web?.AllowedSites ?? []);
+        var (allowed, denyReason) = WebSiteAllowlist.Evaluate(url, rules);
+        if (!allowed)
+        {
+            context.Events.Publish(new Haoyue.Runtime.Events.WarningEvent(
+                $"web_fetch 被允许的网站白名单拒绝：{url}"));
+            return ToolResult.Fail(denyReason!);
         }
 
         var maxChars = Math.Clamp(GetInt(arguments, "max_chars") ?? 10_000, 500, 50_000);

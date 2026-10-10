@@ -22,6 +22,7 @@ public sealed class HaoyueConfig
     public EvolutionConfig Evolution { get; set; } = new();
     public KnowledgeConfig Knowledge { get; set; } = new();
     public ImageGenConfig ImageGen { get; set; } = new();
+    public WebConfig Web { get; set; } = new();
 
 
     public ProviderConfig? FindProvider(string id) =>
@@ -290,6 +291,17 @@ public sealed class ImageGenConfig
     public string? Model { get; set; }
     /// <summary>生成尺寸（传给 images/generations 的 size）。提供商不支持时由端点裁定。</summary>
     public string Size { get; set; } = "1024x1024";
+}
+
+/// <summary>外部网站访问白名单（web_fetch）。空列表 = 不限制；localhost / 127.x / ::1 始终允许。</summary>
+public sealed class WebConfig
+{
+    /// <summary>
+    /// 允许的网站规则，形式 scheme://host（host 可为 "*.example.com" 以允许子域；
+    /// 根域 example.com 需单独添加）。仅 http/https。空列表 = 不限制外部访问。
+    /// 变更立即生效（工具每次执行时读取，无缓存）。
+    /// </summary>
+    public List<string> AllowedSites { get; set; } = [];
 }
 
 public sealed class McpConfig

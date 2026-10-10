@@ -1224,6 +1224,15 @@ public sealed class DaemonServer : IAsyncDisposable
                             token => _admin.SetAdvancedConfigAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "web.allowedGet":
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", _admin.GetWebAccess(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "web.allowedSet":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SetWebAccess(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "prompt.optimize":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             token => _admin.OptimizePromptAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);

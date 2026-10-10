@@ -528,7 +528,7 @@ public sealed class ToolAndAgentTests
         // both available in global tasks, both hidden when the toggle is off.
         var prompts = new FilePromptProvider();
         var search = new WebSearchTool(prompts);
-        var fetch = new WebFetchTool(prompts);
+        var fetch = new WebFetchTool(prompts, new ConfigStore(Path.Combine(Path.GetTempPath(), $"haoyue_cfg_{Guid.NewGuid():N}"), Path.Combine(Path.GetTempPath(), $"haoyue_st_{Guid.NewGuid():N}")));
 
         // Assert through the ITool interface — that is how Agent.ActiveTools
         // inspects tools. A bare class property would NOT override the interface
@@ -821,7 +821,7 @@ public sealed class ToolAndAgentTests
     public async Task WebFetchTool_ExtractsTextAndStripsHtml()
     {
         var prompts = new FilePromptProvider();
-        var tool = new WebFetchTool(prompts);
+        var tool = new WebFetchTool(prompts, new ConfigStore(Path.Combine(Path.GetTempPath(), $"haoyue_cfg_{Guid.NewGuid():N}"), Path.Combine(Path.GetTempPath(), $"haoyue_st_{Guid.NewGuid():N}")));
 
         var html = "<html><head><style>body{color:red;}</style></head><body><h1>Title</h1><p>Hello World</p></body></html>";
         var method = typeof(WebFetchTool).GetMethod("ExtractMainText", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);

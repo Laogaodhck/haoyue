@@ -41,6 +41,7 @@ import type { ModelDetailConfig } from './ModelConfigModal.vue'
 import FieldLabel from './FieldLabel.vue'
 import OfficialSkillsPanel from './OfficialSkillsPanel.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
+import AllowedSitesDialog from './AllowedSitesDialog.vue'
 import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
@@ -183,6 +184,9 @@ const computerUseEnabled = ref(false)
 const computerUseDriver = ref('auto')
 const networkOpsEnabled = ref(false)
 const networkOpsAllowMutating = ref(true)
+/** 允许的网站（外部网站访问白名单）：卡片计数与管理弹窗。 */
+const allowedSitesOpen = ref(false)
+const allowedSitesCount = ref<number | null>(null)
 const replyLanguage = ref<'auto' | 'zh' | 'en'>('auto')
 const rulesEnabled = ref(true)
 const memoryMode = ref<'auto' | 'manual'>('auto')
@@ -693,6 +697,12 @@ async function loadAdvanced(): Promise<void> {
   computerUseDriver.value = config.computerUseDriver ?? 'auto'
   networkOpsEnabled.value = config.networkOpsEnabled ?? false
   networkOpsAllowMutating.value = config.networkOpsAllowMutating ?? true
+  try {
+    const web = await requestJson<{ allowedSites: string[] }>('web.allowedGet')
+    allowedSitesCount.value = web.allowedSites?.length ?? 0
+  } catch {
+    allowedSitesCount.value = null // daemon 版本较旧时静默隐藏计数
+  }
   if (config.localInference) {
     localInference.providerId = config.localInference.providerId
     localInference.gpuLayers = config.localInference.gpuLayers
@@ -2279,6 +2289,17 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="settings-group">
+            <div class="provider-enabled-row">
+              <span>
+                <strong>允许的网站（外部网站访问）</strong>
+                <small v-if="allowedSitesCount && allowedSitesCount > 0">已允许 {{ allowedSitesCount }} 个网站。仍可浏览本地主机。web_fetch 将按白名单拦截列表外的站点。</small>
+                <small v-else>未设置白名单：当前不限制外部网站访问。添加条目后，仅列表中的站点与本地主机可访问。</small>
+              </span>
+              <button class="secondary-button" type="button" @click="allowedSitesOpen = true">管理…</button>
+            </div>
+          </section>
+
+          <section class="settings-group">
             <label class="provider-enabled-row">
               <span>
                 <strong>电脑操作智能体 (Computer Use)</strong>
@@ -2353,4 +2374,5 @@ onBeforeUnmount(() => {
     :saving="action === 'provider.save'" :error="providerEditorOpen ? error : ''"
     :default-models-directory="providers.find((provider) => provider.kind === 'local')?.defaultModelsDirectory"
     @close="providerEditorOpen = false" @save="saveProvider" />
+  <AllowedSitesDialog :open="allowedSitesOpen" @close="() => { allowedSitesOpen = false; if (section === 'advanced') void loadCurrentSection() }" />
 </template>

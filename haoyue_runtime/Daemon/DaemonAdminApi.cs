@@ -190,8 +190,7 @@ internal sealed class DaemonAdminApi(
     }
 
     public string GetAdvancedConfig() => new JsonObject
-    {
-        ["networkEnabled"] = runtime.ConfigStore.Config.Agent.NetworkEnabled,
+    {        ["networkEnabled"] = runtime.ConfigStore.Config.Agent.NetworkEnabled,
         ["failoverEnabled"] = runtime.ConfigStore.Config.Routing.FailoverEnabled,
         ["deepSeekOptimizationEnabled"] = runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled,
         ["computerUseEnabled"] = runtime.ConfigStore.Config.ComputerUse?.Enabled ?? false,
@@ -223,6 +222,41 @@ internal sealed class DaemonAdminApi(
         };
     }
 
+
+    /// <summary>
+    /// 「允许的网站」白名单（外部网站访问）。mode 反映当前生效状态：
+    /// unrestricted（未配置，全部放行）或 allowlist（仅放行列表站点 + localhost）。
+    /// </summary>
+    public string GetWebAccess() => new JsonObject
+    {
+        ["allowedSites"] = new JsonArray(runtime.ConfigStore.Config.Web?.AllowedSites?.Select(s => JsonValue.Create(s))?.ToArray()
+            ?? []),
+        ["mode"] = runtime.ConfigStore.Config.Web?.AllowedSites is { Count: > 0 } ? "allowlist" : "unrestricted",
+        ["localhostAlwaysAllowed"] = true,
+    }.ToJsonString();
+
+    /// <summary>Replaces the allowlist with the submitted entries (invalid entries are
+    /// dropped, dedupe is case-insensitive). Takes effect immediately — web_fetch reads
+    /// the config per call, so no restart is needed.</summary>
+    public string SetWebAccess(JsonObject parameters)
+    {
+        if (parameters["allowedSites"] is not JsonArray array)
+            throw new DaemonRequestException("params.allowedSites must be an array of site entries (e.g. \"https://example.com\" or \"https://*.example.com\")");
+
+        var entries = array
+            .Select(n => n?.GetValue<string>())
+            .ToList();
+
+        var normalized = Tools.WebSiteAllowlist.Normalize(entries);
+        var dropped = entries.Count(e => !string.IsNullOrWhiteSpace(e)) - normalized.Count;
+        if (dropped > 0)
+            throw new DaemonRequestException(
+                $"{dropped} 个条目无效（需形如 https://example.com 或 https://*.example.com，仅 http/https），已跳过；请修正后重试");
+
+        runtime.ConfigStore.Config.Web.AllowedSites = normalized;
+        runtime.ConfigStore.Save();
+        return GetWebAccess();
+    }
 
     /// <summary>
     /// Rewrites an in-progress user prompt with the currently selected model. The

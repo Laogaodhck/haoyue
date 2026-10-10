@@ -355,6 +355,9 @@ public static class DaemonContract
             ("deepSeekOptimizationEnabled", SBoolean("DeepSeek 优化开关"), false))),
         M("advanced.get", "config", "查询高级配置", parameters: EmptyParams),
         M("advanced.set", "config", "更新高级配置", parameters: AdvancedSet),
+        M("web.allowedGet", "config", "查询允许的网站白名单（外部网站访问）", parameters: EmptyParams),
+        M("web.allowedSet", "config", "整体替换允许的网站白名单（无效条目整体拒绝），立即生效", parameters: SObject(
+            ("allowedSites", SArray("站点条目列表（localhost 始终允许）", SString("形如 https://example.com 或 https://*.example.com（允许子域）；仅 http/https")), true))),
         M("agent.config.get", "config", "查询智能体设置", parameters: EmptyParams),
         M("agent.config.set", "config", "部分更新智能体设置（未传字段保持原值）", parameters: SObject(
             ("networkEnabled", SBoolean("网页搜索（联网工具）开关"), false),

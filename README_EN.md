@@ -51,6 +51,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **MCP**: stdio and SSE transports with automatic discovery of tools/prompts/resources; prompt injection is capped at 24 per server and 48 total, with the truncation reason visible in MCP status
 - **Skill System**: directory-based skills (`skill.yaml` + `prompt.txt`); manifest v2 supports trigger keywords, tool whitelists, and parameter collection; skills hot-reload on change, no restart needed
 - **Multimodal Output**: `image_generate` image generation (OpenAI-compatible images/generations endpoint, b64/url channels); artifacts land in `.haoyue/outputs/images/` and can be fed back into the visual verification chain; the tool hides itself automatically when no image model is configured (local diffusion models are outside in-process inference scope — plug in a ComfyUI/SD-compatible gateway instead, see the [Deployment & Isolation Runbook](haoyue_doc/runbooks/deployment-isolation.md))
+- **Allowed websites (external-access allowlist)**: once `web.allowedSites` is configured, `web_fetch` can only reach listed origins plus localhost (127.x / ::1 always allowed); `https://*.example.com` allows subdomains while the apex example.com must be added separately; enforced at runtime and re-read per call, managed visually in the desktop "设置 → 允许的网站" card (RPC `web.allowedGet` / `web.allowedSet`) — changes take effect immediately, no restart needed
 
 ### 🧠 Knowledge Base & Memory
 
@@ -262,7 +263,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (681 cases, ≥70% line coverage gate)
+├── haoyue_tests/         # Runtime unit tests (689 cases, ≥70% line coverage gate)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -400,7 +401,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test haoyue_tests      # runtime tests (681 cases)
+dotnet test haoyue_tests      # runtime tests (689 cases)
 dotnet test haoyue_cli_tests  # CLI tests
 
 # Desktop (requires pnpm install first)

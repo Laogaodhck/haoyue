@@ -40,7 +40,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 ### 🤖 Multi-Provider & Models
 
 - **OpenAI-compatible / Anthropic / Google**: mainstream cloud models out of the box
-- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, KV cache quantization, Flash Attention, and cross-request KV prefix reuse; the CUDA 12 backend delivers a measured **11× decoding speedup** (7.6 → 84.9 tok/s)
+- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, KV cache quantization, Flash Attention, and cross-request KV prefix reuse; load failures retry automatically (falling back to CPU when GPU offload fails), and every successful load runs a small-context inference self-check — corrupted weights or an unallocatable context surface at load time rather than mid-conversation; the CUDA 12 backend delivers a measured **11× decoding speedup** (7.6 → 84.9 tok/s)
 - **Local Multimodal Vision**: companion mmproj weights are auto-discovered so local models can directly "see" images in conversations and tool screenshots — image-bearing requests automatically fall back to a CPU context to dodge an upstream CUDA slow path, while text-only turns stay at full GPU speed
 - **Smart Routing**: fast, balanced, quality, budget, and offline strategies; automatic retry with exponential backoff and circuit-breaker failover
 - **Usage Analytics**: token counts, cost, and model distribution with desktop charts
@@ -95,7 +95,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 
 - **Modern UI**: Electron + Vue 3 + TypeScript, streaming Markdown, image preview, reasoning depth control
 - **Expert System**: built-in domain expert catalog with one-click role presets
-- **Visual Configuration**: providers, models, profiles, MCP servers, and local inference acceleration — all GUI-managed; the "Models & Providers" page shows the active model's parameters (context window / max output), capability badges (streaming / tools / thinking / vision / reasoning), and the full model catalog
+- **Visual Configuration**: providers, models, profiles, MCP servers, and local inference acceleration — all GUI-managed; the "Models & Providers" page shows the active model's parameters (context window / max output), capability badges (streaming / tools / thinking / vision / reasoning), and the full model catalog; local models gain a "Load Settings" page — six sections (context & performance, generation, thinking, memory, speculative decoding, advanced) with view/edit/save wired into the load pipeline
 - **Scheduled Tasks**: cron-driven scheduling turns with instant desktop notifications on failure and Webhook callbacks
 - **Turn Undo & Feedback**: one-click revert of file changes; thumbs-down any assistant answer with a reason — the feedback feeds straight into the evolution signals
 
@@ -263,7 +263,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (689 cases, ≥70% line coverage gate)
+├── haoyue_tests/         # Runtime unit tests (696 cases, ≥70% line coverage gate)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -324,6 +324,47 @@ Each project can override providers and models, temperature and context, tool pe
 - VRAM note: 8GB VRAM with long contexts may OOM — lower `gpuLayers` or enable KV quantization; image-bearing requests automatically switch to a CPU context (dodging the upstream CUDA multimodal slow path) while text-only turns stay at full GPU speed
 
 All of these can also be configured visually in the desktop app under "Settings → Advanced → Local Inference Acceleration".
+
+### Per-Model Load Settings (`load`)
+
+Each local model can additionally override provider-level settings via the `load` field on the model entry, enabling per-model tuning (editable visually on the desktop "Model Load Settings" page; RPC `model.update` to change, `model.config.get` to query):
+
+```json
+{
+  "providers": {
+    "local": {
+      "kind": "local",
+      "models": [
+        {
+          "id": "gemma-4-E4B-it-Q4_K_M",
+          "contextWindow": 32768,
+          "load": {
+            "autoOptimize": false,
+            "contextLength": 32768,
+            "gpuOffload": 999,
+            "evaluationBatchSize": 512,
+            "physicalBatchSize": 256,
+            "tryMmap": true,
+            "keepModelInMemory": false,
+            "offloadKvCacheToGpu": true,
+            "kCacheQuantType": "q8_0",
+            "temperature": 0.6,
+            "topP": 0.95,
+            "stopStrings": ["<end_of_turn>"]
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+- **Semantics**: omitting `load` keeps provider-level and built-in defaults; a null field inside the object likewise means "auto", and cloud providers are never affected. Out-of-range values are clamped at parse time instead of surfacing as cryptic llama.cpp errors
+- **Context & performance**: `contextLength` (explicit contexts clamp only to the trained value — may exceed the default 32k practical cap for longer windows), `gpuOffload` / `threads`, `evaluationBatchSize` / `physicalBatchSize` (llama.cpp n_batch / ubatch for prefill tuning), `flashAttention`
+- **Memory**: `tryMmap` (memory-mapped weights — lower load peak and faster startup), `keepModelInMemory` (mlock pinning; off by default so larger models fit), `offloadKvCacheToGpu`, `unifiedKvCache`, `kCacheQuantType` / `vCacheQuantType` (independent K/V quantization)
+- **Generation & thinking**: `temperature` / `topP` / `minP` / `topK` / `repeatPenalty` / `seed`, `stopStrings`, `enableThinking` (per-model thinking default), `limitResponseLength`
+- **Effect mechanism**: saving immediately invalidates resident weights; the next request reloads with the new settings (only load-affecting fields trigger a reload — sampling fields apply instantly); load failures retry and fall back to CPU, and each successful load runs a small-context inference self-check
+- **Experimental fields**: `speculativeDecoding`, `contextCheckpoints`, `chatTemplate`, `llamaCppOverride` and similar are saved/display-only for now and do not participate in loading until runtime support lands
 
 ## 🎯 Usage Examples
 
@@ -401,7 +442,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test haoyue_tests      # runtime tests (689 cases)
+dotnet test haoyue_tests      # runtime tests (696 cases)
 dotnet test haoyue_cli_tests  # CLI tests
 
 # Desktop (requires pnpm install first)

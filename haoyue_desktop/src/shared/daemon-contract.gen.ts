@@ -123,6 +123,7 @@ export const DAEMON_METHODS = [
   'model.switch',
   'model.test',
   'model.status',
+  'model.config.get',
   'model.update',
   'schedule.list',
   'schedule.create',

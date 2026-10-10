@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { Eye, EyeOff, FolderOpen, Plus, RefreshCw, Save, Settings2, Trash2, X } from '@lucide/vue'
-import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { Eye, EyeOff, FolderOpen, Gauge, Plus, RefreshCw, Save, Settings2, Trash2, X } from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import FieldLabel from './FieldLabel.vue'
 import SelectMenu from './SelectMenu.vue'
 import ModelConfigModal, { type ModelDetailConfig } from './ModelConfigModal.vue'
+import ModelLoadSettingsDialog, { type LocalModelLoadSettings } from './ModelLoadSettingsDialog.vue'
 import { formatTokenCount } from '../app-helpers'
 
 export interface ProviderFormValue {
@@ -56,6 +57,8 @@ const modelList = ref<ModelDetailConfig[]>([])
 const newModelInput = ref('')
 const modelConfigModalOpen = ref(false)
 const selectedModelConfig = ref<ModelDetailConfig | null>(null)
+const loadSettingsOpen = ref(false)
+const loadSettingsModel = ref<ModelDetailConfig | null>(null)
 const firstInput = ref<HTMLInputElement | null>(null)
 const revealKey = ref(false)
 const protocolOptions = [
@@ -221,6 +224,31 @@ function handleModelConfigSave(updated: ModelDetailConfig): void {
   }
   modelConfigModalOpen.value = false
   selectedModelConfig.value = null
+}
+
+/** 打开「模型加载配置」页（仅本地 GGUF 模型）。 */
+function openLoadSettings(model: ModelDetailConfig): void {
+  loadSettingsModel.value = model
+  loadSettingsOpen.value = true
+}
+
+const loadSettingsProviderId = computed((): string | null =>
+  props.editingId?.trim() || form.id.trim() || null
+)
+
+/** 加载配置保存成功后同步到本地模型列表，随提供商保存一起 round-trip。 */
+function handleLoadSettingsSaved(load: LocalModelLoadSettings | null): void {
+  const model = loadSettingsModel.value
+  if (!model) return
+  const index = modelList.value.findIndex((m) => m.id === model.id)
+  if (index !== -1) {
+    const entry = modelList.value[index]
+    if (entry) {
+      const updated: ModelDetailConfig = { ...entry, load }
+      modelList.value[index] = updated
+      loadSettingsModel.value = updated
+    }
+  }
 }
 
 function close(): void {
@@ -446,6 +474,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                           @click="openModelConfig(model)">
                           <Settings2 :size="15" />
                         </button>
+                        <button v-if="isLocalKind()" type="button" class="icon-button compact"
+                          title="模型加载配置（上下文 / 性能 / 内存 / 采样）" @click="openLoadSettings(model)">
+                          <Gauge :size="15" />
+                        </button>
                         <button type="button" class="icon-button compact danger-icon" title="删除模型"
                           @click="removeModel(idx)">
                           <Trash2 :size="15" />
@@ -519,4 +551,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
 
   <ModelConfigModal :open="modelConfigModalOpen" :model="selectedModelConfig" :is-local="isLocalKind()"
     @close="modelConfigModalOpen = false" @save="handleModelConfigSave" />
+
+  <ModelLoadSettingsDialog
+    :open="loadSettingsOpen"
+    :provider-id="loadSettingsProviderId"
+    :model-id="loadSettingsModel?.id ?? null"
+    :initial-load="loadSettingsModel?.load ?? null"
+    @close="loadSettingsOpen = false"
+    @saved="handleLoadSettingsSaved"
+  />
 </template>

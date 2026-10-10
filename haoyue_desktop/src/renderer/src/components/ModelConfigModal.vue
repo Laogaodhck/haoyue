@@ -3,6 +3,7 @@ import { FolderOpen, Save, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import ComboboxInput, { ComboboxOption } from './ComboboxInput.vue'
 import FieldLabel from './FieldLabel.vue'
+import type { LocalModelLoadSettings } from './ModelLoadSettingsDialog.vue'
 
 const tokenPresets: ComboboxOption[] = [
   { value: 128000, label: '128K', description: '128,000 Tokens' },
@@ -21,6 +22,9 @@ export interface ModelDetailConfig {
   maxOutput: number
   vision: boolean
   localPath?: string
+  mmprojPath?: string
+  /** 本地模型的加载配置（模型加载配置页）；null/缺省 = 全部「自动」。 */
+  load?: LocalModelLoadSettings | null
 }
 
 const props = defineProps<{

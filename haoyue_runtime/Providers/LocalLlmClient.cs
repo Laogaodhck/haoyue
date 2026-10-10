@@ -47,8 +47,8 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 
         using var lease = await cache.AcquireAsync(
             path,
-            BuildLoadParams(path, provider),
-            LoadSignature(provider),
+            BuildLoadParams(path, provider, modelConfig),
+            LoadSignature(provider, modelConfig),
             null,
             ct).ConfigureAwait(false);
         var weights = lease.Weights;
@@ -94,15 +94,17 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 
         using var lease = await cache.AcquireAsync(
             path,
-            BuildLoadParams(path, request.Provider),
-            LoadSignature(request.Provider) + "|" + (mmprojPath ?? "nommproj"),
+            BuildLoadParams(path, request.Provider, request.Model),
+            LoadSignature(request.Provider, request.Model) + "|" + (mmprojPath ?? "nommproj"),
             mmprojPath,
             ct).ConfigureAwait(false);
         var weights = lease.Weights;
 
         var (contextParams, signature) = BuildContextParams(path, request.Model, request.Provider, weights);
         string? marker = lease.Mtmd is null ? null : NativeApi.MtmdDefaultMarker();
-        var (prompt, startsInThinking) = BuildPrompt(weights, request, marker);
+        // 思考默认值：模型加载设置可覆盖每次请求的开关（配置页「思考」分区）。
+        var thinkingEnabled = request.Model.Load?.EnableThinking ?? request.EnableThinking;
+        var (prompt, startsInThinking) = BuildPrompt(weights, request, marker, thinkingEnabled);
 
         IAsyncEnumerable<LlmStreamEvent> stream;
         if (images.Count > 0)
@@ -468,53 +470,103 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         }
     }
 
-    /// <summary>Model-load parameters: GPU offload and thread count, no KV allocation yet.</summary>
-    private static ModelParams BuildLoadParams(string path, ProviderConfig provider) => new(path)
+    /// <summary>
+    /// Model-load parameters builder. Merges the provider-level settings with the per-model
+    /// load settings from the model configuration page (model.Load wins; AutoOptimize=true
+    /// forces GPU offload / threads back to the provider level, i.e. "AUTO"). Returns a
+    /// factory so the model cache can request a CPU-only variant (GPU offload degradation)
+    /// without re-deriving every field. Batch sizes, mmap/mlock, FlashAttention, KV offload,
+    /// unified KV and RoPE overrides all come straight from the configuration page.
+    /// </summary>
+    private static Func<bool, ModelParams> BuildLoadParams(string path, ProviderConfig provider, ModelConfig? model)
     {
-        GpuLayerCount = provider.GpuLayers ?? 0,
-        Threads = provider.Threads is { } loadThreads ? Math.Max(1, loadThreads) : null,
-        UseMemorymap = true,
-    };
+        var load = model?.Load;
+        var gpuLayers = load is { AutoOptimize: true } or { GpuOffload: null }
+            ? provider.GpuLayers ?? 0
+            : load!.GpuOffload!.Value;
+        var threads = load is { AutoOptimize: true } or { Threads: null }
+            ? provider.Threads
+            : load!.Threads;
+        var requested = new ModelParams(path)
+        {
+            GpuLayerCount = gpuLayers,
+            Threads = threads is { } loadThreads ? Math.Max(1, loadThreads) : null,
+            // mmap 按页映射权重文件：加载峰值内存远低于整模型读入，且启动更快；mlock
+            // 默认关闭，避免锁页把常驻内存顶到峰值（配置页「内存」分区）。
+            UseMemorymap = load?.TryMmap ?? true,
+            UseMemoryLock = load?.KeepModelInMemory ?? false,
+            BatchSize = (uint)Math.Clamp(load?.EvaluationBatchSize ?? 2048, 16, 8192),
+            UBatchSize = (uint)Math.Clamp(load?.PhysicalBatchSize ?? 512, 16, 8192),
+            FlashAttention = load?.FlashAttention ?? provider.FlashAttention,
+            NoKqvOffload = load is { OffloadKvCacheToGpu: false },
+            KVUnified = load?.UnifiedKvCache,
+            RopeFrequencyBase = (float?)load?.RopeFrequencyBase,
+            RopeFrequencyScale = (float?)load?.RopeFrequencyScale,
+        };
+        return cpuOnly => cpuOnly ? requested with { GpuLayerCount = 0 } : requested;
+    }
 
     /// <summary>
-    /// Identity of the provider-level load settings that force a weights reload when they
-    /// change (the model cache would otherwise reuse weights loaded with the old values).
-    /// FlashAttention is a context-level parameter and lives in the context signature instead.
+    /// Identity of the provider- and model-level load settings that force a weights reload
+    /// when they change (the model cache would otherwise reuse weights loaded with the old
+    /// values). FlashAttention is a context-level parameter and lives in the context
+    /// signature instead.
     /// </summary>
-    internal static string LoadSignature(ProviderConfig provider) =>
-        $"{provider.GpuLayers?.ToString() ?? "cpu"}|{provider.Threads?.ToString() ?? "auto"}";
+    internal static string LoadSignature(ProviderConfig provider, ModelConfig? model = null) =>
+        $"{provider.GpuLayers?.ToString() ?? "cpu"}|{provider.Threads?.ToString() ?? "auto"}"
+        + (model?.Load is { } load ? "|" + load.Signature() : "");
 
     private static (ModelParams Params, string Signature) BuildContextParams(
         string path, ModelConfig model, ProviderConfig provider, LLamaWeights weights, bool forceCpu = false)
     {
         // Registering a model with a context window larger than it was trained for would
         // silently extrapolate positions, so the effective context is clamped to the model.
-        // It is also clamped to a practical CPU ceiling: the KV cache of a 128k window alone
-        // costs multiple gigabytes of RAM, and an entry that was written by hand inherits
-        // the remote default (128k) unless the registration set a real value.
+        // An explicit context length from the configuration page is clamped to the trained
+        // window only; an "auto" value keeps the practical CPU ceiling so a hand-written
+        // registration that inherited the remote default (128k) cannot allocate gigabytes
+        // of KV cache by accident.
+        var load = model.Load;
         var trained = weights.ContextSize > 0 ? weights.ContextSize : 4096;
-        var configured = model.ContextWindow > 0 ? model.ContextWindow : trained;
-        var contextSize = (uint)Math.Max(512, Math.Min(configured, Math.Min(trained, LocalModelProbe.DefaultContextWindow)));
-        var gpuLayers = forceCpu ? 0 : (provider.GpuLayers ?? 0);
-        var threads = provider.Threads;
+        var configured = load is { ContextLength: { } explicitLength, AutoOptimize: false } && explicitLength > 0
+            ? explicitLength
+            : model.ContextWindow > 0 ? model.ContextWindow : trained;
+        var ceiling = load is { ContextLength: { }, AutoOptimize: false }
+            ? trained
+            : Math.Min(trained, LocalModelProbe.DefaultContextWindow);
+        var contextSize = (uint)Math.Max(512, Math.Min(configured, ceiling));
+        var gpuLayers = forceCpu ? 0 : (load is { AutoOptimize: true } or { GpuOffload: null }
+            ? provider.GpuLayers ?? 0
+            : load!.GpuOffload!.Value);
+        var threads = load is { AutoOptimize: true } or { Threads: null } ? provider.Threads : load!.Threads;
+        var flashAttention = load?.FlashAttention ?? provider.FlashAttention;
         // Quantized KV caches require flash attention in llama.cpp; silently keep f16
         // when the user enabled quantization alone instead of failing every request.
-        var kvQuant = provider.FlashAttention ? NormalizeKvQuant(provider.KvCacheQuantization) : "none";
+        var kQuant = load?.KCacheQuantType ?? provider.KvCacheQuantization;
+        var vQuant = load?.VCacheQuantType ?? kQuant;
+        var kvQuant = flashAttention ? NormalizeKvQuant(kQuant) : "none";
         var parameters = new ModelParams(path)
         {
             ContextSize = contextSize,
             GpuLayerCount = gpuLayers,
             Threads = threads is { } threadCount ? Math.Max(1, threadCount) : null,
-            FlashAttention = provider.FlashAttention,
-            UseMemorymap = true,
+            FlashAttention = flashAttention,
+            UseMemorymap = load?.TryMmap ?? true,
+            UseMemoryLock = load?.KeepModelInMemory ?? false,
+            BatchSize = (uint)Math.Clamp(load?.EvaluationBatchSize ?? 2048, 16, 8192),
+            UBatchSize = (uint)Math.Clamp(load?.PhysicalBatchSize ?? 512, 16, 8192),
+            NoKqvOffload = load is { OffloadKvCacheToGpu: false },
+            KVUnified = load?.UnifiedKvCache,
+            RopeFrequencyBase = (float?)load?.RopeFrequencyBase,
+            RopeFrequencyScale = (float?)load?.RopeFrequencyScale,
         };
         if (kvQuant != "none")
         {
             parameters.TypeK = kvQuant == "q4_0" ? GGMLType.GGML_TYPE_Q4_0 : GGMLType.GGML_TYPE_Q8_0;
-            parameters.TypeV = parameters.TypeK;
+            parameters.TypeV = NormalizeKvQuant(vQuant) == "q4_0" ? GGMLType.GGML_TYPE_Q4_0 : GGMLType.GGML_TYPE_Q8_0;
         }
         // Any change to these values invalidates the reusable context (different KV layout).
-        var signature = $"{path}|{contextSize}|{gpuLayers}|{threads?.ToString() ?? "auto"}|{provider.FlashAttention}|{kvQuant}";
+        var signature = $"{path}|{contextSize}|{gpuLayers}|{threads?.ToString() ?? "auto"}|{flashAttention}|{kvQuant}|{NormalizeKvQuant(vQuant)}"
+                        + (load is null ? "" : $"|{load.Signature()}");
         return (parameters, signature);
     }
 
@@ -531,8 +583,9 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// text of the message that carries it — mtmd replaces markers with image embeddings.
     /// </summary>
     private static (string Prompt, bool StartsInThinking) BuildPrompt(
-        LLamaWeights weights, LlmRequest request, string? imageMarker = null)
+        LLamaWeights weights, LlmRequest request, string? imageMarker = null, bool? enableThinking = null)
     {
+        var thinkingEnabled = enableThinking ?? request.EnableThinking;
         LLamaTemplate template;
         try
         {
@@ -582,7 +635,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             // 新模型的官方模板常超前于 llama.cpp 内置 Jinja 的能力（如 Gemma 4 的
             // namespace / raise_exception 语法），apply 失败时按架构走 canonical 兜底渲染，
             // 而不是让该模型在 runtime 中完全不可用。
-            prompt = RenderCanonicalPrompt(weights, request, ex, imageMarker);
+            prompt = RenderCanonicalPrompt(weights, request, ex, imageMarker, thinkingEnabled);
         }
 
         // DeepSeek-R1 family models reason before answering: either the template injects
@@ -607,11 +660,11 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// 其余架构如实抛错（带原始模板错误），绝不静默用错误格式降级模型输出质量。
     /// </summary>
     internal static string RenderCanonicalPrompt(
-        LLamaWeights weights, LlmRequest request, Exception templateError, string? imageMarker = null)
+        LLamaWeights weights, LlmRequest request, Exception templateError, string? imageMarker = null, bool enableThinking = true)
     {
         var architecture = TryGetMetadata(weights, "general.architecture");
         if (architecture is "gemma4")
-            return RenderGemmaTurnPrompt(request.Messages, request.System, request.EnableThinking, imageMarker);
+            return RenderGemmaTurnPrompt(request.Messages, request.System, enableThinking, imageMarker);
 
         throw new LlmException(
             $"The chat template of {request.Model.Id} (architecture: {architecture ?? "unknown"}) " +
@@ -696,29 +749,39 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     }
 
     /// <summary>
-    /// 采样参数配置。温度沿用 DeepSeek 官方对 R1 系列的建议值 0.6、top-p 0.95；
-    /// 显式设置重复惩罚是关键改进——库默认 RepeatPenalty=1（关闭），小参数量本地模型
-    /// 在无惩罚时极易陷入逐词复读循环；惩罚窗口 64 token 覆盖近邻重复，且不惩罚换行，
-    /// 避免长代码块与列表的格式被破坏。
+    /// 采样参数配置。优先级：模型加载配置页（ModelConfig.Load）&gt; 内置默认。内置默认沿用
+    /// DeepSeek 对 R1 系列的建议值：温度 0.6、top-p 0.95；显式设置重复惩罚是关键改进——
+    /// 库默认 RepeatPenalty=1（关闭），小参数量本地模型在无惩罚时极易陷入逐词复读循环；
+    /// 惩罚窗口 64 token 覆盖近邻重复，且不惩罚换行，避免长代码块与列表的格式被破坏。
+    /// 配置页的停止串映射为反提示，种子非空时固定采样种子。
     /// </summary>
     private static InferenceParams BuildInferenceParams(LlmRequest request)
     {
+        var load = request.Model.Load;
         var maxTokens = request.MaxTokens is { } requested && requested > 0
             ? requested
             : Math.Clamp(request.Model.MaxOutput, 256, 32_768);
+        // 配置页「限制回复长度」开启时，严格压到模型注册的最大输出以内。
+        if (load?.LimitResponseLength == true)
+            maxTokens = Math.Min(maxTokens, Math.Clamp(request.Model.MaxOutput, 16, 32_768));
+        var pipeline = new DefaultSamplingPipeline
+        {
+            Temperature = (float)(load?.Temperature ?? request.Temperature ?? 0.6),
+            TopP = (float)(load?.TopP ?? 0.95),
+            TopK = load?.TopK ?? 40,
+            MinP = (float)(load?.MinP ?? 0.1),
+            RepeatPenalty = (float)(load?.RepeatPenalty ?? 1.1),
+            PresencePenalty = (float)(load?.PresencePenalty ?? 0),
+            PenaltyCount = 64,
+            PenalizeNewline = false,
+        };
+        if (load?.Seed is { } seed)
+            pipeline.Seed = (uint)Math.Clamp(seed, 0, uint.MaxValue);
         return new InferenceParams
         {
             MaxTokens = maxTokens,
-            SamplingPipeline = new DefaultSamplingPipeline
-            {
-                Temperature = (float)(request.Temperature ?? 0.6),
-                TopP = 0.95f,
-                TopK = 40,
-                MinP = 0.1f,
-                RepeatPenalty = 1.1f,
-                PenaltyCount = 64,
-                PenalizeNewline = false,
-            },
+            SamplingPipeline = pipeline,
+            AntiPrompts = load?.StopStrings is { Count: > 0 } stops ? stops : [],
         };
     }
 

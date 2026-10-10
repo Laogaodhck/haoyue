@@ -113,6 +113,12 @@ public sealed class ModelConfig
     /// directory; the model stays text-only when none is found.
     /// </summary>
     public string? MmprojPath { get; set; }
+    /// <summary>
+    /// For kind "local": per-model load &amp; inference settings shown on the desktop model
+    /// configuration page. Null keeps provider-level (and built-in) defaults; fields left
+    /// null inside the object mean "auto" as well, so remote providers are never affected.
+    /// </summary>
+    public Providers.LocalModelSettings? Load { get; set; }
     /// <summary>USD per 1M tokens.</summary>
     public decimal InputPricePerMTok { get; set; }
     public decimal OutputPricePerMTok { get; set; }

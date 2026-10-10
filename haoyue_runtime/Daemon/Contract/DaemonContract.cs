@@ -390,13 +390,18 @@ public static class DaemonContract
             ("model", SString("模型 ref"), true))),
         M("model.status", "model", "本地模型预检状态", parameters: SObject(
             ("model", SString("模型 ref"), true))),
-        M("model.update", "model", "更新模型元数据", parameters: SObject(
+        M("model.config.get", "model", "模型加载配置页全量数据（含加载设置 / mmproj / 加载报告）", parameters: SObject(
+            ("provider", SString("提供商 id"), true),
+            ("id", SString("模型 id"), true))),
+        M("model.update", "model", "更新模型元数据与加载配置", parameters: SObject(
             ("provider", SString("提供商 id"), true),
             ("id", SString("模型 id"), true),
             ("alias", SString("显示别名"), false),
             ("contextWindow", SInteger("上下文窗口（>0）"), false),
             ("maxOutput", SInteger("最大输出 token（>0）"), false),
-            ("vision", SBoolean("是否支持视觉"), false))),
+            ("vision", SBoolean("是否支持视觉"), false),
+            ("mmprojPath", SString("多模态投影器路径；null 清除"), false),
+            ("load", SString("加载配置对象（LocalModelSettings JSON）；null 清除恢复自动"), false))),
 
         // schedule
         M("schedule.list", "schedule", "列出定时任务", parameters: EmptyParams),

@@ -29,7 +29,8 @@ internal sealed class DaemonAdminApi(
     WorkspaceInfo globalWorkspace,
     IFileLockCoordinator fileLocks,
     IScheduleService? scheduler = null,
-    CancellationToken lifetime = default)
+    CancellationToken lifetime = default,
+    LocalModelCache? sharedLocalModels = null)
 {
     /// <summary>
     /// Raised after a background MCP reconnect finishes so clients can refresh the
@@ -630,6 +631,12 @@ internal sealed class DaemonAdminApi(
                         model.Capabilities.ToolCalling = tools;
                     if (node.ContainsKey("localPath"))
                         model.LocalPath = OptionalString(node, "localPath");
+                    if (node.ContainsKey("mmprojPath"))
+                        model.MmprojPath = OptionalString(node, "mmprojPath");
+                    if (node["load"] is JsonObject loadNode)
+                        model.Load = LocalModelSettings.FromJson(loadNode);
+                    else if (node.ContainsKey("load") && node["load"] is null)
+                        model.Load = null; // 显式传 null：清除加载配置，回到「自动」
                     return model;
                 })
                 .ToList();
@@ -915,7 +922,7 @@ internal sealed class DaemonAdminApi(
         return Strings(ids).ToJsonString();
     }
 
-    public string UpdateModel(JsonObject parameters)
+    public async Task<string> UpdateModel(JsonObject parameters)
     {
         var providerId = RequiredString(parameters, "provider");
         var modelId = RequiredString(parameters, "id");
@@ -924,6 +931,7 @@ internal sealed class DaemonAdminApi(
         var model = provider.Models.FirstOrDefault(item =>
             item.Id.Equals(modelId, StringComparison.OrdinalIgnoreCase))
                     ?? throw new DaemonRequestException($"Model not found: {providerId}/{modelId}");
+        var originalLoadJson = model.Load?.ToJson().ToJsonString();
 
         if (parameters.ContainsKey("alias"))
             model.Alias = parameters["alias"]?.GetValue<string>()?.Trim() is { Length: > 0 } alias ? alias : null;
@@ -941,6 +949,22 @@ internal sealed class DaemonAdminApi(
         }
         if (parameters["vision"]?.GetValue<bool?>() is { } vision)
             model.Capabilities.Vision = vision;
+        if (parameters["mmprojPath"] is JsonValue mmprojValue)
+        {
+            if (mmprojValue.TryGetValue(out string? mmprojPath) && !string.IsNullOrWhiteSpace(mmprojPath))
+                model.MmprojPath = mmprojPath.Trim();
+            else
+                model.MmprojPath = null;
+        }
+        if (parameters["load"] is JsonObject loadNode)
+            model.Load = LocalModelSettings.FromJson(loadNode);
+        else if (parameters.ContainsKey("load"))
+            model.Load = null; // 显式传 null：清除加载配置，回到「自动」
+
+        // 加载设置变化必须立刻让常驻权重失效，下一次请求会按新配置重新加载。
+        var changedLoad = !string.Equals(originalLoadJson, model.Load?.ToJson().ToJsonString(), StringComparison.Ordinal);
+        if (changedLoad && sharedLocalModels is { IsLoaded: true })
+            await sharedLocalModels.UnloadAsync().ConfigureAwait(false);
         runtime.ConfigStore.Save();
         return new JsonObject
         {
@@ -950,7 +974,75 @@ internal sealed class DaemonAdminApi(
             ["contextWindow"] = model.ContextWindow,
             ["maxOutput"] = model.MaxOutput,
             ["vision"] = model.Capabilities.Vision,
+            ["mmprojPath"] = model.MmprojPath,
+            ["load"] = model.Load?.ToJson(),
         }.ToJsonString();
+    }
+
+    /// <summary>
+    /// 模型配置页的全量读取：模型元数据 + 加载设置 + 多模态投影器解析结果 + 当前常驻
+    /// 状态与最近一次加载报告（重试 / 降级 / 自检信息）。
+    /// </summary>
+    public string GetModelConfig(JsonObject parameters)
+    {
+        var providerId = RequiredString(parameters, "provider");
+        var modelId = RequiredString(parameters, "id");
+        var provider = runtime.ConfigStore.Config.FindProvider(providerId)
+                       ?? throw new DaemonRequestException($"Provider not found: {providerId}");
+        var model = provider.Models.FirstOrDefault(item =>
+            item.Id.Equals(modelId, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new DaemonRequestException($"Model not found: {providerId}/{modelId}");
+
+        var result = new JsonObject
+        {
+            ["provider"] = provider.Id,
+            ["providerName"] = provider.DisplayName,
+            ["providerKind"] = provider.Kind,
+            ["id"] = model.Id,
+            ["alias"] = model.Alias,
+            ["contextWindow"] = model.ContextWindow,
+            ["maxOutput"] = model.MaxOutput,
+            ["vision"] = model.Capabilities.Vision,
+            ["localPath"] = model.LocalPath,
+            ["mmprojPath"] = model.MmprojPath,
+            ["load"] = model.Load?.ToJson(),
+            ["providerDefaults"] = new JsonObject
+            {
+                ["gpuLayers"] = provider.GpuLayers,
+                ["threads"] = provider.Threads,
+                ["flashAttention"] = provider.FlashAttention,
+                ["kvCacheQuantization"] = provider.KvCacheQuantization,
+                ["modelsDirectory"] = LocalModels.ResolveDirectory(provider.ModelsDirectory),
+            },
+        };
+
+        // 本地模型：文件状态 + 自动探测的 mmproj + 常驻状态。
+        if (provider.IsLocal)
+        {
+            var path = LocalModels.ResolveModelPath(provider, model);
+            var file = new FileInfo(path);
+            result["resolvedPath"] = path;
+            result["fileExists"] = file.Exists;
+            result["fileSizeBytes"] = file.Exists ? file.Length : 0;
+            result["autoMmprojPath"] = LocalModels.ResolveMmprojPath(provider, model);
+            result["isMultimodal"] = LocalModels.ResolveMmprojPath(provider, model) is not null
+                                     || model.Capabilities.Vision;
+            result["residentInMemory"] = sharedLocalModels?.IsLoaded == true;
+            var report = sharedLocalModels?.LastLoadReport;
+            if (report is not null)
+            {
+                result["loadReport"] = new JsonObject
+                {
+                    ["attempts"] = report.Attempts,
+                    ["degradedToCpu"] = report.DegradedToCpu,
+                    ["verified"] = report.Verified,
+                    ["loadDurationMs"] = report.LoadDurationMs,
+                    ["effectiveGpuLayers"] = report.EffectiveGpuLayers,
+                    ["note"] = report.Note,
+                };
+            }
+        }
+        return result.ToJsonString();
     }
 
     public string ListMcpServers()
@@ -2312,6 +2404,9 @@ internal sealed class DaemonAdminApi(
             ["vision"] = m.Capabilities.Vision,
             ["toolCalling"] = m.Capabilities.ToolCalling,
             ["localPath"] = m.LocalPath,
+            ["mmprojPath"] = m.MmprojPath,
+            // 加载配置页的全量设置；null = 从未自定义（前端渲染为「自动」）。
+            ["load"] = m.Load?.ToJson(),
         }).ToArray()),
         ["enabled"] = provider.Enabled,
         ["priority"] = provider.Priority,

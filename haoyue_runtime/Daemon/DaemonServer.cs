@@ -210,7 +210,7 @@ public sealed class DaemonServer : IAsyncDisposable
             _sharedLocalModels);
         _runtimeEvents = _runtime.Events.Subscribe();
         _scheduleEventsTask = BroadcastHostEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
-        _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token);
+        _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token, _sharedLocalModels);
         _admin.McpStatusChanged += OnMcpStatusChanged;
         _admin.EvolutionConfigChanged += ScheduleAutoReflect;
         ScheduleAutoReflect();
@@ -1388,7 +1388,12 @@ public sealed class DaemonServer : IAsyncDisposable
 
                     case "model.update":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
-                            _ => Task.FromResult(_admin.UpdateModel(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                            _ => _admin.UpdateModel(Params(request)), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "model.config.get":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.GetModelConfig(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
                     case "mcp.list":

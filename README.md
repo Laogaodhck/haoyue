@@ -40,7 +40,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 🤖 多提供商与模型
 
 - **OpenAI 兼容 / Anthropic / Google**：主流云端模型开箱即用
-- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）
+- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；加载失败自动重试（GPU 卸载失败自动降级 CPU），加载完成后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）
 - **本地多模态视觉**：GGUF 配套 mmproj 权重自动发现，本地模型可直接"看"对话中的图片与工具截图——带图请求自动降级 CPU 上下文规避上游 CUDA 慢路径，文本轮保持 GPU 全速
 - **智能路由**：快速、均衡、质量、经济、离线多种策略，自动重试、指数退避与熔断器故障转移
 - **用量统计**：Token 计数、成本与模型分布，桌面端图表可视化
@@ -94,7 +94,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 
 - **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown、图片预览、推理深度调节
 - **专家系统**：内置领域专家库，一键切换角色预设
-- **图形化配置**：Provider、模型、Profile、MCP 服务器、本地推理加速全程可视化；「模型与提供商」页展示活动模型参数（上下文窗口/最大输出）与能力徽章（流式/工具/思考/视觉/推理）及全模型目录
+- **图形化配置**：Provider、模型、Profile、MCP 服务器、本地推理加速全程可视化；「模型与提供商」页展示活动模型参数（上下文窗口/最大输出）与能力徽章（流式/工具/思考/视觉/推理）及全模型目录；本地模型附「加载配置」页——上下文与性能、生成采样、思考、内存、推测解码、高级六分区查看/编辑/保存，与加载流程实时对接
 - **定时任务**：cron 驱动的调度回合，失败即时桌面通知，支持 Webhook 回调
 - **回合撤销与负反馈**：文件变更一键回滚；每条助手回答可点踩并附原因，反馈直接进入进化信号
 
@@ -262,7 +262,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX 提取与互转 + OCR，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（689 用例，覆盖率门槛 ≥70%）
+├── haoyue_tests/         # 运行时单元测试（696 用例，覆盖率门槛 ≥70%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
@@ -322,7 +322,48 @@ Haoyue/
 - `flashAttention` / `kvCacheQuantization`：注意力内核加速与 KV 缓存量化（`q8_0` / `q4_0`），量化仅在 Flash Attention 开启时生效
 - 显存提示：8GB 显存 + 长上下文可能 OOM，届时下调 `gpuLayers` 或开启 KV 量化；带图请求会自动切换 CPU 上下文（规避上游 CUDA 多模态慢路径），文本轮保持 GPU 全速
 
-以上参数也可在桌面端「设置 → 高级设置 → 本地推理加速」图形化配置。
+以上提供商级参数也可在桌面端「设置 → 高级设置 → 本地推理加速」图形化配置。
+
+### 单模型加载配置（`load`）
+
+每个本地模型还可在配置的 `load` 字段上覆盖提供商级设置，实现逐模型调优（桌面端在「模型与提供商」→ 模型行的加载配置按钮可视化编辑，RPC `model.update` 修改、`model.config.get` 查询）：
+
+```json
+{
+  "providers": {
+    "local": {
+      "kind": "local",
+      "models": [
+        {
+          "id": "gemma-4-E4B-it-Q4_K_M",
+          "contextWindow": 32768,
+          "load": {
+            "autoOptimize": false,
+            "contextLength": 32768,
+            "gpuOffload": 999,
+            "evaluationBatchSize": 512,
+            "physicalBatchSize": 256,
+            "tryMmap": true,
+            "keepModelInMemory": false,
+            "offloadKvCacheToGpu": true,
+            "kCacheQuantType": "q8_0",
+            "temperature": 0.6,
+            "topP": 0.95,
+            "stopStrings": ["<end_of_turn>"]
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+- **语义**：`load` 整体缺省沿用提供商级与内置默认；对象内为 null 的字段同样表示「自动」，云端提供商不受影响。数值非法时解析层自动钳制到合法区间，不会让 llama.cpp 在加载期报错
+- **上下文与性能**：`contextLength`（显式上下文只向训练值钳制，可超过默认 32k 实用上限以支持更长窗口）、`gpuOffload` / `threads`、`evaluationBatchSize` / `physicalBatchSize`（llama.cpp n_batch / ubatch，预填吞吐调优）、`flashAttention`
+- **内存**：`tryMmap`（内存映射加载，降低加载峰值内存与启动耗时）、`keepModelInMemory`（mlock 锁页，默认关闭以支持更大模型）、`offloadKvCacheToGpu`、`unifiedKvCache`、`kCacheQuantType` / `vCacheQuantType`（K/V 独立量化）
+- **生成与思考**：`temperature` / `topP` / `minP` / `topK` / `repeatPenalty` / `seed`、`stopStrings`（停止串）、`enableThinking`（思考开关模型级默认）、`limitResponseLength`
+- **生效机制**：保存后立即失效常驻权重，下一次请求按新配置自动重载（仅影响加载行为的字段触发重载，采样字段即时生效）；加载失败自动重试并在 GPU 不可用时降级 CPU，加载成功后自动跑一次小上下文推理自检
+- **实验性字段**：`speculativeDecoding`（推测解码）、`contextCheckpoints`、`chatTemplate`、`llamaCppOverride` 等当前仅保存展示、暂不参与加载，待运行时能力补齐后启用
 
 ## 🎯 使用示例
 
@@ -400,7 +441,7 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test haoyue_tests      # 运行时测试（689 用例）
+dotnet test haoyue_tests      # 运行时测试（696 用例）
 dotnet test haoyue_cli_tests  # CLI 测试
 
 # 桌面端（需先 pnpm install）

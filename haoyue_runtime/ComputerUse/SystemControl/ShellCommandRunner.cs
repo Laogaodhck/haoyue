@@ -135,13 +135,22 @@ public static class ExecutableLocator
 /// <summary>A located Python interpreter and how it was found.</summary>
 public sealed record PythonInstall(string Executable, string Source);
 
+/// <summary>A located interpreter plus its reported version (from <c>--version</c>).</summary>
+public sealed record PythonProbeResult(PythonInstall Install, string Version);
+
 /// <summary>
 /// Python interpreter detection for Computer Use. Order: configured path → PATH
-/// (python / python3) → Windows py launcher. Returns null when Python is not
-/// installed; callers must degrade gracefully (report status instead of failing).
+/// (Windows: python / python3 / py launcher; POSIX: python3 / python) → common
+/// Windows install locations. Returns null when Python is not installed; callers
+/// must degrade gracefully (report status instead of failing). <see cref="Probe"/>
+/// additionally runs <c>--version</c> once and caches the result so tools can
+/// report the exact interpreter up front instead of failing at execution time.
 /// </summary>
 public static class PythonLocator
 {
+    private static readonly Lazy<PythonProbeResult?> CachedProbe =
+        new(() => ProbeCore(), LazyThreadSafetyMode.ExecutionAndPublication);
+
     public static PythonInstall? Find(string? configuredPath = null)
     {
         if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
@@ -156,6 +165,11 @@ public static class PythonLocator
             }
             var launcher = ExecutableLocator.FindOnPath("py.exe");
             if (launcher is not null) return new PythonInstall(launcher, "py 启动器");
+
+            // PATH misses are common (installer unchecked "Add to PATH"): scan the
+            // standard per-machine and per-user install roots, newest version last.
+            foreach (var exe in WindowsCommonInstalls())
+                return new PythonInstall(exe, "常见安装目录");
         }
         else
         {
@@ -166,5 +180,85 @@ public static class PythonLocator
             }
         }
         return null;
+    }
+
+    /// <summary>Locate the interpreter and read its version. Cached (thread-safe) when
+    /// no explicit configuredPath is given; the version probe costs one process spawn.</summary>
+    public static PythonProbeResult? Probe(string? configuredPath = null)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+            return ProbeCore(configuredPath);
+        return CachedProbe.Value;
+    }
+
+    private static PythonProbeResult? ProbeCore(string? configuredPath = null)
+    {
+        var install = Find(configuredPath);
+        if (install is null) return null;
+
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = install.Executable,
+                Arguments = "--version",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (p is null) return null;
+            // py launcher and some builds print the banner on stderr.
+            var text = p.StandardOutput.ReadToEnd().Trim();
+            if (text.Length == 0) text = p.StandardError.ReadToEnd().Trim();
+            if (!p.WaitForExit(5000)) { try { p.Kill(); } catch { } return null; }
+
+            var match = System.Text.RegularExpressions.Regex.Match(text, @"Python\s+\d+(?:\.\d+)*");
+            return match.Success
+                ? new PythonProbeResult(install, match.Value)
+                : new PythonProbeResult(install, "未知版本");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<string> WindowsCommonInstalls()
+    {
+        if (!OperatingSystem.IsWindows()) yield break;
+
+        // Roots that CONTAIN versioned Python3* folders, plus the drive-root
+        // C:\Python3XX layout the official installer offers as an option.
+        var containerRoots = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Python"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Python"),
+        };
+        foreach (var root in containerRoots)
+        {
+            string[] dirs;
+            try
+            {
+                if (!Directory.Exists(root)) continue;
+                dirs = Directory.GetDirectories(root, "Python3*");
+            }
+            catch { continue; }
+
+            foreach (var dir in dirs.OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase))
+            {
+                var exe = Path.Combine(dir, "python.exe");
+                if (File.Exists(exe)) yield return exe;
+            }
+        }
+
+        string[] driveRootDirs;
+        try { driveRootDirs = Directory.GetDirectories(@"C:\", "Python3?*"); }
+        catch { yield break; }
+        foreach (var dir in driveRootDirs.OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            var exe = Path.Combine(dir, "python.exe");
+            if (File.Exists(exe)) yield return exe;
+        }
     }
 }

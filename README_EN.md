@@ -85,7 +85,8 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **Full observe → act → verify loop**: the `computer` tool supports 18 actions (mouse move/click/drag, keyboard input, window management, scrolling, etc.), with an automatic screenshot sent back to the model after each step to verify the result
 - **Cloud and local models can both "see the screen"**: cloud vision models parse screenshots directly; local GGUF models read them through the mmproj multimodal integration — no more navigating blind via accessibility text only
 - **Coordinate self-calibration**: CoordinateMapper screen calibration + `cursor_position` self-check, DriverFaultSandbox driver fault tolerance, and a 30-step-per-turn cap as a safety net
-- **System Control subsystem**: `computer_exec` (PowerShell / CMD / Python with automatic Python detection) + `computer_scan` (hardware device and folder-structure scanning to locate follow-up actions) + `computer_sysinfo` (system configuration, settings, and running processes) + `computer_browser_repair` (browser homepage hijack detection & repair — covers policy registry, IE start page, Preferences JSON, Firefox prefs.js, and hijacked shortcuts; repairs always back up findings first and can be rolled back)
+- **System Control subsystem**: `computer_exec` (cross-platform shell resolution — `auto` picks PowerShell/bash by OS, `cmd` is Windows-only, `bash` POSIX-only, powershell on POSIX requires pwsh; Python detection shares one source with sysinfo: configured path → PATH → py launcher/common install dirs, with a cached version probe) + `computer_scan` (hardware device and folder-structure scanning to locate follow-up actions) + `computer_sysinfo` (system configuration, settings, and running processes, including a platform line, shell environment, and the Python version report) + `computer_browser_repair` (browser homepage hijack detection & repair — covers policy registry, IE start page, Preferences JSON, Firefox prefs.js, and hijacked shortcuts; repairs always back up findings first and can be rolled back)
+- **OS auto-detection & precise command dialects**: the runtime classifies Windows / Linux / macOS itself so the model never guesses — `computer_exec` rejects unsupported kinds with a precise message naming the OS and the correct kind, timeout tree-kill picks taskkill /T vs entireProcessTree kill per platform; `computer_sysinfo` reports platform and Python version up front so follow-up commands are written in the right dialect immediately
 - **Cross-platform adaptation**: system control picks the Windows / Linux adapter automatically (CIM queries & registry repair vs. /proc, lscpu, /etc policy files); permission-denied operations are reported per-item with elevation hints instead of failing the whole call
 - **Dormant by default**: `computerUse.enabled` defaults to off; enabling it requires an explicit toggle in desktop settings, accompanied by a full-screen halo indicator; `systemControlEnabled` turns off system control alone without affecting mouse/keyboard operation
 
@@ -261,7 +262,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (674 cases, ≥70% line coverage gate)
+├── haoyue_tests/         # Runtime unit tests (681 cases, ≥70% line coverage gate)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -399,7 +400,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test haoyue_tests      # runtime tests (674 cases)
+dotnet test haoyue_tests      # runtime tests (681 cases)
 dotnet test haoyue_cli_tests  # CLI tests
 
 # Desktop (requires pnpm install first)

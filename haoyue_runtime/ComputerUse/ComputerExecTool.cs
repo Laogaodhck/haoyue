@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
+using Haoyue.Runtime.ComputerUse.SystemControl;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Tools;
@@ -11,16 +12,21 @@ using Haoyue.Runtime.Tools.Builtin;
 namespace Haoyue.Runtime.ComputerUse;
 
 /// <summary>
-/// Native shell execution for Computer Use: PowerShell, cmd, and Python.
-/// Lets the agent script system work (files, processes, services, queries)
-/// instead of driving GUIs for everything.
+/// Native shell execution for Computer Use: PowerShell, cmd, bash, and Python,
+/// resolved for the detected OS family. 'auto' (and an omitted kind) picks the
+/// OS default — PowerShell on Windows, bash on Linux/macOS — so the model can
+/// delegate dialect choice; Windows-only kinds fail with a precise message on
+/// POSIX hosts and vice versa instead of a cryptic spawn error.
 ///
 /// Decoding follows what each child actually emits: PowerShell (forced UTF-8 via
 /// Console.OutputEncoding) and Python (-X utf8) decode as UTF-8; cmd.exe pipes
 /// bytes in the OEM console codepage (GBK on zh-CN systems — chcp 65001 does not
 /// affect its piped echo), so cmd output decodes with GetOEMCP(). On timeout the
-/// whole process tree is killed (taskkill /T) — child processes otherwise keep the
-/// pipes open and the call would hang or silently succeed.
+/// whole process tree is killed — taskkill /T on Windows, Kill(entireProcessTree)
+/// elsewhere — child processes otherwise keep the pipes open and the call would
+/// hang or silently succeed. Python resolution is shared with computer_sysinfo
+/// via <see cref="PythonLocator"/> (configured path → PATH → py launcher/common
+/// install dirs), so "is Python installed" is answered identically everywhere.
 /// </summary>
 public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig config) : BuiltinTool(prompts)
 {
@@ -37,7 +43,7 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
     }
 
     public override JsonObject ParameterSchema => ToolSchema.Object(
-        ("kind", ToolSchema.String("Shell to run: 'powershell', 'cmd', or 'python'"), true),
+        ("kind", ToolSchema.String("Shell to run: 'auto' (OS default — PowerShell on Windows, bash on Linux/macOS; also used when kind is omitted), 'powershell', 'bash' (POSIX only), 'cmd' (Windows only), or 'python'", "auto", "powershell", "bash", "cmd", "python"), true),
         ("command", ToolSchema.String("Command or script text to execute"), true),
         ("cwd", ToolSchema.String("Working directory (absolute path recommended; defaults to the user profile)"), false),
         ("timeout_seconds", ToolSchema.Integer("Timeout in seconds (default 60, max 600)"), false));
@@ -64,7 +70,6 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
         {
             return ToolResult.Fail(ex.Message);
         }
-
         var timeout = TimeSpan.FromSeconds(Math.Clamp(
             GetInt(arguments, "timeout_seconds") ?? 60, 1, MaxTimeoutSeconds));
 
@@ -106,7 +111,7 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             timedOut = true;
-            await KillTreeAsync(process.Id).ConfigureAwait(false);
+            await KillTreeAsync(process).ConfigureAwait(false);
         }
 
         string stdout, stderr;
@@ -152,14 +157,22 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
             : new ToolResult { Success = false, Output = $"Exit code {exitCode}\n{text}", Summary = summary };
     }
 
-    private static async Task KillTreeAsync(int processId)
+    /// <summary>Kills the whole process tree on timeout. taskkill /T on Windows
+    /// (it also catches console children .NET's Kill may miss); on POSIX the
+    /// runtime's entireProcessTree kill is the native equivalent.</summary>
+    private static async Task KillTreeAsync(Process process)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            return;
+        }
         try
         {
             using var killer = Process.Start(new ProcessStartInfo
             {
                 FileName = Path.Combine(Environment.SystemDirectory, "taskkill.exe"),
-                Arguments = $"/T /F /PID {processId}",
+                Arguments = $"/T /F /PID {process.Id}",
                 UseShellExecute = false,
                 CreateNoWindow = true
             });
@@ -172,50 +185,96 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
         }
     }
 
-    private CommandSpec Resolve(string? kind, string command) => kind switch
+    /// <summary>Shell resolution keyed off the detected OS family. Internal for tests:
+    /// kind is normalized already (null/empty → auto). Each unsupported combination
+    /// throws an ArgumentException that names the OS and the correct kind to use.</summary>
+    internal CommandSpec Resolve(string? kind, string command) => kind switch
     {
+        null or "" or "auto" => OperatingSystem.IsWindows() ? ResolvePowerShell(command) : ResolveBash(command),
         "powershell" or "pwsh" or "ps" => ResolvePowerShell(command),
-        "cmd" => new CommandSpec(
-            Path.Combine(Environment.SystemDirectory, "cmd.exe"),
-            ["/d", "/s", "/c", command],
-            "cmd",
-            ResolveOemEncoding()),
-        "python" or "py" => ResolvePython(command),
-        _ => throw new ArgumentException($"Unknown shell kind '{kind}'. Use 'powershell', 'cmd', or 'python'.")
+        "bash" or "sh" => ResolveBash(command),
+        "cmd" => ResolveCmd(command),
+        "python" or "py" => ResolvePython(command, config.PythonPath),
+        _ => throw new ArgumentException(
+            $"Unknown shell kind '{kind}'. Available kinds on {SystemEnvironment.OsLabel}: " +
+            (OperatingSystem.IsWindows()
+                ? "'auto' (= powershell), 'powershell', 'cmd', 'python'."
+                : "'auto' (= bash), 'bash', 'powershell' (requires pwsh), 'python'."))
     };
 
     private static CommandSpec ResolvePowerShell(string command)
     {
-        var exe = FindOnPath("pwsh.exe") ?? FindOnPath("powershell.exe");
-        if (exe is null)
-            throw new ArgumentException("PowerShell not found on PATH (looked for pwsh.exe and powershell.exe).");
+        if (OperatingSystem.IsWindows())
+        {
+            var exe = FindOnPath("pwsh.exe") ?? FindOnPath("powershell.exe");
+            if (exe is null)
+                throw new ArgumentException("PowerShell not found on PATH (looked for pwsh.exe and powershell.exe).");
 
-        // -EncodedCommand bypasses every quoting pitfall; the preamble forces UTF-8
-        // output and silences the progress stream that pollutes captured output.
-        var script = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;" + command;
-        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            // -EncodedCommand bypasses every quoting pitfall; the preamble forces UTF-8
+            // output and silences the progress stream that pollutes captured output.
+            var script = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;" + command;
+            var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            return new CommandSpec(
+                exe,
+                ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+                "PowerShell",
+                Encoding.UTF8);
+        }
+
+        // POSIX: only pwsh (Core) exists here; Windows PowerShell never does.
+        var pwsh = FindOnPath("pwsh");
+        if (pwsh is null)
+            throw new ArgumentException(
+                $"PowerShell (pwsh) is not installed on this {SystemEnvironment.OsLabel} host; use kind='bash' (or omit kind — auto resolves to bash).");
+
+        var posixScript = "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;" + command;
+        var posixEncoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(posixScript));
         return new CommandSpec(
-            exe,
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-            "PowerShell",
+            pwsh,
+            ["-NoProfile", "-NonInteractive", "-EncodedCommand", posixEncoded],
+            "PowerShell (pwsh)",
             Encoding.UTF8);
     }
 
-    private CommandSpec ResolvePython(string command)
+    private static CommandSpec ResolveBash(string command)
     {
-        if (!string.IsNullOrWhiteSpace(config.PythonPath))
-            return new CommandSpec(config.PythonPath, ["-X", "utf8", "-c", command], "Python", Encoding.UTF8);
+        if (OperatingSystem.IsWindows())
+            throw new ArgumentException(
+                "kind='bash' is not available on Windows hosts (no login shell is provisioned). Use kind='powershell' or 'cmd' — or omit kind and 'auto' resolves to PowerShell.");
 
-        var python = FindOnPath("python.exe") ?? FindOnPath("python3.exe");
-        if (python is not null)
-            return new CommandSpec(python, ["-X", "utf8", "-c", command], "Python", Encoding.UTF8);
+        foreach (var candidate in new[] { "/bin/bash", "/usr/bin/bash", "/bin/sh" })
+        {
+            if (File.Exists(candidate))
+                return new CommandSpec(candidate, ["-c", command], Path.GetFileName(candidate), Encoding.UTF8);
+        }
+        throw new ArgumentException("No POSIX shell found (looked for /bin/bash, /usr/bin/bash, /bin/sh).");
+    }
 
-        var launcher = FindOnPath("py.exe");
-        if (launcher is not null)
-            return new CommandSpec(launcher, ["-3", "-X", "utf8", "-c", command], "Python", Encoding.UTF8);
+    private static CommandSpec ResolveCmd(string command)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new ArgumentException(
+                $"kind='cmd' only exists on Windows, and this host is {SystemEnvironment.OsLabel}. Use kind='bash' (or omit kind — auto resolves to bash).");
 
-        throw new ArgumentException(
-            "Python not found: add python.exe to PATH or set computerUse.pythonPath in the config.");
+        return new CommandSpec(
+            Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+            ["/d", "/s", "/c", command],
+            "cmd",
+            ResolveOemEncoding());
+    }
+
+    private static CommandSpec ResolvePython(string command, string? configuredPath)
+    {
+        // Same resolution the sysinfo tool reports, so "Python: 已安装" always means
+        // kind=python works and vice versa — one source of truth, OS-aware.
+        var install = PythonLocator.Find(configuredPath);
+        if (install is null)
+        {
+            throw new ArgumentException(OperatingSystem.IsWindows()
+                ? "Python not found: add python.exe to PATH, install the py launcher, or set computerUse.pythonPath in the config."
+                : $"Python not found on this {SystemEnvironment.OsLabel} host: install python3 (e.g. 'sudo apt install python3') or set computerUse.pythonPath in the config.");
+        }
+        return new CommandSpec(install.Executable, ["-X", "utf8", "-c", command], "Python", Encoding.UTF8);
     }
 
     // cmd.exe writes piped output in the OEM console codepage (chcp changes it for
@@ -245,5 +304,5 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
     private static string Shorten(string command) =>
         command.Length > 80 ? command[..80] + "…" : command;
 
-    private sealed record CommandSpec(string Executable, string[] Arguments, string Label, Encoding OutputEncoding);
+    internal sealed record CommandSpec(string Executable, string[] Arguments, string Label, Encoding OutputEncoding);
 }

@@ -84,7 +84,8 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **完整 observe → act → verify 闭环**：`computer` 工具支持 18 种动作（鼠标移动/点击/拖拽、键盘输入、窗口管理、滚动等），每步自动截图回传模型核验结果
 - **云端与本地模型都能"看屏幕"**：云视觉模型直接解析截图；本地 GGUF 模型经 mmproj 多模态接入同样可读图操作，不再只能靠无障碍文本盲操作
 - **坐标自校准**：CoordinateMapper 屏幕标定 + `cursor_position` 自校准，DriverFaultSandbox 驱动容错，单回合 30 步上限兜底
-- **系统操控子系统（SystemControl）**：`computer_exec`（PowerShell / CMD / Python，自动检测 Python 环境）+ `computer_scan`（硬件设备与文件夹结构扫描，按扫描结果定位后续操作）+ `computer_sysinfo`（系统配置、设置项与运行进程读取）+ `computer_browser_repair`（浏览器主页劫持检测与自动修复——检测策略注册表/IE 起始页/Preferences JSON/Firefox prefs.js/快捷方式五类劫持源，修复前自动备份可回滚）
+- **系统操控子系统（SystemControl）**：`computer_exec`（跨平台 shell 解析——`auto` 按 OS 自动选 PowerShell/bash，`cmd` 仅 Windows、`bash` 仅 POSIX，POSIX 上的 powershell 需 pwsh；Python 检测与 sysinfo 同源：配置路径 → PATH → py 启动器/常见安装目录，并探测版本后缓存）+ `computer_scan`（硬件设备与文件夹结构扫描，按扫描结果定位后续操作）+ `computer_sysinfo`（系统配置、设置项与运行进程读取，含平台标识、shell 环境与 Python 版本报告）+ `computer_browser_repair`（浏览器主页劫持检测与自动修复——检测策略注册表/IE 起始页/Preferences JSON/Firefox prefs.js/快捷方式五类劫持源，修复前自动备份可回滚）
+- **OS 自动识别与命令方言精准化**：运行时自动判定 Windows / Linux / macOS，模型无需猜测——`computer_exec` 对不支持的 kind 报出精确错误（指明当前 OS 与应改用的 kind），超时清树按平台选择 taskkill /T 或 entireProcessTree kill；`computer_sysinfo` 先行报告平台与 Python 版本，让后续命令直接用对方言编写
 - **跨平台自动适配**：系统操控按 Windows / Linux 自动选择适配器（CIM 查询、注册表修复 vs /proc、lscpu、/etc 策略文件），权限不足的操作按失败项报告并给出提权指引，而非整体失败
 - **默认休眠**：`computerUse.enabled` 默认关闭，开启需在桌面端设置中显式打开，并伴随全屏光晕提示；`systemControlEnabled` 可单独关闭系统操控而不影响鼠标键盘操控
 
@@ -260,7 +261,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX 提取与互转 + OCR，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（674 用例，覆盖率门槛 ≥70%）
+├── haoyue_tests/         # 运行时单元测试（681 用例，覆盖率门槛 ≥70%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
@@ -398,7 +399,7 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test haoyue_tests      # 运行时测试（674 用例）
+dotnet test haoyue_tests      # 运行时测试（681 用例）
 dotnet test haoyue_cli_tests  # CLI 测试
 
 # 桌面端（需先 pnpm install）

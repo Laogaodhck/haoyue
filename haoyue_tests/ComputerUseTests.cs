@@ -3,6 +3,7 @@ using Haoyue.Runtime;
 using Haoyue.Runtime.ComputerUse;
 using Haoyue.Runtime.ComputerUse.Abstractions;
 using Haoyue.Runtime.ComputerUse.Drivers.Windows;
+using Haoyue.Runtime.ComputerUse.SystemControl;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Prompts;
@@ -537,8 +538,7 @@ public sealed class ComputerUseTests : IAsyncDisposable
 
     [Fact]
     public async Task ComputerExec_Cmd_HonorsCwd()
-    {
-        if (!OperatingSystem.IsWindows()) return;
+    {        if (!OperatingSystem.IsWindows()) return;
         var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
         var context = CreateToolContext();
 
@@ -568,6 +568,109 @@ public sealed class ComputerUseTests : IAsyncDisposable
 
         var noCommand = await tool.ExecuteAsync(new JsonObject { ["kind"] = "cmd" }, context, CancellationToken.None);
         Assert.False(noCommand.Success);
+    }
+
+    [Fact]
+    public void ComputerExec_Resolve_AutoPicksOsDefaultShell()
+    {
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+
+        // omitted kind and 'auto' must resolve identically to the OS default
+        var byAuto = tool.Resolve("auto", "1");
+        var byOmitted = tool.Resolve(null, "1");
+        Assert.Equal(byAuto.Label, byOmitted.Label);
+
+        if (OperatingSystem.IsWindows())
+            Assert.Equal("PowerShell", byAuto.Label);
+        else
+            Assert.Contains("sh", byAuto.Label);
+    }
+
+    [Fact]
+    public void ComputerExec_Resolve_BashRejectedOnWindowsWithKindGuidance()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+
+        var ex = Assert.Throws<ArgumentException>(() => tool.Resolve("bash", "ls -la"));
+        Assert.Contains("powershell", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("auto", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ComputerExec_Resolve_UnknownKindNamesOsAndAvailableKinds()
+    {
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+
+        var ex = Assert.Throws<ArgumentException>(() => tool.Resolve("zsh", "x"));
+        Assert.Contains(SystemEnvironment.OsLabel, ex.Message);
+        Assert.Contains("python", ex.Message);
+    }
+
+    [Fact]
+    public void ComputerExec_Resolve_PythonFailsWithOsSpecificGuidance_WhenAbsent()
+    {
+        var config = new ComputerUseConfig { PythonPath = _tempDir }; // a directory, never a valid interpreter
+        var tool = new ComputerExecTool(new MockPromptProvider(), config);
+        var probe = PythonLocator.Probe();
+        if (probe is not null) return; // a real interpreter exists via PATH fallback — guidance path unreachable
+
+        var ex = Assert.Throws<ArgumentException>(() => tool.Resolve("python", "print(1)"));
+        if (OperatingSystem.IsWindows())
+            Assert.Contains("computerUse.pythonPath", ex.Message);
+        else
+            Assert.Contains("python3", ex.Message);
+    }
+
+    [Fact]
+    public void PythonLocator_Probe_ReportsVersionAndConsistentFind()
+    {
+        var configured = Path.Combine(_tempDir, "missing-python.exe");
+        // a nonexistent configured path must not be honored — but resolution still
+        // degrades to the OS-aware PATH/common-dir search instead of giving up
+        var fallback = PythonLocator.Find(configured);
+        var direct = PythonLocator.Find();
+        Assert.Equal(direct?.Executable, fallback?.Executable);
+
+        var probe = PythonLocator.Probe();
+        if (probe is null) return; // Python not installed on this machine — nothing to assert
+
+        Assert.Matches(@"^Python \d+(\.\d+)*$", probe.Version);
+        Assert.Equal(probe.Install.Executable, PythonLocator.Find()?.Executable);
+        Assert.True(File.Exists(probe.Install.Executable));
+    }
+
+    [Fact]
+    public async Task ComputerExec_AutoKind_ExecutesOsDefaultShell()
+    {
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var context = CreateToolContext();
+
+        var res = OperatingSystem.IsWindows()
+            ? await tool.ExecuteAsync(new JsonObject { ["kind"] = "auto", ["command"] = "Write-Output ('auto-' + 'ok')" }, context, CancellationToken.None)
+            : await tool.ExecuteAsync(new JsonObject { ["kind"] = "auto", ["command"] = "echo auto-ok" }, context, CancellationToken.None);
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains("auto-ok", res.Output);
+    }
+
+    [Fact]
+    public async Task ComputerExec_Python_UsesProbedInterpreterWithVersionInSysinfo()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var probe = PythonLocator.Probe();
+        if (probe is null) return; // Python not installed on this machine
+
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var context = CreateToolContext();
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "python",
+            ["command"] = "import sys; print('py-' + sys.version.split()[0])"
+        }, context, CancellationToken.None);
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains(probe.Version["Python ".Length..], res.Output); // interpreter version matches the probe
     }
 
     private ToolContext CreateToolContext()

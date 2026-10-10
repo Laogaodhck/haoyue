@@ -50,19 +50,35 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **Built-in Tools**: file read/write/edit (precise diff application), grep/glob, bash, web search & fetch, task planning, screen capture
 - **MCP**: stdio and SSE transports with automatic discovery of tools/prompts/resources; prompt injection is capped at 24 per server and 48 total, with the truncation reason visible in MCP status
 - **Skill System**: directory-based skills (`skill.yaml` + `prompt.txt`); manifest v2 supports trigger keywords, tool whitelists, and parameter collection; skills hot-reload on change, no restart needed
+- **Multimodal Output**: `image_generate` image generation (OpenAI-compatible images/generations endpoint, b64/url channels); artifacts land in `.haoyue/outputs/images/` and can be fed back into the visual verification chain; the tool hides itself automatically when no image model is configured (local diffusion models are outside in-process inference scope — plug in a ComfyUI/SD-compatible gateway instead, see the [Deployment & Isolation Runbook](haoyue_doc/runbooks/deployment-isolation.md))
 
 ### 🧠 Knowledge Base & Memory
 
 - **Automatic Capture**: knowledge is saved / searched / forgotten automatically during conversations
 - **Fault-Tolerant Retrieval**: synonym expansion, full/half-width normalization, CJK bigram tokenization, and edit-distance fallback — typos and mixed Chinese/English queries still hit; custom synonym lists hot-reload
+- **Semantic Retrieval Layer**: once an embedding-capable model is configured, knowledge retrieval upgrades to hybrid "lexical + cosine similarity" ranking (0.6/0.4 fusion), with vectors cached per (workspace, term, model) in SQLite; any failure falls back to pure lexical retrieval as a whole — semantics is an enhancement, not a dependency. Two on-ramps: HTTP via OpenAI-compatible /embeddings (Ollama / LM Studio / cloud), or local GGUF embedding models (`capabilities.embedding = true`) running in-process with zero network dependency
 - **Rules & Memory**: AGENTS.md workspace rules injected automatically (with a provenance envelope and pinned priority), MEMORY.md long-term memory with automatic / manual management
+- **Project Facts Layer**: `fact_save` captures structured one-line facts with source, confidence, and optional TTL (`.haoyue/facts.json`), auto-injected into later turns tagged "to be confirmed", expiring automatically — an intermediate memory layer between MEMORY.md and the knowledge base
+
+### 🤝 Multi-Agent Collaboration
+
+- **Single-Task Delegation**: `delegate_task` runs a sub-agent in an isolated context and session; nesting depth is controlled by `agent.delegationMaxDepth` (default 1, cap 4)
+- **Parallel Fan-Out**: `delegate_tasks` dispatches 2-6 independent subtasks to parallel sub-agents and returns one aggregated report organized by task; parallel sub-agents coordinate file writes through the shared file-lock coordinator and may not delegate further
 
 ### 🔒 Reliability & Safety (under the meta layer)
+
+- **Mandatory Tool Execution Policy Gate**: every tool call is evaluated by `ToolExecutionPolicy` after argument parsing and before execution (the model cannot bypass it) — user allow/deny regex rules plus built-in bash high-risk guards (recursive root deletion, disk wipe, fork bombs, curl|sh remote execution, shadow-copy deletion, etc.); a hit is rejected and journaled as an audit event; configured via `agent.toolPolicy`
+- **Bash Command Audit**: every executed command is pre-classified by content risk (low/medium/high, with rationale) and fully recorded (command, directory, risk, result, duration) appended to `.haoyue/audit/bash.jsonl` in the workspace — never rotated or truncated, always traceable
+- **Process-Level Sandbox (Windows Job Object)**: with `agent.bashSandbox.enabled`, the entire bash child process tree enters a kernel-enforced fence — memory cap (default 2GB/process), active process cap (default 256), UI restrictions (clipboard/system parameters/display settings/shutdown/desktop switch), and kill-on-close so timed-out commands leave no orphans; network isolation is beyond Job Object's reach, and audit records carry a sandbox flag — the network plane is closed at the deployment layer; see the [Deployment & Isolation Runbook](haoyue_doc/runbooks/deployment-isolation.md) (egress allowlist proxy / per-program firewall blocking / containerization); self-supplied GGUF (including embedding model registration) is covered in section 3 of the same runbook
 
 - **Atomic Writes**: config and state writes go through a same-directory temp file + atomic swap — a crash never leaves a half-written file; field-level reload-merge before each save keeps concurrent multi-client edits to their own changes
 - **Single-Writer Convergence**: CLI config writes are delegated to the online daemon (`config.save`) and only fall back to local writes when offline — multi-writer races are eliminated
 - **Prompt Budget**: when injected context exceeds a 24k token total budget, contributions are dropped in inverse degrade-rank order (knowledge → skill bodies → MCP → catalogs/memory) while System/Developer messages are never dropped; every drop is announced in the session
 - **Turn Rollback (TurnScope)**: each turn keeps a step ledger and a compensation stack, so `write`/`edit` file changes can be reverted in one click (`agent.undo`); the desktop shows an undo banner after each turn; on daemon crash, startup reconciliation surfaces the restorable files of unfinished turns
+
+### 📋 Background Task Queue
+
+- **Long tasks in the background**: the daemon RPC `task.start` submits a full agent turn for background execution (concurrency cap 4, hard timeout protection); `task.get` / `task.list` / `task.cancel` manage tasks; terminal states broadcast via `task.updated`, sessions persist, and progress replays through `events.recent` — frontend disconnects never lose progress
 
 ### 🖱️ Computer Use
 
@@ -228,28 +244,28 @@ Haoyue/
 │   ├── Configuration/      # Config management (atomic writes, reload-merge, single-writer bridge)
 │   ├── Coordination/       # File-lock coordinator
 │   ├── Daemon/             # Daemon (JSON-RPC, RPC routing, crash reconciliation)
-│   ├── Data/               # Data layer (knowledge storage, retrieval ranking, SQLite)
+│   ├── Data/               # Data layer (knowledge storage & semantic retrieval, facts store, SQLite)
 │   ├── Events/             # Event bus & journal (SQLite persistence)
 │   ├── Evolution/          # Evolution engine (signal aggregation, decision ledger, reflection turns)
 │   ├── Experts/            # Expert system
 │   ├── Mcp/                # MCP client (stdio/SSE, injection quotas)
 │   ├── Prompts/            # Prompt loading, composition, and budget enforcement
 │   ├── Providers/          # LLM provider integrations & circuit breaker
-│   ├── Scheduling/         # Scheduled task dispatch
+│   ├── Scheduling/         # Scheduled tasks & background task queue
 │   ├── Sessions/           # Session persistence (SQLite)
 │   ├── Skills/             # Skill management (manifest v2, hot reload)
-│   ├── Tools/              # Tool registry and implementations
+│   ├── Tools/              # Tool registry and implementations (incl. execution policy gate, bash audit & sandbox)
 │   ├── Verification/       # Build verification chain
 │   └── Workspaces/         # Workspace detection and management
 ├── haoyue_desktop/       # Desktop app (Electron + Vue 3 + TypeScript)
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (463 cases, ≥70% line coverage gate)
+├── haoyue_tests/         # Runtime unit tests (674 cases, ≥70% line coverage gate)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
-├── benchmarks/           # Local model eval harness (fluency / speed / self-correction / vision, with reports)
+├── benchmarks/           # Eval harnesses: local model eval (fluency / speed / self-correction / vision) + agent-eval end-to-end agent benchmark
 ├── models/               # Local GGUF models (dev environment, not committed)
 └── packaging/            # Packaging scripts and configuration
 ```
@@ -322,6 +338,9 @@ haoyue memory set "Run the full test suite before releasing this repo"
 
 # Scheduled tasks (cron drives full agent turns)
 haoyue schedule add "Daily report" "0 9 * * *" "Summarize yesterday's commits into a report"
+
+# Evaluation regression
+dotnet run --project benchmarks/agent-eval   # end-to-end agent task eval
 ```
 
 Session data is stored in `~/.haoyue/haoyue.db`; legacy session formats are imported automatically on upgrade.
@@ -380,7 +399,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test haoyue_tests      # runtime tests (463 cases)
+dotnet test haoyue_tests      # runtime tests (674 cases)
 dotnet test haoyue_cli_tests  # CLI tests
 
 # Desktop (requires pnpm install first)
@@ -402,6 +421,15 @@ dotnet run --project benchmarks/local-model-eval -- visiontest  # multimodal vis
 ```
 
 The measured gemma-4-E4B report is available at [`本地模型评测报告-gemma-4-E4B-2026-10-07.md`](benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md) (in Chinese).
+
+## 📈 Agent-Level Evaluation
+
+[`benchmarks/agent-eval/`](benchmarks/agent-eval/) is an end-to-end regression harness for agent task success rates: 6 fixed tasks (file write, code repair, multi-step orchestration, restraint negative-scoring, policy-gate regression, read-and-summarize) run through the real isolated runtime path with deterministic file-assertion scoring, producing Markdown + JSON reports and a non-zero exit code for CI — regress tuning of nudge thresholds or prompts no longer relies on gut feeling.
+
+```bash
+dotnet run --project benchmarks/agent-eval          # run all tasks
+dotnet run --project benchmarks/agent-eval -- --filter policy-guard   # policy-gate regression only
+```
 
 ## 📄 Document Toolkit
 
@@ -428,6 +456,7 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - State concurrency, context boundaries, and atomicity risk review (with fix reconciliation)
 - Workflow orchestration adjudication & TurnScope design
 - Evolution engine blueprint review & landing design (E1-E4)
+- Agent capability assessment report (G1-G7 gaps closed same-day: policy gate, parallel sub-agents, background tasks, semantic retrieval, facts layer, agent eval, bash audit & sandbox, multimodal output)
 - Cross-language contract governance (Contract First), test pyramid & coverage gate
 - NLP & HCI optimization assessment, knowledge base optimization notes
 - ProviderManager concurrency and parameter review

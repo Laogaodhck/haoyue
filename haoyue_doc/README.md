@@ -35,7 +35,7 @@
 | 机制 | 位置 | 说明 |
 |---|---|---|
 | ADR（架构决策记录） | [adr/](adr/README.md) | 重大技术选型必须以 ADR-YYYYMMDD-主题.md 文档化，随代码提交；已回填 7 个关键决策 |
-| Runbook（操作手册） | [runbooks/](runbooks/README.md) | 每个内置工具/官方技能必须有 how-to-use 章节，护栏测试 `RunbookCoverageTests` 强制 |
+| Runbook（操作手册） | [runbooks/](runbooks/README.md) | 每个内置工具/官方技能必须有 how-to-use 章节，护栏测试 `RunbookCoverageTests` 强制；部署级网络隔离与自备 GGUF 配套见 [runbooks/deployment-isolation.md](runbooks/deployment-isolation.md) |
 
 ## 技术研究
 

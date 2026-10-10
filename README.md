@@ -50,19 +50,34 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **内置工具**：文件读/写/编辑（diff 精确应用）、grep/glob、bash、网页搜索与抓取、任务规划、屏幕捕获
 - **MCP**：stdio 与 SSE 传输，自动发现工具/提示/资源；提示注入有每服务器 24 个、总量 48 个的限额，超限原因在 MCP 状态中可见
 - **技能系统**：目录式技能（`skill.yaml` + `prompt.txt`），manifest v2 支持触发关键词、工具白名单与参数收集；技能变更后扫描热加载，无需重启
+- **多模态输出**：`image_generate` 图像生成（OpenAI 兼容 images/generations 端点，b64/url 双通道），产物落 `.haoyue/outputs/images/` 并可回灌视觉核验链；未配置图像模型时工具自动隐藏（本地扩散模型不在进程内推理能力内，可接 ComfyUI/SD 兼容网关，见 [部署与隔离 Runbook](haoyue_doc/runbooks/deployment-isolation.md)）
 
 ### 🧠 知识库与记忆
 
 - **自动沉淀**：对话中自动保存 / 检索 / 遗忘知识
 - **高容错检索**：同义词扩展、全半角归一化、CJK 二元分词与编辑距离兜底——错别字、中英混排也能命中；支持自定义同义词表热重载
+- **语义检索层**：配置 embedding 能力模型后，知识检索自动升级为「词法 + 余弦相似度」混合排序（0.6/0.4 融合），向量按 (工作区, 词条, 模型) 缓存于 SQLite；任一环节失败自动整体退回纯词法方案——语义是增强，不是依赖。双通道接入：HTTP 走 OpenAI 兼容 /embeddings（Ollama / LM Studio / 云端均可）；本地 GGUF 嵌入模型（`capabilities.embedding = true`）直接进程内推理，零网络依赖
 - **规则与记忆**：AGENTS.md 工作区规则自动注入（带来源信封、优先级钉死），MEMORY.md 长期记忆支持自动 / 手动管理
+- **项目事实层**：`fact_save` 沉淀带来源、置信度、可选 TTL 的结构化短句事实（`.haoyue/facts.json`），自动注入后续回合并标注"待确认"，到期自动失效——介于 MEMORY.md 与知识库之间的中间记忆层
+
+### 🤝 多代理协作
+
+- **单任务委派**：`delegate_task` 在独立上下文与独立会话中运行子代理，深度由 `agent.delegationMaxDepth`（默认 1，上限 4）控制
+- **并行 fan-out**：`delegate_tasks` 把 2-6 个独立子任务并行派发给多个子代理，一次返回按任务分节的聚合报告；并行子代理的文件写入经统一文件锁协调，且不得再委派
 
 ### 🔒 可靠性与安全（元数据层之下）
 
+- **工具执行强制策略闸门**：每次工具调用在参数解析后、执行前经 `ToolExecutionPolicy` 强制评估（模型无法绕过）——用户 allow/deny 规则 + 内置 bash 高危守卫（根目录递归删除、磁盘擦除、fork 炸弹、curl|sh 远程执行、卷影删除等），命中即拒绝并落审计事件；`agent.toolPolicy` 配置
+- **bash 命令审计**：每条执行的命令按内容前置风险分级（low/medium/high，含分级理由），完整记录（命令、目录、风险、结果、耗时）追加写入工作区 `.haoyue/audit/bash.jsonl`，永不轮转截断，可随时回溯追责
+- **进程级沙箱（Windows Job Object）**：`agent.bashSandbox.enabled` 启用后，bash 命令整棵子进程树进入内核强制围栏——内存上限（默认 2GB/进程）、活动进程数上限（默认 256）、UI 限制（剪贴板/系统参数/显示设置/关机/桌面切换），kill-on-close 保证超时命令不留孤儿进程；网络隔离不在 Job Object 能力内，审计记录带沙箱标记——网络面由部署环境收口，方案见 [部署与隔离 Runbook](haoyue_doc/runbooks/deployment-isolation.md)（代理白名单 / 防火墙按程序阻断 / 容器化），自备 GGUF（含嵌入模型注册）同见该手册第 3 节
 - **原子写**：配置与状态写入走「同目录临时文件 + 原子替换」，崩溃不产生半截文件；保存前做字段级 reload-merge，多端并发只保留各自的改动
 - **单写者收敛**：CLI 的配置写操作自动委托给在线 daemon（`config.save`），离线才回退本地——彻底消除多写点竞争
 - **提示预算**：上下文注入总量超 24k token 时按降级秩逆序丢弃（知识库 → 技能正文 → MCP → 目录/记忆），System/Developer 消息永不丢弃，丢弃动作在会话中明示
 - **回合回滚（TurnScope）**：每个回合维护步骤账本与补偿栈，`write`/`edit` 的文件变更可一键撤销（`agent.undo`）；桌面端回合完成后出现撤销横幅；daemon 崩溃后启动对账，提示未完成回合的可恢复文件
+
+### 📋 后台任务队列
+
+- **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度
 
 ### 🖱️ Computer Use（电脑操作智能体）
 
@@ -228,28 +243,28 @@ Haoyue/
 │   ├── Configuration/      # 配置管理（原子写、reload-merge、单写者桥接）
 │   ├── Coordination/       # 文件锁协调器
 │   ├── Daemon/             # 守护进程（JSON-RPC、RPC 路由、崩溃对账）
-│   ├── Data/               # 数据层（知识库存储、检索排序、SQLite）
+│   ├── Data/               # 数据层（知识库存储与语义检索、事实层、SQLite）
 │   ├── Events/             # 事件总线与事件日志（SQLite 持久化）
 │   ├── Evolution/          # 进化引擎（信号聚合、决策账本、反思回合）
 │   ├── Experts/            # 专家系统
 │   ├── Mcp/                # MCP 客户端（stdio/SSE、注入限额）
 │   ├── Prompts/            # 提示加载、组合与预算强制
 │   ├── Providers/          # LLM 提供商集成与熔断器
-│   ├── Scheduling/         # 定时任务调度
+│   ├── Scheduling/         # 定时任务调度与后台任务队列
 │   ├── Sessions/           # 会话持久化（SQLite）
 │   ├── Skills/             # 技能管理（manifest v2、热加载）
-│   ├── Tools/              # 工具注册和实现
+│   ├── Tools/              # 工具注册和实现（含执行策略闸门、bash 审计与沙箱）
 │   ├── Verification/       # 构建验证链
 │   └── Workspaces/         # 工作区检测和管理
 ├── haoyue_desktop/       # 桌面应用（Electron + Vue 3 + TypeScript）
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX 提取与互转 + OCR，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（463 用例，覆盖率门槛 ≥70%）
+├── haoyue_tests/         # 运行时单元测试（674 用例，覆盖率门槛 ≥70%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
-├── benchmarks/           # 本地模型评测 harness（流畅性/速度/自修正/视觉四相，含评测报告）
+├── benchmarks/           # 评测 harness：本地模型评测（流畅性/速度/自修正/视觉）+ agent-eval Agent 级端到端评测
 ├── models/               # 本地 GGUF 模型（开发环境，不入库）
 └── packaging/            # 打包脚本与配置
 ```
@@ -322,6 +337,9 @@ haoyue memory set "本仓库发布前必须跑全量测试"
 
 # 定时任务（cron 驱动完整 Agent 回合）
 haoyue schedule add "日报" "0 9 * * *" "汇总昨日提交生成日报"
+
+# 评测回归
+dotnet run --project benchmarks/agent-eval   # Agent 级端到端任务评测
 ```
 
 会话数据保存在 `~/.haoyue/haoyue.db`，升级后旧格式会话自动导入。
@@ -380,7 +398,7 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test haoyue_tests      # 运行时测试（463 用例）
+dotnet test haoyue_tests      # 运行时测试（674 用例）
 dotnet test haoyue_cli_tests  # CLI 测试
 
 # 桌面端（需先 pnpm install）
@@ -402,6 +420,15 @@ dotnet run --project benchmarks/local-model-eval -- visiontest  # 多模态视�
 ```
 
 gemma-4-E4B 实测报告见 [`本地模型评测报告-gemma-4-E4B-2026-10-07.md`](benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md)。
+
+## 📈 Agent 级评测
+
+[`benchmarks/agent-eval/`](benchmarks/agent-eval/) 是 Agent 任务成功率的端到端回归 harness：6 个固定任务（文件写入、代码修复、多步编排、克制负向判分、策略闸门回归、读汇总）走真实隔离运行时链路，确定性文件断言判分，输出 Markdown + JSON 报告，非零退出码可直接接 CI——每次调整纠偏阈值或提示词后回归，调参不再靠手感。
+
+```bash
+dotnet run --project benchmarks/agent-eval          # 运行全部任务
+dotnet run --project benchmarks/agent-eval -- --filter policy-guard   # 只跑策略闸门回归
+```
 
 ## 📄 文档处理工具包
 
@@ -428,6 +455,7 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - 状态并发、上下文边界与原子性风险评审（含修复对账）
 - 工作流编排层架构裁决与 TurnScope 设计
 - 进化引擎设计蓝图评审与落地设计（E1-E4）
+- Agent 应用能力评估报告（G1-G7 欠缺项同日全量闭环：权限闸门、并行子代理、后台任务、语义检索、事实层、Agent 评测、bash 审计与沙箱、多模态输出）
 - 跨语言契约治理（Contract First）、测试金字塔与覆盖率门槛
 - NLP 与 HCI 全面优化评估报告、知识库优化说明
 - ProviderManager 并发与参数审查

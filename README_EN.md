@@ -502,6 +502,7 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Agent capability assessment report (G1-G7 gaps closed same-day: policy gate, parallel sub-agents, background tasks, semantic retrieval, facts layer, agent eval, bash audit & sandbox, multimodal output)
 - Cross-language contract governance (Contract First), test pyramid & coverage gate
 - NLP & HCI optimization assessment, knowledge base optimization notes
+- Model loading enhancement implementation plan (per-model load settings, auto-retry with CPU fallback, post-load inference self-check)
 - ProviderManager concurrency and parameter review
 
 Major technical decisions are documented as [ADRs (Architecture Decision Records)](haoyue_doc/adr/README.md) (7 backfilled so far), and every built-in tool and official skill has a [Runbook](haoyue_doc/runbooks/README.md) (enforced by guard tests).

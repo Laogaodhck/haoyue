@@ -501,6 +501,7 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 应用能力评估报告（G1-G7 欠缺项同日全量闭环：权限闸门、并行子代理、后台任务、语义检索、事实层、Agent 评测、bash 审计与沙箱、多模态输出）
 - 跨语言契约治理（Contract First）、测试金字塔与覆盖率门槛
 - NLP 与 HCI 全面优化评估报告、知识库优化说明
+- 模型加载模块增强实施方案（逐模型加载配置、自动重试与 CPU 降级、加载后推理自检）
 - ProviderManager 并发与参数审查
 
 重大技术选型以 [ADR（架构决策记录）](haoyue_doc/adr/README.md) 文档化（已回填 7 篇），每个内置工具与官方技能配有 [Runbook 操作手册](haoyue_doc/runbooks/README.md)（护栏测试强制）。

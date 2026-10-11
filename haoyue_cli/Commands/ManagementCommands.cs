@@ -363,6 +363,11 @@ public static class ConnectorCommands
         {
             using var rt = CliHost.CreateRuntime();
             var id = parse.GetValue(idArg);
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                AnsiConsole.MarkupLine("[red]缺少连接器 id：haoyue connectors install <id>[/]");
+                return 1;
+            }
             var package = Haoyue.Runtime.Connectors.ConnectorCatalog.Find(id);
             if (package is null)
             {
@@ -427,6 +432,11 @@ public static class ConnectorCommands
         {
             using var rt = CliHost.CreateRuntime();
             var id = parse.GetValue(idArg);
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                AnsiConsole.MarkupLine("[red]缺少连接器 id：haoyue connectors uninstall <id>[/]");
+                return 1;
+            }
             if (Haoyue.Runtime.Connectors.ConnectorInstaller.Uninstall(rt.ConfigStore, id))
                 return 0;
             AnsiConsole.MarkupLine($"[red]未安装：{Markup.Escape(id)}[/]");

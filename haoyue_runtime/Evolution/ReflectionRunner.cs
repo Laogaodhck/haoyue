@@ -184,7 +184,7 @@ public sealed class ReflectionRunner
                 var promoted = PromoteCandidate(skillName, report, sessionId, summary, now, out var error);
                 if (promoted is null)
                 {
-                    RecordFailed(pending, sessionId, error);
+                    RecordFailed(pending, sessionId, error ?? "candidate promotion failed without an error message");
                     Publish(sessionId, 0, 0, skipped, pending.Count, error);
                     return new ReflectionRunResult(0, 0, 0, skipped, pending.Count, sessionId, error);
                 }
@@ -390,7 +390,9 @@ public sealed class ReflectionRunner
         try
         {
             var node = JsonNode.Parse(body[start..(end + 1)]);
-            var action = node?["action"]?.GetValue<string>()?.Trim().ToLowerInvariant();
+            if (node is null)
+                return (null, null, null, "结论块解析为空");
+            var action = node["action"]?.GetValue<string>()?.Trim().ToLowerInvariant();
             if (action is not (EvolutionAction.NewSkill or EvolutionAction.ReviseSkill or EvolutionAction.NoAction))
                 return (null, null, null, $"未知结论 action：{action}");
             var skillName = node["skillName"]?.GetValue<string>()?.Trim();

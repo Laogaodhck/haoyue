@@ -56,7 +56,7 @@ public sealed class OpenAiEmbeddingClient(HttpClient http, ProviderConfig provid
         foreach (var item in data)
         {
             var index = item?["index"]?.GetValue<int>() ?? Array.IndexOf(vectors, null);
-            var array = item["embedding"] as JsonArray
+            var array = item?["embedding"] as JsonArray
                 ?? throw new HttpRequestException("embeddings item has no embedding array.");
             vectors[index] = [.. array.Select(node => node?.GetValue<double>() ?? 0d)];
         }

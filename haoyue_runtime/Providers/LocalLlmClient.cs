@@ -305,7 +305,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             // Tokenize 把 prompt 按 marker 切成 text/image 混合块；媒体位图按入队顺序
             // 被 marker 位置消费。返回值为错误码（0 = 成功）。
             var tokenizeResult = mtmd.Tokenize(prompt, true, true, out var chunks);
-            if (tokenizeResult != 0 || chunks.Size == 0)
+            if (tokenizeResult != 0 || chunks is null || chunks.Size == 0)
                 throw new LlmException(
                     $"Multimodal tokenization failed for {request.Model.Id} (code {tokenizeResult}). " +
                     "The mmproj may not match this model file.",

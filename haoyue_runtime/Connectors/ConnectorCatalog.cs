@@ -178,7 +178,7 @@ public static class ConnectorInstaller
         server.Command = Substitute(server.Command);
         server.Url = Substitute(server.Url);
         if (server.Args is { } args)
-            server.Args = [.. args.Select(Substitute)];
+            server.Args = [.. args.Select(a => Substitute(a) ?? string.Empty)];
         if (server.Env is { } env)
             server.Env = env.ToDictionary(
                 pair => pair.Key, pair => SubstituteSecret(pair.Value));

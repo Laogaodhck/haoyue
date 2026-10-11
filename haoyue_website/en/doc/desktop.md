@@ -79,7 +79,8 @@ Open “Settings → Models & Providers” to:
 - view and edit API keys stored in the configuration (resolved for display, encrypted at rest);
 - store and manage the API key in the configuration;
 - manage models, Base URL, proxy, timeout, and priority;
-- create Profiles and switch the active model or routing strategy.
+- create Profiles and switch the active model or routing strategy;
+- local models (GGUF) gain a "Load Settings" panel — six sections (context & performance, generation, thinking, memory, speculative decoding, advanced) with view/edit/save, "Load & Verify", and load reports (see [Providers, Models, and Smart Routing](/en/doc/providers)).
 
 ![Haoyue Desktop model and Provider management](/screenshots/desktop/providers-and-models.png)
 

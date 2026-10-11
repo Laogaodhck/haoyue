@@ -79,7 +79,8 @@ AI 正在输出时仍可继续输入。点击“发送”会把消息加入发�
 - 直接查看和修改保存在配置中的 API Key（解密显示，落盘为加密引用）；
 - 在配置文件中保存和管理 API Key；
 - 管理模型列表、Base URL、代理、超时和优先级；
-- 创建 Profile，并切换活动模型或路由策略。
+- 创建 Profile，并切换活动模型或路由策略；
+- 本地模型（GGUF）附「加载配置」面板——上下文与性能、生成采样、思考、内存、推测解码、高级六分区的查看/编辑/保存，支持「加载并验证」与加载报告查看（详见 [Provider、模型与智能路由](/doc/providers)）。
 
 ![Haoyue Desktop 的模型与 Provider 管理](/screenshots/desktop/providers-and-models.png)
 

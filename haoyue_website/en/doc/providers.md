@@ -77,6 +77,66 @@ A plaintext `apiKey` written by hand into the configuration migrates automatical
 
 `promptCaching` is enabled by default. OpenAI-compatible services keep using their automatic prefix caches; the Anthropic protocol additionally places `cache_control` checkpoints after the stable system prompt and tool definitions. Disable it in Desktop or set `"promptCaching": false` when an older Anthropic-compatible gateway rejects that field. The default prompts contain no dynamic timestamp, and tool definitions are sorted by name so the cached prefix remains byte-stable across steps.
 
+## Local models (in-process GGUF inference)
+
+Beyond Ollama / LM Studio (via OpenAI-compatible endpoints), Haoyue can run GGUF models directly in-process with no server required:
+
+```json
+{
+  "id": "local",
+  "name": "Local GGUF",
+  "kind": "local",
+  "modelsDirectory": "~/.haoyue/models",
+  "gpuLayers": 0,
+  "threads": 8,
+  "localPrefixReuse": true,
+  "flashAttention": false,
+  "kvCacheQuantization": "none",
+  "mmprojPath": ""
+}
+```
+
+- `gpuLayers`: GPU-offloaded layers, default `0` (pure CPU); after building the CUDA 12 backend (`dotnet build -p:LlamaBackend=Cuda12`), set `999` to offload everything — measured 7.6 → 84.9 tok/s
+- `mmprojPath`: path to the multimodal projector weights (mmproj GGUF); when left empty, the single `*mmproj*.gguf` in the model directory is auto-discovered (must sit next to the main model and be the companion version)
+- `localPrefixReuse`: reuse KV prefixes across requests — multi-step turns only decode new tokens (measured TTFT 20.5s → 0.61s)
+- `flashAttention` / `kvCacheQuantization`: attention-kernel acceleration and KV cache quantization (`q8_0` / `q4_0`); quantization only takes effect with Flash Attention enabled
+
+Loading has a full fault-tolerance chain: failures retry automatically, and GPU-offload failures fall back to CPU; every successful load runs a small-context inference self-check — corrupted weights or an unallocatable context surface at load time, not mid-conversation.
+
+### Per-model load settings (`load`)
+
+Each local model can override provider-level settings via the `load` field on the model entry:
+
+```json
+{
+  "id": "gemma-4-E4B-it-Q4_K_M",
+  "contextWindow": 32768,
+  "load": {
+    "autoOptimize": false,
+    "contextLength": 32768,
+    "gpuOffload": 999,
+    "evaluationBatchSize": 512,
+    "physicalBatchSize": 256,
+    "tryMmap": true,
+    "keepModelInMemory": false,
+    "offloadKvCacheToGpu": true,
+    "kCacheQuantType": "q8_0",
+    "temperature": 0.6,
+    "topP": 0.95,
+    "stopStrings": ["<end_of_turn>"]
+  }
+}
+```
+
+- **Semantics**: omitting `load` keeps provider-level and built-in defaults; a null field inside the object means "auto", and cloud providers are never affected; out-of-range values are clamped at parse time
+- **Context & performance**: `contextLength` (clamps only to the trained value — may exceed the default 32k practical cap), `gpuOffload` / `threads`, `evaluationBatchSize` / `physicalBatchSize` (llama.cpp n_batch / ubatch)
+- **Memory**: `tryMmap` (memory-mapped weights — lower load peak and faster startup), `keepModelInMemory` (mlock pinning; off by default so larger models fit), `kCacheQuantType` / `vCacheQuantType` (independent K/V quantization), `unifiedKvCache`
+- **Generation & thinking**: `temperature` / `topP` / `minP` / `topK` / `repeatPenalty` / `seed`, `stopStrings`, `enableThinking`, `limitResponseLength`
+- **Effect mechanism**: saving immediately invalidates resident weights; the next request reloads with the new settings; only load-affecting fields trigger a reload — sampling fields apply instantly
+- **Experimental fields**: `speculativeDecoding`, `contextCheckpoints`, `chatTemplate`, `llamaCppOverride` and similar are saved/display-only for now
+
+All of these can be edited visually on the Desktop "Models & Providers" page's local model load-settings panel (RPC `model.update` to change, `model.config.get` to query, with a "Load & Verify" button).
+
 ## Profiles and routing
 
 A Profile can pin a Provider and model or specify only a strategy and let the Runtime build a candidate chain. Seed strategies are:

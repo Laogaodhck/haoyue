@@ -77,6 +77,66 @@ Provider 是数组，模型属于对应 Provider：
 
 `promptCaching` 默认启用。OpenAI-compatible 服务使用服务端的自动前缀缓存；Anthropic 协议还会在稳定的 System Prompt 和工具定义后写入 `cache_control` 检查点。若某个旧的 Anthropic-compatible 网关不接受该字段，可在 Desktop 中关闭此项或设置 `"promptCaching": false`。默认 Prompt 不包含动态时间，工具定义也会按名称稳定排序，避免每轮请求改变缓存前缀。
 
+## 本地模型（GGUF 进程内推理）
+
+除 Ollama / LM Studio（OpenAI compatible 接入）外，Haoyue 支持直接在进程内运行 GGUF 模型，无需任何服务器：
+
+```json
+{
+  "id": "local",
+  "name": "Local GGUF",
+  "kind": "local",
+  "modelsDirectory": "~/.haoyue/models",
+  "gpuLayers": 0,
+  "threads": 8,
+  "localPrefixReuse": true,
+  "flashAttention": false,
+  "kvCacheQuantization": "none",
+  "mmprojPath": ""
+}
+```
+
+- `gpuLayers`：GPU 卸载层数，默认 `0`（纯 CPU）；构建 CUDA 12 后端（`dotnet build -p:LlamaBackend=Cuda12`）后设 `999` 卸载全部层，实测解码 7.6 → 84.9 tok/s
+- `mmprojPath`：多模态视觉投影权重（mmproj GGUF）路径；留空时自动发现模型目录下唯一 `*mmproj*.gguf`（须与主模型同目录且版本配套）
+- `localPrefixReuse`：跨请求复用 KV 前缀，多步回合只解码新增 token（实测 TTFT 20.5s → 0.61s）
+- `flashAttention` / `kvCacheQuantization`：注意力内核加速与 KV 缓存量化（`q8_0` / `q4_0`），量化仅在 Flash Attention 开启时生效
+
+加载具备完整的容错链路：失败自动重试，GPU 卸载失败自动降级 CPU；每次加载成功后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露，而不是等到第一次对话。
+
+### 单模型加载配置（`load`）
+
+每个本地模型可在模型条目的 `load` 字段覆盖提供商级设置，实现逐模型调优：
+
+```json
+{
+  "id": "gemma-4-E4B-it-Q4_K_M",
+  "contextWindow": 32768,
+  "load": {
+    "autoOptimize": false,
+    "contextLength": 32768,
+    "gpuOffload": 999,
+    "evaluationBatchSize": 512,
+    "physicalBatchSize": 256,
+    "tryMmap": true,
+    "keepModelInMemory": false,
+    "offloadKvCacheToGpu": true,
+    "kCacheQuantType": "q8_0",
+    "temperature": 0.6,
+    "topP": 0.95,
+    "stopStrings": ["<end_of_turn>"]
+  }
+}
+```
+
+- **语义**：`load` 缺省沿用提供商级与内置默认；对象内为 null 的字段表示「自动」，云端提供商不受影响；非法值在解析层自动钳制到合法区间
+- **上下文与性能**：`contextLength`（只向训练值钳制，可超过默认 32k 实用上限）、`gpuOffload` / `threads`、`evaluationBatchSize` / `physicalBatchSize`（llama.cpp n_batch / ubatch）
+- **内存**：`tryMmap`（内存映射加载，降低峰值内存与启动耗时）、`keepModelInMemory`（mlock 锁页，默认关闭以支持更大模型）、`kCacheQuantType` / `vCacheQuantType`（K/V 独立量化）、`unifiedKvCache`
+- **生成与思考**：`temperature` / `topP` / `minP` / `topK` / `repeatPenalty` / `seed`、`stopStrings`、`enableThinking`、`limitResponseLength`
+- **生效机制**：保存后立即失效常驻权重，下一次请求按新配置自动重载；仅加载类字段触发重载，采样字段即时生效
+- **实验性字段**：`speculativeDecoding`（推测解码）、`contextCheckpoints`、`chatTemplate`、`llamaCppOverride` 等当前仅保存展示、暂不参与加载
+
+以上配置均可在 Desktop「模型与 Provider」页的本地模型加载配置面板中可视化编辑（RPC `model.update` 修改、`model.config.get` 查询，含「加载并验证」按钮）。
+
 ## Profile 与路由
 
 Profile 可固定 Provider / 模型，也可以只指定策略让 Runtime 构建候选链。默认策略为：

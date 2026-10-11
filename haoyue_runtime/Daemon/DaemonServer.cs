@@ -2555,7 +2555,13 @@ public sealed class DaemonServer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            await WriteAsync(writer, writerGate, id, "error", ex.Message, ct, code: DaemonErrorCode.InternalError).ConfigureAwait(false);
+            // 内部错误附带异常类型与堆栈：前端「技术详情」直接可定位，而不是只有一句
+            // 「Object reference not set...」无从查起。DaemonRequestException 是面向用户
+            // 的受控错误，保持纯消息。
+            var detail = ex.StackTrace is { Length: > 0 } stack
+                ? $"{ex.GetType().FullName}: {ex.Message}\n{stack}"
+                : ex.Message;
+            await WriteAsync(writer, writerGate, id, "error", detail, ct, code: DaemonErrorCode.InternalError).ConfigureAwait(false);
         }
         finally
         {

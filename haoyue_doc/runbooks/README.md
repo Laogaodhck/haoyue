@@ -18,6 +18,8 @@
 ## 其他 Runbook
 
 - [deployment-isolation.md](deployment-isolation.md) — 部署级网络隔离（代理白名单 / 防火墙 / 容器化）与自备 GGUF 模型配套（嵌入模型注册、图像生成通道）。
+- [connectors.md](connectors.md) — 连接器生态：包规范、安装/卸载两步接入、secret 加密、本地 MCP 服务器承载的后六类连接器。
+- [delegation-roles.md](delegation-roles.md) — 角色化子代理：researcher / implementer / reviewer 预设、工具白名单收敛与统一汇报模板。
 
 ## 为什么
 

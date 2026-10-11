@@ -51,6 +51,7 @@ root.Add(SwitchCommand.Build());
 root.Add(InitCommand.Build());
 root.Add(SkillCommands.Build());
 root.Add(McpCommands.Build());
+root.Add(ConnectorCommands.Build());
 root.Add(SessionCommands.Build());
 root.Add(KnowledgeCommands.Build());
 root.Add(MemoryCommands.Build());

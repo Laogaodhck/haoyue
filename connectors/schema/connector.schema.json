@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Haoyue Connector Package",
+  "description": "连接器包清单（connector.json）规范。一个连接器 = 一个 MCP server 配置 + 元数据 + 输入声明。",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "description", "category", "server"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,31}$",
+      "description": "连接器唯一标识（kebab-case），安装后作为 mcp.servers 的键。"
+    },
+    "name": { "type": "string", "maxLength": 32, "description": "展示名（中文）" },
+    "description": { "type": "string", "maxLength": 200, "description": "一句话中文说明" },
+    "icon": { "type": "string", "maxLength": 8, "description": "emoji 图标" },
+    "category": {
+      "type": "string",
+      "enum": ["web", "dev", "communication", "data", "productivity", "system"]
+    },
+    "tags": { "type": "array", "items": { "type": "string" }, "maxItems": 8 },
+    "homepage": { "type": "string", "format": "uri" },
+    "offline": { "type": "boolean", "description": "true = 无外部 npm/uvx 依赖，随 haoyue 分发" },
+    "server": {
+      "type": "object",
+      "description": "安装后写入 mcp.servers 的服务器配置。字段值支持 ${KEY} 占位符，安装时由 inputs 解析。",
+      "required": ["transport"],
+      "properties": {
+        "transport": { "type": "string", "enum": ["stdio", "sse", "http", "streamable-http"] },
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "url": { "type": "string" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "connectTimeoutSeconds": { "type": "integer" }
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "description": "安装时向用户收集的配置项；secret 项加密存储。",
+      "items": {
+        "type": "object",
+        "required": ["key", "title"],
+        "properties": {
+          "key": { "type": "string", "pattern": "^[A-Z0-9_]{2,64}$" },
+          "title": { "type": "string", "description": "中文提示语" },
+          "description": { "type": "string" },
+          "required": { "type": "boolean", "default": false },
+          "default": { "type": "string" },
+          "secret": { "type": "boolean", "default": false, "description": "true = 以 secret: 前缀加密存储" }
+        }
+      }
+    },
+    "mutatingTools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "显式标记为 mutating 的工具名（无写关键词但改真实世界的工具）。"
+    },
+    "readOnlyTools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "显式标记为只读的工具名（优先级高于 mutatingTools）。"
+    },
+    "trustReadOnly": {
+      "type": "boolean",
+      "default": false,
+      "description": "对已知安全的服务器恢复宽松只读推断；默认 false（fail-closed）。"
+    }
+  }
+}

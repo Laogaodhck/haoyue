@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "browser",
+  "name": "浏览器控制",
+  "description": "驱动 Playwright 浏览器：打开网页、点击填表、截图与抓取，适合需要登录态或 JS 渲染的页面。",
+  "icon": "🌐",
+  "category": "web",
+  "tags": ["浏览器", "网页", "自动化"],
+  "homepage": "https://github.com/microsoft/playwright-mcp",
+  "server": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@playwright/mcp@latest"],
+    "env": { "PLAYWRIGHT_HEADLESS": "${HEADLESS}" }
+  },
+  "inputs": [
+    { "key": "HEADLESS", "title": "是否无头模式（true/false）", "required": false, "default": "false" }
+  ],
+  "trustReadOnly": false,
+  "mutatingTools": ["browser_click", "browser_type", "browser_navigate", "browser_fill_form", "browser_press_key"]
+}

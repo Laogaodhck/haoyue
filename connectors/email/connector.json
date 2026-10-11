@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "email",
+  "name": "邮箱（IMAP/SMTP）",
+  "description": "收件箱浏览与邮件发送，基于 haoyue 内置本地服务器（纯标准库），支持任意提供 IMAP/SMTP 的邮箱。",
+  "icon": "📧",
+  "category": "communication",
+  "tags": ["邮件", "IMAP", "SMTP"],
+  "offline": true,
+  "server": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["${LOCAL_SERVER}"],
+    "env": {
+      "IMAP_HOST": "${IMAP_HOST}",
+      "IMAP_PORT": "${IMAP_PORT}",
+      "IMAP_USER": "${IMAP_USER}",
+      "IMAP_PASSWORD": "${IMAP_PASSWORD}",
+      "SMTP_HOST": "${SMTP_HOST}",
+      "SMTP_PORT": "${SMTP_PORT}",
+      "SMTP_USER": "${SMTP_USER}",
+      "SMTP_PASSWORD": "${SMTP_PASSWORD}"
+    }
+  },
+  "inputs": [
+    { "key": "LOCAL_SERVER", "title": "内置服务器路径（自动填充，无需修改）", "required": false },
+    { "key": "IMAP_HOST", "title": "IMAP 服务器地址（如 imap.qq.com）", "required": true },
+    { "key": "IMAP_PORT", "title": "IMAP 端口", "required": false, "default": "993" },
+    { "key": "IMAP_USER", "title": "邮箱账号", "required": true },
+    { "key": "IMAP_PASSWORD", "title": "授权码/密码", "description": "多数服务商使用专用授权码而非登录密码。", "required": true, "secret": true },
+    { "key": "SMTP_HOST", "title": "SMTP 服务器地址（如 smtp.qq.com）", "required": true },
+    { "key": "SMTP_PORT", "title": "SMTP 端口", "required": false, "default": "587" },
+    { "key": "SMTP_USER", "title": "SMTP 账号（通常与邮箱相同）", "required": false },
+    { "key": "SMTP_PASSWORD", "title": "SMTP 授权码/密码", "required": false, "secret": true }
+  ],
+  "mutatingTools": ["email_send", "clipboard_set"],
+  "readOnlyTools": ["email_list", "clipboard_get", "ics_events", "rss_read", "http_request", "notify_send"]
+}

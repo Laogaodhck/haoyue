@@ -3,3 +3,9 @@ Delegate a self-contained subtask to a fresh sub-agent and return only its final
 Use this when a well-scoped piece of work is better handled in isolation — a research sweep, a refactor confined to one module, or a long analysis that would flood the current conversation. The sub-agent starts with a clean context window: it cannot see this conversation, so the task description must carry everything it needs (files to look at, constraints, and the expected output). It has the same tools as you, except delegation itself — a delegated task can never spawn further tasks.
 
 Delegate one task at a time and wait for its result before continuing; delegation runs serially. Prefer doing simple, quick work yourself — each delegation costs a full agent turn. Report the sub-agent's answer to the user in your own words, adding any context from this conversation that helps.
+
+Optional parameter `role`: a built-in role preset applied to the sub-agent.
+- researcher — read-only research; tool view is narrowed to read/grep/glob/list_dir/bash/web_search/web_fetch/fact_save/update_plan.
+- implementer — hands-on implementation; full toolset, must self-verify and report what was validated.
+- reviewer — read-only review; P0-P3 graded findings with locations, ends with 可合入/需修改后合入/阻断.
+Unknown role values are rejected. Every role returns a fixed report template (结论/关键发现/涉及文件/风险与不确定性), so results from multiple delegations stay uniform.

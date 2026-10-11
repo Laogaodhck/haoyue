@@ -40,7 +40,7 @@ from .core.registry import FormatRegistry
 from .ocr import OcrError, OcrResult, get_default_engine
 from .ocr.pdf_fallback import ocr_pdf_document
 from .parsers import DocxParser, ImageParser, MarkdownParser, PdfParser, TxtParser
-from .renderers import DocxRenderer, MarkdownRenderer, PdfRenderer, TxtRenderer
+from .renderers import DocxRenderer, MarkdownRenderer, PdfRenderer, PptxRenderer, TxtRenderer, XlsxRenderer
 
 __all__ = ["DocToolkit", "default_toolkit"]
 
@@ -60,7 +60,7 @@ class DocToolkit:
                 TxtParser(), MarkdownParser(), PdfParser(), DocxParser(), ImageParser(),
             ):
                 self.registry.register_parser(parser)
-            for renderer in (TxtRenderer(), MarkdownRenderer(), DocxRenderer(), PdfRenderer()):
+            for renderer in (TxtRenderer(), MarkdownRenderer(), DocxRenderer(), PdfRenderer(), PptxRenderer(), XlsxRenderer()):
                 self.registry.register_renderer(renderer)
 
     # ---- 扩展接口 --------------------------------------------------------

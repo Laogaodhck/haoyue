@@ -37,6 +37,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { confirmAction } from '../confirmation'
 import ExpertsPanel from './ExpertsPanel.vue'
 import McpPanel from './McpPanel.vue'
+import ConnectorsPanel from './ConnectorsPanel.vue'
 import type { ModelDetailConfig } from './ModelConfigModal.vue'
 import FieldLabel from './FieldLabel.vue'
 import OfficialSkillsPanel from './OfficialSkillsPanel.vue'
@@ -362,6 +363,14 @@ const visibleSections = computed(() =>
 
 /** 扩展页技能类目内的二级视图：本地已安装 / 技能市场。 */
 const skillsView = ref<'installed' | 'market'>('installed')
+
+/** 扩展页连接器类目内的二级视图：卡片商店 / MCP 高级配置。 */
+const connectorsView = ref<'store' | 'advanced'>('store')
+
+/** 连接器安装/卸载后让 MCP 面板状态随之刷新（重连由 daemon 后台完成）。 */
+function onConnectorsChanged(): void {
+  window.haoyue.daemon.request('mcp.reload', {}).catch(() => {})
+}
 
 async function requestJson<T>(
   method: string,
@@ -1355,6 +1364,7 @@ watch(() => props.page, () => {
 })
 watch(section, (next) => {
   if (next === 'skills') skillsView.value = 'installed'
+  if (next === 'mcp') connectorsView.value = 'store'
   void loadCurrentSection()
 })
 
@@ -1621,7 +1631,23 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-else-if="section === 'mcp'">
-          <McpPanel :workspace-path="workspacePath" />
+          <!-- 扩展中心：连接器卡片商店为默认视图，MCP 高级配置收进二级视图；
+               普通设置页维持原 MCP 面板直入。 -->
+          <div v-if="page === 'extensions'" class="settings-section-heading">
+            <div>
+              <h3>连接器</h3>
+              <p>一键接入常用外部服务；进阶配置（自定义服务器、凭据、OAuth）请切到 MCP 配置。</p>
+            </div>
+            <div class="row-actions">
+              <div class="segmented-control">
+                <button :class="{ active: connectorsView === 'store' }" @click="connectorsView = 'store'">连接器商店</button>
+                <button :class="{ active: connectorsView === 'advanced' }" @click="connectorsView = 'advanced'">MCP 配置</button>
+              </div>
+            </div>
+          </div>
+          <ConnectorsPanel v-if="page === 'extensions' && connectorsView === 'store'"
+            @changed="onConnectorsChanged" />
+          <McpPanel v-else :workspace-path="workspacePath" />
         </template>
 
         <template v-else-if="section === 'skills'">

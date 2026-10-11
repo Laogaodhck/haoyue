@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "github",
+  "name": "GitHub",
+  "description": "管理 GitHub 仓库、Issue、Pull Request 与文件，需要个人访问令牌（repo 权限按需缩小）。",
+  "icon": "🐙",
+  "category": "dev",
+  "tags": ["github", "代码协作"],
+  "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/github",
+  "server": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+  },
+  "inputs": [
+    {
+      "key": "GITHUB_TOKEN",
+      "title": "GitHub 个人访问令牌",
+      "description": "在 GitHub → Settings → Developer settings → Personal access tokens 生成；建议只勾选所需仓库权限。",
+      "required": true,
+      "secret": true
+    }
+  ],
+  "mutatingTools": ["create_issue", "create_pull_request", "merge_pull_request", "create_branch", "push_files", "create_or_update_file", "delete_file", "fork_repository", "add_issue_comment"]
+}

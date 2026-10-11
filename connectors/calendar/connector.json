@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "calendar",
+  "name": "日历（ICS）",
+  "description": "读取 iCalendar 订阅链接或 .ics 文件，列出日程事件，支持订阅节假日/排班/会议室日历。",
+  "icon": "📅",
+  "category": "productivity",
+  "tags": ["日历", "ICS", "日程"],
+  "offline": true,
+  "server": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["${LOCAL_SERVER}"]
+  },
+  "inputs": [
+    { "key": "LOCAL_SERVER", "title": "内置服务器路径（自动填充，无需修改）", "required": false }
+  ],
+  "readOnlyTools": ["clipboard_get", "ics_events", "rss_read", "http_request", "email_list", "notify_send"]
+}

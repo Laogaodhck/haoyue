@@ -109,6 +109,10 @@ public sealed partial class Agent
         if (Tools.Builtin.ImageGenTool.ResolveEndpoint(configStore.Config) is null)
             available = available.Where(tool => tool.Name != "image_generate").ToList();
 
+        // 文档创作链：Python 或 doc_toolkit 不可用时隐藏 doc_render，同理不可用即不可见。
+        if (!Tools.Builtin.DocRenderTool.IsAvailable(configStore.Config.DocRender))
+            available = available.Where(tool => tool.Name != "doc_render").ToList();
+
         if (!model.Model.Capabilities.Vision)
             available = available.Where(tool => !tool.RequiresVision).ToList();
 

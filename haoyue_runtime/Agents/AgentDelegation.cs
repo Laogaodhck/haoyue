@@ -21,6 +21,16 @@ public interface IAgentDelegator
     Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, CancellationToken ct);
 
     /// <summary>
+    /// S7 角色化委派：role 命中 AgentRole.Builtins 时注入角色纪律提示词并收敛
+    /// 工具白名单；null 或未实现时退化为普通委派（默认接口成员保证既有实现兼容）。
+    /// </summary>
+    async Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, string? role, CancellationToken ct)
+    {
+        var effectiveTask = role is { Length: > 0 } ? AgentRole.Resolve(role).ComposeTask(task) : task;
+        return await RunSubTaskAsync(workspace, effectiveTask, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Runs several subtasks and returns their results in input order. The default
     /// implementation is a serial fallback; real delegators may parallelize.
     /// </summary>
@@ -30,6 +40,17 @@ public interface IAgentDelegator
         foreach (var task in tasks)
             results.Add(await RunSubTaskAsync(workspace, task, ct).ConfigureAwait(false));
         return results;
+    }
+
+    /// <summary>S7：角色化批量委派。默认实现只注入角色提示词（不收敛工具），
+    /// AgentDelegator 显式实现时会同时应用角色工具白名单并保持并行。</summary>
+    async Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
+        WorkspaceInfo workspace, IReadOnlyList<string> tasks, string? role, CancellationToken ct)
+    {
+        if (role is not { Length: > 0 })
+            return await RunSubTasksAsync(workspace, tasks, ct).ConfigureAwait(false);
+        var composed = tasks.Select(AgentRole.Resolve(role).ComposeTask).ToList();
+        return await RunSubTasksAsync(workspace, composed, ct).ConfigureAwait(false);
     }
 }
 
@@ -76,6 +97,21 @@ public sealed class OverlayToolRegistry(IToolRegistry inner, ITool[] overlay, pa
 }
 
 /// <summary>
+/// S7 角色工具白名单视图：只放行 allowedTools 中的工具（大小写不敏感），
+/// 其余一律视为不存在。白名单为空/null 时等价于透传。
+/// </summary>
+public sealed class AllowListToolRegistry(IToolRegistry inner, IReadOnlyList<string> allowedTools) : IToolRegistry
+{
+    private readonly HashSet<string> _allowed = allowedTools.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    public IDisposable Register(ITool tool) => inner.Register(tool);
+
+    public ITool? Resolve(string name) => _allowed.Contains(name) ? inner.Resolve(name) : null;
+
+    public IReadOnlyList<ITool> All => inner.All.Where(tool => _allowed.Contains(tool.Name)).ToList();
+}
+
+/// <summary>
 /// Default delegator. Sub-agents share every runtime dependency except the tool view,
 /// and each gets a dedicated persisted session so sub-tasks stay auditable. Depth is
 /// governed by <c>agent.delegationMaxDepth</c> (default 1 = the current one-level
@@ -100,19 +136,40 @@ public sealed class AgentDelegator(
     public const string ParallelDelegateToolName = "delegate_tasks";
 
     public async Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, CancellationToken ct) =>
-        await RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: false).ConfigureAwait(false);
+        await RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: false, allowedTools: null).ConfigureAwait(false);
+
+    /// <summary>S7：角色化委派——组合角色任务文本并按预设收敛子代理工具视图。</summary>
+    async Task<AgentTurnResult> IAgentDelegator.RunSubTaskAsync(
+        WorkspaceInfo workspace, string task, string? role, CancellationToken ct)
+    {
+        var preset = role is { Length: > 0 } ? AgentRole.Resolve(role) : null;
+        var effectiveTask = preset?.ComposeTask(task) ?? task;
+        return await RunSubTaskAsync(workspace, effectiveTask, ct, depth: 0, parallel: false, allowedTools: preset?.AllowedTools)
+            .ConfigureAwait(false);
+    }
 
     public async Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
         WorkspaceInfo workspace, IReadOnlyList<string> tasks, CancellationToken ct)
     {
-        var runs = tasks.Select(task => RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: true));
+        var runs = tasks.Select(task => RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: true, allowedTools: null));
+        return await Task.WhenAll(runs).ConfigureAwait(false);
+    }
+
+    /// <summary>S7：角色化批量委派——全部子任务注入同一角色并应用其工具白名单，保持并行。</summary>
+    async Task<IReadOnlyList<AgentTurnResult>> IAgentDelegator.RunSubTasksAsync(
+        WorkspaceInfo workspace, IReadOnlyList<string> tasks, string? role, CancellationToken ct)
+    {
+        var preset = role is { Length: > 0 } ? AgentRole.Resolve(role) : null;
+        var composed = preset is null ? tasks : tasks.Select(preset.ComposeTask).ToList();
+        var runs = composed.Select(task => RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: true, allowedTools: preset?.AllowedTools));
         return await Task.WhenAll(runs).ConfigureAwait(false);
     }
 
     private async Task<AgentTurnResult> RunSubTaskAsync(
-        WorkspaceInfo workspace, string task, CancellationToken ct, int depth, bool parallel)
+        WorkspaceInfo workspace, string task, CancellationToken ct, int depth, bool parallel,
+        IReadOnlyList<string>? allowedTools)
     {
-        var subTools = BuildSubToolView(depth, parallel);
+        var subTools = BuildSubToolView(depth, parallel, allowedTools);
         var subAgent = new Agent(
             configStore, providerManager, subTools, promptProvider, promptComposer,
             workspaceManager, sessionStore, verifier, events, fileLocks, lockScope, skills);
@@ -122,22 +179,29 @@ public sealed class AgentDelegator(
 
     /// <summary>
     /// Builds one sub-agent's tool view: the shared registry minus delegation tools,
-    /// plus depth-aware delegation tools when the child may still delegate.
+    /// plus depth-aware delegation tools when the child may still delegate. A role
+    /// preset (S7) additionally narrows the view to its allowed-tools list.
     /// </summary>
-    private IToolRegistry BuildSubToolView(int depth, bool parallel)
+    private IToolRegistry BuildSubToolView(int depth, bool parallel, IReadOnlyList<string>? allowedTools)
     {
         var childDepth = depth + 1;
         var mayDelegate = !parallel && childDepth < ResolveMaxDepth();
-        if (!mayDelegate)
-            return new FilteredToolRegistry(toolRegistry, DelegateToolName, ParallelDelegateToolName);
 
-        var childDelegator = new ChildDelegator(this, childDepth);
-        var overlay = new ITool[]
-        {
-            new DelegateTool(promptProvider, childDelegator),
-            new DelegateTasksTool(promptProvider, childDelegator),
-        };
-        return new OverlayToolRegistry(toolRegistry, overlay, DelegateToolName, ParallelDelegateToolName);
+        IToolRegistry view = mayDelegate
+            ? new OverlayToolRegistry(
+                toolRegistry,
+                [
+                    new DelegateTool(promptProvider, childDelegatorFor(childDepth)),
+                    new DelegateTasksTool(promptProvider, childDelegatorFor(childDepth)),
+                ],
+                DelegateToolName, ParallelDelegateToolName)
+            : new FilteredToolRegistry(toolRegistry, DelegateToolName, ParallelDelegateToolName);
+
+        return allowedTools is { Count: > 0 }
+            ? new AllowListToolRegistry(view, allowedTools)
+            : view;
+
+        ChildDelegator childDelegatorFor(int d) => new(this, d);
     }
 
     private int ResolveMaxDepth() =>
@@ -147,14 +211,14 @@ public sealed class AgentDelegator(
     private sealed class ChildDelegator(AgentDelegator owner, int depth) : IAgentDelegator
     {
         public Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, CancellationToken ct) =>
-            owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: false);
+            owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: false, allowedTools: null);
 
         public async Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
             WorkspaceInfo workspace, IReadOnlyList<string> tasks, CancellationToken ct)
         {
             // A child may fan out too, but its children never delegate (parallel rule).
             var results = await Task.WhenAll(
-                tasks.Select(task => owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: true)))
+                tasks.Select(task => owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: true, allowedTools: null)))
                 .ConfigureAwait(false);
             return results;
         }

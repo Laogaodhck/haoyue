@@ -99,5 +99,15 @@ public static class EvalTasks
                 ("docs/spec-a.txt", "规格 A：登录接口。要求：密码长度至少 8 位；连续失败 5 次锁定 10 分钟；所有响应超时为 30 秒。"),
                 ("docs/spec-b.txt", "规格 B：导出接口。要求：导出任务超时为 60 秒；文件保留 7 天；仅管理员可发起。"),
             ]),
+
+        new EvalTask(
+            "doc-render",
+            "文档成链：起草并渲染 Word",
+            "请严格按两步执行：第一步，调用 write_file 工具创建 report.md，内容需包含一行「# 本地推理加速评审」、一个二级标题和至少两条以 - 开头的要点；第二步，调用 doc_render 工具，参数 source_path=report.md、format=docx、file_name=季度评审。不要做其他事情。如果 doc_render 不可用，改为创建 skipped.txt 写入 no-doc-render。",
+            [
+                new EvalJudge("fileExists", "report.md"),
+                new EvalJudge("fileExists", ".haoyue/outputs/documents/季度评审.docx"),
+            ],
+            MaxSteps: 30),
     ];
 }

@@ -20,7 +20,8 @@ public sealed class DelegateTool(IPromptProvider prompts, IAgentDelegator delega
         ?? "Delegate a self-contained subtask to a fresh sub-agent and return only its final answer.";
 
     public JsonObject ParameterSchema => ToolSchema.Object(
-        ("task", ToolSchema.String("完整、自包含的子任务描述。子代理看不到当前对话历史，描述必须包含它需要的全部信息（文件、约束、期望产出）。"), true));
+        ("task", ToolSchema.String("完整、自包含的子任务描述。子代理看不到当前对话历史，描述必须包含它需要的全部信息（文件、约束、期望产出）。"), true),
+        ("role", ToolSchema.String($"可选角色预设：{AgentRole.ValidRoles}。命中时子代理注入角色纪律提示词并收敛工具白名单（如 reviewer 只读）。"), false));
 
     public bool Mutating => true;
 
@@ -31,10 +32,13 @@ public sealed class DelegateTool(IPromptProvider prompts, IAgentDelegator delega
         var task = arguments["task"]?.GetValue<string>()?.Trim();
         if (string.IsNullOrWhiteSpace(task))
             return ToolResult.Fail("delegate_task 需要 task 参数：描述要委派的完整子任务。");
+        var role = arguments["role"]?.GetValue<string>()?.Trim();
+        if (role is { Length: > 0 } && !AgentRole.Builtins.ContainsKey(role))
+            return ToolResult.Fail($"未知角色「{role}」。可选：{AgentRole.ValidRoles}。");
 
         try
         {
-            var result = await delegator.RunSubTaskAsync(context.Workspace, task, ct).ConfigureAwait(false);
+            var result = await delegator.RunSubTaskAsync(context.Workspace, task, role, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(result.Error))
                 return ToolResult.Fail($"子任务失败：{result.Error}");
             if (result.Cancelled)

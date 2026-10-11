@@ -1421,6 +1421,21 @@ public sealed class DaemonServer : IAsyncDisposable
                             _admin.ReloadMcpAsync, context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "connectors.list":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListConnectors()), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "connectors.install":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            token => _admin.InstallConnectorAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "connectors.uninstall":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            token => _admin.UninstallConnectorAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "skill.list":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.ListSkills()), context.ConnectionCt).ConfigureAwait(false);

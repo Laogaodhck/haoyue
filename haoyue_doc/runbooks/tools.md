@@ -156,6 +156,16 @@
 - **何时不用**：未配置图像模型时工具自动隐藏，不会出现在工具列表；纯文本回答不要调用。
 - **失败表现**：端点错误或无 b64/url 返回时明确报错；产物路径在结果消息中，可用 read 工具查看核验。
 
+## doc_render
+
+- **用途**：文档创作链——把 Markdown 内容渲染为 docx / xlsx / pptx 产物，写入工作区 `.haoyue/outputs/documents/`。
+- **参数**：`format` 必填（docx / xlsx / pptx）；`content`（内联 Markdown）与 `source_path`（既有 md/txt 文件）二选一；`file_name` 可选。
+- **何时用**：用户要交付正式文档（报告→docx）、数据表（管道表格→真实电子表格行列）、演示稿（H1 标题分页→pptx）时；数据用 `| a | b |` 管道表格书写，xlsx 才能落为真实单元格。
+- **何时不用**：本机无 Python 或缺 doc_toolkit 包（python-docx / openpyxl / python-pptx 未装）时工具自动隐藏；只要求展示不要求产物时直接输出 Markdown 即可。
+- **格式语义**：docx——标题落 Heading 样式、列表落 List Bullet/Number、引用落 Intense Quote；xlsx——标题行加粗、表格切分为单元格、分隔行跳过；pptx——H1 分页出标题、H2+ 为加粗正文、列表项带缩进、代码块 Consolas。
+- **依赖与配置**：`agent.docRender.toolkitPath` 显式指定 doc_toolkit 包目录（默认自动探测可执行文件相对目录与环境变量 `HAOYUE_DOC_TOOLKIT_PATH`）；`agent.docRender.pythonPath` 可显式指定解释器（默认复用系统探测链）。
+- **失败表现**：Python/包缺失 → 明确报错并附安装指引（工具同时从模型视图隐藏）；doc_toolkit 退出码非零 → 带出 stderr 的中文错误（如依赖缺失的 pip 安装提示）。
+
 ## declare_skill
 
 - **用途**：手动加载一个未命中关键词触发的技能，对当前回合生效。

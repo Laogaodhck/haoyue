@@ -5,6 +5,7 @@ using System.IO;
 using Cronos;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
+using Haoyue.Runtime.Connectors;
 using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Experts;
 using Haoyue.Runtime.Mcp;
@@ -1189,6 +1190,92 @@ internal sealed class DaemonAdminApi(
             servers.Add((JsonNode)McpServerJson(name, scope, server, status));
         }
         return servers.ToJsonString();
+    }
+
+    /// <summary>连接器目录：内置包元数据 + 当前安装状态。inputs 只给键名不给已存值。</summary>
+    public string ListConnectors()
+    {
+        var root = ConnectorCatalog.ResolveRoot();
+        var result = new JsonObject
+        {
+            ["catalogAvailable"] = root is not null,
+            ["root"] = root,
+        };
+        var servers = runtime.ConfigStore.Config.Mcp.Servers;
+        var packages = new JsonArray();
+        foreach (var package in ConnectorCatalog.LoadAll(root))
+        {
+            servers.TryGetValue(package.Id, out var installed);
+            var inputs = new JsonArray();
+            foreach (var input in package.Inputs ?? [])
+            {
+                inputs.Add((JsonNode)new JsonObject
+                {
+                    ["key"] = input.Key,
+                    ["title"] = input.Title,
+                    ["description"] = input.Description,
+                    ["required"] = input.Required,
+                    ["secret"] = input.Secret,
+                    ["hasDefault"] = !string.IsNullOrWhiteSpace(input.Default),
+                });
+            }
+
+            packages.Add((JsonNode)new JsonObject
+            {
+                ["id"] = package.Id,
+                ["name"] = package.Name,
+                ["description"] = package.Description,
+                ["icon"] = package.Icon,
+                ["category"] = package.Category,
+                ["tags"] = new JsonArray((package.Tags ?? []).Select(tag => (JsonNode)tag).ToArray()),
+                ["offline"] = package.Offline ?? false,
+                ["homepage"] = package.Homepage,
+                ["installed"] = installed is not null,
+                ["enabled"] = installed?.Enabled ?? false,
+                ["inputs"] = inputs,
+            });
+        }
+        result["connectors"] = packages;
+        return result.ToJsonString();
+    }
+
+    /// <summary>一键安装连接器：占位符填充（secret 项加密）→ 写全局配置 → 后台重连 MCP。</summary>
+    public Task<string> InstallConnectorAsync(JsonObject parameters, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var id = RequiredString(parameters, "id");
+        var package = ConnectorCatalog.Find(id)
+            ?? throw new DaemonRequestException($"Connector not found: {id}", DaemonErrorCode.NotFound);
+
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (parameters["values"] is JsonObject raw)
+        {
+            foreach (var (key, node) in raw)
+                if (node is JsonValue value && value.TryGetValue(out string? text) && text.Length > 0)
+                    values[key] = text;
+        }
+
+        try
+        {
+            ConnectorInstaller.Install(runtime.ConfigStore, package, values);
+        }
+        catch (ConnectorException ex)
+        {
+            throw new DaemonRequestException(ex.Message);
+        }
+        ReconnectMcpInBackground();
+        return Task.FromResult(ListConnectors());
+    }
+
+    /// <summary>卸载连接器：从全局配置移除该 MCP 服务器并后台重连。</summary>
+    public Task<string> UninstallConnectorAsync(JsonObject parameters, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var id = RequiredString(parameters, "id");
+        if (!ConnectorInstaller.Uninstall(runtime.ConfigStore, id))
+            throw new DaemonRequestException($"Connector not installed: {id}", DaemonErrorCode.NotFound);
+        ReconnectMcpInBackground();
+        return Task.FromResult(ListConnectors());
     }
 
     public Task<string> UpsertMcpServerAsync(JsonObject parameters, CancellationToken ct)

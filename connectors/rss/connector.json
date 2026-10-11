@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "rss",
+  "name": "RSS 订阅",
+  "description": "读取 RSS 2.0 / Atom 源的最新条目，用于信息流追踪、竞品监控与内容聚合。",
+  "icon": "📰",
+  "category": "productivity",
+  "tags": ["RSS", "资讯", "订阅"],
+  "offline": true,
+  "server": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["${LOCAL_SERVER}"]
+  },
+  "inputs": [
+    { "key": "LOCAL_SERVER", "title": "内置服务器路径（自动填充，无需修改）", "required": false }
+  ],
+  "readOnlyTools": ["clipboard_get", "ics_events", "rss_read", "http_request", "email_list", "notify_send"]
+}

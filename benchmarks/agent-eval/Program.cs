@@ -18,6 +18,8 @@ namespace Haoyue.Benchmarks.AgentEval;
 /// </summary>
 public static class Program
 {
+    private static string _repoRoot = "";
+
     public static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
@@ -30,6 +32,9 @@ public static class Program
         }
 
         var repoRoot = FindRepoRoot();
+        _repoRoot = repoRoot;
+        // doc_render 等依赖「当前目录探测」的能力统一以仓库根为基准。
+        Environment.CurrentDirectory = repoRoot;
         var resultsDir = Path.Combine(repoRoot, "benchmarks", "agent-eval", "results");
         Directory.CreateDirectory(resultsDir);
         var runStamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
@@ -39,6 +44,17 @@ public static class Program
         var tasks = EvalTasks.Default
             .Where(t => filter is null || t.Id.Contains(filter, StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+        // 环境依赖任务：doc_render 依赖本机 Python + doc_toolkit，不具备时跳过并明示，
+        // 避免无 Python 的 CI 把「环境缺失」误判为「任务失败」。
+        var docRenderAvailable = Haoyue.Runtime.Tools.Builtin.DocRenderTool.IsAvailable(
+            new Haoyue.Runtime.Configuration.DocRenderConfig());
+        if (!docRenderAvailable && tasks.RemoveAll(t => t.Id == "doc-render") > 0)
+        {
+            Console.WriteLine("跳过任务 doc-render：本机无可用 Python / doc_toolkit（不计入通过率）。");
+            Console.WriteLine();
+        }
+
         if (tasks.Count == 0)
         {
             Console.WriteLine($"没有匹配 filter 的任务：{filter}");
@@ -109,6 +125,9 @@ public static class Program
                         Tool = rule.Tool, Pattern = rule.Pattern, Reason = rule.Reason,
                     })];
             }
+            // 文档任务显式指向仓库内 doc_toolkit，不依赖 cwd 碰运气。
+            runtime.ConfigStore.Config.DocRender.ToolkitPath =
+                Path.Combine(_repoRoot, "doc_toolkit");
             if (maxStepsOverride > 0)
                 runtime.ConfigStore.Config.Agent.MaxSteps = maxStepsOverride;
 

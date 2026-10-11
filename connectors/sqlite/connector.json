@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "sqlite",
+  "name": "SQLite 数据库",
+  "description": "对指定 SQLite 数据库执行查询与模式浏览（官方 mcp-server-sqlite），适合本地数据分析。",
+  "icon": "🗄️",
+  "category": "data",
+  "tags": ["sqlite", "数据库", "分析"],
+  "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite",
+  "server": {
+    "transport": "stdio",
+    "command": "uvx",
+    "args": ["mcp-server-sqlite", "--db-path", "${DB_PATH}"]
+  },
+  "inputs": [
+    { "key": "DB_PATH", "title": "数据库文件路径", "required": true }
+  ]
+}

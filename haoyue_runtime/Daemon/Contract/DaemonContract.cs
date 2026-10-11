@@ -436,6 +436,15 @@ public static class DaemonContract
             ("scope", SString("作用域", "workspace", "global"), false))),
         M("mcp.reload", "mcp", "重载 MCP 服务器", parameters: EmptyParams),
 
+        // connectors：连接器目录与一键安装（基于 MCP 分发格式）
+        M("connectors.list", "connectors", "列出连接器目录与安装状态", parameters: EmptyParams),
+        M("connectors.install", "connectors", "一键安装连接器（占位符填充、secret 加密落盘）", parameters: SObject(
+            ("id", SString("连接器包 id"), true),
+            ("values", SObject(
+                ("key", SString("inputs 配置项取值（键名与包 inputs.key 对应）"), false)), false))),
+        M("connectors.uninstall", "connectors", "卸载连接器", parameters: SObject(
+            ("id", SString("连接器包 id"), true))),
+
         // skill
         M("skill.list", "skill", "列出已装技能", parameters: EmptyParams),
         M("skill.import", "skill", "导入技能目录", parameters: SObject(

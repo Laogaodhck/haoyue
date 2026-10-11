@@ -22,6 +22,7 @@ public sealed class HaoyueConfig
     public EvolutionConfig Evolution { get; set; } = new();
     public KnowledgeConfig Knowledge { get; set; } = new();
     public ImageGenConfig ImageGen { get; set; } = new();
+    public DocRenderConfig DocRender { get; set; } = new();
     public WebConfig Web { get; set; } = new();
 
 
@@ -297,6 +298,21 @@ public sealed class ImageGenConfig
     public string? Model { get; set; }
     /// <summary>生成尺寸（传给 images/generations 的 size）。提供商不支持时由端点裁定。</summary>
     public string Size { get; set; } = "1024x1024";
+}
+
+/// <summary>
+/// 文档渲染配置（doc_render 工具）。工具调用本机 Python 运行 doc_toolkit
+/// 完成文档生成；Python 缺失或找不到 doc_toolkit 包时工具自动隐藏。
+/// </summary>
+public sealed class DocRenderConfig
+{
+    /// <summary>总开关。关闭后 doc_render 工具从模型工具视图中移除。</summary>
+    public bool Enabled { get; set; } = true;
+    /// <summary>doc_toolkit 包目录的显式路径（含 __init__.py 的目录本身）。
+    /// 空 = 按可执行文件相对目录、环境变量 HAOYUE_DOC_TOOLKIT_PATH 与当前目录逐级探测。</summary>
+    public string ToolkitPath { get; set; } = "";
+    /// <summary>Python 解释器显式路径。空 = 复用 PythonLocator 的系统探测链。</summary>
+    public string PythonPath { get; set; } = "";
 }
 
 /// <summary>外部网站访问白名单（web_fetch）。空列表 = 不限制；localhost / 127.x / ::1 始终允许。</summary>

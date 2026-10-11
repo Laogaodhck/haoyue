@@ -1,0 +1,13 @@
+Render a Markdown document into a finished docx / xlsx / pptx artifact and save it under the workspace.
+
+- content (one of content / source_path required): Markdown source to render inline.
+- source_path: alternative to content — render an existing markdown/text file (absolute or workspace-relative).
+- format (required): docx | xlsx | pptx.
+- file_name (optional): output file name without extension; a timestamped default is used otherwise.
+
+Mapping semantics:
+- docx — headings become Heading styles, lists become List Bullet/Number, quotes become Intense Quote, code blocks keep a monospace font.
+- xlsx — heading lines become bold section rows; markdown pipe tables (| a | b |) become real spreadsheet rows/columns (separator rows are skipped); other lines land one per row. Prefer a pipe table when the data is tabular.
+- pptx — H1 headings split slides (slide title), H2+ become bold body lines, list items become bullets with indentation, code blocks render in Consolas.
+
+The output is written under .haoyue/outputs/documents/ and the result message contains its absolute path. Requires a local Python with the doc_toolkit package (plus python-docx / openpyxl / python-pptx); the tool is hidden when that runtime is unavailable.

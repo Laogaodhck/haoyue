@@ -1,0 +1,17 @@
+{
+  "name": "@haoyue/daemon-client",
+  "version": "1.0.0",
+  "description": "haoyue daemon 的类型化 TypeScript 客户端（契约驱动生成，114 个 RPC 方法全覆盖）",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "example": "node --experimental-strip-types examples/hello.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "license": "MIT"
+}

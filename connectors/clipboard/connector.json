@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "clipboard",
+  "name": "剪贴板",
+  "description": "读写系统剪贴板文本，让代理能与桌面应用交换内容（复制结果、取选中文本）。",
+  "icon": "📋",
+  "category": "system",
+  "tags": ["剪贴板", "桌面"],
+  "offline": true,
+  "server": {
+    "transport": "stdio",
+    "command": "python",
+    "args": ["${LOCAL_SERVER}"]
+  },
+  "inputs": [
+    { "key": "LOCAL_SERVER", "title": "内置服务器路径（自动填充，无需修改）", "required": false }
+  ],
+  "mutatingTools": ["clipboard_set"],
+  "readOnlyTools": ["clipboard_get", "ics_events", "rss_read", "http_request", "email_list", "notify_send"]
+}

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "notion",
+  "name": "Notion",
+  "description": "读写 Notion 页面与数据库（官方 Notion MCP 服务器），需要集成令牌并先在页面连接授权。",
+  "icon": "📒",
+  "category": "productivity",
+  "tags": ["notion", "知识库", "文档"],
+  "homepage": "https://github.com/makenotion/notion-mcp-server",
+  "server": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@notionhq/notion-mcp-server"],
+    "env": {
+      "OPENAPI_MCP_HEADERS": "{\"Authorization\": \"Bearer ${NOTION_TOKEN}\", \"Notion-Version\": \"2022-06-28\"}"
+    }
+  },
+  "inputs": [
+    {
+      "key": "NOTION_TOKEN",
+      "title": "Notion 集成令牌",
+      "description": "在 notion.so/my-integrations 创建 internal integration，并为目标页面授予访问权限。",
+      "required": true,
+      "secret": true
+    }
+  ]
+}

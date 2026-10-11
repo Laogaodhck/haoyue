@@ -4,3 +4,5 @@
 2. 每个子代理都看不到当前对话历史：tasks 数组中每条描述必须自包含——涉及哪些文件、约束是什么、期望产出是什么。
 3. 单个子任务的结果报告按"## 子任务 N"分节返回，失败的任务会标注状态与原因，可针对性重试，无需整批重跑。
 4. 并行子代理不能再委派；每个子代理的文件写入经统一文件锁协调，避免相互覆盖。
+
+Optional parameter `role`: a built-in role preset applied to ALL subtasks (researcher / implementer / reviewer), same semantics as delegate_task. Use it when fanning out homogeneous work, e.g. role=researcher for parallel evidence sweeps — every child is read-only and returns the uniform report template.

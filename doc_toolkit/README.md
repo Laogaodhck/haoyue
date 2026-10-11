@@ -7,7 +7,7 @@
 | 能力 | 支持 |
 |---|---|
 | 内容提取（解析） | TXT（含 GBK/UTF-16 自动探测）、Markdown、PDF、DOCX、图片（PNG/JPG/BMP/WEBP/TIFF，走 OCR） |
-| 格式输出（渲染） | TXT、Markdown、DOCX、PDF |
+| 格式输出（渲染） | TXT、Markdown、DOCX、PDF、XLSX、PPTX |
 | 格式互转 | 任意「可解析格式」→ 任意「可输出格式」，保留标题/段落/列表/引用/代码块结构 |
 | OCR 识别 | RapidOCR（ONNX Runtime CPU 推理，模型内置、完全离线），中文效果佳 |
 | 扫描件 PDF | `ocr_fallback=True` 时逐页渲染识别，无文本层的 PDF 也能提取 |
@@ -15,8 +15,8 @@
 ## 安装依赖
 
 ```bash
-pip install pypdf python-docx fpdf2          # 基础格式支持
-pip install rapidocr-onnxruntime pillow pypdfium2  # OCR / 图片支持（可选）
+pip install pypdf python-docx fpdf2 openpyxl python-pptx   # 基础格式支持
+pip install rapidocr-onnxruntime pillow pypdfium2          # OCR / 图片支持（可选）
 ```
 
 ## 快速上手
@@ -67,11 +67,14 @@ doc_toolkit/
 │   ├── txt_renderer.py
 │   ├── markdown_renderer.py
 │   ├── docx_renderer.py   #   块类型映射 Heading/List Bullet/List Number 样式
-│   └── pdf_renderer.py    #   fpdf2 + 自动查找中文字体（msyh → simhei → simsun）
+│   ├── pdf_renderer.py    #   fpdf2 + 自动查找中文字体（msyh → simhei → simsun）
+│   ├── xlsx_renderer.py   #   openpyxl：标题行加粗分区、管道表格切分为真实行列
+│   └── pptx_renderer.py   #   python-pptx：H1 分页出标题，列表/引用/代码进正文
 ├── ocr/                   # OCR 层
 │   ├── base.py            #   OcrResult/OcrLine 结果模型 + BaseOcrEngine 扩展点
 │   ├── rapid_engine.py    #   RapidOCR 引擎（进程级惰性单例，模型仅加载一次）
 │   └── pdf_fallback.py    #   扫描件 PDF：pypdfium2 逐页渲染 → OCR
+├── cli.py                 # 命令行入口：python -m doc_toolkit convert/formats/text
 └── toolkit.py             # 门面：DocToolkit 统一调用入口
 ```
 
@@ -134,8 +137,21 @@ kit.convert("book.epub", "markdown")   # 新格式立刻接入全部互转链路
 ## 验证
 
 ```bash
-python doc_toolkit/verify_e2e.py    # 23 项：4 格式提取、9 组互转、结构回读、错误提示
-python doc_toolkit/verify_ocr.py    # 9 项：OCR 纯文本/结构化、边界情况、扫描件回退
+python doc_toolkit/verify_e2e.py         # 23 项：4 格式提取、9 组互转、结构回读、错误提示
+python doc_toolkit/verify_ocr.py         # 9 项：OCR 纯文本/结构化、边界情况、扫描件回退
+python -m doc_toolkit.verify_renderers   # 25 项：六种块类型 × docx/xlsx/pptx 渲染保真度
 ```
 
-依赖版本基线：Python 3.13 · pypdf 6.x · python-docx 1.2 · fpdf2 2.8 · rapidocr-onnxruntime 1.2 · pillow 12 · pypdfium2 5。
+## 命令行调用
+
+宿主程序（如 haoyue 的 doc_render 工具）以子进程方式调用命令行入口：
+
+```bash
+python -m doc_toolkit convert 报告.md --to docx --out 输出/报告.docx
+python -m doc_toolkit formats     # 列出支持的解析/渲染格式
+python -m doc_toolkit text 报告.docx   # 提取纯文本到 stdout
+```
+
+成功时 stdout 输出一行输出文件绝对路径；失败时 stderr 输出中文错误、退出码 1。
+
+依赖版本基线：Python 3.13 · pypdf 6.x · python-docx 1.2 · fpdf2 2.8 · openpyxl 3.1 · python-pptx 1.0 · rapidocr-onnxruntime 1.2 · pillow 12 · pypdfium2 5。

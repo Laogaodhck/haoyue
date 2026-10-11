@@ -24,7 +24,8 @@ public sealed class DelegateTasksTool(IPromptProvider prompts, IAgentDelegator d
     public JsonObject ParameterSchema => ToolSchema.Object(
         ("tasks", ToolSchema.Array(
             $"完整、自包含的子任务描述列表（{MinTasks}-{MaxTasks} 个）。每个子代理都看不到当前对话历史，描述必须自包含。",
-            ToolSchema.String("子任务描述")), true));
+            ToolSchema.String("子任务描述")), true),
+        ("role", ToolSchema.String($"可选角色预设，应用到全部子任务：{AgentRole.ValidRoles}。命中时每个子代理注入角色纪律提示词并收敛工具白名单。"), false));
 
     public bool Mutating => true;
 
@@ -34,6 +35,10 @@ public sealed class DelegateTasksTool(IPromptProvider prompts, IAgentDelegator d
     {
         if (arguments["tasks"] is not JsonArray array || array.Count == 0)
             return ToolResult.Fail($"delegate_tasks 需要 tasks 参数：{MinTasks}-{MaxTasks} 个子任务描述的数组。");
+
+        var role = arguments["role"]?.GetValue<string>()?.Trim();
+        if (role is { Length: > 0 } && !AgentRole.Builtins.ContainsKey(role))
+            return ToolResult.Fail($"未知角色「{role}」。可选：{AgentRole.ValidRoles}。");
 
         var tasks = array
             .Select(node => node?.GetValue<string>()?.Trim())
@@ -48,7 +53,7 @@ public sealed class DelegateTasksTool(IPromptProvider prompts, IAgentDelegator d
 
         try
         {
-            var results = await delegator.RunSubTasksAsync(context.Workspace, tasks, ct).ConfigureAwait(false);
+            var results = await delegator.RunSubTasksAsync(context.Workspace, tasks, role, ct).ConfigureAwait(false);
 
             var report = new System.Text.StringBuilder();
             var failed = 0;

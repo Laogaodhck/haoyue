@@ -317,6 +317,127 @@ public static class SessionCommands
     }
 }
 
+public static class ConnectorCommands
+{
+    public static Command Build()
+    {
+        var command = new Command("connectors", "Discover and install connector packages (bundled MCP servers)");
+
+        var list = new Command("list", "List connectors in the catalog and their install status");
+        list.SetAction(_ =>
+        {
+            using var rt = CliHost.CreateRuntime();
+            var packages = Haoyue.Runtime.Connectors.ConnectorCatalog.LoadAll();
+            if (packages.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[gray]未找到连接器目录。[/] 设置 [cyan]HAOYUE_CONNECTORS_DIR[/] 或检查安装目录下 [cyan]connectors/[/]。");
+                return 0;
+            }
+            var table = new Table().Border(TableBorder.Rounded);
+            table.AddColumn("ID").AddColumn("Name").AddColumn("Category").AddColumn("Description").AddColumn("Installed");
+            foreach (var package in packages)
+                table.AddRow(
+                    Markup.Escape(package.Id),
+                    Markup.Escape($"{package.Icon} {package.Name}"),
+                    Markup.Escape(package.Category),
+                    Markup.Escape(package.Description),
+                    Haoyue.Runtime.Connectors.ConnectorInstaller.IsInstalled(rt.ConfigStore, package.Id)
+                        ? "[green]yes[/]" : "[gray]no[/]");
+            AnsiConsole.Write(table);
+            return 0;
+        });
+
+        var idArg = new Argument<string>("id") { Description = "连接器 id（见 connectors list）" };
+        var setOption = new Option<string[]>("--set")
+        {
+            Description = "以 KEY=value 形式提供配置项（可多次出现；缺省时交互询问）",
+            AllowMultipleArgumentsPerToken = true,
+        };
+
+        var install = new Command("install", "Install a connector into mcp.servers")
+        {
+            idArg,
+            setOption,
+        };
+        install.SetAction(parse =>
+        {
+            using var rt = CliHost.CreateRuntime();
+            var id = parse.GetValue(idArg);
+            var package = Haoyue.Runtime.Connectors.ConnectorCatalog.Find(id);
+            if (package is null)
+            {
+                AnsiConsole.MarkupLine($"[red]未找到连接器：{Markup.Escape(id)}[/]。用 [cyan]connectors list[/] 查看可用项。");
+                return 1;
+            }
+
+            var values = new Dictionary<string, string>();
+            foreach (var raw in parse.GetValue(setOption) ?? [])
+            {
+                var eq = raw.IndexOf('=');
+                if (eq <= 0)
+                {
+                    AnsiConsole.MarkupLine($"[red]--set 需要 KEY=value 形式：{Markup.Escape(raw)}[/]");
+                    return 1;
+                }
+                values[raw[..eq]] = raw[(eq + 1)..];
+            }
+
+            // 缺失的必填项交互询问（secret 项回显为 *）。
+            foreach (var input in package.Inputs ?? [])
+            {
+                if (values.ContainsKey(input.Key) || string.Equals(input.Key, "LOCAL_SERVER", StringComparison.Ordinal))
+                    continue;
+                if (!input.Required && input.Default is not null)
+                    continue;
+                if (!input.Required)
+                    continue;
+                var prompt = new TextPrompt<string>($"{input.Title}（{input.Key}）")
+                    .AllowEmpty();
+                if (input.Secret)
+                    prompt.Secret('*');
+                var answer = AnsiConsole.Prompt(prompt);
+                if (!string.IsNullOrWhiteSpace(answer))
+                    values[input.Key] = answer;
+                else if (input.Required)
+                {
+                    AnsiConsole.MarkupLine("[red]必填项未提供，安装已取消。[/]");
+                    return 1;
+                }
+            }
+
+            try
+            {
+                Haoyue.Runtime.Connectors.ConnectorInstaller.Install(rt.ConfigStore, package, values);
+            }
+            catch (Haoyue.Runtime.Connectors.ConnectorException ex)
+            {
+                AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.Message)}[/]");
+                return 1;
+            }
+            AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(package.Name)} 已安装[/]（mcp.servers.{Markup.Escape(package.Id)}）。" +
+                "重启会话或运行 [cyan]haoyue mcp test[/] 生效。");
+            return 0;
+        });
+
+        var uninstall = new Command("uninstall", "Remove an installed connector")
+        {
+            idArg,
+        };
+        uninstall.SetAction(parse =>
+        {
+            using var rt = CliHost.CreateRuntime();
+            var id = parse.GetValue(idArg);
+            if (Haoyue.Runtime.Connectors.ConnectorInstaller.Uninstall(rt.ConfigStore, id))
+                return 0;
+            AnsiConsole.MarkupLine($"[red]未安装：{Markup.Escape(id)}[/]");
+            return 1;
+        });
+
+        command.Add(list); command.Add(install); command.Add(uninstall);
+        return command;
+    }
+}
+
 public static class DaemonCommand
 {
     public static Command Build()

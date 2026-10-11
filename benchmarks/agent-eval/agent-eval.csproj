@@ -19,4 +19,12 @@
     <ProjectReference Include="..\..\haoyue_runtime\haoyue_runtime.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 评测走真实 runtime 链路，工具描述与 doc_render 依赖必须就位：
+         prompts 来自 CLI（FilePromptProvider 的 AppDir 根），doc_toolkit 供
+         DocRenderTool 的「可执行文件相对目录」探测命中。 -->
+    <None Include="..\..\haoyue_cli\prompts\**\*" Link="prompts\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\doc_toolkit\**\*.py" Link="doc_toolkit\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

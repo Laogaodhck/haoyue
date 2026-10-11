@@ -300,6 +300,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                          prompts,
                          _services.GetRequiredService<IConfigStore>(),
                          _services.GetRequiredService<ILlmHttpFactory>()),
+                     new DocRenderTool(prompts, _services.GetRequiredService<IConfigStore>()),
                      new DeclareSkillTool(_services.GetRequiredService<ISkillManager>(), prompts),
                  })
             Tools.Register(tool);

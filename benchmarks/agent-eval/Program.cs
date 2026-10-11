@@ -24,11 +24,39 @@ public static class Program
     {
         Console.OutputEncoding = Encoding.UTF8;
         string? filter = null;
+        string? providerOverride = null;
+        string? modelOverride = null;
         var maxStepsOverride = 0;
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--filter" && i + 1 < args.Length) filter = args[++i];
             if (args[i] == "--steps" && i + 1 < args.Length && int.TryParse(args[++i], out var s)) maxStepsOverride = s;
+            // 覆盖活动供应商/模型：本机小模型跑不动评测时，先用 CLI/桌面配置好任意
+            // OpenAI 兼容或 Anthropic 供应商，再以此参数指向它复测成功率（G2 收口）。
+            if (args[i] == "--provider" && i + 1 < args.Length) providerOverride = args[++i];
+            if (args[i] == "--model" && i + 1 < args.Length) modelOverride = args[++i];
+        }
+        if (providerOverride is null != (modelOverride is null))
+        {
+            Console.WriteLine("--provider 与 --model 必须成对提供。");
+            return 2;
+        }
+        // 前置校验：指向不存在的供应商/模型直接硬失败，不逐任务跑出误导性的 0 分。
+        if (providerOverride is { } pidCheck)
+        {
+            var config = new ConfigStore().Config;
+            var provider = config.Providers.FirstOrDefault(p =>
+                string.Equals(p.Id, pidCheck, StringComparison.OrdinalIgnoreCase));
+            if (provider is null)
+            {
+                Console.WriteLine($"配置中不存在供应商 {pidCheck}：先经 CLI/桌面配置该供应商（含 BaseUrl 与 ApiKey）再评测。");
+                return 2;
+            }
+            if (!provider.Models.Any(m => string.Equals(m.Id, modelOverride, StringComparison.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine($"供应商 {pidCheck} 下不存在模型 {modelOverride}：先在配置中登记该模型。");
+                return 2;
+            }
         }
 
         var repoRoot = FindRepoRoot();
@@ -63,14 +91,16 @@ public static class Program
 
         Console.WriteLine("=== 浩玥 Agent 级评测 ===");
         Console.WriteLine($"任务数: {tasks.Count}，工作区: {workspaceBase}");
-        Console.WriteLine($"提供商: 取 ~/.haoyue/config.json 当前活动配置");
+        Console.WriteLine(providerOverride is null
+            ? "提供商: 取 ~/.haoyue/config.json 当前活动配置"
+            : $"提供商: 覆盖为 {providerOverride} / {modelOverride}");
         Console.WriteLine();
 
         var results = new List<TaskResult>();
         foreach (var task in tasks)
         {
             Console.WriteLine($"--- {task.Id} | {task.Name} ---");
-            results.Add(await RunTaskAsync(task, Path.Combine(workspaceBase, task.Id), maxStepsOverride));
+            results.Add(await RunTaskAsync(task, Path.Combine(workspaceBase, task.Id), maxStepsOverride, providerOverride, modelOverride));
             var last = results[^1];
             Console.WriteLine(last.Passed
                 ? $"  ✅ 通过（{last.Duration.TotalSeconds:0.0}s）"
@@ -97,7 +127,8 @@ public static class Program
         return passed == results.Count ? 0 : 1;
     }
 
-    private static async Task<TaskResult> RunTaskAsync(EvalTask task, string workspaceDir, int maxStepsOverride)
+    private static async Task<TaskResult> RunTaskAsync(
+        EvalTask task, string workspaceDir, int maxStepsOverride, string? providerOverride, string? modelOverride)
     {
         Directory.CreateDirectory(workspaceDir);
         foreach (var (path, content) in task.Setup ?? [])
@@ -128,6 +159,13 @@ public static class Program
             // 文档任务显式指向仓库内 doc_toolkit，不依赖 cwd 碰运气。
             runtime.ConfigStore.Config.DocRender.ToolkitPath =
                 Path.Combine(_repoRoot, "doc_toolkit");
+            // 供应商/模型覆盖：已在 Main 前置校验存在性，这里仅切换本次评测进程的活动项，
+            // 不写回配置文件。
+            if (providerOverride is { } pid)
+            {
+                runtime.ConfigStore.Config.Provider = pid;
+                runtime.ConfigStore.Config.Model = modelOverride;
+            }
             if (maxStepsOverride > 0)
                 runtime.ConfigStore.Config.Agent.MaxSteps = maxStepsOverride;
 

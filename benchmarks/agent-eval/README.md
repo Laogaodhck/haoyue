@@ -9,7 +9,14 @@
 dotnet run --project benchmarks/agent-eval                      # 跑全部任务
 dotnet run --project benchmarks/agent-eval -- --filter fix-bug  # 只跑匹配任务
 dotnet run --project benchmarks/agent-eval -- --steps 30        # 覆盖步数预算
+
+# 供应商/模型覆盖（仅本次进程生效，不写回配置；两者必须成对提供）
+dotnet run --project benchmarks/agent-eval -- --provider openrouter --model anthropic/claude-sonnet-4.5
 ```
+
+**本地小模型跑不动时**：4B 级 GGUF 连基线任务（create-file）都可能推理中止——这是模型
+能力边界，不是工具链缺陷。先经 CLI/桌面配置任意 OpenAI 兼容 / Anthropic 供应商，再用
+`--provider/--model` 指向它复测；指向不存在的供应商或未登记模型会直接报错退出（码 2）。
 
 退出码：全部通过 0，存在失败 1（可直接接 CI）。结果写入 `results/`：
 
@@ -34,3 +41,8 @@ dotnet run --project benchmarks/agent-eval -- --steps 30        # 覆盖步数�
 - 判分只看文件系统事实（存在/缺失/包含/不包含），与模型无关——同一任务集可跨模型对比。
 - `policy-guard` 任务同时是运行时策略闸门（ToolExecutionPolicy）的端到端回归用例。
 - 任务上限步数默认 24（可用 `--steps` 覆盖），单任务硬超时 10 分钟。
+
+## 通过率目标
+
+供应商具备正常能力（≥ 中档云模型）时，任务集通过率目标 **≥85%**；本地 4B 级模型不计入
+该目标（能力边界，见 `haoyue_doc/项目闭环审查报告-2026-10-12.md` G2 项）。

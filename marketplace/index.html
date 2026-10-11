@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>浩玥技能市场 · Haoyue Marketplace</title>
+<meta name="description" content="浩玥（Haoyue）官方技能与连接器市场：30 个官方技能、11 个官方连接器，社区 PR 持续扩充。">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1c2430; --muted: #5c6b7f;
+    --border: #e2e7ee; --accent: #3565d9; --accent-soft: #e8eefc;
+    --tag-bg: #eef1f5; --code-bg: #0f1720; --code-text: #d7e2f0;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10151c; --panel: #171e27; --text: #dde5ee; --muted: #8b9aab;
+      --border: #263140; --accent: #6f9bf0; --accent-soft: #1d2a40;
+      --tag-bg: #1f2836; --code-bg: #0a0e14; --code-text: #c9d7e8;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; line-height: 1.6; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px 64px; }
+  header { padding: 40px 0 24px; }
+  header h1 { font-size: 26px; display: flex; align-items: center; gap: 10px; }
+  header h1 .logo { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, #3565d9, #7c4dd9); display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 17px; }
+  header p { color: var(--muted); margin-top: 6px; max-width: 720px; }
+  .tabs { display: flex; gap: 8px; margin: 22px 0 14px; flex-wrap: wrap; }
+  .tabs button { border: 1px solid var(--border); background: var(--panel); color: var(--muted); padding: 8px 18px; border-radius: 999px; cursor: pointer; font-size: 14px; }
+  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
+  .toolbar input { flex: 1 1 260px; max-width: 420px; padding: 9px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--text); font-size: 14px; }
+  .toolbar input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--border); background: var(--tag-bg); color: var(--muted); padding: 4px 12px; border-radius: 999px; cursor: pointer; font-size: 12.5px; }
+  .chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .count { color: var(--muted); font-size: 13px; margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; cursor: pointer; transition: transform .12s ease, box-shadow .12s ease; display: flex; flex-direction: column; gap: 8px; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+  .card .head { display: flex; align-items: center; gap: 10px; }
+  .card .icon { font-size: 22px; }
+  .card h3 { font-size: 15.5px; flex: 1; }
+  .card .ver { color: var(--muted); font-size: 12px; }
+  .card p { color: var(--muted); font-size: 13.5px; flex: 1; }
+  .card .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { background: var(--tag-bg); color: var(--muted); font-size: 11.5px; padding: 2px 9px; border-radius: 999px; }
+  .badge { font-size: 11px; padding: 2px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  .modal-mask { position: fixed; inset: 0; background: rgba(8,12,18,.55); display: none; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; z-index: 50; }
+  .modal-mask.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; max-width: 780px; width: 100%; padding: 26px; }
+  .modal .m-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .modal h2 { font-size: 19px; flex: 1; }
+  .modal .close { border: 1px solid var(--border); background: var(--panel); color: var(--muted); width: 32px; height: 32px; border-radius: 9px; cursor: pointer; font-size: 15px; }
+  .modal .meta { color: var(--muted); font-size: 13px; margin-bottom: 14px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .modal section { margin: 16px 0; }
+  .modal h4 { font-size: 13.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+  pre { background: var(--code-bg); color: var(--code-text); padding: 14px; border-radius: 10px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; max-height: 340px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+  code.inline { background: var(--tag-bg); padding: 2px 7px; border-radius: 6px; font-size: 13px; }
+  .copy { border: 1px solid var(--border); background: var(--tag-bg); color: var(--muted); font-size: 12px; padding: 3px 10px; border-radius: 7px; cursor: pointer; margin-left: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  th { background: var(--tag-bg); color: var(--muted); font-weight: 500; }
+  .contribute { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-top: 10px; }
+  .contribute h3 { margin-bottom: 10px; }
+  .contribute ol { padding-left: 22px; color: var(--muted); font-size: 14px; display: grid; gap: 6px; }
+  .contribute code { font-size: 12.5px; }
+  .empty { color: var(--muted); text-align: center; padding: 48px 0; grid-column: 1/-1; }
+  footer { color: var(--muted); font-size: 13px; padding: 30px 0 0; border-top: 1px solid var(--border); margin-top: 40px; display: flex; gap: 18px; flex-wrap: wrap; }
+  footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="logo">玥</span>浩玥技能市场 <span class="badge" id="src-badge">官方目录同步</span></h1>
+    <p>浩玥（Haoyue）本地 Agent 运行时的官方技能与连接器目录。数据由运行时单源（OfficialSkillCatalog / connectors/）自动导出，经契约护栏测试防漂移；社区技能经 PR 合入后即可在站内浏览。</p>
+  </header>
+
+  <div class="tabs">
+    <button id="tab-skills" class="active" onclick="switchTab('skills')">官方技能</button>
+    <button id="tab-connectors" onclick="switchTab('connectors')">连接器</button>
+    <button id="tab-contribute" onclick="switchTab('contribute')">社区贡献</button>
+  </div>
+
+  <div class="toolbar" id="toolbar">
+    <input id="search" type="search" placeholder="搜索名称、描述或标签…" oninput="render()">
+    <div class="chips" id="chips"></div>
+    <div class="count" id="count"></div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <div class="contribute" id="contribute-panel" style="display:none">
+    <h3>贡献一个技能 / 连接器</h3>
+    <ol>
+      <li>Fork 本仓库，在 <code>marketplace/community/&lt;slug&gt;/</code> 下放入你的技能文件（裸 <code>.md</code> 提示词，或含 <code>skill.yaml</code> + <code>prompt.txt</code> 的 <code>.zip</code>）。</li>
+      <li>技能目录规范与字段说明见 <code>marketplace/CONTRIBUTING.md</code>（name / description / version / triggers / allowed-tools / parameters）。</li>
+      <li>提交 PR 并勾选模板中的自查清单（不含密钥、提示词可独立执行、已实测）。</li>
+      <li>合入后站内即可浏览；用户通过 <code>haoyue skill import &lt;文件&gt;</code> 一键导入，或在桌面端「技能导入」选择下载文件。</li>
+      <li>连接器类贡献遵循 <code>connectors/schema/connector.schema.json</code>，提交到 <code>connectors/</code> 目录。</li>
+    </ol>
+  </div>
+
+  <footer>
+    <span>浩玥 Haoyue · 数据基准：<span id="gen-info">OfficialSkillCatalog</span></span>
+    <a href="https://github.com/Laogaodhck/haoyue">GitHub 仓库</a>
+    <a href="#" onclick="switchTab('contribute');return false;">贡献指南</a>
+  </footer>
+</div>
+
+<div class="modal-mask" id="mask" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+let skills = [], connectors = [];
+let tab = 'skills', activeTag = '', query = '';
+
+const ICONS = { '语言':'🌐','写作':'✍️','润色':'🪄','办公':'📋','汇报':'📈','开发':'💻','测试':'🧪','数据':'📊','文档':'📄','研究':'🔬','内容':'🎯','效率':'⚡','浏览器':'🌍','日历':'📅','剪贴板':'📌','邮件':'📧','代码托管':'🐙','HTTP':'🔌','通知':'🔔','知识库':'📚','数据库':'🗄️','Git':'🔧' };
+const CAT_ICON = { 'browser':'🌍','calendar':'📅','clipboard':'📌','email':'📧','git':'🔧','github':'🐙','http-api':'🔌','notify':'🔔','notion':'📚','rss':'📰','sqlite':'🗄️' };
+
+function icon(item) {
+  if (item.icon) return item.icon;
+  if (CAT_ICON[item.id]) return CAT_ICON[item.id];
+  for (const t of (item.tags || [])) if (ICONS[t]) return ICONS[t];
+  return '🧩';
+}
+
+function switchTab(t) {
+  tab = t; activeTag = ''; query = '';
+  document.getElementById('search').value = '';
+  ['skills','connectors','contribute'].forEach(x => {
+    document.getElementById('tab-' + x).classList.toggle('active', x === t);
+  });
+  document.getElementById('toolbar').style.display = t === 'contribute' ? 'none' : 'flex';
+  document.getElementById('contribute-panel').style.display = t === 'contribute' ? 'block' : 'none';
+  render();
+}
+
+function chipList() {
+  const set = new Set();
+  if (tab === 'skills') skills.forEach(s => s.tags.forEach(t => set.add(t)));
+  else connectors.forEach(c => { if (c.manifest.category) set.add(c.manifest.category); });
+  return [...set].sort((a, b) => a.localeCompare(b, 'zh'));
+}
+
+function render() {
+  const grid = document.getElementById('grid');
+  const chips = document.getElementById('chips');
+  const items = tab === 'skills' ? skills : connectors;
+  chips.innerHTML = chipList().map(t =>
+    `<span class="chip ${t === activeTag ? 'active' : ''}" onclick="activeTag = activeTag === '${t}' ? '' : '${t}'; render()">${t}</span>`).join('');
+
+  const q = query.trim().toLowerCase();
+  const filtered = items.filter(it => {
+    if (activeTag) {
+      if (tab === 'skills' && !(it.tags || []).includes(activeTag)) return false;
+      if (tab === 'connectors' && it.manifest.category !== activeTag) return false;
+    }
+    if (!q) return true;
+    const hay = tab === 'skills'
+      ? `${it.slug} ${it.name} ${it.description} ${(it.tags||[]).join(' ')}`.toLowerCase()
+      : `${it.id} ${it.manifest.name} ${it.manifest.description} ${(it.manifest.tags||[]).join(' ')}`.toLowerCase();
+    return hay.includes(q);
+  });
+
+  document.getElementById('count').textContent = `${filtered.length} / ${items.length} 项`;
+  grid.innerHTML = filtered.map((it, i) => {
+    if (tab === 'skills') {
+      return `<div class="card" onclick="openSkill(${items.indexOf(it)})">
+        <div class="head"><span class="icon">${icon(it)}</span><h3>${esc(it.name)}</h3><span class="ver">v${esc(it.version)}</span></div>
+        <p>${esc(it.description)}</p>
+        <div class="tags">${(it.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>
+      </div>`;
+    }
+    const m = it.manifest;
+    return `<div class="card" onclick="openConnector(${items.indexOf(it)})">
+      <div class="head"><span class="icon">${icon(m)}</span><h3>${esc(m.name)}</h3><span class="ver">${esc(m.category||'')}</span></div>
+      <p>${esc(m.description)}</p>
+      <div class="tags"><span class="tag">${esc(it.id)}</span>${(m.tags||[]).slice(0,3).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>
+    </div>`;
+  }).join('') || `<div class="empty">没有匹配的条目</div>`;
+}
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function installBlock(kind, id) {
+  const cli = kind === 'skill' ? `haoyue skill install ${id}` : `haoyue connectors install ${id}`;
+  const ui = kind === 'skill'
+    ? '桌面端：设置 → 扩展中心 → 技能市场 → 一键安装'
+    : '桌面端：设置 → 扩展中心 → 连接器 → 卡片内一键安装';
+  return `<section><h4>安装方式</h4>
+    <p style="font-size:13.5px;color:var(--muted);margin-bottom:8px">${ui}</p>
+    <pre id="cli-${kind}-${id}" style="max-height:none;white-space:pre-wrap">${esc(cli)}</pre>
+    <button class="copy" onclick="copyText('cli-${kind}-${id}')">复制命令</button>
+  </section>`;
+}
+
+function openSkill(i) {
+  const s = skills[i];
+  document.getElementById('modal').innerHTML = `
+    <div class="m-head"><span class="icon" style="font-size:26px">${icon(s)}</span><h2>${esc(s.name)}</h2><button class="close" onclick="closeModal()">✕</button></div>
+    <div class="meta"><span>slug：<code class="inline">${esc(s.slug)}</code></span><span>版本 v${esc(s.version)}</span><span>${(s.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join(' ')}</span></div>
+    <p style="font-size:14px">${esc(s.description)}</p>
+    ${installBlock('skill', s.slug)}
+    <section><h4>技能提示词<button class="copy" onclick="copyText('prompt-view')">复制全文</button></h4><pre id="prompt-view">${esc(s.prompt)}</pre></section>`;
+  document.getElementById('mask').classList.add('open');
+}
+
+function openConnector(i) {
+  const c = connectors[i], m = c.manifest;
+  const inputs = (m.inputs || []);
+  document.getElementById('modal').innerHTML = `
+    <div class="m-head"><span class="icon" style="font-size:26px">${icon(m)}</span><h2>${esc(m.name)}</h2><button class="close" onclick="closeModal()">✕</button></div>
+    <div class="meta"><span>id：<code class="inline">${esc(c.id)}</code></span><span>类别：${esc(m.category||'—')}</span><span>${(m.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join(' ')}</span></div>
+    <p style="font-size:14px">${esc(m.description)}</p>
+    ${installBlock('connector', c.id)}
+    ${inputs.length ? `<section><h4>配置项（安装时填写，secret 项加密落盘）</h4>
+      <table><tr><th>键</th><th>说明</th><th>必填</th><th>密钥</th></tr>
+      ${inputs.map(x=>`<tr><td><code class="inline">${esc(x.key)}</code></td><td>${esc(x.label||x.description||'')}</td><td>${x.required?'是':'否'}</td><td>${x.secret?'🔒':''}</td></tr>`).join('')}
+    </table></section>` : ''}
+    ${m.homepage ? `<section><h4>主页</h4><a href="${esc(m.homepage)}" target="_blank" rel="noopener" style="color:var(--accent)">${esc(m.homepage)}</a></section>` : ''}`;
+  document.getElementById('mask').classList.add('open');
+}
+
+function closeModal() { document.getElementById('mask').classList.remove('open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.getElementById('search').addEventListener('input', e => { query = e.target.value; render(); });
+
+function copyText(id) {
+  const text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target;
+    btn.textContent = '已复制 ✓';
+    setTimeout(() => btn.textContent = '复制命令', 1200);
+  });
+}
+
+Promise.all([
+  fetch('data/skills.json').then(r => r.json()),
+  fetch('data/connectors.json').then(r => r.json()),
+]).then(([s, c]) => {
+  skills = s; connectors = c;
+  document.getElementById('gen-info').textContent =
+    `OfficialSkillCatalog × ${skills.length} · connectors × ${connectors.length}`;
+  render();
+}).catch(err => {
+  document.getElementById('grid').innerHTML =
+    `<div class="empty">数据加载失败：请通过本地 HTTP 服务访问（如 <code>python -m http.server</code>），直接双击打开会受 fetch 限制。</div>`;
+});
+</script>
+</body>
+</html>

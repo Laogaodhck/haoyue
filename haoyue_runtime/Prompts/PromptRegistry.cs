@@ -1,14 +1,23 @@
 namespace Haoyue.Runtime.Prompts;
 
 /// <summary>Composition order of the final system prompt.</summary>
+/// <remarks>
+/// Slot order doubles as cache-stability order. The Skill slot is the ONLY segment
+/// whose content changes turn-to-turn (trigger gating + declare_skill), so it must
+/// come LAST: a change then invalidates only the skill segment itself, while the
+/// stable prefix (system → developer → workspace → tool schemas → memory) — by far
+/// the largest chunk, the tool manifest alone is thousands of tokens — keeps its
+/// KV/prompt-cache prefix across turns. Skills placed mid-prompt re-prefilled the
+/// entire tool schema and memory on every trigger-set change.
+/// </remarks>
 public enum PromptSlot
 {
     System = 0,
     Developer = 1,
     Workspace = 2,
-    Skill = 3,
     Tool = 4,
     Memory = 5,
+    Skill = 6,
 }
 
 /// <summary>Context handed to prompt contributors when the final prompt is assembled.</summary>

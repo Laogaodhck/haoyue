@@ -330,6 +330,10 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             var maxTokens = inferenceParams.MaxTokens < 0 ? int.MaxValue : inferenceParams.MaxTokens;
             var generated = 0;
             var stopped = false;
+            // 思考预算（与 KV 复用路径同口径）：耗尽后注入结束标记强制收束。
+            var thinkingBudget = ThinkingBudgetTokens(request);
+            var thinkingTokens = 0;
+            var budgetExhausted = false;
             for (var i = 0; i < maxTokens && !ct.IsCancellationRequested; i++)
             {
                 var id = inferenceParams.SamplingPipeline.Sample(context.NativeHandle, batch.TokenCount - 1);
@@ -339,6 +343,22 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 generated++;
                 var decoded = decoder.Read();
                 if (antiprocessor.Add(decoded)) { stopped = true; break; }
+
+                if (thinkingBudget is { } mBudget && !budgetExhausted && parser.InThinking)
+                {
+                    thinkingTokens++;
+                    if (thinkingTokens >= mBudget)
+                    {
+                        budgetExhausted = true;
+
+                        foreach (var piece in parser.Process("</think>"))
+                        {
+                            if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                            else yield return new LlmTextDelta(piece.Text);
+                        }
+                    }
+                }
+
                 foreach (var piece in parser.Process(decoded))
                 {
                     if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
@@ -468,6 +488,12 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         var inferenceParams = BuildInferenceParams(request);
         inferenceParams.SamplingPipeline.Reset();
 
+        // 思考预算：预算耗尽时注入结束标记强制收束进入作答（与 llama-server
+        // --reasoning-budget 行为一致），避免小模型单步思考以分钟计。
+        var thinkingBudget = ThinkingBudgetTokens(request);
+        var thinkingTokens = 0;
+        var budgetExhausted = false;
+
         var context = reuse.Context;
         var history = reuse.Tokens; // tokens currently decoded into the KV cache
         var batch = new LLamaBatch();
@@ -525,6 +551,24 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 generated++;
                 var decoded = decoder.Read();
                 if (antiprocessor.Add(decoded)) { stopped = true; break; }
+
+                // 思考预算计量：仅在思考段内逐采样 token 计数；耗尽后一次性注入
+                // 结束标记，parser 随即切入作答段，后续采样继续正常进行。
+                if (thinkingBudget is { } budget && !budgetExhausted && parser.InThinking)
+                {
+                    thinkingTokens++;
+                    if (thinkingTokens >= budget)
+                    {
+                        budgetExhausted = true;
+
+                        foreach (var piece in parser.Process("</think>"))
+                        {
+                            if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                            else yield return new LlmTextDelta(piece.Text);
+                        }
+                    }
+                }
+
                 foreach (var piece in parser.Process(decoded))
                 {
                     if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
@@ -946,6 +990,31 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     }
 
     /// <summary>
+    /// 本地思考预算（按推理等级映射思考 token 上限，对齐远程提供商的预算映射口径）。
+    /// 小参数量本地模型 decode 速度有限（几十 tok/s），无预算时单步思考动辄数千 token、
+    /// 以分钟计；预算耗尽后由生成循环注入结束标记强制收束进入作答。返回 null 表示
+    /// 思考未开启（无预算概念）。多步回合预算按步生效——agent 每步独立调用，预算即
+    /// 单步上限，与远程 AnthropicBudget 的语义一致。
+    /// </summary>
+    internal static int? ThinkingBudgetTokens(LlmRequest request)
+    {
+        if (!request.EnableThinking) return null;
+        if (!request.Model.Capabilities.Thinking) return null;
+        var budget = request.ReasoningLevel switch
+        {
+            ReasoningLevel.Low => 1_024,
+            ReasoningLevel.Medium => 3_072,
+            ReasoningLevel.High => 6_144,
+            ReasoningLevel.Max or ReasoningLevel.XHigh or ReasoningLevel.Ultra => 12_288,
+            _ => 0,
+        };
+        if (budget <= 0) return null;
+        // 预算不得超过本步输出窗口：思考必须给回答留出空间。
+        var maxOutput = request.MaxTokens ?? request.Model.MaxOutput;
+        return Math.Min(budget, Math.Max(256, maxOutput - 256));
+    }
+
+    /// <summary>
     /// 生成结束后的输出收尾（仅作用于最终 LlmCompletion，流式增量不受影响）：
     /// 1) 模型把全部预算耗在推理里、从未输出结束标记时回答为空，下游只能收到一次空
     ///    回复——此时把推理内容整体提升为回答兜底，保证下游总能拿到非空文本；
@@ -987,6 +1056,13 @@ internal sealed class ThinkTagParser(bool startsInThinking)
 
     /// <summary>Everything classified as reasoning so far, which the answer may still grow into.</summary>
     public string Thinking => _thinking.ToString();
+
+    /// <summary>
+    /// Whether the parser is currently inside the thinking segment. The generation loop
+    /// reads this to meter thinking against the reasoning-level budget and force the
+    /// close tag once the budget is exhausted.
+    /// </summary>
+    public bool InThinking => _inThinking;
 
     /// <summary>Everything classified as the answer so far.</summary>
     public string Answer => _answer.ToString();

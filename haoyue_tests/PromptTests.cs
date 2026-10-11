@@ -83,7 +83,37 @@ public sealed class PromptTests : IDisposable
             Variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["project"] = "demo" },
         });
 
-        Assert.Equal("SYSTEM\n\nSKILL\n\nMEMORY demo", result);
+        // Skill is the only turn-variant segment and must compose LAST so a trigger-set
+        // change never invalidates the KV/prompt-cache prefix of the stable content.
+        Assert.Equal("SYSTEM\n\nMEMORY demo\n\nSKILL", result);
+    }
+
+    [Fact]
+    public async Task Composer_SkillSegmentComesLast_ForCacheStablePrefix()
+    {
+        // 缓存稳定性契约：skills 段（唯一逐回合变化的段）必须位于工具 schema 与记忆之后。
+        // KV 前缀复用与远程 prompt cache 都按最长公共前缀命中——skills 置中时每次触发集
+        // 变化都会重新预填充其后的全部工具 schema（数千 token）。
+        using var provider = new FilePromptProvider([MakeRoot("empty-order")]);
+        var registry = new PromptRegistry();
+        registry.Register(new PromptContribution("skill", PromptSlot.Skill,
+            (_, _) => ValueTask.FromResult<string?>("SKILL")));
+        registry.Register(new PromptContribution("mem", PromptSlot.Memory,
+            (_, _) => ValueTask.FromResult<string?>("MEMORY")));
+        registry.Register(new PromptContribution("tool", PromptSlot.Tool,
+            (_, _) => ValueTask.FromResult<string?>("TOOLS")));
+        registry.Register(new PromptContribution("sys", PromptSlot.System,
+            (_, _) => ValueTask.FromResult<string?>("SYSTEM")));
+
+        var composer = new PromptComposer(provider, registry);
+        var result = await composer.ComposeAsync(new PromptRenderContext { Variables = new Dictionary<string, string>() });
+
+        var skillAt = result.IndexOf("SKILL", StringComparison.Ordinal);
+        var toolAt = result.IndexOf("TOOLS", StringComparison.Ordinal);
+        var memAt = result.IndexOf("MEMORY", StringComparison.Ordinal);
+        var sysAt = result.IndexOf("SYSTEM", StringComparison.Ordinal);
+        Assert.True(sysAt < toolAt && toolAt < memAt && memAt < skillAt,
+            $"expected SYSTEM < TOOLS < MEMORY < SKILL, got: {result}");
     }
 
     [Fact]

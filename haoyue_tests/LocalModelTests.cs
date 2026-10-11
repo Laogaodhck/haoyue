@@ -164,6 +164,66 @@ public sealed class LocalModelTests : IDisposable
     }
 
     [Fact]
+    public void ThinkTagParser_InThinking_TracksSegmentStateAcrossInjectedCloseTag()
+    {
+        var parser = new ThinkTagParser(startsInThinking: true);
+        Assert.True(parser.InThinking);
+
+        parser.Process("部分推理");
+        Assert.True(parser.InThinking);
+
+        // 预算收束注入：结束标记处理完成后 parser 必须切到作答段，
+        // 生成循环据此停止思考计量。
+        var pieces = parser.Process("</think>");
+        Assert.False(parser.InThinking);
+        Assert.All(pieces, piece => Assert.False(piece.IsThinking));
+
+        parser.Process("回答正文");
+        Assert.False(parser.InThinking);
+    }
+
+    [Fact]
+    public void ThinkingBudgetTokens_MapsReasoningLevel_AndClampsToOutputWindow()
+    {
+        static LlmRequest Request(bool thinking, ReasoningLevel level, int? maxTokens = null, int modelMaxOutput = 4096) => new()
+        {
+            Provider = new ProviderConfig { Id = "local", Kind = "local" },
+            Model = new ModelConfig
+            {
+                Id = "m.gguf",
+                MaxOutput = modelMaxOutput,
+                Capabilities = new ModelCapabilities { Thinking = thinking },
+            },
+            Messages = [ChatMessage.User("hi")],
+            EnableThinking = thinking,
+            ReasoningLevel = level,
+            MaxTokens = maxTokens,
+        };
+
+        // 思考未开启或模型无思考能力：无预算。
+        Assert.Null(LocalLlmClient.ThinkingBudgetTokens(Request(thinking: false, ReasoningLevel.High)));
+        Assert.Null(LocalLlmClient.ThinkingBudgetTokens(Request(thinking: true, ReasoningLevel.None)));
+
+        var noThinkingCapability = Request(thinking: true, ReasoningLevel.High);
+        noThinkingCapability.Model.Capabilities.Thinking = false;
+        Assert.Null(LocalLlmClient.ThinkingBudgetTokens(noThinkingCapability));
+
+        // 等级映射：low 最小，ultra 最大（模型输出窗口须容得下完整预算）。
+        var low = LocalLlmClient.ThinkingBudgetTokens(Request(true, ReasoningLevel.Low));
+        var medium = LocalLlmClient.ThinkingBudgetTokens(Request(true, ReasoningLevel.Medium));
+        var high = LocalLlmClient.ThinkingBudgetTokens(Request(true, ReasoningLevel.High, modelMaxOutput: 16_384));
+        var ultra = LocalLlmClient.ThinkingBudgetTokens(Request(true, ReasoningLevel.Ultra, modelMaxOutput: 16_384));
+        Assert.Equal(1_024, low);
+        Assert.True(medium > low);
+        Assert.True(high > medium);
+        Assert.Equal(12_288, ultra);
+
+        // 预算必须给回答留空间：输出窗口小时被钳制。
+        var clamped = LocalLlmClient.ThinkingBudgetTokens(Request(true, ReasoningLevel.Ultra, maxTokens: 1_024));
+        Assert.Equal(768, clamped);
+    }
+
+    [Fact]
     public async Task StreamAsync_ReportsMissingFileInsteadOfLoading()
     {
         var provider = new ProviderConfig { Id = "local", Kind = "local", ModelsDirectory = _dir };

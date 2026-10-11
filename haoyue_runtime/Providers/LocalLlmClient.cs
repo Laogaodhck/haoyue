@@ -21,6 +21,63 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     public string Kind => "local";
 
     /// <summary>
+    /// 自适应调优器（P3/P4/P5）：装载档位计算、反馈调档与复用命中率跟踪。实例随
+    /// 权重缓存单例存活（daemon 与客户端共享同一份）。仅在「自动」语义（AutoOptimize
+    /// 且提供商级未显式配 GpuLayers）下生效；本地推理严格串行，无需加锁。
+    /// </summary>
+    private AdaptiveInferenceTuner Tuner => cache.Tuning;
+
+    /// <summary>一次性超长文档（约 2 万 token 以上）的字符阈值：复用命中率过低时改走无状态路径（P5）。</summary>
+    private const int LongDocumentChars = 80_000;
+
+    /// <summary>解码速率低于该值（tok/s）且开启思考时，向上层附缩短思考预算的提示（P5）。</summary>
+    private const double SlowDecodeHintTokensPerSecond = 10;
+
+    /// <summary>
+    /// 计算本请求的自适应档位。仅在「自动」语义下生效（AutoOptimize 且提供商级未显式
+    /// 配置 GpuLayers）；模型形状来自 GGUF header + 文件大小，GPU 能力来自 nvidia-smi
+    /// 探测，任一不可得即返回 null（保持提供商默认行为，绝不猜测）。
+    /// </summary>
+    private InferenceTier? TierFor(Configuration.ProviderConfig provider, ModelConfig? model, string path)
+    {
+        if (!(model?.Load?.AutoOptimize ?? true)) return null;      // 用户手动配置：绝不干预
+        if (provider.GpuLayers is not null) return null;            // 提供商级显式卸载：尊重配置
+        var shape = BuildShape(path);
+        if (shape is null) return null;
+        return Tuner.EnsureTier(path, shape, GpuProbe.Probe());
+    }
+
+    /// <summary>
+    /// 模型静态形状（KV 显存估算用）。KvDim = KV头数 × 头维度；header 缺头维度时按
+    /// 隐藏维度的一半保守估算（介于 MHA 与常见 GQA 之间），完全缺失则为 null。
+    /// </summary>
+    internal static ModelShape? BuildShape(string path)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            if (!file.Exists || file.Length <= 0) return null;
+            var header = GgufProbe.Read(path);
+            long? kvDim = header.HeadCountKv is { } kvHeads
+                && (header.KeyLength ?? header.ValueLength) is { } headDim
+                    ? kvHeads * headDim
+                    : header.EmbeddingLength is { } embedding ? embedding / 2 : null;
+            return new ModelShape(file.Length, header.BlockCount, kvDim);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>自适应档位估算用的上下文长度（与 BuildContextParams 的 auto 分支口径一致）。</summary>
+    internal static long EstimateContextForTier(ModelConfig? model, GgufProbe.Header header)
+    {
+        var trained = header.ContextLength is > 0 ? header.ContextLength.Value : 4096;
+        return model?.ContextWindow > 0 ? Math.Min(model.ContextWindow, trained) : Math.Min(trained, LocalModelProbe.DefaultContextWindow);
+    }
+
+    /// <summary>
     /// In-process GGUF embeddings: acquires the shared weights lease, builds a
     /// dedicated embedding context (small window — embeddings do not need chat KV)
     /// and embeds inputs sequentially. Throws on a missing/broken model file so the
@@ -45,10 +102,14 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 $"Local embedding model file not found: {path}. Put the GGUF file into the provider's models directory or fix the path.",
                 retryable: false);
 
+        // 嵌入与聊天共用同一权重与签名口径：档位参与签名，避免聊天（带档位）与嵌入
+        // （无档位）交替时签名漂移导致权重反复重载。
+        var tier = TierFor(provider, modelConfig, path);
+
         using var lease = await cache.AcquireAsync(
             path,
-            BuildLoadParams(path, provider, modelConfig),
-            LoadSignature(provider, modelConfig),
+            BuildLoadParams(path, provider, modelConfig, tier),
+            LoadSignature(provider, modelConfig, tier),
             null,
             ct).ConfigureAwait(false);
         var weights = lease.Weights;
@@ -92,20 +153,30 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         // 签名漂移导致权重反复重载。
         var mmprojPath = LocalModels.ResolveMmprojPath(request.Provider, request.Model);
 
+        // 自适应档位（P3）：自动语义下按显存预算选档；签名携带档位身份，调档即走既有重载通道。
+        var tier = TierFor(request.Provider, request.Model, path);
+
         using var lease = await cache.AcquireAsync(
             path,
-            BuildLoadParams(path, request.Provider, request.Model),
-            LoadSignature(request.Provider, request.Model) + "|" + (mmprojPath ?? "nommproj"),
+            BuildLoadParams(path, request.Provider, request.Model, tier),
+            LoadSignature(request.Provider, request.Model, tier) + "|" + (mmprojPath ?? "nommproj"),
             mmprojPath,
             ct).ConfigureAwait(false);
         var weights = lease.Weights;
 
-        var (contextParams, signature) = BuildContextParams(path, request.Model, request.Provider, weights);
+        var (contextParams, signature) = BuildContextParams(path, request.Model, request.Provider, weights, tier: tier);
         string? marker = lease.Mtmd is null ? null : NativeApi.MtmdDefaultMarker();
         // 思考默认值：模型加载设置可覆盖每次请求的开关（配置页「思考」分区）。
         var thinkingEnabled = request.Model.Load?.EnableThinking ?? request.EnableThinking;
         var (prompt, startsInThinking) = BuildPrompt(weights, request, marker, thinkingEnabled);
 
+        // 路径调度（P5）：会话型请求走 KV 前缀复用；一次性超长文档（复用命中率观测过低）
+        // 改走无状态路径，避免为不再复用的 prompt 保留整段 KV 常驻。
+        var useReuse = request.Provider.LocalPrefixReuse;
+        if (useReuse && prompt.Length > LongDocumentChars && Tuner.LastCacheHitRate < 0.05)
+            useReuse = false;
+
+        var meter = new InferenceMeter(prefixReuse: useReuse, multimodal: images.Count > 0);
         IAsyncEnumerable<LlmStreamEvent> stream;
         if (images.Count > 0)
         {
@@ -113,19 +184,83 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             // 图像注意力上存在病态慢路径：实测 266 个图像 token 在 3070 Ti 上需 26 分钟，
             // 同一请求全 CPU 只要 23 秒。带图请求一律强制全 CPU context 保证可用性；
             // 纯文本轮不受影响，继续享受 GPU 卸载加速。
-            var (cpuParams, _) = BuildContextParams(path, request.Model, request.Provider, weights, forceCpu: true);
+            var (cpuParams, _) = BuildContextParams(path, request.Model, request.Provider, weights, forceCpu: true, tier: tier);
             stream = StreamMultimodalAsync(weights, lease.Mtmd, cpuParams, prompt, startsInThinking, images, request, ct);
         }
         else
         {
-            stream = request.Provider.LocalPrefixReuse
+            stream = useReuse
                 ? StreamReusableAsync(cache, weights, contextParams, signature, prompt, startsInThinking, request, ct)
                 : StreamStatelessAsync(weights, contextParams, prompt, startsInThinking, request, ct);
         }
 
-        await foreach (var evt in stream.ConfigureAwait(false))
+        await foreach (var evt in MeasureAsync(stream, meter, request).ConfigureAwait(false))
         {
             yield return evt;
+        }
+    }
+
+    /// <summary>
+    /// 遥测包装（P1）+ OOM 反馈（P4）：对内层流透传每个事件并打点，完成事件结算
+    /// InferencePerformance（附慢模型思考预算提示，P5）；内层抛出 OOM 类异常时通知
+    /// 调优器紧急降档后原样上抛。取消与普通异常的语义完全不变。
+    /// </summary>
+    private async IAsyncEnumerable<LlmStreamEvent> MeasureAsync(
+        IAsyncEnumerable<LlmStreamEvent> inner, InferenceMeter meter, LlmRequest request,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var enumerator = inner.GetAsyncEnumerator(ct);
+        try
+        {
+            while (true)
+            {
+                LlmStreamEvent current;
+                try
+                {
+                    if (!await enumerator.MoveNextAsync().ConfigureAwait(false)) break;
+                    current = enumerator.Current;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    if (OomPattern.Matches(ex.Message)) Tuner.OnOom();
+                    throw;
+                }
+
+                yield return meter.Observe(current);
+                if (current is LlmCompleted done)
+                {
+                    var finished = meter.Finalize(done);
+                    var performance = finished.Completion.Performance;
+                    if (performance is { } perf
+                        && perf.DecodeTokensPerSecond < SlowDecodeHintTokensPerSecond
+                        && perf.DecodeTokensPerSecond > 0
+                        && request.EnableThinking)
+                    {
+                        finished = finished with
+                        {
+                            Completion = finished.Completion with
+                            {
+                                Performance = perf with
+                                {
+                                    Hint = $"本地模型解码速度 {perf.DecodeTokensPerSecond:F1} tok/s 低于 "
+                                           + $"{SlowDecodeHintTokensPerSecond:F0} tok/s，建议缩短思考预算或关闭思考模式。",
+                                },
+                            },
+                        };
+                    }
+                    if (finished.Completion.Performance is { } final)
+                        Tuner.OnObservation(final);
+                    yield return finished;
+                }
+            }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -477,20 +612,27 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// factory so the model cache can request a CPU-only variant (GPU offload degradation)
     /// without re-deriving every field. Batch sizes, mmap/mlock, FlashAttention, KV offload,
     /// unified KV and RoPE overrides all come straight from the configuration page.
+    /// <paramref name="tier"/> 为自适应档位（P3）：仅在自动语义下由调用方传入，覆盖
+    /// GPU 卸载层数、KV 卸载与物理批大小；null 表示保持原有自动/手动语义。
     /// </summary>
-    internal static Func<bool, ModelParams> BuildLoadParams(string path, ProviderConfig provider, ModelConfig? model)
+    internal static Func<bool, ModelParams> BuildLoadParams(
+        string path, ProviderConfig provider, ModelConfig? model, InferenceTier? tier = null)
     {
         var load = model?.Load;
         // 显式覆盖仅在「load 存在且 AutoOptimize=false 且值非空」时生效；load 为 null
         // （未配置过加载页）必须走提供商级默认。属性模式对 null 恒为 false，因此这里
         // 不能写成 `load is { AutoOptimize: true } or { GpuOffload: null }`——该写法在
         // load == null 时落入 else 分支对 load! 解引用，直接 NullReferenceException。
-        var gpuLayers = load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
-            ? explicitGpu
-            : provider.GpuLayers ?? 0;
+        // 档位存在（自动语义 + 提供商级未显式配 GPU）时，档位就是「自动」的最终答案。
+        var gpuLayers = tier is { } tierValue ? tierValue.GpuLayers
+            : load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
+                ? explicitGpu
+                : provider.GpuLayers ?? 0;
         var threads = load is { AutoOptimize: false, Threads: { } explicitThreads }
             ? explicitThreads
             : provider.Threads;
+        var kvOffload = tier is { } kvTier ? kvTier.KvOffload : load?.OffloadKvCacheToGpu ?? true;
+        var ubatch = tier is { } ubTier ? ubTier.UBatch : load?.PhysicalBatchSize ?? 512;
         var requested = new ModelParams(path)
         {
             GpuLayerCount = gpuLayers,
@@ -500,9 +642,9 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             UseMemorymap = load?.TryMmap ?? true,
             UseMemoryLock = load?.KeepModelInMemory ?? false,
             BatchSize = (uint)Math.Clamp(load?.EvaluationBatchSize ?? 2048, 16, 8192),
-            UBatchSize = (uint)Math.Clamp(load?.PhysicalBatchSize ?? 512, 16, 8192),
+            UBatchSize = (uint)Math.Clamp(ubatch, 16, 8192),
             FlashAttention = load?.FlashAttention ?? provider.FlashAttention,
-            NoKqvOffload = load is { OffloadKvCacheToGpu: false },
+            NoKqvOffload = !kvOffload,
             KVUnified = load?.UnifiedKvCache,
             RopeFrequencyBase = (float?)load?.RopeFrequencyBase,
             RopeFrequencyScale = (float?)load?.RopeFrequencyScale,
@@ -514,14 +656,16 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// Identity of the provider- and model-level load settings that force a weights reload
     /// when they change (the model cache would otherwise reuse weights loaded with the old
     /// values). FlashAttention is a context-level parameter and lives in the context
-    /// signature instead.
+    /// signature instead. 自适应档位（非 null 时）进入签名：调档即触发权重重载。
     /// </summary>
-    internal static string LoadSignature(ProviderConfig provider, ModelConfig? model = null) =>
+    internal static string LoadSignature(ProviderConfig provider, ModelConfig? model = null, InferenceTier? tier = null) =>
         $"{provider.GpuLayers?.ToString() ?? "cpu"}|{provider.Threads?.ToString() ?? "auto"}"
-        + (model?.Load is { } load ? "|" + load.Signature() : "");
+        + (model?.Load is { } load ? "|" + load.Signature() : "")
+        + (tier is { } signatureTier ? "|" + signatureTier.Key : "");
 
     private static (ModelParams Params, string Signature) BuildContextParams(
-        string path, ModelConfig model, ProviderConfig provider, LLamaWeights weights, bool forceCpu = false)
+        string path, ModelConfig model, ProviderConfig provider, LLamaWeights weights,
+        bool forceCpu = false, InferenceTier? tier = null)
     {
         // Registering a model with a context window larger than it was trained for would
         // silently extrapolate positions, so the effective context is clamped to the model.
@@ -540,27 +684,36 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         var contextSize = (uint)Math.Max(512, Math.Min(configured, ceiling));
         // 同 BuildLoadParams：load == null（未配置加载页）时必须走提供商级默认，
         // 属性模式 `or { X: null }` 对 null 恒为 false，原写法会 NRE。
-        var gpuLayers = forceCpu ? 0 : (load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
-            ? explicitGpu
-            : provider.GpuLayers ?? 0);
+        // 档位存在（自动语义 + 提供商级未显式配 GPU）时覆盖 GPU 卸载与 KV 卸载。
+        var gpuLayers = forceCpu ? 0
+            : tier is { } cpuTier ? cpuTier.GpuLayers
+            : load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
+                ? explicitGpu
+                : provider.GpuLayers ?? 0;
         var threads = load is { AutoOptimize: false, Threads: { } explicitThreads } ? explicitThreads : provider.Threads;
-        var flashAttention = load?.FlashAttention ?? provider.FlashAttention;
-        // Quantized KV caches require flash attention in llama.cpp; silently keep f16
-        // when the user enabled quantization alone instead of failing every request.
-        var kQuant = load?.KCacheQuantType ?? provider.KvCacheQuantization;
-        var vQuant = load?.VCacheQuantType ?? kQuant;
-        var kvQuant = flashAttention ? NormalizeKvQuant(kQuant) : "none";
+        bool? flashAttention = load?.FlashAttention ?? provider.FlashAttention;
+        // KV 量化来源优先级：用户显式配置（加载页 / 提供商级）> 自适应档位 > 关闭。
+        // 量化需要 FlashAttention（llama.cpp 硬性前提）：档位要求量化而用户未显式配置
+        // FA 时按档位启用；用户已显式关闭 FA 则量化静默回退 f16（与既有语义一致）。
+        var userKvQuant = load?.KCacheQuantType ?? provider.KvCacheQuantization;
+        var tierKvQuant = tier is { } quantTier && userKvQuant is null ? quantTier.KvQuant : null;
+        if (tierKvQuant is { } required && required != "none" && flashAttention is null)
+            flashAttention = true;
+        var faOn = flashAttention ?? false;
+        var vQuant = load?.VCacheQuantType ?? userKvQuant ?? tierKvQuant;
+        var kQuant = userKvQuant ?? tierKvQuant;
+        var kvQuant = faOn ? NormalizeKvQuant(kQuant) : "none";
         var parameters = new ModelParams(path)
         {
             ContextSize = contextSize,
             GpuLayerCount = gpuLayers,
             Threads = threads is { } threadCount ? Math.Max(1, threadCount) : null,
-            FlashAttention = flashAttention,
+            FlashAttention = faOn,
             UseMemorymap = load?.TryMmap ?? true,
             UseMemoryLock = load?.KeepModelInMemory ?? false,
             BatchSize = (uint)Math.Clamp(load?.EvaluationBatchSize ?? 2048, 16, 8192),
-            UBatchSize = (uint)Math.Clamp(load?.PhysicalBatchSize ?? 512, 16, 8192),
-            NoKqvOffload = load is { OffloadKvCacheToGpu: false },
+            UBatchSize = (uint)Math.Clamp(tier?.UBatch ?? load?.PhysicalBatchSize ?? 512, 16, 8192),
+            NoKqvOffload = tier is { } offloadTier ? !offloadTier.KvOffload : load is { OffloadKvCacheToGpu: false },
             KVUnified = load?.UnifiedKvCache,
             RopeFrequencyBase = (float?)load?.RopeFrequencyBase,
             RopeFrequencyScale = (float?)load?.RopeFrequencyScale,
@@ -571,8 +724,9 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             parameters.TypeV = NormalizeKvQuant(vQuant) == "q4_0" ? GGMLType.GGML_TYPE_Q4_0 : GGMLType.GGML_TYPE_Q8_0;
         }
         // Any change to these values invalidates the reusable context (different KV layout).
-        var signature = $"{path}|{contextSize}|{gpuLayers}|{threads?.ToString() ?? "auto"}|{flashAttention}|{kvQuant}|{NormalizeKvQuant(vQuant)}"
-                        + (load is null ? "" : $"|{load.Signature()}");
+        var signature = $"{path}|{contextSize}|{gpuLayers}|{threads?.ToString() ?? "auto"}|{faOn}|{kvQuant}|{NormalizeKvQuant(vQuant)}"
+                        + (load is null ? "" : $"|{load.Signature()}")
+                        + (tier is { } sigTier ? $"|{sigTier.Key}" : "");
         return (parameters, signature);
     }
 

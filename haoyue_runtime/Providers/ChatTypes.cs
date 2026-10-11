@@ -107,6 +107,11 @@ public sealed record LlmCompletion
     public IReadOnlyList<ToolCallRequest> ToolCalls { get; init; } = [];
     public TokenUsage Usage { get; init; } = new(0, 0);
     public string FinishReason { get; init; } = "";
+    /// <summary>
+    /// 本地推理的性能观测（TTFT / decode 速率 / KV 复用命中率等）。远程提供商不产生
+    /// 该字段（保持 null），客户端据此区分是否展示本地性能面板。
+    /// </summary>
+    public InferencePerformance? Performance { get; init; }
 }
 
 public sealed record TokenUsage(long InputTokens, long OutputTokens)

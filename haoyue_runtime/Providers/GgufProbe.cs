@@ -28,8 +28,22 @@ public static class GgufProbe
     private const long MaxStringBytes = 32L * 1024 * 1024;
     private const long MaxArrayItems = 1_000_000;
 
-    /// <summary>The three header fields Haoyue needs for local model registration.</summary>
-    public sealed record Header(string? Architecture, string? Name, long? ContextLength);
+    /// <summary>
+    /// GGUF header 中 Haoyue 需要的字段。除注册用的三项外，含自适应装载档位（P3）做
+    /// KV cache 显存估算所需的张量结构：block_count（层数）、head_count（注意力头数）、
+    /// head_count_kv（KV 头数，GQA 模型远小于头数）、key/value_length（每头维度）、
+    /// embedding_length（隐藏维度，head_count_kv 缺失时按 GQA 经验值估算 KV 宽度）。
+    /// </summary>
+    public sealed record Header(
+        string? Architecture = null,
+        string? Name = null,
+        long? ContextLength = null,
+        long? BlockCount = null,
+        long? HeadCount = null,
+        long? HeadCountKv = null,
+        long? KeyLength = null,
+        long? ValueLength = null,
+        long? EmbeddingLength = null);
 
     public static Header Read(string path)
     {
@@ -49,6 +63,12 @@ public static class GgufProbe
             string? architecture = null;
             string? name = null;
             long? contextLength = null;
+            long? blockCount = null;
+            long? headCount = null;
+            long? headCountKv = null;
+            long? keyLength = null;
+            long? valueLength = null;
+            long? embeddingLength = null;
 
             for (long index = 0; index < pairs && stream.Position < stream.Length; index++)
             {
@@ -61,17 +81,43 @@ public static class GgufProbe
                 else if (key.EndsWith(".context_length", StringComparison.Ordinal)
                          && type is TypeUint32 or TypeInt32 or TypeUint64)
                     contextLength = type == TypeUint64 ? (long)reader.ReadUInt64() : reader.ReadUInt32();
+                else if (IsNumericTensorField(key, type, ".block_count"))
+                    blockCount = ReadNumeric(reader, type);
+                // head_count_kv 必须先于 head_count 匹配：后者是前者的后缀，
+                // 顺序颠倒会把 GQA 的 KV 头数错记为全量头数。
+                else if (IsNumericTensorField(key, type, ".attention.head_count_kv"))
+                    headCountKv = ReadNumeric(reader, type);
+                else if (IsNumericTensorField(key, type, ".attention.head_count"))
+                    headCount = ReadNumeric(reader, type);
+                else if (IsNumericTensorField(key, type, ".attention.key_length"))
+                    keyLength = ReadNumeric(reader, type);
+                else if (IsNumericTensorField(key, type, ".attention.value_length"))
+                    valueLength = ReadNumeric(reader, type);
+                else if (IsNumericTensorField(key, type, ".embedding_length"))
+                    embeddingLength = ReadNumeric(reader, type);
                 else if (!Skip(reader, type))
                     break;
             }
 
-            return new(architecture, name, contextLength is > 0 ? contextLength : null);
+            return new(architecture, name, contextLength is > 0 ? contextLength : null,
+                blockCount, headCount, headCountKv, keyLength, valueLength, embeddingLength);
         }
         catch (Exception ex) when (ex is IOException or EndOfStreamException or DecoderFallbackException)
         {
             return new(null, null, null);
         }
     }
+
+    private static bool IsNumericTensorField(string key, uint type, string suffix) =>
+        type is TypeUint32 or TypeInt32 or TypeUint64 && key.EndsWith(suffix, StringComparison.Ordinal);
+
+    private static long ReadNumeric(BinaryReader reader, uint type) => type switch
+    {
+        TypeUint64 => (long)reader.ReadUInt64(),
+        TypeUint32 => reader.ReadUInt32(),
+        TypeInt32 => reader.ReadInt32(),
+        _ => 0,
+    };
 
     private static string ReadString(BinaryReader reader)
     {

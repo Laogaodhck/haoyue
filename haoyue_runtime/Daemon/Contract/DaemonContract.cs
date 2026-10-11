@@ -402,6 +402,11 @@ public static class DaemonContract
             ("vision", SBoolean("是否支持视觉"), false),
             ("mmprojPath", SString("多模态投影器路径；null 清除"), false),
             ("load", SString("加载配置对象（LocalModelSettings JSON）；null 清除恢复自动"), false))),
+        M("model.benchmark", "model", "本地模型基准测试（多轮 TTFT/decode/prefill 速率与 KV 复用命中率）", parameters: SObject(
+            ("model", SString("模型 ref"), true),
+            ("runs", SInteger("轮数（1-10，缺省 3）"), false),
+            ("maxTokens", SInteger("每轮生成上限（16-4096，缺省 256）"), false),
+            ("prompt", SString("自定义基准提示词"), false))),
 
         // schedule
         M("schedule.list", "schedule", "列出定时任务", parameters: EmptyParams),

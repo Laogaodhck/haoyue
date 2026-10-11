@@ -1396,6 +1396,11 @@ public sealed class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.GetModelConfig(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "model.benchmark":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            token => _admin.BenchmarkModelAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "mcp.list":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.ListMcpServers()), context.ConnectionCt).ConfigureAwait(false);

@@ -44,6 +44,12 @@ public sealed class LocalModelCache : IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private (string Path, string? LoadSignature, LLamaWeights Weights, MtmdWeights? Mtmd, ReuseEntry? Reuse, LocalModelLoadReport? Report)? _loaded;
 
+    /// <summary>
+    /// 自适应推理调优器（P3/P4/P5）：随缓存单例存活，本地客户端写（观测/调档），
+    /// daemon 读（model.benchmark / 配置页展示）——同一实例保证两边看到一致的档位。
+    /// </summary>
+    public AdaptiveInferenceTuner Tuning { get; } = new();
+
     /// <summary>最近一次成功加载的报告（供 daemon model.status / 配置页展示）。</summary>
     public LocalModelLoadReport? LastLoadReport => _loaded?.Report;
 

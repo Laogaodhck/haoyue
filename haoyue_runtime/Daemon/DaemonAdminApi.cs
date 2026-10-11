@@ -835,6 +835,133 @@ internal sealed class DaemonAdminApi(
     }
 
     /// <summary>
+    /// 本地模型基准测试（P6）：对指定模型以固定 prompt 流式生成若干轮，采集每轮的
+    /// TTFT / decode 速率 / prefill 速率 / KV 复用命中率（InferencePerformance）并输出
+    /// 聚合统计。仅支持本地提供商；首轮结果含模型加载时间（TTFT 口径覆盖加载等待），
+    /// 聚合时单列。验收指标口径与 haoyue_doc/CUDA本地推理加速优化方案-2026-10-11.md §4 一致。
+    /// </summary>
+    public async Task<string> BenchmarkModelAsync(JsonObject parameters, CancellationToken ct)
+    {
+        var reference = RequiredString(parameters, "model");
+        var model = runtime.Models.Resolve(reference)
+                    ?? throw new DaemonRequestException($"Model not found: {reference}");
+        if (!model.Provider.IsLocal)
+            throw new DaemonRequestException($"model.benchmark 仅支持本地模型（{model.Ref} 是 {model.Provider.Kind}）");
+        var runs = Math.Clamp(parameters["runs"] is { } r && r.GetValue<int>() > 0 ? r.GetValue<int>() : 3, 1, 10);
+        var maxTokens = Math.Clamp(parameters["maxTokens"] is { } m && m.GetValue<int>() > 0 ? m.GetValue<int>() : 256, 16, 4096);
+        var prompt = (parameters["prompt"]?.GetValue<string>() is { Length: > 0 } custom)
+            ? custom
+            : "用 300 字左右介绍艾灸的起源与原理，分三段。";
+
+        var results = new JsonArray();
+        var ttfts = new List<double>();
+        var decodes = new List<double>();
+        var prefills = new List<double>();
+        string? error = null;
+        for (var run = 1; run <= runs && error is null; run++)
+        {
+            try
+            {
+                LlmCompletion? completion = null;
+                await foreach (var evt in runtime.Providers.StreamAsync(
+                    candidate => new LlmRequest
+                    {
+                        Provider = candidate.Provider,
+                        Model = candidate.Model,
+                        Messages = [ChatMessage.User(prompt)],
+                        MaxTokens = maxTokens,
+                        EnableThinking = false,
+                    },
+                    workspace: null,
+                    ct,
+                    candidateFilter: candidate => candidate.Ref == model.Ref).ConfigureAwait(false))
+                {
+                    if (evt is LlmCompleted done) completion = done.Completion;
+                }
+
+                var performance = completion?.Performance;
+                var row = new JsonObject
+                {
+                    ["run"] = run,
+                    ["finishReason"] = completion?.FinishReason ?? "",
+                    ["outputChars"] = completion?.Text.Length ?? 0,
+                };
+                if (performance is { } perf)
+                {
+                    row["ttftMs"] = Math.Round(perf.TtftMs, 1);
+                    row["totalMs"] = Math.Round(perf.TotalMs, 1);
+                    row["decodeMs"] = Math.Round(perf.DecodeMs, 1);
+                    row["decodeTokensPerSecond"] = Math.Round(perf.DecodeTokensPerSecond, 2);
+                    row["prefillTokensPerSecond"] = Math.Round(perf.PrefillTokensPerSecond, 2);
+                    row["promptTokens"] = perf.PromptTokens;
+                    row["generatedTokens"] = perf.GeneratedTokens;
+                    row["cachedTokens"] = perf.CachedTokens;
+                    row["cacheHitRate"] = Math.Round(perf.CacheHitRate, 4);
+                    row["prefixReuse"] = perf.PrefixReuse;
+                    if (perf.Hint is { } hint) row["hint"] = hint;
+                    if (run > 1)
+                    {
+                        // 首轮含模型加载等待（TTFT 覆盖加载），聚合并剔除以反映稳态性能。
+                        ttfts.Add(perf.TtftMs);
+                        if (perf.DecodeTokensPerSecond > 0) decodes.Add(perf.DecodeTokensPerSecond);
+                        if (perf.PrefillTokensPerSecond > 0) prefills.Add(perf.PrefillTokensPerSecond);
+                    }
+                }
+                else
+                {
+                    row["note"] = "本轮未产生性能观测（远程模型或空的完成事件）";
+                }
+                results.Add((JsonNode)row);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                error = ex.Message;
+                results.Add((JsonNode)new JsonObject { ["run"] = run, ["error"] = ex.Message });
+            }
+        }
+
+        double Percentile(List<double> values, double fraction)
+        {
+            if (values.Count == 0) return 0;
+            var sorted = values.OrderBy(v => v).ToList();
+            return sorted[Math.Clamp((int)(fraction * sorted.Count), 0, sorted.Count - 1)];
+        }
+
+        var response = new JsonObject
+        {
+            ["model"] = model.Ref,
+            ["runs"] = runs,
+            ["maxTokens"] = maxTokens,
+            ["results"] = results,
+            ["aggregate"] = new JsonObject
+            {
+                // 首轮 TTFT 含模型加载，稳态聚合基于第 2 轮起的数据；runs=1 时为空。
+                ["steadyRuns"] = ttfts.Count,
+                ["ttftMsMean"] = ttfts.Count > 0 ? Math.Round(ttfts.Average(), 1) : 0,
+                ["ttftMsP50"] = Math.Round(Percentile(ttfts, 0.5), 1),
+                ["decodeTokensPerSecondMean"] = decodes.Count > 0 ? Math.Round(decodes.Average(), 2) : 0,
+                ["decodeTokensPerSecondP50"] = Math.Round(Percentile(decodes, 0.5), 2),
+                ["prefillTokensPerSecondMean"] = prefills.Count > 0 ? Math.Round(prefills.Average(), 2) : 0,
+            },
+            ["error"] = error,
+        };
+        if (sharedLocalModels?.Tuning is { } tuning)
+        {
+            response["tuning"] = new JsonObject
+            {
+                ["modelPath"] = tuning.ModelPath,
+                ["tierLevel"] = tuning.Current?.Level,
+                ["gpuLayers"] = tuning.Current?.GpuLayers,
+                ["kvQuant"] = tuning.Current?.KvQuant,
+                ["ubatch"] = tuning.Current?.UBatch,
+                ["tierReason"] = tuning.Current?.Reason,
+                ["lastAdjustment"] = tuning.LastAdjustment,
+            };
+        }
+        return response.ToJsonString();
+    }
+
+    /// <summary>
     /// Pre-flight check for a model without loading it: local GGUF models report the
     /// resolved file path, existence and size, remote models report their endpoint.
     /// The desktop calls this before a full load so a missing file fails fast with a

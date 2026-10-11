@@ -125,6 +125,7 @@ export const DAEMON_METHODS = [
   'model.status',
   'model.config.get',
   'model.update',
+  'model.benchmark',
   'schedule.list',
   'schedule.create',
   'schedule.update',

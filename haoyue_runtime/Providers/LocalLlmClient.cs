@@ -478,15 +478,19 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// without re-deriving every field. Batch sizes, mmap/mlock, FlashAttention, KV offload,
     /// unified KV and RoPE overrides all come straight from the configuration page.
     /// </summary>
-    private static Func<bool, ModelParams> BuildLoadParams(string path, ProviderConfig provider, ModelConfig? model)
+    internal static Func<bool, ModelParams> BuildLoadParams(string path, ProviderConfig provider, ModelConfig? model)
     {
         var load = model?.Load;
-        var gpuLayers = load is { AutoOptimize: true } or { GpuOffload: null }
-            ? provider.GpuLayers ?? 0
-            : load!.GpuOffload!.Value;
-        var threads = load is { AutoOptimize: true } or { Threads: null }
-            ? provider.Threads
-            : load!.Threads;
+        // 显式覆盖仅在「load 存在且 AutoOptimize=false 且值非空」时生效；load 为 null
+        // （未配置过加载页）必须走提供商级默认。属性模式对 null 恒为 false，因此这里
+        // 不能写成 `load is { AutoOptimize: true } or { GpuOffload: null }`——该写法在
+        // load == null 时落入 else 分支对 load! 解引用，直接 NullReferenceException。
+        var gpuLayers = load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
+            ? explicitGpu
+            : provider.GpuLayers ?? 0;
+        var threads = load is { AutoOptimize: false, Threads: { } explicitThreads }
+            ? explicitThreads
+            : provider.Threads;
         var requested = new ModelParams(path)
         {
             GpuLayerCount = gpuLayers,
@@ -534,10 +538,12 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             ? trained
             : Math.Min(trained, LocalModelProbe.DefaultContextWindow);
         var contextSize = (uint)Math.Max(512, Math.Min(configured, ceiling));
-        var gpuLayers = forceCpu ? 0 : (load is { AutoOptimize: true } or { GpuOffload: null }
-            ? provider.GpuLayers ?? 0
-            : load!.GpuOffload!.Value);
-        var threads = load is { AutoOptimize: true } or { Threads: null } ? provider.Threads : load!.Threads;
+        // 同 BuildLoadParams：load == null（未配置加载页）时必须走提供商级默认，
+        // 属性模式 `or { X: null }` 对 null 恒为 false，原写法会 NRE。
+        var gpuLayers = forceCpu ? 0 : (load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
+            ? explicitGpu
+            : provider.GpuLayers ?? 0);
+        var threads = load is { AutoOptimize: false, Threads: { } explicitThreads } ? explicitThreads : provider.Threads;
         var flashAttention = load?.FlashAttention ?? provider.FlashAttention;
         // Quantized KV caches require flash attention in llama.cpp; silently keep f16
         // when the user enabled quantization alone instead of failing every request.

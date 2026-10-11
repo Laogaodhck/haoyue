@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Providers;
 using Xunit;
+using Configuration = Haoyue.Runtime.Configuration;
 
 namespace Haoyue.Tests;
 
@@ -139,5 +140,70 @@ public sealed class LocalModelLoadSettingsTests
         settings.LlamaCppOverride = "-ngl 99";
         settings.ReasoningBudget = 2048;
         Assert.Equal(baseline, settings.Signature());
+    }
+
+    // ------------------------------------------------ BuildLoadParams（加载参数合并）
+
+    [Fact]
+    public void BuildLoadParams_NullLoad_FallsBackToProviderDefaults()
+    {
+        // 回归：原实现 `load is { AutoOptimize: true } or { GpuOffload: null }` 对
+        // load == null（未配置过加载页的模型，即绝大多数场景）两侧都不匹配，落入
+        // else 分支对 load! 解引用 → NullReferenceException，模型调用直接失败。
+        var provider = new Configuration.ProviderConfig
+        {
+            Id = "local", Kind = "local", GpuLayers = 18, Threads = 6,
+        };
+        var model = new Configuration.ModelConfig { Id = "m" };
+
+        var factory = LocalLlmClient.BuildLoadParams("x.gguf", provider, model);
+
+        var parameters = factory(false);
+        Assert.Equal(18, parameters.GpuLayerCount);
+        Assert.Equal(6, parameters.Threads);
+    }
+
+    [Fact]
+    public void BuildLoadParams_AutoOptimize_IgnoresExplicitOverrides()
+    {
+        var provider = new Configuration.ProviderConfig { Id = "local", Kind = "local", GpuLayers = 18 };
+        var model = new Configuration.ModelConfig
+        {
+            Id = "m",
+            Load = new LocalModelSettings { AutoOptimize = true, GpuOffload = 99, Threads = 99 },
+        };
+
+        var parameters = LocalLlmClient.BuildLoadParams("x.gguf", provider, model)(false);
+        Assert.Equal(18, parameters.GpuLayerCount); // AUTO：回到提供商级
+        Assert.Null(parameters.Threads);
+    }
+
+    [Fact]
+    public void BuildLoadParams_ExplicitOverrides_OnlyWhenAutoOptimizeDisabled()
+    {
+        var provider = new Configuration.ProviderConfig { Id = "local", Kind = "local", GpuLayers = 18, Threads = 6 };
+
+        // AutoOptimize=false + 显式值 → 生效
+        var explicitModel = new Configuration.ModelConfig
+        {
+            Id = "m",
+            Load = new LocalModelSettings { AutoOptimize = false, GpuOffload = 10, Threads = 4 },
+        };
+        var parameters = LocalLlmClient.BuildLoadParams("x.gguf", provider, explicitModel)(false);
+        Assert.Equal(10, parameters.GpuLayerCount);
+        Assert.Equal(4, parameters.Threads);
+
+        // CPU 降级请求 → GPU 归零
+        Assert.Equal(0, LocalLlmClient.BuildLoadParams("x.gguf", provider, explicitModel)(true).GpuLayerCount);
+
+        // AutoOptimize=false 但值留空 → 仍回提供商级
+        var emptyModel = new Configuration.ModelConfig
+        {
+            Id = "m",
+            Load = new LocalModelSettings { AutoOptimize = false, GpuOffload = null, Threads = null },
+        };
+        var fallback = LocalLlmClient.BuildLoadParams("x.gguf", provider, emptyModel)(false);
+        Assert.Equal(18, fallback.GpuLayerCount);
+        Assert.Equal(6, fallback.Threads);
     }
 }

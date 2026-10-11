@@ -530,8 +530,11 @@ public sealed partial class Agent(
         {
             // 意外异常（存储/IO 等）也要走受控失败路径：否则 TurnCompletedEvent 与
             // workflow 收尾事件都不会发布，客户端的工作流视图停留在最后一步。
+            // error 面向用户只给消息；堆栈放进 Detail，客户端「技术详情」可直接定位。
             error = $"Unexpected error: {ex.Message}";
-            events.Publish(new ErrorEvent("Agent turn failed", error));
+            events.Publish(new ErrorEvent(
+                "Agent turn failed",
+                ex.StackTrace is { Length: > 0 } stack ? $"{error}\n{ex.GetType().FullName}: {stack}" : error));
         }
 
         finally

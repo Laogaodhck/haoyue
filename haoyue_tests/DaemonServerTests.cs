@@ -29,6 +29,28 @@ public sealed class DaemonServerTests : IAsyncDisposable
     public DaemonServerTests() => Directory.CreateDirectory(_tempDir);
 
     [Fact]
+    public async Task Chat_AcknowledgesTurnWithStatusEventBeforeSlowStartup()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "hello" });
+
+        // 回合受理确认：桌面端对 chat 施加 first-event 超时（任意事件即解除）。
+        // 隔离 runtime 构建、MCP 连接与本地模型冷加载都可能超过该窗口，因此受理
+        // status 帧必须在任何慢启动工作之前发出，且先于 stub 回合的第一个事件。
+        var ack = await connection.ReadAsync();
+        Assert.Equal(1, ack["id"]!.GetValue<long>());
+        Assert.Equal("status", ack["event"]!.GetValue<string>());
+        Assert.Equal("Preparing turn", ack["data"]!.GetValue<string>());
+        Assert.NotNull(ack["sessionId"]!.GetValue<string>());
+
+        var done = await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "done");
+        Assert.Equal("ok", done["data"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task ActiveChat_DoesNotBlockCancellation_AndEndsWithCancelledEvent()
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -42,6 +64,10 @@ public sealed class DaemonServerTests : IAsyncDisposable
 
         var connection = await StartServerAsync(SlowTurn);
         await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "keep working" });
+        // 先读掉回合受理 status 帧，保持 workspace.open 裸 ReadAsync 的帧序断言成立。
+        var ack = await connection.ReadAsync();
+        Assert.Equal(("1", "status"),
+            (ack["id"]!.GetValue<long>().ToString(), ack["event"]!.GetValue<string>()));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         await connection.SendAsync(3, "workspace.open", new JsonObject { ["path"] = _tempDir });
@@ -137,6 +163,10 @@ public sealed class DaemonServerTests : IAsyncDisposable
 
         var connection = await StartServerAsync(SlowTurn);
         await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "first" });
+        // 回合受理确认帧必须先于 stub 回合启动（any-event 解除桌面 first-event 超时）。
+        var ack = await connection.ReadAsync();
+        Assert.Equal(1, ack["id"]!.GetValue<long>());
+        Assert.Equal("status", ack["event"]!.GetValue<string>());
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // 同一会话的第二个并发回合必须被拒绝：并发写入会交错会话历史并破坏 tool-call 配对。
@@ -170,6 +200,10 @@ public sealed class DaemonServerTests : IAsyncDisposable
 
         var connection = await StartServerAsync(SlowTurn);
         await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "long turn" });
+        // 先读掉回合受理 status 帧，保持后续裸 ReadAsync 的帧序断言成立。
+        var ack = await connection.ReadAsync();
+        Assert.Equal(("1", "status"),
+            (ack["id"]!.GetValue<long>().ToString(), ack["event"]!.GetValue<string>()));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // 不匹配的 sessionId 不得误伤本连接上的活动回合（渲染层在 requestId 未就绪时按会话取消）。
@@ -526,10 +560,10 @@ public sealed class DaemonServerTests : IAsyncDisposable
         });
 
         await connection.SendAsync(4, "chat", new JsonObject { ["message"] = "hello" });
-        var response = await connection.ReadAsync();
+        // 跳过回合受理 status 帧，断言终态 error 信封携带完整 provider 详情。
+        var response = await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 4 && r["event"]!.GetValue<string>() == "error");
 
-        Assert.Equal(4, response["id"]!.GetValue<long>());
-        Assert.Equal("error", response["event"]!.GetValue<string>());
         Assert.Equal(detail, response["data"]!.GetValue<string>());
     }
 
@@ -563,7 +597,8 @@ public sealed class DaemonServerTests : IAsyncDisposable
                 })
         });
 
-        var response = await connection.ReadAsync();
+        var response = await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 40 && r["event"]!.GetValue<string>() == "done");
         Assert.Equal("done", response["event"]!.GetValue<string>());
         await invoked.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
@@ -978,7 +1013,8 @@ public sealed class DaemonServerTests : IAsyncDisposable
             ["message"] = "hello without a directory",
             ["global"] = true,
         });
-        Assert.Equal("done", (await connection.ReadAsync())["event"]!.GetValue<string>());
+        Assert.Equal("done", (await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 34 && r["event"]!.GetValue<string>() == "done"))["event"]!.GetValue<string>());
         await observedGlobalContext.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 

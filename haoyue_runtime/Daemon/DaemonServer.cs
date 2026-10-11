@@ -931,6 +931,12 @@ public sealed class DaemonServer : IAsyncDisposable
                         turn.Task = RunTurnAsync(
                             turnSession, workspace, message, images, reasoningLevel, id, context.Writer, context.WriterGate,
                             turnCancellation.Token, context.ConnectionCt, turn.Steering);
+                        // Turn-acceptance ack: desktop clients arm a first-event timeout
+                        // on chat (any event cancels it). Isolated-runtime construction,
+                        // MCP connects and local model cold loads can each take longer
+                        // than that window, so confirm the turn was accepted right away,
+                        // before any of that slow startup work produces its first event.
+                        await WriteAsync(context.Writer, context.WriterGate, id, "status", "Preparing turn", context.ConnectionCt, turnSession.Header.Id).ConfigureAwait(false);
                         // The session lock releases itself when the turn completes; the
                         // value-aware removal never evicts a newer turn's registration.
                         _ = turn.Task.ContinueWith(

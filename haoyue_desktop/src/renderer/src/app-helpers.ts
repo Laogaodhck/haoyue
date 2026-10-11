@@ -258,6 +258,7 @@ export function messageMatches(message: ChatMessage, query: string): boolean {
 
 export function phaseLabel(status: string): string {
   const s = status.toLocaleLowerCase()
+  if (s.includes('preparing')) return '正在准备'
   if (s.includes('compacting')) return '压缩记忆'
   if (s.includes('verifying')) return '构建验证'
   if (s.includes('truncated')) return '自动续写'

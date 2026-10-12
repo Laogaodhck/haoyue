@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "haoyue_website/**"
+      - "marketplace/**"
       - ".github/workflows/website.yml"
   workflow_dispatch:
 
@@ -40,6 +41,9 @@ jobs:
           # Project site under /haoyue/ — config.mts reads PAGES_BASE.
           PAGES_BASE: /haoyue/
         run: npm run build
+      # 技能市场（纯静态，零构建）并入部署产物：/haoyue/marketplace/
+      - name: Bundle skill marketplace
+        run: cp -r marketplace haoyue_website/.vitepress/dist/marketplace
       - uses: actions/upload-pages-artifact@v3
         with:
           path: haoyue_website/.vitepress/dist

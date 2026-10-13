@@ -1,0 +1,1 @@
+Delete a wrong or outdated fact from the workspace facts layer by its #id (from fact_search), or by passing the fact's exact content. Prefer fact_save to re-record a corrected version first, then forget the wrong one; use this tool only when the fact should disappear entirely (cleanup no longer depends on TTL expiry or capacity eviction).

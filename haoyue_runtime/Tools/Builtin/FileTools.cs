@@ -141,6 +141,12 @@ public sealed class ReadFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
         if (!File.Exists(path))
             return Task.FromResult(ToolResult.Fail($"File not found: {path}"));
 
+        // Binary guard (same sniff grep uses): dumping a binary file into the context
+        // wastes the window budget on mojibake the model cannot use.
+        if (FileWalker.IsProbablyBinary(path))
+            return Task.FromResult(ToolResult.Fail(
+                $"{path} appears to be a binary file and is not shown as text. Use the bash tool (e.g. strings, xxd) or a format-specific approach instead."));
+
         var offset = Math.Max(1, GetInt(arguments, "offset") ?? 1);
         var limit = Math.Max(1, GetInt(arguments, "limit") ?? 2000);
 
@@ -174,7 +180,9 @@ public sealed class ReadFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
                 context.Events.Publish(new ToolCallProgressEvent(context.CallId, chunkSb.ToString()));
         }
 
-        var output = sb.Length == 0 ? "(empty file)" : context.Truncate(sb.ToString(), "file");
+        // H-B: head+tail——大文件的首尾（导入区/入口与文件末尾的导出、main）都比
+        // 中段更有诊断价值，头截断会把尾部整段丢掉。
+        var output = sb.Length == 0 ? "(empty file)" : context.TruncateTailPrioritized(sb.ToString(), "file");
         var relative = Path.GetRelativePath(context.Workspace.Root, path);
         return Task.FromResult(ToolResult.Ok(output, $"Read {lines.Count} lines from {relative}") with { FilePath = path });
     }
@@ -192,7 +200,8 @@ public sealed class WriteFileTool(IPromptProvider prompts) : BuiltinTool(prompts
 
     public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
-        var path = context.ResolvePath(GetString(arguments, "path") ?? "");
+        if (!context.TryResolveWritablePath(GetString(arguments, "path") ?? "", out var path, out var pathError))
+            return Task.FromResult(ToolResult.Fail(pathError!));
         var content = GetString(arguments, "content") ?? "";
         return WithFileWriteLockAsync(context, path, _ => WriteCoreAsync(path, content, context, ct), ct);
     }
@@ -239,7 +248,8 @@ public sealed class EditFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
 
     public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
-        var path = context.ResolvePath(GetString(arguments, "path") ?? "");
+        if (!context.TryResolveWritablePath(GetString(arguments, "path") ?? "", out var path, out var pathError))
+            return Task.FromResult(ToolResult.Fail(pathError!));
         if (!File.Exists(path))
             return Task.FromResult(ToolResult.Fail($"File not found: {path}"));
 

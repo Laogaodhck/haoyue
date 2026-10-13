@@ -129,6 +129,18 @@ public sealed record EvolutionReflectionCompletedEvent(
     int Skipped,
     string? Error = null) : RuntimeEvent;
 
+/// <summary>
+/// Emitted after a memory-consolidation pass finishes (H-C): recent session
+/// experience distilled into project facts. Superseded counts facts that merged
+/// into (or refreshed) an existing fact instead of growing the store.
+/// </summary>
+public sealed record MemoryConsolidationCompletedEvent(
+    string SessionId,
+    int SessionsScanned,
+    int FactsAdded,
+    int FactsSuperseded,
+    string? Error = null) : RuntimeEvent;
+
 /// <summary>Explicit user feedback on a finished turn (P4 thumbs-down). The defect
 /// aggregator turns each negative feedback into its own defect report so the next
 /// reflection pass can analyze the session transcript.</summary>
@@ -139,4 +151,19 @@ public sealed record UserFeedbackEvent(
 /// 前端据此刷新任务列表；任务进度本身复用回合级流式事件经 events.recent 重放。</summary>
 public sealed record BackgroundTaskEvent(
     string TaskId, string Status, string? SessionId = null, string? Error = null) : RuntimeEvent;
+
+// ---------------------------------------------------------------- local model loading
+
+/// <summary>
+/// 本地模型加载进度（预热 / 首请求加载 / model.preload 时发布）。llama.cpp 权重
+/// 加载是单次原生调用，百分比为「阶段边界 + 历史 ETA 插值」的诚实估计； EstimatedRemainingMs
+/// 为 null 表示无历史耗时指纹可用。daemon 以 model.load.progress 广播转发。
+/// </summary>
+public sealed record ModelLoadProgressEvent(
+    string ModelRef,
+    string Phase,
+    double Percent,
+    long ElapsedMs,
+    long? EstimatedRemainingMs = null,
+    string? Message = null) : RuntimeEvent;
 

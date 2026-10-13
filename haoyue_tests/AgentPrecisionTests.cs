@@ -263,12 +263,15 @@ public sealed class AgentPrecisionTests
     [Fact]
     public async Task AnswerCompleteness_UnmentionedChangedFiles_InjectsOnce()
     {
-        var target = Path.Combine(Path.GetTempPath(), $"haoyue-write-{Guid.NewGuid():N}.txt");
+        // 写入目标必须在 harness 工作区内（2026-10-12 起 write_file 强制工作区边界）；
+        // 用非全局工作区使边界即工作区根。
+        var dir = Path.Combine(Path.GetTempPath(), "haoyue-precision-test", Guid.NewGuid().ToString("N"));
+        var target = Path.Combine(dir, "ws", "hello-haoyue.txt");
         var args = $$"""{"path":"{{target.Replace("\\", "\\\\")}}","content":"hello haoyue"}""";
         using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
             ToolCall("w1", "write_file", args),
             new LlmCompletion { Text = "任务完成" },
-            new LlmCompletion { Text = $"已完成 {Path.GetFileName(target)} 的写入" }));
+            new LlmCompletion { Text = $"已完成 {Path.GetFileName(target)} 的写入" }), dir: dir, globalWorkspace: false);
 
         var result = await harness.RunAsync("写一个测试文件");
 
@@ -282,11 +285,12 @@ public sealed class AgentPrecisionTests
     [Fact]
     public async Task AnswerCompleteness_AnswerNamesChangedFile_SkipsNudge()
     {
-        var target = Path.Combine(Path.GetTempPath(), $"haoyue-write-{Guid.NewGuid():N}.txt");
+        var dir = Path.Combine(Path.GetTempPath(), "haoyue-precision-test", Guid.NewGuid().ToString("N"));
+        var target = Path.Combine(dir, "ws", "named-change.txt");
         var args = $$"""{"path":"{{target.Replace("\\", "\\\\")}}","content":"hello haoyue"}""";
         using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
             ToolCall("w1", "write_file", args),
-            new LlmCompletion { Text = $"已写入 {Path.GetFileName(target)}" }));
+            new LlmCompletion { Text = $"已写入 {Path.GetFileName(target)}" }), dir: dir, globalWorkspace: false);
 
         var result = await harness.RunAsync("写一个测试文件");
 
@@ -475,9 +479,10 @@ public sealed class AgentPrecisionTests
             if (Directory.Exists(workspace.Root)) Directory.Delete(workspace.Root, true);
         }
 
-        public static async Task<AgentHarness> CreateAsync(List<LlmCompletion> steps, int throwLlmAtRequest = 0)
+        public static async Task<AgentHarness> CreateAsync(
+            List<LlmCompletion> steps, int throwLlmAtRequest = 0, string? dir = null, bool globalWorkspace = true)
         {
-            var dir = Path.Combine(Path.GetTempPath(), "haoyue-precision-test", Guid.NewGuid().ToString("N"));
+            dir ??= Path.Combine(Path.GetTempPath(), "haoyue-precision-test", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             var store = new ConfigStore(Path.Combine(dir, "config.json"), Path.Combine(dir, "state.json"));
             store.Config.Providers.Clear();
@@ -489,7 +494,9 @@ public sealed class AgentPrecisionTests
                 Models = [new ModelConfig { Id = "gpt-test", ContextWindow = 128_000 }],
             });
             var capture = new ScriptedClientFactory(steps) { ThrowAtRequest = throwLlmAtRequest };
-            var workspace = new WorkspaceManager().CreateGlobal(Path.Combine(dir, "global"));
+            var workspace = globalWorkspace
+                ? new WorkspaceManager().CreateGlobal(Path.Combine(dir, "global"))
+                : new WorkspaceInfo { Root = Path.Combine(dir, "ws"), ProjectKinds = [] };
 
             var runtime = HaoyueRuntime.CreateIsolated(workspace, configureServices: services =>
             {

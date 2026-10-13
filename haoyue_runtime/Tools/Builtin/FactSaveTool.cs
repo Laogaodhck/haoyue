@@ -22,7 +22,8 @@ public sealed class FactSaveTool(IPromptProvider prompts) : BuiltinTool(prompts)
         ("content", ToolSchema.String("要沉淀的事实，一句话：构建命令、部署约定、环境要点、关键决定等。"), true),
         ("topic", ToolSchema.String("可选主题标签，如 build、deploy、convention"), false),
         ("confidence", ToolSchema.String("置信度 0~1：用户明确说的填 1，推断出的填 0.5~0.8", "0.9", "0.8", "0.7", "0.5"), false),
-        ("ttlDays", ToolSchema.Integer("可选有效期（天）：临时事实设 1-30，长期约定不填"), false));
+        ("ttlDays", ToolSchema.Integer("可选有效期（天）：临时事实设 1-30，长期约定不填"), false),
+        ("supersedes", ToolSchema.String("可选：要取代的旧事实（其 id 或完整内容）。纠正错误事实时使用——旧事实不再注入，避免矛盾事实同时出现"), false));
 
     public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
@@ -31,6 +32,7 @@ public sealed class FactSaveTool(IPromptProvider prompts) : BuiltinTool(prompts)
             return Task.FromResult(ToolResult.Fail("content is required"));
 
         var topic = GetString(arguments, "topic");
+        var supersedes = GetString(arguments, "supersedes");
         double? confidence = arguments["confidence"] is JsonValue confValue
             && confValue.TryGetValue<double>(out var conf)
             ? Math.Clamp(conf, 0, 1) : null;
@@ -43,11 +45,12 @@ public sealed class FactSaveTool(IPromptProvider prompts) : BuiltinTool(prompts)
                 context.Workspace.Root, content, topic,
                 source: "agent",
                 confidence: confidence ?? 0.8,
-                ttlDays: ttlDays);
+                ttlDays: ttlDays,
+                supersedes: supersedes);
 
             var scope = entry.ExpiresAt is { } at ? $"，有效期至 {at:yyyy-MM-dd}" : "，长期有效";
             return Task.FromResult(ToolResult.Ok(
-                $"事实已沉淀（{entry.Id}，置信度 {entry.Confidence:0.0}{scope}）：\n{entry.Content}\n该事实会在此工作区的后续回合自动注入系统提示；用 fact_search 可按需检索。",
+                $"事实已沉淀（{entry.Id}，置信度 {entry.Confidence:0.0}{scope}）：\n{entry.Content}\n该事实会在此工作区的后续回合自动注入系统提示；用 fact_search 可按需检索，用 fact_forget 可撤销错误事实。",
                 "Fact saved"));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)

@@ -322,7 +322,10 @@ public sealed class WebFetchTool(IPromptProvider prompts, IConfigStore configSto
             return ToolResult.Fail(denyReason!);
         }
 
-        var maxChars = Math.Clamp(GetInt(arguments, "max_chars") ?? 10_000, 500, 50_000);
+        // H-B: 模型请求的 max_chars 不再是绝对常量——收敛进本模型的自适应工具输出
+        // 预算（context.MaxOutputChars），超长页面不再绕过窗口预算撑爆上下文。
+        var maxChars = Math.Clamp(
+            GetInt(arguments, "max_chars") ?? 10_000, 500, Math.Max(500, context.MaxOutputChars));
 
         try
         {
@@ -333,11 +336,40 @@ public sealed class WebFetchTool(IPromptProvider prompts, IConfigStore configSto
             if (!response.IsSuccessStatusCode)
                 return ToolResult.Fail($"HTTP request to {url} failed with status code {(int)response.StatusCode} ({response.ReasonPhrase}).");
 
+            // Content-type branching (L1): binary resources used to run through the HTML
+            // strip pipeline and return mojibake. Redirect the model to a suitable tool
+            // instead of polluting the context window.
+            var mediaType = response.Content.Headers.ContentType?.MediaType ?? "";
+            if (mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                || mediaType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)
+                || mediaType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)
+                || mediaType.Contains("pdf", StringComparison.OrdinalIgnoreCase)
+                || mediaType.Contains("octet-stream", StringComparison.OrdinalIgnoreCase)
+                || mediaType.Contains("zip", StringComparison.OrdinalIgnoreCase)
+                || mediaType.Contains("gzip", StringComparison.OrdinalIgnoreCase))
+            {
+                return ToolResult.Fail(
+                    $"{url} 是二进制资源（Content-Type: {mediaType}），web_fetch 只返回文本。"
+                    + "如需该资源，请改用 bash 工具下载后按格式处理。");
+            }
+
             var rawContent = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            var extractedText = ExtractMainText(rawContent);
+            // Only HTML (and unknown types, for compatibility) go through tag stripping;
+            // plain text / JSON / XML return as-is so structure is preserved.
+            var isMarkup = mediaType.Length == 0
+                || mediaType.Contains("html", StringComparison.OrdinalIgnoreCase)
+                || mediaType.Contains("xml", StringComparison.OrdinalIgnoreCase);
+            var extractedText = isMarkup ? ExtractMainText(rawContent) : rawContent;
 
             if (extractedText.Length > maxChars)
-                extractedText = extractedText[..maxChars] + $"\n… [Truncated remaining {extractedText.Length - maxChars} chars]";
+            {
+                // H-B: head+tail 折叠中段——文章结论与关键数据常在尾部，头截断会丢掉。
+                var body = Math.Max(2, maxChars - 96);
+                var tailChars = Math.Max(1, (int)(body * 0.3));
+                extractedText = extractedText[..(body - tailChars)]
+                    + $"\n… [middle omitted: {extractedText.Length - maxChars} chars] …\n"
+                    + extractedText[^tailChars..];
+            }
 
             var summary = $"Fetched {extractedText.Length} characters from {url}";
             return ToolResult.Ok(extractedText, summary);

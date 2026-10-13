@@ -82,6 +82,15 @@ public sealed class DaemonServer : IAsyncDisposable
     // config changes. The reflection turn itself stays human-gated for adoption.
     private Timer? _autoReflectTimer;
     private DateTimeOffset _lastReflectAt = DateTimeOffset.UtcNow;
+    // L-D 会话保留策略维护：24h 周期的后台定时器与单航班闸门（与自动反思同风格，
+    // 维护是尽力而为的后台杂务，失败留待下一周期）。
+    private Timer? _maintenanceTimer;
+    private readonly SemaphoreSlim _maintenanceGate = new(1, 1);
+    // 本地模型空闲回收：5 分钟一轮（阈值来自 Agent.LocalModelIdleUnloadMinutes）。
+    private Timer? _localModelIdleTimer;
+    // H-C 记忆固化：6h 周期的后台定时器（单航班在 ConsolidationRunner 内部）。
+    private Timer? _consolidationTimer;
+    private readonly ConsolidationRunner _consolidation;
 
     // Configuration and workspace administration remains serialized, while agent turns
     // execute concurrently in isolated runtime instances.
@@ -208,6 +217,12 @@ public sealed class DaemonServer : IAsyncDisposable
             runtime, _fileLocks, _sharedHttp, _sharedBreaker, _evolution,
             runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct),
             _sharedLocalModels);
+        // H-C 记忆固化：与反思同构的隔离回合通道（测试 stub 一致），定时把近期
+        // 会话经验沉淀为项目事实。
+        _consolidation = new ConsolidationRunner(
+            runtime, _fileLocks, _sharedHttp, _sharedBreaker,
+            runTurn is null ? null : (workspace, session, prompt, ct) => runTurn(session, workspace, prompt, ct),
+            _sharedLocalModels);
         _runtimeEvents = _runtime.Events.Subscribe();
         _scheduleEventsTask = BroadcastHostEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
         _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token, _sharedLocalModels);
@@ -219,6 +234,12 @@ public sealed class DaemonServer : IAsyncDisposable
     /// <summary>Releases the scheduler and shared HTTP clients when the daemon host shuts down.</summary>
     public async ValueTask DisposeAsync()
     {
+        _consolidationTimer?.Dispose();
+        _consolidationTimer = null;
+        _maintenanceTimer?.Dispose();
+        _maintenanceTimer = null;
+        _localModelIdleTimer?.Dispose();
+        _localModelIdleTimer = null;
         _autoReflectTimer?.Dispose();
         _autoReflectTimer = null;
         _shutdown.Cancel();
@@ -247,6 +268,26 @@ public sealed class DaemonServer : IAsyncDisposable
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _shutdown.Token);
         var runCt = linkedCts.Token;
         await RecoverInterruptedTurnsAsync(runCt).ConfigureAwait(false);
+        // 本地模型库运行时策略（驻留上限 / 并发槽 / 空闲回收）随配置装配。
+        ConfigureLocalModelCache();
+        // L-D 会话保留策略维护：启动执行一次（归档过期会话/清理孤儿图片/必要时
+        // VACUUM），之后每 24h 一轮。后台执行、单项容错，不影响服务主循环。
+        StartSessionMaintenance();
+        _maintenanceTimer = new Timer(
+            _ => StartSessionMaintenance(), null, TimeSpan.FromHours(24), TimeSpan.FromHours(24));
+        // 本地模型空闲回收：5 分钟一轮，归还超过配置时长未使用的权重（0 = 关闭）。
+        _localModelIdleTimer = new Timer(
+            _ => StartLocalModelIdleReclaim(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        // 本地模型预热（可选）：后台加载活跃本地模型，第一条消息免等权重加载。
+        StartLocalModelPreload();
+        // H-C 记忆固化：启动执行一次，之后每 6h 扫描近期会话沉淀事实；配置关闭时
+        // 完全不启用（连定时器都不挂）。
+        if (_runtime.ConfigStore.Config.Agent.MemoryConsolidationEnabled)
+        {
+            StartConsolidation();
+            _consolidationTimer = new Timer(
+                _ => StartConsolidation(), null, TimeSpan.FromHours(6), TimeSpan.FromHours(6));
+        }
         var schedulerTask = RunSchedulerAsync(runCt);
         try
         {
@@ -953,6 +994,40 @@ public sealed class DaemonServer : IAsyncDisposable
                     case "agent.steer":
                     {
                         var parameters = Params(request);
+                        // M-B: abort=true 是显式 opt-in 的硬中止（区别于默认的"下一回合
+                        // 生效"引导）。先解析它——abort 不需要 message/images。
+                        var abort = parameters["abort"]?.GetValue<bool?>() ?? false;
+                        ActiveTurn? abortTarget;
+                        if (abort)
+                        {
+                            var abortRequestedId = parameters["requestId"]?.GetValue<long?>();
+                            var abortRequestedSessionId = parameters["sessionId"]?.GetValue<string>();
+                            abortTarget = abortRequestedId is { } abortSpecific
+                                ? context.ActiveTurns.GetValueOrDefault(abortSpecific)
+                                : context.ActiveTurns.Values
+                                    .Where(turn => string.Equals(turn.Session.Header.Id, abortRequestedSessionId, StringComparison.OrdinalIgnoreCase))
+                                    .OrderByDescending(turn => turn.Session.Header.UpdatedAt)
+                                    .FirstOrDefault();
+                            if (abortTarget is null)
+                            {
+                                await WriteAsync(context.Writer, context.WriterGate, id, "error", "No active turn found for this session", context.ConnectionCt, abortRequestedSessionId, code: DaemonErrorCode.NotFound).ConfigureAwait(false);
+                                break;
+                            }
+                            var accepted = abortTarget.Steering.RequestAbort();
+                            if (accepted)
+                            {
+                                await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                                    "abort requested", context.ConnectionCt, abortTarget.Session.Header.Id).ConfigureAwait(false);
+                            }
+                            else
+                            {
+                                await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                    "the active turn is already finishing", context.ConnectionCt,
+                                    abortTarget.Session.Header.Id, code: DaemonErrorCode.Conflict).ConfigureAwait(false);
+                            }
+                            break;
+                        }
+
                         var message = parameters["message"]?.GetValue<string>()
                                       ?? parameters["prompt"]?.GetValue<string>()
                                       ?? "";
@@ -1390,6 +1465,17 @@ public sealed class DaemonServer : IAsyncDisposable
                     case "model.status":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.ModelStatus(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "model.preload":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            token => _admin.PreloadModelAsync(Params(request), LocalLoadProgress(), token),
+                            context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "model.unload":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            token => _admin.UnloadLocalModelsAsync(token), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
                     case "model.update":
@@ -1859,6 +1945,144 @@ public sealed class DaemonServer : IAsyncDisposable
     }
 
     /// <summary>
+    /// L-D 会话保留策略维护的单航班触发：归档超过保留期未更新的会话、清理无引用
+    /// 孤儿图片缓存、距上次超过一天时 VACUUM。读当前配置的保留天数，后台执行，
+    /// 任何失败都吞掉并留待下一周期——维护绝不能影响 daemon 主循环。
+    /// </summary>
+    private void StartSessionMaintenance()
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        if (!_maintenanceGate.Wait(0)) return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var retentionDays = _runtime.ConfigStore.Config.Agent.SessionRetentionDays;
+                _runtime.Sessions.RunMaintenance(retentionDays);
+            }
+            catch (Exception)
+            {
+                // Best-effort housekeeping; the next tick retries.
+            }
+            finally { _maintenanceGate.Release(); }
+        }, _shutdown.Token);
+    }
+
+    /// <summary>
+    /// 本地模型库策略装配：把 Agent 配置（驻留上限 / 并发槽 / 空闲回收阈值）应用到
+    /// 进程级共享的权重库。启动与配置热更新路径都可调用；并发数变更若有活跃推理
+    /// 则延后生效（库内部处理）。
+    /// </summary>
+    private void ConfigureLocalModelCache()
+    {
+        var agent = _runtime.ConfigStore.Config.Agent;
+        _sharedLocalModels.Configure(
+            agent.LocalModelMaxResident, agent.LocalModelConcurrency, agent.LocalModelIdleUnloadMinutes);
+    }
+
+    /// <summary>
+    /// 本地模型预热（Agent.LocalModelPreload 开启时）：后台把活跃本地模型的权重
+    /// 装入驻留槽——不阻塞启动、不占推理槽、失败静默（下一次请求照常懒加载）。
+    /// 进度以 model.load.progress 广播（此时通常还没有客户端，事件进 journal，
+    /// 重连的桌面端可经 events.recent 回放）。
+    /// </summary>
+    private void StartLocalModelPreload()
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        if (!_runtime.ConfigStore.Config.Agent.LocalModelPreload) return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var active = _runtime.Providers.ResolveActive(null);
+                if (!active.Provider.IsLocal) return;
+                var path = Providers.LocalModels.ResolveModelPath(active.Provider, active.Model);
+                if (!File.Exists(path)) return;
+                var tier = Providers.LocalLlmClient.TierFor(
+                    _sharedLocalModels.Tuning, active.Provider, active.Model, path, _sharedLocalModels.Metadata);
+                var mmproj = _sharedLocalModels.Metadata.ResolveMmproj(
+                    Providers.LocalModels.ResolveDirectory(active.Provider.ModelsDirectory), active.Model.MmprojPath);
+                _ = _sharedLocalModels.PreloadAsync(
+                    path,
+                    Providers.LocalLlmClient.BuildLoadParams(path, active.Provider, active.Model, tier),
+                    Providers.LocalLlmClient.LoadSignature(active.Provider, active.Model, tier) + "|" + (mmproj ?? "nommproj"),
+                    mmproj,
+                    LocalLoadProgress(),
+                    _shutdown.Token);
+            }
+            catch (Exception)
+            {
+                // 预热是纯优化：任何失败都退化为下一次请求的懒加载。
+            }
+        }, _shutdown.Token);
+    }
+
+    /// <summary>本地模型空闲回收：归还超过阈值的常驻权重（阈值为 0 时库里直接跳过）。</summary>
+    private void StartLocalModelIdleReclaim()
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        var minutes = _runtime.ConfigStore.Config.Agent.LocalModelIdleUnloadMinutes;
+        if (minutes <= 0) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _sharedLocalModels.UnloadIdleAsync(TimeSpan.FromMinutes(minutes), _shutdown.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Best-effort; the next tick retries.
+            }
+        }, _shutdown.Token);
+    }
+
+    /// <summary>
+    /// 把库内的加载进度桥接为运行时事件（journal + model.load.progress 广播）。
+    /// ModelRef 用文件名——本地模型 id 即 GGUF 文件名。
+    /// </summary>
+    private IProgress<Providers.LocalLoadProgress> LocalLoadProgress() =>
+        new Progress<Providers.LocalLoadProgress>(progress =>
+        {
+            try
+            {
+                _runtime.Events.Publish(new ModelLoadProgressEvent(
+                    Path.GetFileName(progress.ModelPath),
+                    progress.Phase.ToString(),
+                    progress.Percent,
+                    progress.ElapsedMs,
+                    progress.EstimatedRemainingMs,
+                    progress.Message));
+            }
+            catch (Exception)
+            {
+                // 进度事件绝不影响加载。
+            }
+        });
+
+    /// <summary>
+    /// H-C 记忆固化的后台触发：单航班与墙钟预算都在 ConsolidationRunner 内部，
+    /// 这里只负责 fire-and-forget 与彻底容错（固化是背景杂务，失败留待下一周期）。
+    /// </summary>
+    private void StartConsolidation()
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        if (!_runtime.ConfigStore.Config.Agent.MemoryConsolidationEnabled) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _consolidation.RunAsync("auto", _shutdown.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+            catch (Exception)
+            {
+                // Best-effort housekeeping; the next tick retries.
+            }
+        }, _shutdown.Token);
+    }
+
+    /// <summary>
     /// Fires one reflection turn if none is running. Conflicts (a manual or scheduled
     /// reflection still in flight) are silently skipped — the next tick retries, and
     /// outcomes reach clients through the evolution.reflected broadcast either way.
@@ -1921,6 +2145,38 @@ public sealed class DaemonServer : IAsyncDisposable
                 };
                 if (!string.IsNullOrWhiteSpace(reflected.Error)) reflectedDetails["error"] = reflected.Error;
                 await BroadcastAsync(0, "evolution.reflected", "进化引擎反思完成", ct, reflectedDetails)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
+            if (evt is MemoryConsolidationCompletedEvent consolidated)
+            {
+                var consolidatedDetails = new JsonObject
+                {
+                    ["sessionId"] = consolidated.SessionId,
+                    ["sessionsScanned"] = consolidated.SessionsScanned,
+                    ["factsAdded"] = consolidated.FactsAdded,
+                    ["factsSuperseded"] = consolidated.FactsSuperseded,
+                };
+                if (!string.IsNullOrWhiteSpace(consolidated.Error)) consolidatedDetails["error"] = consolidated.Error;
+                await BroadcastAsync(0, "memory.consolidated", "记忆固化完成", ct, consolidatedDetails)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
+            if (evt is ModelLoadProgressEvent loadProgress)
+            {
+                // 本地模型加载进度（预热 / model.preload / 首请求加载）：桌面端加载条。
+                var progressDetails = new JsonObject
+                {
+                    ["model"] = loadProgress.ModelRef,
+                    ["phase"] = loadProgress.Phase,
+                    ["percent"] = Math.Round(loadProgress.Percent, 4),
+                    ["elapsedMs"] = loadProgress.ElapsedMs,
+                };
+                if (loadProgress.EstimatedRemainingMs is { } remaining) progressDetails["estimatedRemainingMs"] = remaining;
+                if (!string.IsNullOrWhiteSpace(loadProgress.Message)) progressDetails["message"] = loadProgress.Message;
+                await BroadcastAsync(0, "model.load.progress", "本地模型加载进度", ct, progressDetails)
                     .ConfigureAwait(false);
                 continue;
             }

@@ -16,7 +16,8 @@ public sealed partial class Agent
 
     private async Task<ToolExecution> ExecuteToolAsync(
         ToolCallRequest call, WorkspaceInfo workspace, ModelInfo model,
-        TurnExecutionScope turnScope, TurnPlan turnPlan, CancellationToken ct)
+        TurnExecutionScope turnScope, TurnPlan turnPlan, CancellationToken ct,
+        HashSet<string>? quarantinedTools = null)
     {
         var tool = toolRegistry.Resolve(call.Name);
         var argsSummary = SummarizeArguments(call.ArgumentsJson);
@@ -29,6 +30,17 @@ public sealed partial class Agent
                 + (suggestions.Length > 0
                     ? $". Closest available tools: {string.Join(", ", suggestions)}. Use one of these or correct the tool name."
                     : "");
+            events.Publish(new ToolCallCompletedEvent(call.Id, call.Name, false, message, TimeSpan.Zero));
+            return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
+        }
+
+        // H-D 回合级隔离：同签名失败达到换策略阈值后，该工具在本回合剩余时间内直接
+        // 拒绝执行——比任何提示都硬，模型无法无视。
+        if (quarantinedTools is not null && quarantinedTools.Contains(tool.Name))
+        {
+            var message = $"Tool '{tool.Name}' is quarantined for the rest of this turn: it failed "
+                + $"{StrategyPivotFailureThreshold} times in a row with identical arguments. Do not call it again this turn — "
+                + "switch to a different tool or approach, or finish with the results you already have.";
             events.Publish(new ToolCallCompletedEvent(call.Id, call.Name, false, message, TimeSpan.Zero));
             return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
         }
@@ -47,7 +59,7 @@ public sealed partial class Agent
         // Best-effort repair of truncated / trailing-garbage arguments, then execute with
         // the recovered object. Unrecoverable arguments become an explicit tool error so the
         // model regenerates the call instead of the provider rejecting the whole request.
-        var parsedArguments = ToolArguments.Parse(call.ArgumentsJson);
+        var parsedArguments = ToolArguments.ParseDetailed(call.ArgumentsJson);
         if (parsedArguments.Obj is null)
         {
             var message = "Invalid tool arguments: the model produced arguments that are not valid JSON. Regenerate the tool call with valid JSON arguments.";
@@ -104,6 +116,22 @@ public sealed partial class Agent
             call.Id, call.Name, result.Success,
             result.Summary ?? Firstline(result.Output), stopwatch.Elapsed));
 
+        // G6 审计扩展（L3）：MCP 调用与文件写入统一落 .haoyue/audit/tools.jsonl
+        //（bash 保留专属风险分级日志，不重复记录）。审计失败绝不影响执行。
+        TryAuditToolExecution(workspace, tool, arguments, result, stopwatch.ElapsedMilliseconds);
+
+        // Repaired-arguments transparency (L7): a bracket-closure repair can recover a
+        // syntactically valid but semantically truncated parameter (e.g. a cut-off bash
+        // command). Surface that on successful results so the model regenerates the call
+        // instead of building on broken input.
+        if (parsedArguments.Repaired && result.Success)
+            result = result with
+            {
+                Output = result.Output
+                    + "\n>>> [args repaired] 本调用的参数 JSON 疑似被截断，运行时已自动修复。"
+                    + "若执行结果与预期不符（如命令文本不完整），请重新完整生成该调用。"
+            };
+
         var filePath = result.FilePath is null
             ? null
             : Path.IsPathRooted(result.FilePath)
@@ -127,6 +155,28 @@ public sealed partial class Agent
     }
 
     // ---------------------------------------------------------------- misc
+
+    private static void TryAuditToolExecution(
+        WorkspaceInfo workspace, ITool tool, JsonObject arguments, ToolResult result, long elapsedMs)
+    {
+        try
+        {
+            if (ToolAuditLog.Resolve(tool, arguments) is not { } audited) return;
+            var (category, target) = audited;
+            ToolAuditLog.Append(workspace, new ToolAuditRecord(
+                DateTime.UtcNow.ToString("o"),
+                tool.Name,
+                category,
+                target,
+                result.Success ? "ok" : "fail",
+                result.Summary ?? Firstline(result.Output),
+                elapsedMs));
+        }
+        catch (Exception)
+        {
+            // 审计属于观测层：任何异常都不允许反过来中断工具执行。
+        }
+    }
 
     /// <summary>
     /// Closest registered tool names for an unknown tool call: edit-distance plus

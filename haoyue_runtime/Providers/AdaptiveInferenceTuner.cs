@@ -251,7 +251,7 @@ public sealed class AdaptiveInferenceTuner
         return Current;
     }
 
-    private InferenceTier? Adjust(InferenceTier target, string reason, bool overrideCooldown = false)
+    private InferenceTier? Adjust(InferenceTier target, string reason)
     {
         var ladder = _ladder!;
         var next = Array.FindIndex(ladder, tier => tier.Level == target.Level);

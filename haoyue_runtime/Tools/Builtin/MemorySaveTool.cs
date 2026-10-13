@@ -22,11 +22,11 @@ public sealed class MemorySaveTool(IPromptProvider prompts) : BuiltinTool(prompt
         ("content", ToolSchema.String("要记住的内容：用户偏好、项目约定、环境要点或重要决定，一句话即可。"), true),
         ("topic", ToolSchema.String("可选主题标签，如 build、convention、preference"), false));
 
-    public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
+    public override async Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
         var content = GetString(arguments, "content")?.Trim();
         if (string.IsNullOrEmpty(content))
-            return Task.FromResult(ToolResult.Fail("content is required"));
+            return ToolResult.Fail("content is required");
         var topic = GetString(arguments, "topic")?.Trim();
         var line = $"- {DateTimeOffset.Now:yyyy-MM-dd} {(string.IsNullOrEmpty(topic) ? "" : $"[{topic}] ")}{content}";
 
@@ -34,21 +34,23 @@ public sealed class MemorySaveTool(IPromptProvider prompts) : BuiltinTool(prompt
         try
         {
             Directory.CreateDirectory(context.Workspace.MemoryDir);
-            var existing = File.Exists(file) ? File.ReadAllText(file) : "";
+            var existing = File.Exists(file) ? await File.ReadAllTextAsync(file, ct).ConfigureAwait(false) : "";
             if (existing.Split('\n').Any(l => l.Contains(content, StringComparison.OrdinalIgnoreCase)))
-                return Task.FromResult(ToolResult.Ok(
-                    $"该内容已存在于工作区记忆中，未重复写入：\n{line}", "Memory already recorded"));
+                return ToolResult.Ok(
+                    $"该内容已存在于工作区记忆中，未重复写入：\n{line}", "Memory already recorded");
             if (existing.Length > 0 && !existing.EndsWith('\n'))
                 existing += "\n";
-            File.WriteAllText(file, existing + line + "\n");
+            // 原子写（temp+rename）：MEMORY.md 是用户策展内容且无备份，崩溃时绝不能
+            // 留下半截文件——WriteAtomicAsync 与文件工具共用同一保障。
+            await WriteAtomicAsync(file, existing + line + "\n", ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return Task.FromResult(ToolResult.Fail($"无法写入记忆文件：{ex.Message}"));
+            return ToolResult.Fail($"无法写入记忆文件：{ex.Message}");
         }
 
-        return Task.FromResult(ToolResult.Ok(
+        return ToolResult.Ok(
             $"已写入工作区记忆（MEMORY.md）：\n{line}\n该记忆会在此工作区的后续回合自动注入系统提示。",
-            "Memory saved"));
+            "Memory saved");
     }
 }

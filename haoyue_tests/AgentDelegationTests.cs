@@ -203,16 +203,19 @@ public class AgentDelegationTests : IDisposable
     }
 
     [Fact]
-    public async Task DelegateTasksTool_CapsBatchAtSixTasks()
+    public async Task DelegateTasksTool_RejectsBatchBeyondSixTasks()
     {
+        // 2026-10-12 行为变更：>6 个子任务不再静默截断（模型会误以为全部已派出），
+        // 改为显式报错让模型拆分批次。
         var delegator = new BatchDelegator();
         var tool = new DelegateTasksTool(new FilePromptProvider(), delegator);
         var tasks = new JsonArray();
         for (var i = 1; i <= 8; i++) tasks.Add((JsonNode)$"任务 {i}");
         var result = await tool.ExecuteAsync(new JsonObject { ["tasks"] = tasks }, Context(), CancellationToken.None);
 
-        Assert.True(result.Success);
-        Assert.Equal(6, delegator.ReceivedTasks.Count);
+        Assert.False(result.Success);
+        Assert.Contains("最多 6 个", result.Output);
+        Assert.Empty(delegator.ReceivedTasks);
     }
 
     private static ToolContext Context() => new()

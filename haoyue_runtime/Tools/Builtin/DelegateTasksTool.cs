@@ -49,7 +49,11 @@ public sealed class DelegateTasksTool(IPromptProvider prompts, IAgentDelegator d
         if (tasks.Count < MinTasks)
             return ToolResult.Fail($"并行委派至少需要 {MinTasks} 个子任务；单个子任务请改用 delegate_task。");
         if (tasks.Count > MaxTasks)
-            tasks = tasks.Take(MaxTasks).ToList();
+            // Silent Take(6) dropped tasks without telling the model — it would report
+            // work as done that was never dispatched. Fail loudly instead.
+            return ToolResult.Fail(
+                $"子任务数量超过上限：收到 {tasks.Count} 个，一次最多 {MaxTasks} 个。"
+                + "请合并相近的子任务，或把多余的子任务留到下一轮再委派。");
 
         try
         {
@@ -69,7 +73,9 @@ public sealed class DelegateTasksTool(IPromptProvider prompts, IAgentDelegator d
                 report.AppendLine();
             }
             var summary = $"{tasks.Count} 个并行子任务：{tasks.Count - failed} 完成，{failed} 失败/取消";
-            return ToolResult.Ok(context.Truncate(report.ToString().TrimEnd(), "subtask output"), summary);
+            // 子任务报告的结论在各子任务文本的尾部，失败摘要更是在最后——头截断会
+            // 系统性丢掉它们（H-B）。
+            return ToolResult.Ok(context.TruncateTailPrioritized(report.ToString().TrimEnd(), "subtask output", tailShare: 0.7), summary);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

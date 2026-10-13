@@ -28,6 +28,8 @@ public static class EventJournal
         nameof(PlanUpdatedEvent),
         nameof(ScheduledTaskUpcomingEvent), nameof(ScheduledTaskCompletedEvent),
         nameof(EvolutionReflectionCompletedEvent), nameof(UserFeedbackEvent),
+        nameof(MemoryConsolidationCompletedEvent),
+        nameof(ModelLoadProgressEvent),
         nameof(WarningEvent), nameof(ErrorEvent),
     ];
 

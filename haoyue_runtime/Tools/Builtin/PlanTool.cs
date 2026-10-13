@@ -69,6 +69,19 @@ public sealed class PlanTool(IPromptProvider prompts) : BuiltinTool(prompts)
             var title = item["title"]?.GetValue<string>();
             if (string.IsNullOrWhiteSpace(title)) continue;
             var status = item["status"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                var normalized = NormalizeStatus(status);
+                if (normalized is null)
+                {
+                    // Schema enum only advises; execution validates. Letting an arbitrary
+                    // string through would permanently break plan-finished detection
+                    // (TurnPlanStep.Completed only recognizes canonical values).
+                    return Task.FromResult(ToolResult.Fail(
+                        $"Unknown step status \"{status.Trim()}\". Allowed values: pending, in_progress, completed."));
+                }
+                status = normalized;
+            }
             steps.Add(new TurnPlanStep(
                 title.Trim(),
                 string.IsNullOrWhiteSpace(status) ? "pending" : status.Trim(),
@@ -87,5 +100,22 @@ public sealed class PlanTool(IPromptProvider prompts) : BuiltinTool(prompts)
             output += $"\n当前计划状态：\n{context.PlanTracker.Render()}";
 
         return Task.FromResult(ToolResult.Ok(output, summary));
+    }
+
+    /// <summary>
+    /// Maps the common status spellings models actually emit (including trailing marks
+    /// like "done ✅" or localized forms) onto the canonical enum. Returns null for
+    /// genuinely unknown values so the caller can reject them with a corrective error.
+    /// </summary>
+    internal static string? NormalizeStatus(string status)
+    {
+        var trimmed = status.Trim().TrimEnd('✅', '✔', '☑', '。', '.', '!', ' ', '\t').Trim().TrimEnd('✅', '✔', '☑');
+        return trimmed.ToLowerInvariant() switch
+        {
+            "pending" or "todo" or "not_started" or "not-started" or "未开始" or "待办" => "pending",
+            "in_progress" or "in-progress" or "inprogress" or "doing" or "active" or "进行中" => "in_progress",
+            "completed" or "complete" or "done" or "finished" or "resolved" or "已完成" or "完成" => "completed",
+            _ => null,
+        };
     }
 }

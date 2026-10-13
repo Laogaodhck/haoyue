@@ -257,9 +257,23 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                 return ValueTask.FromResult<string?>(null);
             }
             if (facts.Count == 0) return ValueTask.FromResult<string?>(null);
-            var lines = facts
+            // M-D: 按置信度→新者优先排序；同主题的多条事实（自动仲裁未覆盖的残余冲突）
+            // 从第二条起显式标注冲突与采信顺序——模型不再靠猜，也知道可以先问用户。
+            var ordered = facts
                 .OrderByDescending(f => f.Confidence)
-                .Select(f => $"- [{f.Topic ?? "general"}] ({f.Source}, 置信度 {f.Confidence:0.0}{(f.Confidence < 0.7 ? "，待确认" : "")}) {f.Content}");
+                .ThenByDescending(f => f.CreatedAt)
+                .ToList();
+            var seenTopics = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var lines = ordered
+                .Select(f =>
+                {
+                    var topic = f.Topic ?? "general";
+                    var conflicting = !seenTopics.Add(topic);
+                    return $"- [{topic}] ({f.Source}, 置信度 {f.Confidence:0.0}{(f.Confidence < 0.7 ? "，待确认" : "")})"
+                        + (conflicting ? " ⚠ 与同主题更高优先级的事实冲突，采信前请先向用户确认" : "")
+                        + $" {f.Content}";
+                })
+                .ToList();
             var text = "## 项目事实（自动沉淀，带来源与置信度）\n"
                 + string.Join("\n", lines)
                 + "\n\n以上为自动沉淀的项目事实：置信度低（待确认）的条目使用前请先核实；与当前任务无关的事实可忽略。需要沉淀新事实时使用 fact_save 工具。";
@@ -296,6 +310,8 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                      new DelegateTool(prompts, _services.GetRequiredService<IAgentDelegator>()),
                      new DelegateTasksTool(prompts, _services.GetRequiredService<IAgentDelegator>()),
                      new FactSaveTool(prompts),
+                     new FactSearchTool(prompts),
+                     new FactForgetTool(prompts),
                      new ImageGenTool(
                          prompts,
                          _services.GetRequiredService<IConfigStore>(),
@@ -355,6 +371,8 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<IToolRegistry, ToolRegistry>();
         services.AddSingleton<IWorkspaceManager, WorkspaceManager>();
         services.AddSingleton<HaoyueDatabase>();
+        // H-E: per-model token 估算校准系数的持久化（ProviderManager 写、Agent 读）。
+        services.AddSingleton<Data.ModelTokenStats>();
         services.AddSingleton<KnowledgeStore>();
         services.AddSingleton<KnowledgeSemanticIndex>();
         services.AddSingleton<ISessionStore, SessionStore>();

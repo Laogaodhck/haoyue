@@ -234,6 +234,21 @@ public sealed partial class KnowledgeStore
         var source = GetSource(scope, sourceId) ?? throw new KeyNotFoundException($"No knowledge source #{sourceId} in this scope.");
         using var connection = database.OpenConnection();
         using var transaction = connection.BeginTransaction();
+        // Invalidate cached vectors for the doomed chunk entries BEFORE the knowledge
+        // rows disappear (the subquery resolves ids through knowledge.source_id).
+        try
+        {
+            using (var vectors = connection.CreateCommand())
+            {
+                vectors.Transaction = transaction;
+                vectors.CommandText =
+                    "DELETE FROM knowledge_vectors WHERE scope = $scope AND entry_id IN (SELECT id FROM knowledge WHERE source_id = $id);";
+                vectors.Parameters.AddWithValue("$scope", scope);
+                vectors.Parameters.AddWithValue("$id", sourceId);
+                vectors.ExecuteNonQuery();
+            }
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException) { /* pre-vector database */ }
         Execute(connection, transaction, "DELETE FROM knowledge WHERE source_id = $id;", sourceId);
         Execute(connection, transaction, "DELETE FROM kb_sources WHERE id = $id;", sourceId);
         transaction.Commit();
@@ -251,6 +266,20 @@ public sealed partial class KnowledgeStore
         using var connection = database.OpenConnection();
         using var transaction = connection.BeginTransaction();
 
+        // Invalidate cached vectors for the old chunks before their knowledge rows go.
+        try
+        {
+            using (var vectors = connection.CreateCommand())
+            {
+                vectors.Transaction = transaction;
+                vectors.CommandText =
+                    "DELETE FROM knowledge_vectors WHERE scope = $scope AND entry_id IN (SELECT id FROM knowledge WHERE source_id = $id);";
+                vectors.Parameters.AddWithValue("$scope", scope);
+                vectors.Parameters.AddWithValue("$id", sourceId);
+                vectors.ExecuteNonQuery();
+            }
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException) { /* pre-vector database */ }
         Execute(connection, transaction, "DELETE FROM knowledge WHERE source_id = $id;", sourceId);
         for (var index = 0; index < chunks.Count; index++)
         {

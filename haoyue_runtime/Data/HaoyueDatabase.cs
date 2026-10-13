@@ -136,6 +136,9 @@ public sealed class HaoyueDatabase
             PRAGMA foreign_keys=OFF;
             PRAGMA busy_timeout=10000;
 
+            DROP TRIGGER IF EXISTS messages_fts_ai;
+            DROP TRIGGER IF EXISTS messages_fts_ad;
+            DROP TABLE IF EXISTS messages_fts;
             DROP TABLE IF EXISTS messages;
             DROP TABLE IF EXISTS sessions;
             DROP TABLE IF EXISTS projects;
@@ -146,6 +149,10 @@ public sealed class HaoyueDatabase
             DROP TABLE IF EXISTS knowledge_vectors;
             DROP TABLE IF EXISTS knowledge;
             DROP TABLE IF EXISTS events;
+            DROP TABLE IF EXISTS evolution_log;
+            DROP TABLE IF EXISTS evolution_runs;
+            DROP TABLE IF EXISTS model_token_stats;
+            DROP TABLE IF EXISTS maintenance_state;
             """;
         command.ExecuteNonQuery();
     }
@@ -315,6 +322,24 @@ public sealed class HaoyueDatabase
                 error TEXT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS model_token_stats (
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                ratio REAL NOT NULL,
+                samples INTEGER NOT NULL DEFAULT 0,
+                last_input_tokens INTEGER NOT NULL DEFAULT 0,
+                last_estimated_tokens INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (provider_id, model_id)
+            );
+
+            -- L-D 保留策略维护的跨进程状态键值（当前仅记录上次 VACUUM 时间，
+            -- 保证压缩每天至多执行一次，CLI 与 daemon 并存时也不会重复）。
+            CREATE TABLE IF NOT EXISTS maintenance_state (
+                key TEXT NOT NULL PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """;
         command.ExecuteNonQuery();
 
@@ -339,6 +364,60 @@ public sealed class HaoyueDatabase
                 CREATE INDEX IF NOT EXISTS ix_knowledge_source ON knowledge(source_id);
                 """;
             indexCommand.ExecuteNonQuery();
+        }
+
+        EnsureSessionFts(connection);
+    }
+
+    /// <summary>
+    /// L2 会话全文检索：FTS5 trigram 虚表 + 消息表触发器同步。trigram 分词让中文等
+    /// CJK 文本按子串命中（unicode61 对 CJK 整段成 token，无法做短语匹配）。虚表由
+    /// AFTER INSERT / AFTER DELETE 触发器与 messages 保持一致（ReplaceHistory/Truncate/
+    /// 级联删除全部走这两条路径，无需额外同步点）；存量消息的回填在 SessionStore
+    /// 首次搜索时进行。FTS5/trigram/json1 不可用时整体跳过——SessionStore.Search
+    /// 自动退回 LIKE 扫描，行为与旧版一致。
+    /// </summary>
+    private static void EnsureSessionFts(SqliteConnection connection)
+    {
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                    text,
+                    msg_id UNINDEXED,
+                    scope UNINDEXED,
+                    session_id UNINDEXED,
+                    tokenize = 'trigram'
+                );
+
+                CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(msg_id, scope, session_id, text)
+                    VALUES (new.id, new.scope, new.session_id,
+                            coalesce(json_extract(new.payload_json, '$.text'), '')
+                            || ' ' || coalesce(json_extract(new.payload_json, '$.thinking'), ''));
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+                    DELETE FROM messages_fts WHERE msg_id = old.id;
+                END;
+                """;
+            command.ExecuteNonQuery();
+        }
+        catch (SqliteException)
+        {
+            // 虚表可能已建而触发器未建成功（索引会失去同步）——整体丢弃，统一走 LIKE。
+            try
+            {
+                using var cleanup = connection.CreateCommand();
+                cleanup.CommandText = """
+                    DROP TRIGGER IF EXISTS messages_fts_ai;
+                    DROP TRIGGER IF EXISTS messages_fts_ad;
+                    DROP TABLE IF EXISTS messages_fts;
+                    """;
+                cleanup.ExecuteNonQuery();
+            }
+            catch (SqliteException) { }
         }
     }
 

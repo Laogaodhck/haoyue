@@ -390,6 +390,9 @@ public static class DaemonContract
             ("model", SString("模型 ref"), true))),
         M("model.status", "model", "本地模型预检状态", parameters: SObject(
             ("model", SString("模型 ref"), true))),
+        M("model.preload", "model", "预热本地模型（权重装入驻留槽，不占推理槽；进度经 model.load.progress 广播）", parameters: SObject(
+            ("model", SString("模型 ref"), true))),
+        M("model.unload", "model", "卸载全部常驻本地权重（归还内存/显存；活跃推理结束后释放）", parameters: EmptyParams),
         M("model.config.get", "model", "模型加载配置页全量数据（含加载设置 / mmproj / 加载报告）", parameters: SObject(
             ("provider", SString("提供商 id"), true),
             ("id", SString("模型 id"), true))),

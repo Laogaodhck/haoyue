@@ -44,7 +44,7 @@ public sealed class DelegateTool(IPromptProvider prompts, IAgentDelegator delega
             if (result.Cancelled)
                 return ToolResult.Fail("子任务已取消。");
             var output = result.Text.Length > 0
-                ? context.Truncate(result.Text, "subtask output")
+                ? context.TruncateTailPrioritized(result.Text, "subtask output", tailShare: 0.7)
                 : "（子任务完成，但没有返回文本。）";
             return ToolResult.Ok(output, "subtask completed");
         }

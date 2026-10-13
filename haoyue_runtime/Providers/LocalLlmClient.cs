@@ -30,34 +30,50 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// <summary>一次性超长文档（约 2 万 token 以上）的字符阈值：复用命中率过低时改走无状态路径（P5）。</summary>
     private const int LongDocumentChars = 80_000;
 
+    /// <summary>
+    /// 思考开标记（单一事实来源）：部分模型家族的模板把生成提示渲染成以该字面量结尾，
+    /// BuildPrompt 据此判定 startsInThinking，ThinkTagParser 在输出流中匹配同一标记。
+    /// 两侧必须一致——由模板耦合单测锁定。
+    /// </summary>
+    internal const string ThinkingOpenMarker = " thinking";
+
     /// <summary>解码速率低于该值（tok/s）且开启思考时，向上层附缩短思考预算的提示（P5）。</summary>
     private const double SlowDecodeHintTokensPerSecond = 10;
 
     /// <summary>
     /// 计算本请求的自适应档位。仅在「自动」语义下生效（AutoOptimize 且提供商级未显式
-    /// 配置 GpuLayers）；模型形状来自 GGUF header + 文件大小，GPU 能力来自 nvidia-smi
-    /// 探测，任一不可得即返回 null（保持提供商默认行为，绝不猜测）。
+    /// 配置 GpuLayers）；模型形状来自 GGUF header + 文件大小（经元数据缓存，重复请求
+    /// 零 IO），GPU 能力来自 nvidia-smi 探测，任一不可得即返回 null（保持提供商默认
+    /// 行为，绝不猜测）。
     /// </summary>
-    private InferenceTier? TierFor(Configuration.ProviderConfig provider, ModelConfig? model, string path)
+    private InferenceTier? TierFor(Configuration.ProviderConfig provider, ModelConfig? model, string path) =>
+        TierFor(Tuner, provider, model, path, cache.Metadata);
+
+    /// <summary>静态形态：daemon 预热等无客户端实例的场景复用同一档位口径。</summary>
+    internal static InferenceTier? TierFor(
+        AdaptiveInferenceTuner tuner, Configuration.ProviderConfig provider, ModelConfig? model, string path,
+        LocalModelMetadataCache? metadata = null)
     {
         if (!(model?.Load?.AutoOptimize ?? true)) return null;      // 用户手动配置：绝不干预
         if (provider.GpuLayers is not null) return null;            // 提供商级显式卸载：尊重配置
-        var shape = BuildShape(path);
+        var shape = BuildShape(path, metadata);
         if (shape is null) return null;
-        return Tuner.EnsureTier(path, shape, GpuProbe.Probe());
+        return tuner.EnsureTier(path, shape, GpuProbe.Probe());
     }
 
     /// <summary>
     /// 模型静态形状（KV 显存估算用）。KvDim = KV头数 × 头维度；header 缺头维度时按
     /// 隐藏维度的一半保守估算（介于 MHA 与常见 GQA 之间），完全缺失则为 null。
+    /// header 读取经 <paramref name="metadata"/> 缓存（路径+大小+mtime 键），重复
+    /// 请求不触盘。
     /// </summary>
-    internal static ModelShape? BuildShape(string path)
+    internal static ModelShape? BuildShape(string path, LocalModelMetadataCache? metadata = null)
     {
         try
         {
             var file = new FileInfo(path);
             if (!file.Exists || file.Length <= 0) return null;
-            var header = GgufProbe.Read(path);
+            var header = metadata is null ? GgufProbe.Read(path) : metadata.Header(path);
             long? kvDim = header.HeadCountKv is { } kvHeads
                 && (header.KeyLength ?? header.ValueLength) is { } headDim
                     ? kvHeads * headDim
@@ -137,6 +153,58 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     public async IAsyncEnumerable<LlmStreamEvent> StreamAsync(
         LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
     {
+        // 异常回退链：主模型 + （可选）同提供商备用模型。仅「尚未产出任何 token 前」
+        // 的加载/预处理失败才触发回退——已开始流式输出的异常原样上抛（半截回答
+        // 换模型重答比失败更糟）。备用模型自身不再回退（不形成链）。
+        // 结构说明：C# 迭代器禁止在含 catch 的 try 内 yield，故用手动枚举器 +
+        // 仅含 finally 的外层 try；加载失败的捕获放在不含 yield 的内层 try。
+        var chain = FallbackChain.Build(request.Provider, request.Model);
+        LlmException? lastFailure = null;
+        for (var index = 0; index < chain.Count; index++)
+        {
+            var model = chain[index];
+            var hasNext = index < chain.Count - 1;
+            var attempt = model == request.Model ? request : request with { Model = model };
+            var streamed = false;
+            var failed = false;
+            var enumerator = StreamOnceAsync(attempt, ct).GetAsyncEnumerator(ct);
+            try
+            {
+                while (true)
+                {
+                    bool moved;
+                    try
+                    {
+                        moved = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                    }
+                    catch (LlmException ex) when (hasNext && !streamed)
+                    {
+                        lastFailure = ex;
+                        failed = true;
+                        break;
+                    }
+                    if (!moved) break;
+                    streamed = true;
+                    yield return enumerator.Current;
+                }
+            }
+            finally
+            {
+                await enumerator.DisposeAsync().ConfigureAwait(false);
+            }
+            if (failed) continue;
+            yield break;
+        }
+        throw lastFailure ?? new LlmException("本地模型推理失败。", retryable: false);
+    }
+
+    /// <summary>
+    /// 单次完整推理（原 StreamAsync 主体）。前置检查（文件缺失 / 投影器误注册）
+    /// 与权重加载失败抛 <see cref="LlmException"/>——调用方的回退链据此换模型。
+    /// </summary>
+    private async IAsyncEnumerable<LlmStreamEvent> StreamOnceAsync(
+        LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
+    {
         var path = LocalModels.ResolveModelPath(request.Provider, request.Model);
         if (!File.Exists(path))
             throw new LlmException(
@@ -150,8 +218,10 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 
         var images = CollectImages(request);
         // mmproj 始终参与解析与加载签名（即使本轮纯文本），避免图片轮/文本轮交替时
-        // 签名漂移导致权重反复重载。
-        var mmprojPath = LocalModels.ResolveMmprojPath(request.Provider, request.Model);
+        // 签名漂移导致权重反复重载。解析经元数据缓存（目录 mtime 键），重复请求
+        // 不再枚举模型目录。
+        var mmprojPath = cache.Metadata.ResolveMmproj(
+            LocalModels.ResolveDirectory(request.Provider.ModelsDirectory), request.Model.MmprojPath);
 
         // 自适应档位（P3）：自动语义下按显存预算选档；签名携带档位身份，调档即走既有重载通道。
         var tier = TierFor(request.Provider, request.Model, path);
@@ -171,8 +241,9 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         var (prompt, startsInThinking) = BuildPrompt(weights, request, marker, thinkingEnabled);
 
         // 路径调度（P5）：会话型请求走 KV 前缀复用；一次性超长文档（复用命中率观测过低）
-        // 改走无状态路径，避免为不再复用的 prompt 保留整段 KV 常驻。
-        var useReuse = request.Provider.LocalPrefixReuse;
+        // 改走无状态路径，避免为不再复用的 prompt 保留整段 KV 常驻。并发 > 1 时每请求
+        // 独立 context，复用条目无法安全共享，同样改走无状态路径。
+        var useReuse = request.Provider.LocalPrefixReuse && cache.SupportsPrefixReuse;
         if (useReuse && prompt.Length > LongDocumentChars && Tuner.LastCacheHitRate < 0.05)
             useReuse = false;
 
@@ -846,7 +917,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         // the opening tag into the generation prompt (original R1), or the template itself
         // references the ASCII "</think>" delimiter the model emits on its own (R1-0528).
         var trimmed = prompt.TrimEnd('\n', '\r', ' ');
-        var startsInThinking = trimmed.EndsWith(" thinking", StringComparison.Ordinal)
+        var startsInThinking = trimmed.EndsWith(ThinkingOpenMarker, StringComparison.Ordinal)
             || (TryGetChatTemplate(weights)?.Contains("</think>", StringComparison.Ordinal) ?? false);
         return (prompt, startsInThinking);
     }
@@ -1039,14 +1110,38 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 }
 
 /// <summary>
+/// 本地模型回退链解析（P-回退）。规则：
+/// 1) 主模型始终在链首；
+/// 2) 主模型配置了 FallbackModelId 且能在同提供商内解析到、且不是主模型自身时，
+///    追加为第二个成员（不形成链——备用模型自身不再回退，避免循环与延迟叠加）；
+/// 3) 解析不到（id 写错 / 指向自身 / 远端提供商）时链长为 1，调用方照常抛错。
+/// </summary>
+internal static class FallbackChain
+{
+    public static IReadOnlyList<ModelConfig> Build(Configuration.ProviderConfig provider, ModelConfig model)
+    {
+        var fallbackId = model.FallbackModelId;
+        if (string.IsNullOrWhiteSpace(fallbackId)) return [model];
+        var fallback = provider.Models.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, fallbackId, StringComparison.OrdinalIgnoreCase));
+        if (fallback is null || ReferenceEquals(fallback, model)) return [model];
+        return [model, fallback];
+    }
+}
+
+/// <summary>
 /// Incrementally splits model output into reasoning / answer pieces. Handles both the
 /// ASCII "&lt;/think&gt;" delimiter of the DeepSeek-R1-0528 family and the special-token
 /// delimiters of the original R1, with tags possibly split across stream chunks.
 /// </summary>
 internal sealed class ThinkTagParser(bool startsInThinking)
 {
-    private const string OpenTag = " thinking";
-    private static readonly string[] CloseTags = ["</think>", "<｜end▁of▁thinking｜>"];
+    // 开标记与 BuildPrompt 的 ThinkingOpenMarker 同源（模板耦合契约，单测锁定）。
+    // 标准的 <think>（R1-0528 家族自带输出）与原版 R1 特殊 token 开标记一并覆盖，
+    // 取最早出现者；" thinking" 为模板渲染尾巴的兜底匹配。
+    internal static readonly string[] OpenTags =
+        ["<think>", LocalLlmClient.ThinkingOpenMarker, "<｜begin▁of▁thinking｜>"];
+    internal static readonly string[] CloseTags = ["</think>", "<｜end▁of▁thinking｜>"];
 
     private readonly StringBuilder _buffer = new();
     private readonly StringBuilder _thinking = new();
@@ -1089,15 +1184,15 @@ internal sealed class ThinkTagParser(bool startsInThinking)
                 break;
             }
 
-            var open = buffer.IndexOf(OpenTag, StringComparison.Ordinal);
+            var (open, openTag) = FindEarliestTag(buffer, OpenTags);
             if (open >= 0)
             {
                 Add(pieces, false, buffer[..open]);
-                _buffer.Remove(0, open + OpenTag.Length);
+                _buffer.Remove(0, open + openTag.Length);
                 _inThinking = true;
                 continue;
             }
-            var keep = LongestTagPrefixAtEnd(buffer, [OpenTag]);
+            var keep = LongestTagPrefixAtEnd(buffer, OpenTags);
             if (buffer.Length > keep) Add(pieces, false, buffer[..(buffer.Length - keep)]);
             KeepTail(keep);
             break;
@@ -1117,11 +1212,13 @@ internal sealed class ThinkTagParser(bool startsInThinking)
         return pieces;
     }
 
-    private static (int Index, string Tag) FindCloseTag(string text)
+    private static (int Index, string Tag) FindCloseTag(string text) => FindEarliestTag(text, CloseTags);
+
+    private static (int Index, string Tag) FindEarliestTag(string text, string[] tags)
     {
         var best = -1;
         var bestTag = "";
-        foreach (var tag in CloseTags)
+        foreach (var tag in tags)
         {
             var index = text.IndexOf(tag, StringComparison.Ordinal);
             if (index >= 0 && (best < 0 || index < best))

@@ -52,10 +52,12 @@ public sealed class ProviderManager(
     ILlmHttpFactory httpFactory,
     IUsageTracker usageTracker,
     IEventBus eventBus,
-    CircuitBreaker? breaker = null) : IProviderManager
+    CircuitBreaker? breaker = null,
+    Haoyue.Runtime.Data.ModelTokenStats? tokenStats = null) : IProviderManager
 {
     private CircuitBreaker? _breaker;
     private readonly object _breakerGate = new();
+    private readonly Haoyue.Runtime.Data.ModelTokenStats? _tokenStats = tokenStats;
     private RetryConfig Retry => configStore.Config.Routing.Retry;
     // A shared breaker can be injected by the daemon so circuit state survives
     // across isolated per-turn runtimes; standalone runtimes create their own.
@@ -210,7 +212,7 @@ public sealed class ProviderManager(
                         goto NextCandidate;
                     }
 
-                    stream = TryOpenStream(model, requestFactory, ct);
+                    stream = TryOpenStream(model, requestFactory, ct, out var builtRequest);
 
                     while (true)
                     {
@@ -268,7 +270,7 @@ public sealed class ProviderManager(
                     }
 
                     Breaker.RecordSuccess(model.Ref);
-                    RecordUsage(model, completion, stopwatch, success: true);
+                    RecordUsage(model, completion, stopwatch, success: true, builtRequest);
                     yield break;
 
                     NextAttempt: ;
@@ -447,10 +449,11 @@ public sealed class ProviderManager(
     // ---------------------------------------------------------------- helpers
 
     private IAsyncEnumerator<LlmStreamEvent> TryOpenStream(
-        ModelInfo model, Func<ModelInfo, LlmRequest> requestFactory, CancellationToken ct)
+        ModelInfo model, Func<ModelInfo, LlmRequest> requestFactory, CancellationToken ct, out LlmRequest request)
     {
         var client = clientFactory.GetClient(model.Provider.Kind);
-        return client.StreamAsync(requestFactory(model), ct).GetAsyncEnumerator(ct);
+        request = requestFactory(model);
+        return client.StreamAsync(request, ct).GetAsyncEnumerator(ct);
     }
 
     private static void ApplyModelListHeaders(HttpRequestMessage request, ProviderConfig provider)
@@ -484,7 +487,7 @@ public sealed class ProviderManager(
         return null;
     }
 
-    private void RecordUsage(ModelInfo model, LlmCompletion? completion, Stopwatch stopwatch, bool success)
+    private void RecordUsage(ModelInfo model, LlmCompletion? completion, Stopwatch stopwatch, bool success, LlmRequest? request = null)
     {
         stopwatch.Stop();
         var usage = completion?.Usage ?? new TokenUsage(0, 0);
@@ -501,6 +504,23 @@ public sealed class ProviderManager(
             ElapsedMs = stopwatch.Elapsed.TotalMilliseconds,
             Success = success,
         });
+
+        // H-E: token 估算校准闭环。provider 回传的真实 prompt tokens 与发送前的本地
+        // 估算配对，EWMA 沉淀为 per-model 系数；ContextPlanner 下一次估算即按该系数
+        // 收敛。遥测属性：任何存储失败都不允许影响请求结果。
+        if (success && _tokenStats is not null && request is not null
+            && completion?.Usage is { TotalInputTokens: > 0 } reported)
+        {
+            try
+            {
+                _tokenStats.Record(
+                    model.Provider.Id, model.Model.Id, reported.TotalInputTokens,
+                    Haoyue.Runtime.Agents.ContextPlanner.EstimateRequestTokens(request));
+            }
+            catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or IOException)
+            {
+            }
+        }
     }
 
     public static decimal ComputeCost(ModelConfig model, TokenUsage usage) =>

@@ -175,6 +175,25 @@ public sealed partial class ToolExecutionPolicy : IToolExecutionPolicy
         (@"\b(?:irm|iwr|Invoke-WebRequest|Invoke-RestMethod|curl|wget)\b[^;\n|]*\|\s*\(?\s*(?:iex|Invoke-Expression)\b|\biex\s*\(\s*(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod|curl|wget)",
             "下载内容直接管道进 PowerShell 执行（irm|iex）被默认禁止。"),
 
+        // Interpreter escapes (M10): remote content piped into language interpreters, and
+        // encoded-command execution. Plain "python -c", "node -e" stay allowed — they are
+        // everyday dev work; only the download→interpret / obfuscated-execution shapes
+        // are guarded here.
+        (@"\b(?:curl|wget|irm|iwr|Invoke-WebRequest|Invoke-RestMethod)\b[^;\n|]*\|\s*\(?\s*(?:python\d?|py\b|node|deno|bun|perl|ruby|php)",
+            "下载内容直接管道进脚本解释器执行被默认禁止。"),
+        (@"\bbase64\s+(?:-d|--decode|-D)\b[^;\n|]{0,120}\|\s*\(?\s*(?:ba|z|da|fi)?sh\b|\|\s*base64\s+(?:-d|--decode)\b[^;\n|]{0,120}\|\s*\(?\s*(?:ba|z|da|fi)?sh\b",
+            "base64 解码后管道进 shell 执行被默认禁止。"),
+        (@"\b(?:pwsh|powershell)(?:\.exe)?\b[^;\n|]*-(?:enc|EncodedCommand)\b",
+            "PowerShell 编码命令（-EncodedCommand）被默认禁止，属常见混淆执行手法。"),
+        (@"\becho\b[^;\n|]*\|\s*(?:ba|z|da|fi)?sh\b",
+            "echo 管道进 shell 执行被默认禁止。"),
+
+        // Two-stage download-then-execute: fetch && run the fetched script. Requires an
+        // executable script shape (./x.sh, bash x.sh, powershell -File …) right after the
+        // chain operator so "curl -o a.json && cat a.json" and legit ./tool invocations pass.
+        (@"\b(?:curl|wget|irm|iwr|Invoke-WebRequest|Invoke-RestMethod)\b[^;&\n]{0,200}(?:&&|;)\s*(?:\.\/[\w./-]*\.(?:sh|bash|ps1|bat|cmd|py)\b|(?:ba|z|da|fi)?sh\s+[\w./""'-]*\.(?:sh|bash)\b|powershell(?:\.exe)?\s+(?:-[A-Za-z]+\s+)*-File\b)",
+            "两段式下载后执行脚本（curl 下载 && 执行）被默认禁止。"),
+
         // Registry bulk deletion and ransomware-style shadow copy cleanup.
         (@"\breg\s+delete\s+HK", "注册表删除命令被默认禁止。"),
         (@"\bvssadmin\s+delete\s+shadows\b", "删除卷影副本（常见于勒索行为）被默认禁止。"),

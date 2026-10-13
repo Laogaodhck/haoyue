@@ -33,6 +33,8 @@ public static class GgufProbe
     /// KV cache 显存估算所需的张量结构：block_count（层数）、head_count（注意力头数）、
     /// head_count_kv（KV 头数，GQA 模型远小于头数）、key/value_length（每头维度）、
     /// embedding_length（隐藏维度，head_count_kv 缺失时按 GQA 经验值估算 KV 宽度）。
+    /// Version 为 GGUF 格式版本（2/3 已支持；更高版本由 ModelCompatibility 早期拒绝，
+    /// 而不是让 llama.cpp 在加载期给出难懂的原生错误）。
     /// </summary>
     public sealed record Header(
         string? Architecture = null,
@@ -43,7 +45,8 @@ public static class GgufProbe
         long? HeadCountKv = null,
         long? KeyLength = null,
         long? ValueLength = null,
-        long? EmbeddingLength = null);
+        long? EmbeddingLength = null,
+        int? Version = null);
 
     public static Header Read(string path)
     {
@@ -52,7 +55,9 @@ public static class GgufProbe
             using var stream = new FileStream(
                 path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16, FileOptions.SequentialScan);
             using var reader = new BinaryReader(stream);
-            if (reader.ReadUInt32() != Magic || reader.ReadUInt32() < 2)
+            var magic = reader.ReadUInt32();
+            var version = reader.ReadUInt32();
+            if (magic != Magic || version < 2)
                 return new(null, null, null);
 
             reader.ReadUInt64(); // tensor count
@@ -100,7 +105,8 @@ public static class GgufProbe
             }
 
             return new(architecture, name, contextLength is > 0 ? contextLength : null,
-                blockCount, headCount, headCountKv, keyLength, valueLength, embeddingLength);
+                blockCount, headCount, headCountKv, keyLength, valueLength, embeddingLength,
+                version > int.MaxValue ? null : (int)version);
         }
         catch (Exception ex) when (ex is IOException or EndOfStreamException or DecoderFallbackException)
         {

@@ -37,10 +37,89 @@ public sealed class ToolContext
         return Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(root, path));
     }
 
+    /// <summary>
+    /// Workspace-relative name of a resolved path, for messages and lock keys.
+    /// </summary>
+    public string RelativePath(string absolutePath)
+    {
+        var root = Workspace.IsGlobal ? Directory.GetCurrentDirectory() : Workspace.Root;
+        return Path.GetRelativePath(root, absolutePath);
+    }
+
+    /// <summary>
+    /// Resolves a path for file-MUTATING tools and enforces the workspace boundary:
+    /// the result must stay inside the workspace root, and well-known sensitive
+    /// targets (.git internals, .env secrets, the bash audit log) are rejected even
+    /// inside the workspace. This is the runtime backstop behind the mode layer —
+    /// without it an edit-mode agent could write arbitrary absolute paths on disk.
+    /// Returns false with a model-facing error message when the path is out of bounds.
+    /// </summary>
+    public bool TryResolveWritablePath(string path, out string resolved, out string? error)
+    {
+        resolved = ResolvePath(path);
+        error = null;
+
+        var root = Path.GetFullPath(Workspace.IsGlobal ? Directory.GetCurrentDirectory() : Workspace.Root)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalized = resolved.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var inRoot = normalized.Equals(root, comparison)
+            || normalized.StartsWith(root + Path.DirectorySeparatorChar, comparison);
+        if (!inRoot)
+        {
+            error = $"Path escapes the workspace: {resolved}. File writes are restricted to the workspace root ({root}). "
+                + "Write the file inside the workspace, or ask the user to run a shell command for anything outside it.";
+            return false;
+        }
+
+        // Sensitive in-workspace targets: git internals, env-secret files, audit trail.
+        var relative = Path.GetRelativePath(root, resolved);
+        var segments = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase)))
+        {
+            error = $"Refusing to write {relative}: .git internals are protected. Use git commands via the bash tool instead.";
+            return false;
+        }
+        var fileName = segments[^1];
+        if (fileName.Equals(".env", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith(".env.", StringComparison.OrdinalIgnoreCase))
+        {
+            error = $"Refusing to write {relative}: env-secret files are protected. Ask the user to edit them manually.";
+            return false;
+        }
+        if (segments.Length >= 2 && segments[0].Equals(".haoyue", StringComparison.OrdinalIgnoreCase)
+            && segments[1].Equals("audit", StringComparison.OrdinalIgnoreCase))
+        {
+            error = $"Refusing to write {relative}: the bash audit trail is append-only and protected.";
+            return false;
+        }
+        return true;
+    }
+
     public string Truncate(string text, string label = "output")
     {
         if (text.Length <= MaxOutputChars) return text;
         return text[..MaxOutputChars] + $"\n… [{label} truncated: {text.Length - MaxOutputChars} characters omitted]";
+    }
+
+    /// <summary>
+    /// Head+tail truncation for outputs whose decisive information sits at the END
+    /// (H-B): build/test logs put failure summaries, stack traces and exit codes at the
+    /// tail, which a head-only cut systematically discards — the model then diagnoses
+    /// from a truncated log and retries blindly. The middle is folded into a marker
+    /// that states how much was omitted. <paramref name="tailShare"/> (0.1..0.9)
+    /// controls the split; failing commands raise it toward 0.7-0.8 so the error tail
+    /// survives. The rendered result stays within <see cref="MaxOutputChars"/>.
+    /// </summary>
+    public string TruncateTailPrioritized(string text, string label = "output", double tailShare = 0.5)
+    {
+        if (text.Length <= MaxOutputChars) return text;
+        tailShare = Math.Clamp(tailShare, 0.1, 0.9);
+        var marker = $"\n… [{label} truncated: {text.Length - MaxOutputChars} characters omitted from the middle] …\n";
+        var body = Math.Max(2, MaxOutputChars - marker.Length);
+        var tailChars = Math.Max(1, (int)Math.Round(body * tailShare));
+        var headChars = Math.Max(1, body - tailChars);
+        return text[..headChars] + marker + text[^tailChars..];
     }
 }
 

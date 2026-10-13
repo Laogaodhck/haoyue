@@ -48,15 +48,21 @@ public sealed partial class KnowledgeStore(HaoyueDatabase database)
         {
             using var connection = database.OpenConnection();
             string? createdAt;
+            string? oldTitle;
+            string? oldContent;
+            string? oldTags;
             using (var find = connection.CreateCommand())
             {
-                find.CommandText = "SELECT created_at FROM knowledge WHERE scope = $scope AND id = $id;";
+                find.CommandText = "SELECT created_at, title, content, tags FROM knowledge WHERE scope = $scope AND id = $id;";
                 find.Parameters.AddWithValue("$scope", scope);
                 find.Parameters.AddWithValue("$id", updateId);
                 using var reader = find.ExecuteReader();
                 if (!reader.Read())
                     throw new KeyNotFoundException($"No knowledge entry #{updateId} in this scope.");
                 createdAt = reader.GetString(0);
+                oldTitle = reader.GetString(1);
+                oldContent = reader.GetString(2);
+                oldTags = reader.IsDBNull(3) ? null : reader.GetString(3);
             }
             using var update = connection.CreateCommand();
             update.CommandText = """
@@ -71,6 +77,15 @@ public sealed partial class KnowledgeStore(HaoyueDatabase database)
             update.Parameters.AddWithValue("$scope", scope);
             update.Parameters.AddWithValue("$id", updateId);
             update.ExecuteNonQuery();
+
+            // Vector invalidation: the embedding text covers title + tags + content, so
+            // any of them changing makes the cached vector stale. Drop it; the next
+            // semantic search re-embeds from the new text.
+            if (!string.Equals(oldTitle, trimmedTitle, StringComparison.Ordinal)
+                || !string.Equals(oldContent, trimmedContent, StringComparison.Ordinal)
+                || !string.Equals(oldTags, trimmedTags, StringComparison.Ordinal))
+                InvalidateVectors(connection, scope, [updateId]);
+
             return new KnowledgeSaveResult(
                 new KnowledgeEntry(updateId, trimmedTitle, trimmedContent, trimmedTags, createdAt, now),
                 Created: false);
@@ -84,10 +99,12 @@ public sealed partial class KnowledgeStore(HaoyueDatabase database)
         using var connection2 = database.OpenConnection();
         long? existingId = null;
         string? existingCreatedAt = null;
+        string? existingContent = null;
+        string? existingTags = null;
         using (var find = connection2.CreateCommand())
         {
             find.CommandText = """
-                SELECT id, created_at FROM knowledge
+                SELECT id, created_at, content, tags FROM knowledge
                 WHERE scope = $scope AND lower(title) = lower($title)
                 ORDER BY id LIMIT 1;
                 """;
@@ -98,6 +115,8 @@ public sealed partial class KnowledgeStore(HaoyueDatabase database)
             {
                 existingId = reader.GetInt64(0);
                 existingCreatedAt = reader.GetString(1);
+                existingContent = reader.GetString(2);
+                existingTags = reader.IsDBNull(3) ? null : reader.GetString(3);
             }
         }
 
@@ -114,6 +133,13 @@ public sealed partial class KnowledgeStore(HaoyueDatabase database)
             update.Parameters.AddWithValue("$now", now);
             update.Parameters.AddWithValue("$id", matchedId);
             update.ExecuteNonQuery();
+
+            // Vector invalidation on real content/tag changes (title is unchanged by
+            // construction in this branch — the match was on title).
+            if (!string.Equals(existingContent, trimmedContent, StringComparison.Ordinal)
+                || !string.Equals(existingTags, trimmedTags, StringComparison.Ordinal))
+                InvalidateVectors(connection2, scope, [matchedId]);
+
             return new KnowledgeSaveResult(
                 new KnowledgeEntry(matchedId, trimmedTitle, trimmedContent, trimmedTags, existingCreatedAt ?? now, now),
                 Created: false);
@@ -160,11 +186,48 @@ public sealed partial class KnowledgeStore(HaoyueDatabase database)
     public bool Delete(string scope, long id)
     {
         using var connection = database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        // Drop cached vectors together with the entry — otherwise they linger forever
+        // as orphan rows (the table has no FK back to knowledge).
+        InvalidateVectors(connection, scope, [id], transaction);
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "DELETE FROM knowledge WHERE scope = $scope AND id = $id;";
         command.Parameters.AddWithValue("$scope", scope);
         command.Parameters.AddWithValue("$id", id);
-        return command.ExecuteNonQuery() > 0;
+        var removed = command.ExecuteNonQuery() > 0;
+        transaction.Commit();
+        return removed;
+    }
+
+    /// <summary>
+    /// Removes cached embedding vectors for the given entries. Called whenever entry
+    /// text changes (Save) or entries disappear (Delete / source replacement), so the
+    /// semantic index re-embeds from current content instead of ranking on stale
+    /// vectors. Missing knowledge_vectors table (old database) is tolerated — the
+    /// semantic layer degrades to lexical search there anyway.
+    /// </summary>
+    private static void InvalidateVectors(
+        Microsoft.Data.Sqlite.SqliteConnection connection, string scope,
+        IReadOnlyList<long> entryIds, Microsoft.Data.Sqlite.SqliteTransaction? transaction = null)
+    {
+        if (entryIds.Count == 0) return;
+        try
+        {
+            var ids = entryIds.Distinct().ToList();
+            var placeholders = string.Join(", ", ids.Select((_, i) => $"$id{i}"));
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = $"DELETE FROM knowledge_vectors WHERE scope = $scope AND entry_id IN ({placeholders});";
+            command.Parameters.AddWithValue("$scope", scope);
+            for (var i = 0; i < ids.Count; i++)
+                command.Parameters.AddWithValue($"$id{i}", ids[i]);
+            command.ExecuteNonQuery();
+        }
+        catch (SqliteException)
+        {
+            // Table missing in pre-vector databases — nothing to invalidate.
+        }
     }
 
     public IReadOnlyList<KnowledgeEntry> Search(string scope, string query, int limit = 8, string? tag = null)

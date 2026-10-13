@@ -120,6 +120,12 @@ public sealed class ModelConfig
     /// null inside the object mean "auto" as well, so remote providers are never affected.
     /// </summary>
     public Providers.LocalModelSettings? Load { get; set; }
+    /// <summary>
+    /// For kind "local": 备用模型 id（同提供商内）。主模型加载全失败（重试 + CPU 降级
+    /// 均不奏效，如文件损坏 / 显存不足）时自动改用它再试一次；回退成功时本次请求由
+    /// 备用模型服务。空 = 无回退。仅本地模型生效，且不形成链（备用模型自身不再回退）。
+    /// </summary>
+    public string? FallbackModelId { get; set; }
     /// <summary>USD per 1M tokens.</summary>
     public decimal InputPricePerMTok { get; set; }
     public decimal OutputPricePerMTok { get; set; }
@@ -267,6 +273,44 @@ public sealed class AgentConfig
     public Haoyue.Runtime.Tools.ToolPolicyConfig ToolPolicy { get; set; } = new();
     /// <summary>Windows 进程级沙箱（Job Object）。默认关闭；启用后 bash 子进程树受内存/进程数/UI 限制并有 kill-on-close 兜底。网络隔离不在 Job Object 能力范围内。</summary>
     public BashSandboxConfig BashSandbox { get; set; } = new();
+    /// <summary>
+    /// L-D 会话保留天数：超过 N 天未更新的会话在维护时自动归档（仅从默认列表隐藏，
+    /// 仍可检索、includeArchived 找回，不删数据）；无消息引用的孤儿图片缓存文件与
+    /// VACUUM 共用同一维护周期。0 = 关闭归档与孤儿清理。默认 90 天。
+    /// </summary>
+    public int SessionRetentionDays { get; set; } = 90;
+    /// <summary>
+    /// H-C 记忆固化总开关：开启后 daemon 定期把近期会话经验沉淀为项目事实
+    /// （ConsolidationRunner）。关闭后仅保留回合内的 fact_save 自觉写入。
+    /// </summary>
+    public bool MemoryConsolidationEnabled { get; set; } = true;
+    /// <summary>
+    /// H-C 记忆固化扫描窗口（天，1..30）：只消化最近 N 天更新过的会话。
+    /// </summary>
+    public int MemoryConsolidationLookbackDays { get; set; } = 3;
+    /// <summary>
+    /// 本地模型同时驻留上限（LRU，1..16）。默认 2：聊天模型与嵌入模型交替请求
+    /// 不再互相卸载重载（旧结构同时只驻留一个）。超出预算时驱逐最久未用且无
+    /// 活跃推理的权重；服务中的权重永不驱逐。
+    /// </summary>
+    public int LocalModelMaxResident { get; set; } = 2;
+    /// <summary>
+    /// 本地推理并发槽数（1..16）。默认 1 = 严格串行（llama.cpp 单 context 的
+    /// 保守语义，KV 前缀复用可用）。&gt;1 时每请求独立 context 并行解码，KV 前缀
+    /// 复用自动关闭；显存随槽位数增长，请按显卡容量调整。
+    /// </summary>
+    public int LocalModelConcurrency { get; set; } = 1;
+    /// <summary>
+    /// 本地模型空闲回收（分钟，0 = 不回收）。权重空闲超过该时长后由 daemon 维护
+    /// 周期归还内存/显存；下一次请求按原签名重新加载（有指纹 ETA 预估）。
+    /// </summary>
+    public int LocalModelIdleUnloadMinutes { get; set; } = 20;
+    /// <summary>
+    /// daemon 启动时后台预热活跃本地模型（不阻塞启动、不占推理槽）。开启后第一条
+    /// 消息无需等待权重加载；关闭则保持纯懒加载（首次请求时加载）。预热进度经
+    /// model.load.progress 广播，失败静默（不影响启动）。
+    /// </summary>
+    public bool LocalModelPreload { get; set; }
 }
 
 /// <summary>bash 进程级沙箱配置（Windows Job Object）。</summary>

@@ -183,6 +183,114 @@ public sealed class LocalModelTests : IDisposable
     }
 
     [Fact]
+    public void ThinkTagParser_TemplateCoupling_OpenMarkerMatchesBuildPromptHeuristic()
+    {
+        // 模板耦合契约：ThinkTagParser 在输出流中识别的开标记集合必须包含
+        // BuildPrompt 判定 startsInThinking 用的尾部字面量，任一侧单独改动都会造成
+        // 「prompt 判定在思考、解析器却把推理当回答」的错位。
+        Assert.Equal(" thinking", LocalLlmClient.ThinkingOpenMarker);
+        Assert.Contains(LocalLlmClient.ThinkingOpenMarker, ThinkTagParser.OpenTags);
+        Assert.Equal(["</think>", "<｜end▁of▁thinking｜>"], ThinkTagParser.CloseTags);
+    }
+
+    [Fact]
+    public void ThinkTagParser_StandardThinkOpenTag_SwitchesToThinking()
+    {
+        // R1-0528 家族模板不含思考前缀时由模型自行输出 <think>：
+        // 开标签（含尖括号）必须被识别，其后内容不得漏进回答。
+        var parser = new ThinkTagParser(startsInThinking: false);
+        var pieces = parser.Process("前言<think>推理</think>回答").Concat(parser.Flush()).ToList();
+
+        Assert.Equal("推理", string.Concat(pieces.Where(p => p.IsThinking).Select(p => p.Text)));
+        Assert.Equal("前言回答", string.Concat(pieces.Where(p => !p.IsThinking).Select(p => p.Text)));
+        Assert.False(parser.InThinking);
+    }
+
+    [Fact]
+    public void ThinkTagParser_OpenMarkerSwitchesToThinkingAndEmitsPrefixAsAnswer()
+    {
+        // startsInThinking=false（模板不含思考前缀）时，流中出现模板渲染尾巴开标记：
+        // 前缀归属回答，其后内容归属推理，直到闭合标记。
+        var parser = new ThinkTagParser(startsInThinking: false);
+        var pieces = parser.Process("先 thinking\n推理正文</think>最终回答").Concat(parser.Flush()).ToList();
+
+        Assert.Equal("\n推理正文", string.Concat(pieces.Where(p => p.IsThinking).Select(p => p.Text)));
+        Assert.Equal("先最终回答", string.Concat(pieces.Where(p => !p.IsThinking).Select(p => p.Text)));
+        Assert.False(parser.InThinking);
+    }
+
+    [Fact]
+    public void ThinkTagParser_ProseContainingOpenMarker_EntersThinking_KnownAmbiguity()
+    {
+        // 已知歧义（锁定现行语义）：" thinking" 是宽松子串匹配——散文中出现该
+        // 词组会切入思考段。该路径仅在模板未注入思考前缀的本地模型上生效，
+        // 且闭合一到即恢复作答，可接受；改判定语义需同步评估 BuildPrompt 侧。
+        var parser = new ThinkTagParser(startsInThinking: false);
+        var pieces = parser.Process("I am thinking about the plan.").Concat(parser.Flush()).ToList();
+
+        Assert.Equal("I am", string.Concat(pieces.Where(p => !p.IsThinking).Select(p => p.Text)));
+        Assert.Equal(" about the plan.", string.Concat(pieces.Where(p => p.IsThinking).Select(p => p.Text)));
+    }
+
+    [Fact]
+    public void ThinkTagParser_OpenMarkerSplitAcrossChunks_StillDetected()
+    {
+        // 开标记跨 chunk 分割：" thi" 先到（前缀保持），"nking" 补齐后才切入思考段。
+        var parser = new ThinkTagParser(startsInThinking: false);
+        var pieces = parser.Process("回答前缀 thi").Concat(parser.Process("nking 后续</think>最终")).Concat(parser.Flush()).ToList();
+
+        Assert.Equal(" 后续", string.Concat(pieces.Where(p => p.IsThinking).Select(p => p.Text)));
+        Assert.Equal("回答前缀最终", string.Concat(pieces.Where(p => !p.IsThinking).Select(p => p.Text)));
+    }
+
+    [Fact]
+    public void ThinkTagParser_SpecialTokenCloseTag_SplitsReasoning()
+    {
+        // 原版 R1 的特殊 token 闭合标记（多字节分隔符）必须与 ASCII "</think>" 同级处理。
+        var parser = new ThinkTagParser(startsInThinking: true);
+        var pieces = parser.Process("推理<｜end▁of▁thinking｜>回答").Concat(parser.Flush()).ToList();
+
+        Assert.Equal("推理", string.Concat(pieces.Where(p => p.IsThinking).Select(p => p.Text)));
+        Assert.Equal("回答", string.Concat(pieces.Where(p => !p.IsThinking).Select(p => p.Text)));
+        Assert.False(parser.InThinking);
+    }
+
+    [Fact]
+    public void ThinkTagParser_SpecialTokenCloseTagSplitAcrossChunks_NoTailLoss()
+    {
+        var parser = new ThinkTagParser(startsInThinking: true);
+        var pieces = parser.Process("推理<｜end")
+            .Concat(parser.Process("▁of▁thinking｜>回答")).Concat(parser.Flush()).ToList();
+
+        Assert.Equal("推理", string.Concat(pieces.Where(p => p.IsThinking).Select(p => p.Text)));
+        Assert.Equal("回答", string.Concat(pieces.Where(p => !p.IsThinking).Select(p => p.Text)));
+    }
+
+    [Fact]
+    public void ThinkTagParser_SecondOpenMarker_ReentersThinkingSegment()
+    {
+        // 闭合后流中再次出现开标记：解析器重新进入思考段（锁定现行语义，
+        // 生成循环的预算计量依赖 InThinking 状态翻转）。
+        var parser = new ThinkTagParser(startsInThinking: true);
+        var pieces = parser.Process("第一段</think>作答 thinking 又开始</think>又答").Concat(parser.Flush()).ToList();
+
+        Assert.Equal("第一段 又开始", string.Concat(pieces.Where(p => p.IsThinking).Select(p => p.Text)));
+        Assert.Equal("作答又答", string.Concat(pieces.Where(p => !p.IsThinking).Select(p => p.Text)));
+    }
+
+    [Fact]
+    public void ThinkTagParser_FlushReleasesHeldPartialTagTail_AsAnswer()
+    {
+        // 流在半截开标记处结束：Flush 不得丢弃被保持的前缀尾，原样归属回答。
+        var parser = new ThinkTagParser(startsInThinking: false);
+        parser.Process("先说 thi");
+        var pieces = parser.Flush();
+
+        Assert.Equal(" thi", string.Concat(pieces.Select(p => p.Text)));
+        Assert.All(pieces, piece => Assert.False(piece.IsThinking));
+    }
+
+    [Fact]
     public void ThinkingBudgetTokens_MapsReasoningLevel_AndClampsToOutputWindow()
     {
         static LlmRequest Request(bool thinking, ReasoningLevel level, int? maxTokens = null, int modelMaxOutput = 4096) => new()

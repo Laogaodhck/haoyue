@@ -26,9 +26,16 @@ public static class ContextPlanner
     /// <summary>Upper bound for the assembled system prompt before history budgeting starts.</summary>
     public const int MaxSystemPromptTokens = 24_000;
 
-    public static int EstimateTokens(string text)
+    public static int EstimateTokens(string text, double calibration = 1.0)
     {
         if (string.IsNullOrEmpty(text)) return 0;
+        var tokens = EstimateRaw(text);
+        return calibration is > 0.99 and < 1.01 ? tokens : (int)Math.Ceiling(tokens * calibration);
+    }
+
+    /// <summary>Pure heuristic estimate before per-model calibration (see <see cref="ModelTokenStats"/>).</summary>
+    private static int EstimateRaw(string text)
+    {
         var cjk = CountCjkChars(text);
         if (cjk == 0) return (int)Math.Ceiling(text.Length / CharsPerToken);
         var other = text.Length - cjk;
@@ -80,11 +87,32 @@ public static class ContextPlanner
         return tokens > 0 ? text.Length / tokens : CharsPerToken;
     }
 
-    public static int EstimateTokens(ChatMessage message) =>
-        EstimateTokens(message.Text)
-        + (message.ToolCalls?.Sum(c => EstimateTokens(c.ArgumentsJson) + EstimateTokens(c.Name)) ?? 0)
+    public static int EstimateTokens(ChatMessage message, double calibration = 1.0) =>
+        EstimateTokens(message.Text, calibration)
+        // H-E: DeepSeek reasoner 等模型每轮回传的 reasoning_content 也是真实 prompt
+        // 体积，此前完全不计入预算——思考历史长的会话会被系统性低估。
+        + (string.IsNullOrEmpty(message.Thinking) ? 0 : EstimateTokens(message.Thinking, calibration))
+        + (message.ToolCalls?.Sum(c => EstimateTokens(c.ArgumentsJson, calibration) + EstimateTokens(c.Name, calibration)) ?? 0)
         + (message.Images?.Sum(EstimateImageTokens) ?? 0)
         + PerMessageOverheadTokens;
+
+    /// <summary>Tool-definition schema tokens (name + description + JSON Schema). The tool
+    /// manifest alone is thousands of tokens and must be subtracted from the window
+    /// budget (H-E); callers cache this per promptKey so it is not re-serialized every step.</summary>
+    public static int EstimateToolTokens(IReadOnlyList<ToolDefinition> tools) =>
+        tools is null
+            ? 0
+            : tools.Sum(tool =>
+                EstimateTokens(tool.Name)
+                + EstimateTokens(tool.Description)
+                + EstimateTokens(tool.Parameters.ToJsonString()));
+
+    /// <summary>Estimated prompt tokens of a full provider request (system + messages + tools),
+    /// the actual-vs-estimate pair recorded by <see cref="ModelTokenStats"/>.</summary>
+    public static int EstimateRequestTokens(LlmRequest request, double calibration = 1.0) =>
+        EstimateTokens(request.System ?? "", calibration)
+        + request.Messages.Sum(message => EstimateTokens(message, calibration))
+        + EstimateToolTokens(request.Tools);
 
     /// <summary>
     /// Image token estimate derived from the encoded payload size (dimensions are not on
@@ -172,18 +200,27 @@ public static class ContextPlanner
         return Math.Clamp(byWindow, 4_000, agent.MaxToolOutputChars);
     }
 
-    /// <summary>
-    /// Trims history so system prompt + messages + reply head-room fit the window.
-    /// Oldest messages drop first; tool results shrink before user/assistant text is touched.
-    /// </summary>
-    /// <summary>Token budget available for conversation history inside the active model window.</summary>
-    public static int WindowBudget(ModelConfig model, string systemPrompt)
+    /// <summary>Token budget available for conversation history inside the active model window.
+    /// When <paramref name="windowCeiling"/> is set (runtime-calibrated after a context-overflow
+    /// failure, see <see cref="ContextWindowCalibrator"/>), it replaces the declared window.
+    /// <paramref name="calibration"/> is the per-model actual/estimated token ratio
+    /// (<see cref="ModelTokenStats"/>): a ratio above 1 means the heuristic underestimates,
+    /// so the budget shrinks accordingly. <paramref name="toolSchemaTokens"/> subtracts the
+    /// tool manifest, which the request pays on every step.</summary>
+    public static int WindowBudget(ModelConfig model, string systemPrompt, int? windowCeiling = null,
+        double calibration = 1.0, int toolSchemaTokens = 0)
     {
-        var budget = model.ContextWindow
-                     - model.MaxOutput
+        var effectiveWindow = windowCeiling is { } ceiling && ceiling < model.ContextWindow
+            ? ceiling
+            : model.ContextWindow;
+        var ratio = calibration is > 0.1 and < 10 ? calibration : 1.0;
+        // 统一按"原始估算单位"记账：实际用量 ≈ ratio × 原始估算，因此窗口先按 ratio
+        // 折算成原始单位，再减系统提示、工具 schema 与线格式余量（都是原始估算）。
+        var budget = (effectiveWindow - model.MaxOutput) / ratio
                      - EstimateTokens(systemPrompt)
+                     - Math.Max(0, toolSchemaTokens)
                      - 1_500; // safety reserve for wire format overhead
-        return budget > 0 ? budget : model.ContextWindow / 2;
+        return budget > 0 ? (int)budget : effectiveWindow / 2;
     }
 
     /// <summary>
@@ -192,15 +229,16 @@ public static class ContextPlanner
     /// on a complete tool-turn boundary so no tool call is ever orphaned.
     /// </summary>
     public static (IReadOnlyList<ChatMessage> Old, IReadOnlyList<ChatMessage> Recent) SplitForCompaction(
-        IReadOnlyList<ChatMessage> messages, ModelConfig model, string systemPrompt)
+        IReadOnlyList<ChatMessage> messages, ModelConfig model, string systemPrompt, int? windowCeiling = null,
+        double calibration = 1.0, int toolSchemaTokens = 0)
     {
-        var tailBudget = Math.Max(1_024, WindowBudget(model, systemPrompt) / 2);
+        var tailBudget = Math.Max(1_024, WindowBudget(model, systemPrompt, windowCeiling, calibration, toolSchemaTokens) / 2);
 
         var split = messages.Count;
         var total = 0;
         for (var i = messages.Count - 1; i >= 0; i--)
         {
-            var cost = EstimateTokens(messages[i]);
+            var cost = EstimateTokens(messages[i], calibration);
             if (split < messages.Count && total + cost > tailBudget) break;
             split = i;
             total += cost;
@@ -213,13 +251,18 @@ public static class ContextPlanner
         return (messages.Take(split).ToList(), messages.Skip(split).ToList());
     }
 
+    /// <summary>
+    /// Trims history so system prompt + messages + reply head-room fit the window.
+    /// Oldest messages drop first; tool results shrink before user/assistant text is touched.
+    /// </summary>
     public static IReadOnlyList<ChatMessage> FitToWindow(
-        IReadOnlyList<ChatMessage> messages, ModelConfig model, string systemPrompt)
+        IReadOnlyList<ChatMessage> messages, ModelConfig model, string systemPrompt, int? windowCeiling = null,
+        double calibration = 1.0, int toolSchemaTokens = 0)
     {
         messages = EnsureCompleteToolTurns(messages);
-        var budget = WindowBudget(model, systemPrompt);
+        var budget = WindowBudget(model, systemPrompt, windowCeiling, calibration, toolSchemaTokens);
 
-        var total = messages.Sum(EstimateTokens);
+        var total = messages.Sum(m => EstimateTokens(m, calibration));
         if (total <= budget) return messages;
 
         var result = new List<ChatMessage>(messages);

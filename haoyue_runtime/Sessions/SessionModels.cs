@@ -62,8 +62,18 @@ public sealed class SessionImage
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string MediaType { get; set; } = "";
-    public string Data { get; set; } = "";
+    /// <summary>
+    /// base64 图片数据。L-D 保留策略后，新写入的记录此字段为 null——字节落在
+    /// 内容寻址缓存（&lt;数据库目录&gt;/session-images/&lt;sha256&gt;.&lt;ext&gt;）里，
+    /// payload 只保留 <see cref="Path"/> + <see cref="Sha256"/> 引用；旧记录
+    /// （升级前写入）此字段仍内联数据，读取时自动兼容。
+    /// </summary>
+    public string? Data { get; set; }
     public long SizeBytes { get; set; }
+    /// <summary>L-D: 内容寻址缓存内的文件名（&lt;sha256&gt;.&lt;ext&gt;）；旧格式记录为 null。</summary>
+    public string? Path { get; set; }
+    /// <summary>L-D: 图片字节的 SHA-256（hex），与缓存文件名一致，用于校验与孤儿清理。</summary>
+    public string? Sha256 { get; set; }
 }
 
 public sealed class SessionImageReference

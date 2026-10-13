@@ -48,7 +48,11 @@ public sealed class KnowledgeSearchTool(
             var content = entry.Content.Length > 600 ? entry.Content[..600] + "…" : entry.Content;
             sb.Append("   ").AppendLine(content);
         }
-        return ToolResult.Ok(sb.ToString().TrimEnd(), $"{matches.Count} knowledge entries matched");
+        // H-B: 20 条 ×600 字符的硬切在 32K 窗口模型上会超预算 3 倍——最终输出收敛进
+        // 自适应窗口预算，且 head+tail 保证靠后的条目不被整段丢弃。
+        return ToolResult.Ok(
+            context.TruncateTailPrioritized(sb.ToString().TrimEnd(), "knowledge results"),
+            $"{matches.Count} knowledge entries matched");
     }
 
     private async Task<IReadOnlyList<KnowledgeEntry>> SearchAsync(string scope, string query, int limit, CancellationToken ct)

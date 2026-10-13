@@ -19,21 +19,49 @@ internal static class ToolArguments
     }
 
     /// <summary>
+    /// Signature form of the raw arguments for repeated-failure / redundant-call tracking
+    /// only — never for provider replay. Recoverable arguments normalize to their repaired
+    /// JSON; unrecoverable ones keep the (capped) raw text. Collapsing two different
+    /// malformed calls onto the same "{}" signature would falsely read as "retrying a
+    /// dead end" and trigger strategy nudges for what are actually distinct attempts.
+    /// </summary>
+    public static string Signature(string raw)
+    {
+        var trimmed = raw?.Trim() ?? "";
+        if (trimmed.Length == 0) return "{}";
+        var (obj, json) = Parse(trimmed);
+        if (obj is not null) return json;
+        var signature = trimmed;
+        if (signature.Length > 200) signature = signature[..200] + "…";
+        return signature;
+    }
+
+    /// <summary>
     /// Parses raw tool arguments, attempting a best-effort repair for truncated or
     /// trailing-garbage JSON. <c>Obj</c> is null when the arguments cannot be recovered.
     /// </summary>
     public static (JsonObject? Obj, string Json) Parse(string raw)
     {
+        var (obj, json, _) = ParseDetailed(raw);
+        return (obj, json);
+    }
+
+    /// <summary>Full-detail variant of <see cref="Parse"/>: <c>Repaired</c> marks
+    /// arguments that needed bracket-balancing or closure repair — the caller should
+    /// treat the recovered parameters (especially long command strings) as possibly
+    /// semantically incomplete instead of silently executing them.</summary>
+    public static (JsonObject? Obj, string Json, bool Repaired) ParseDetailed(string raw)
+    {
         var trimmed = raw?.Trim() ?? "";
-        if (trimmed.Length == 0) return (new JsonObject(), "{}");
+        if (trimmed.Length == 0) return (new JsonObject(), "{}", false);
         try
         {
-            if (JsonNode.Parse(trimmed) is JsonObject valid) return (valid, trimmed);
+            if (JsonNode.Parse(trimmed) is JsonObject valid) return (valid, trimmed, false);
         }
         catch (JsonException) { }
 
         var start = trimmed.IndexOf('{');
-        if (start < 0) return (null, "{}");
+        if (start < 0) return (null, "{}", false);
 
         var scan = Scan(trimmed, start);
         if (scan.Balanced is not null)
@@ -41,7 +69,7 @@ internal static class ToolArguments
             try
             {
                 if (JsonNode.Parse(scan.Balanced) is JsonObject repaired)
-                    return (repaired, scan.Balanced);
+                    return (repaired, scan.Balanced, true);
             }
             catch (JsonException) { }
         }
@@ -64,12 +92,12 @@ internal static class ToolArguments
             try
             {
                 if (JsonNode.Parse(truncated + suffix) is JsonObject repaired)
-                    return (repaired, truncated + suffix);
+                    return (repaired, truncated + suffix, true);
             }
             catch (JsonException) { }
         }
 
-        return (null, "{}");
+        return (null, "{}", false);
     }
 
     private static (string? Balanced, int OpenDepth) Scan(string text, int start)

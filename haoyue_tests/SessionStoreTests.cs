@@ -95,8 +95,7 @@ public class SessionStoreTests : IDisposable
     }
 
     [Fact]
-    public void Search_RanksByMatchCount_ThenRecency()
-    {
+    public void Search_RanksByMatchCount_ThenRecency()    {
         var richer = NewSessionWithTitle();
         var poorer = NewSessionWithTitle();
         // matchCount counts matching *messages*: two for `richer`, one for `poorer`.
@@ -135,5 +134,55 @@ public class SessionStoreTests : IDisposable
             try { Directory.Delete(otherRoot, recursive: true); }
             catch (IOException) { }
         }
+    }
+
+    // ------------------------------------------------- L2: FTS5 index synchronization
+
+    [Fact]
+    public void Search_FindsMessageBody_EvenWhenTitleMissing()
+    {
+        // 消息体命中必须来自 FTS/LIKE 对 payload 的检索，而不是首条消息成为标题的副作用：
+        // 先用一条普通消息占住标题，再追加含目标词的 assistant 消息。
+        var id = NewSessionWithTitle();
+        var session = _store.Load(_workspace, id)!;
+        _store.Append(session, ChatMessage.User("开场白"));
+        _store.Append(session, ChatMessage.Assistant("唯一标识词 ploverquark 在这里"));
+
+        var hit = Assert.Single(_store.Search(_workspace, "ploverquark"));
+        Assert.Equal(id, hit.Header.Id);
+        Assert.True(hit.MatchCount >= 1);
+    }
+
+    [Fact]
+    public void Search_ReflectsReplaceHistory_NotDeletedContent()
+    {
+        // 先设显式标题：否则首条用户消息会成为标题，标题匹配会污染断言。
+        var id = NewSessionWithTitle("压缩演练");
+        var session = _store.Load(_workspace, id)!;
+        _store.Append(session, ChatMessage.User("旧内容被压缩替换词"));
+
+        // 压缩：历史替换为新文本，旧内容必须从搜索结果消失。
+        _store.ReplaceHistory(session, [ChatMessage.User("新摘要 只有这一句")]);
+        Assert.Empty(_store.Search(_workspace, "被压缩替换词"));
+        var hit = Assert.Single(_store.Search(_workspace, "新摘要"));
+        Assert.Equal(id, hit.Header.Id);
+    }
+
+    [Fact]
+    public void Search_ReflectsTruncate_AndSessionDelete()
+    {
+        var id = NewSessionWithTitle("截断演练");
+        var session = _store.Load(_workspace, id)!;
+        _store.Append(session, ChatMessage.User("保留段"));
+        _store.Append(session, ChatMessage.User("将被截断的目标词 ploverquark"));
+
+        // 截断保 1 条：历史尾部（含目标词）离开后不再命中（AFTER DELETE 触发器同步索引）。
+        _store.Truncate(_workspace, id, 1);
+        Assert.Empty(_store.Search(_workspace, "ploverquark"));
+        Assert.Single(_store.Search(_workspace, "保留段"));
+
+        // 会话删除级联清空其消息，搜索随之无结果。
+        _store.Delete(_workspace, id);
+        Assert.Empty(_store.Search(_workspace, "保留段"));
     }
 }

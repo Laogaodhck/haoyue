@@ -123,6 +123,8 @@ export const DAEMON_METHODS = [
   'model.switch',
   'model.test',
   'model.status',
+  'model.preload',
+  'model.unload',
   'model.config.get',
   'model.update',
   'model.benchmark',

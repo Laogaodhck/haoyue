@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Connectors;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Secrets;
 using Haoyue.Runtime.Tools;
@@ -166,6 +167,7 @@ public sealed class McpManager(
     private async Task<McpServerStatus> ConnectOneAsync(string name, McpServerConfig server, CancellationToken ct)
     {
         var remote = IsRemoteTransport(server.Transport);
+        HealBundledServerArgs(name, server);
         for (var attempt = 1; ; attempt++)
         {
             IMcpTransport transport = _transportFactory(name, server);
@@ -207,6 +209,43 @@ public sealed class McpManager(
 
     private static bool IsRemoteTransport(string transport) =>
         transport is "sse" or "http" or "streamable-http" or "streamable_http";
+
+    /// <summary>
+    /// Self-heal for offline connectors (calendar / clipboard / email / http-api /
+    /// notify / rss). Their install freezes the absolute path of the bundled local
+    /// MCP server (connectors/servers/haoyue_local_server.py) into mcp.servers
+    /// args; when that file later moves or disappears — transient build output,
+    /// app upgrade, directory rename — the child process dies instantly with
+    /// "No such file or directory" and the connector stays broken until a manual
+    /// reinstall. Re-resolve the current bundled server and substitute it, so an
+    /// installed offline connector survives relocation. The healed path is
+    /// persisted when the server entry lives in the global config.
+    /// Only args that look like the bundled server AND no longer exist on disk are
+    /// touched; healthy paths and all other arguments are left as-is.
+    /// </summary>
+    private void HealBundledServerArgs(string name, McpServerConfig server)
+    {
+        if (server.Args is not { Count: > 0 }) return;
+        for (var i = 0; i < server.Args.Count; i++)
+        {
+            var arg = server.Args[i];
+            if (string.IsNullOrEmpty(arg) || File.Exists(arg)) continue;
+            if (!Path.GetFileName(arg).Equals("haoyue_local_server.py", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var bundled = ConnectorCatalog.ResolveBundledServer();
+            if (bundled is null || string.Equals(bundled, arg, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            server.Args[i] = bundled;
+            if (configStore.Config.Mcp?.Servers is { } servers &&
+                servers.TryGetValue(name, out var stored) &&
+                ReferenceEquals(stored, server))
+            {
+                configStore.Save();
+            }
+        }
+    }
 
     /// <summary>
     /// Authorization attempt for a 401-ing remote server: silent refresh first (no
@@ -474,7 +513,7 @@ public sealed class McpToolAdapter : ITool
         try
         {
             var (success, text) = await _client.CallToolAsync(_tool.Name, arguments, ct).ConfigureAwait(false);
-            var output = context.Truncate(text.Length == 0 ? "(no output)" : text, "MCP output");
+            var output = context.TruncateTailPrioritized(text.Length == 0 ? "(no output)" : text, "MCP output");
             return success
                 ? ToolResult.Ok(output, $"{_tool.Name} via {_client.ServerName}")
                 : ToolResult.Fail(output);

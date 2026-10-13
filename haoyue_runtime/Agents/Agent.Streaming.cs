@@ -28,7 +28,9 @@ public sealed partial class Agent
         IReadOnlyList<ITool> tools,
         ReasoningLevel reasoningLevel,
         bool requiresVision,
-        CancellationToken ct)
+        CancellationToken ct,
+        double calibration = 1.0,
+        int toolSchemaTokens = 0)
     {
         var config = configStore.Config;
         var temperature = workspace.Config?.Temperature ?? config.Temperature;
@@ -42,7 +44,11 @@ public sealed partial class Agent
             Model = model.Model,
             // Re-fit for the concrete candidate because automatic failover models can have
             // a smaller user-declared context window than the initially selected model.
-            Messages = ContextPlanner.FitToWindow(history, model.Model, systemPrompt),
+            // The runtime-calibrated ceiling (context-overflow feedback) applies too.
+            Messages = ContextPlanner.FitToWindow(
+                history, model.Model, systemPrompt,
+                ContextWindowCalibrator.GetCeiling(model.Provider.Id, model.Model.Id),
+                calibration, toolSchemaTokens),
             System = systemPrompt,
             Tools = definitions,
             Temperature = temperature,

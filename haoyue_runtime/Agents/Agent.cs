@@ -37,11 +37,16 @@ public sealed partial class Agent(
     FileLockScope lockScope,
     ISkillManager? skills = null,
     TurnUndoRegistry? undoRegistry = null,
-    IToolExecutionPolicy? toolPolicy = null)
+    IToolExecutionPolicy? toolPolicy = null,
+    Data.ModelTokenStats? tokenStats = null)
 {
     private readonly ISkillManager? _skills = skills;
     private readonly TurnUndoRegistry? _undoRegistry = undoRegistry;
     private readonly IToolExecutionPolicy _toolPolicy = toolPolicy ?? new Tools.ToolExecutionPolicy();
+    private readonly Data.ModelTokenStats? _tokenStats = tokenStats;
+    // H-E: per-model 校准系数的进程内缓存（DB 行极小，一次读取后本进程复用；
+    // 与 ContextWindowCalibrator 一致，配置变更本就要重启运行时）。
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> _ratioCache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Optional daemon hook: invoked for every mutating step so the crash journal can
@@ -163,6 +168,16 @@ public sealed partial class Agent(
         var answerCompletenessNudged = false;
         var readOnlyMode = AgentModeExtensions.Parse(workspace.Config?.Mode ?? agentConfig.Mode).IsReadOnly();
 
+        // Declared before HandleToolResult so the nudge guards below can defer to it:
+        // once the step-budget wrap-up takes over, every corrective notice competes with
+        // the final summary for the model's remaining output budget.
+        var wrapUpRequested = false;
+
+        // H-D 回合级失败工具隔离：同签名失败达到换策略阈值后，该工具在本回合剩余时间内
+        // 被隔离（ExecuteToolAsync 直接拒绝执行）。策略提示是软的、模型可无视；隔离是
+        // 硬动作，把"摆烂重试 20 次同一命令"的最坏消耗从 MaxSteps 全烧压到阈值即刹车。
+        var quarantinedTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         // Planning hint: nudge complex-looking inputs toward a declared plan before the
         // first model step. Conservative heuristic (length + sequencing markers), only
         // in edit/auto modes, once per turn — simple tasks proceed untouched.
@@ -183,7 +198,7 @@ public sealed partial class Agent(
             {
                 consecutiveFailures = 0;
                 failureSignature = "";
-                var successCall = $"{call.Name}|{ToolArguments.Sanitize(call.ArgumentsJson)}";
+                var successCall = $"{call.Name}|{ToolArguments.Signature(call.ArgumentsJson)}";
                 if (successCall == successSignature) successStreak++;
                 else
                 {
@@ -197,7 +212,7 @@ public sealed partial class Agent(
                     successSignature = "";
                     successStreak = 0;
                 }
-                else if (successStreak == RedundantCallThreshold && !redundantCallNudged)
+                else if (successStreak == RedundantCallThreshold && !redundantCallNudged && !wrapUpRequested)
                 {
                     redundantCallNudged = true;
                     sessionStore.Append(session, ChatMessage.User(
@@ -209,7 +224,8 @@ public sealed partial class Agent(
             }
             successSignature = "";
             successStreak = 0;
-            var signature = $"{call.Name}|{ToolArguments.Sanitize(call.ArgumentsJson)}";            if (signature == failureSignature) consecutiveFailures++;
+            var signature = $"{call.Name}|{ToolArguments.Signature(call.ArgumentsJson)}";
+            if (signature == failureSignature) consecutiveFailures++;
             else
             {
                 failureSignature = signature;
@@ -229,6 +245,11 @@ public sealed partial class Agent(
                     $">>> [strategy pivot] 工具 {call.Name} 已用相同参数连续失败 {consecutiveFailures} 次，当前方法大概率不可行。请彻底改变思路：换用其他工具或方式完成这一步、先阅读相关文件与文档弄清上下文、或重新拆解问题，而不是继续微调同样的参数。"));
                 events.Publish(new WarningEvent(
                     $"工具 {call.Name} 连续失败 {consecutiveFailures} 次，已注入换策略提示。"));
+                // H-D 硬动作：提示之外把该工具加入回合级隔离名单——后续调用在执行前
+                // 直接被拒，模型无法用"再试一次同样的命令"烧完整个步数预算。
+                if (quarantinedTools.Add(call.Name))
+                    events.Publish(new WarningEvent(
+                        $"工具 {call.Name} 已加入本回合隔离名单：同签名连续失败 {consecutiveFailures} 次后停止执行该工具，请换用其他工具或思路。"));
             }
         }
 
@@ -239,10 +260,10 @@ public sealed partial class Agent(
             // Reserve one extra step per allowed repair so long multi-step tasks are
             // not cut short by their own repair loop.
             var maxSteps = agentConfig.MaxSteps + Math.Clamp(agentConfig.MaxRepairAttempts, 0, 128);
-            var compactedThisTurn = false;
+            var compactedCount = 0;
+            var lastCompactionStep = 0;
             var truncatedSteps = 0;
             var reachedMaxSteps = false;
-            var wrapUpRequested = false;
             var emptyAnswerNudged = false;
             // Composing the system prompt reads memory / AGENTS.md / prompt files from disk.
             // Its inputs cannot change between steps of one turn (same model, tools and flags),
@@ -250,6 +271,9 @@ public sealed partial class Agent(
             // prompt prefix byte-identical for cache hits.
             string? cachedPromptKey = null;
             string cachedSystemPrompt = "";
+            // H-E: 工具 schema 的 token 估算按 promptKey 缓存——它是每步请求的固定
+            // 大头（tool manifest alone is thousands of tokens），从窗口预算中扣掉。
+            int cachedToolSchemaTokens = 0;
             events.Publish(new WorkflowEvent(0, "start", "开始任务"));
             while (true)
             {
@@ -279,6 +303,14 @@ public sealed partial class Agent(
                 var preSteering = AppendSteering(session, steering);
                 turnHasImagesFlag |= preSteering.Any(message => message.Images is { Count: > 0 });
                 PublishSteering(preSteering);
+                if (steering?.IsAbortRequested == true)
+                {
+                    // M-B: 用户通过 steering 显式请求中止——不再发起新的模型步骤，
+                    // 回合以"被用户中止"收尾（finally 里落中断痕迹与撤销台账）。
+                    cancelled = true;
+                    events.Publish(new StatusEvent("Steering abort requested; turn stopped"));
+                    break;
+                }
 
                 // Vision relevance: only what this turn produced decides whether vision is
                 // needed — the current input, mid-turn steering (possibly with a screenshot)
@@ -302,23 +334,43 @@ public sealed partial class Agent(
                 {
                     cachedSystemPrompt = await ComposeSystemPromptAsync(
                         workspace, model, tools, effectiveNetworkEnabled, skillTriggerContext, expertId, ct).ConfigureAwait(false);
+                    cachedToolSchemaTokens = ContextPlanner.EstimateToolTokens(
+                        tools.Select(t => new ToolDefinition(t.Name, t.Description, t.ParameterSchema)).ToList());
                     cachedPromptKey = promptKey;
                 }
                 var systemPrompt = cachedSystemPrompt;
-                var source = requiresVision ? session.Messages : WithoutImages(session.Messages);
-                var history = ContextPlanner.FitToWindow(source, model.Model, systemPrompt);
+                // Window ceiling calibration (M7): a mis-declared ContextWindow previously
+                // overflowed forever. When a context-length failure was recorded for this
+                // model, the calibrated (smaller) ceiling drives the window budget.
+                var windowCeiling = ContextWindowCalibrator.GetCeiling(model.Provider.Id, model.Model.Id);
+                // H-E: per-model 实测校准系数（ProviderManager 每请求后回写 EWMA）。
+                var calibration = TokenCalibration(model);
+                // M-C: 视觉回合只保留最近的图（去重 + 总量/token 预算），不再把全部
+                // 历史截图每步重传——延迟/费用随会话线性增长的核心缺口。
+                var source = requiresVision
+                    ? PruneVisionHistory(session.Messages, VisionImageTokenBudget(model))
+                    : WithoutImages(session.Messages);
+                var history = ContextPlanner.FitToWindow(
+                    source, model.Model, systemPrompt, windowCeiling, calibration, cachedToolSchemaTokens);
                 // Context compaction: when plain trimming would have to drop history, first
                 // summarize the old part so long turns keep their memory and can finish.
                 // A failed compaction never aborts the turn — it falls back to the trim.
+                // Up to 3 passes per turn with a cool-down gap: very long tool-heavy turns
+                // used to hit the window a second time and degrade to hard trimming.
                 if (agentConfig.EnableContextCompaction
-                    && !compactedThisTurn
+                    && compactedCount < 3
+                    && (compactedCount == 0 || step - lastCompactionStep >= 6)
                     && history.Count + 4 <= source.Count)
                 {
                     PublishWorkflow(step, "compact", "压缩记忆");
-                    await CompactContextAsync(session, workspace, model, source, systemPrompt, ct).ConfigureAwait(false);
-                    compactedThisTurn = true;
-                    source = requiresVision ? session.Messages : WithoutImages(session.Messages);
-                    history = ContextPlanner.FitToWindow(source, model.Model, systemPrompt);
+                    await CompactContextAsync(session, workspace, model, source, systemPrompt, ct, windowCeiling, calibration, cachedToolSchemaTokens).ConfigureAwait(false);
+                    compactedCount++;
+                    lastCompactionStep = step;
+                    source = requiresVision
+                        ? PruneVisionHistory(session.Messages, VisionImageTokenBudget(model))
+                        : WithoutImages(session.Messages);
+                    history = ContextPlanner.FitToWindow(
+                        source, model.Model, systemPrompt, windowCeiling, calibration, cachedToolSchemaTokens);
                 }
 
                 events.Publish(new StatusEvent("Thinking"));
@@ -328,9 +380,27 @@ public sealed partial class Agent(
                         events.Publish(new ImageViewedEvent(image.Id, image.Name, image.MediaType));
                 events.Publish(new ModelInvocationStartedEvent(model.Provider.Id, model.Model.Id, step));
 
-                var completion = await StreamOnceAsync(
-                    model, workspace, systemPrompt, history, tools,
-                    reasoningLevel ?? agentConfig.ReasoningLevel, requiresVision, ct).ConfigureAwait(false);
+                LlmCompletion completion;
+                try
+                {
+                    completion = await StreamOnceAsync(
+                        model, workspace, systemPrompt, history, tools,
+                        reasoningLevel ?? agentConfig.ReasoningLevel, requiresVision, ct,
+                        calibration, cachedToolSchemaTokens).ConfigureAwait(false);
+                }
+                catch (LlmException ex) when (ContextWindowCalibrator.IsContextOverflow(ex.Message))
+                {
+                    // Feed the observed request size back as a calibrated ceiling for this
+                    // model so the next turn fits before sending (M7 closed loop).
+                    var estimated = ContextPlanner.EstimateTokens(systemPrompt, calibration)
+                                    + history.Sum(m => ContextPlanner.EstimateTokens(m, calibration))
+                                    + cachedToolSchemaTokens
+                                    + model.Model.MaxOutput;
+                    ContextWindowCalibrator.RecordOverflow(model.Provider.Id, model.Model.Id, estimated);
+                    events.Publish(new WarningEvent(
+                        $"模型 {model.Model.Id} 的上下文窗口声明（{model.Model.ContextWindow}）与实际不符，已按实测上限 {estimated} tokens 校正后续请求。"));
+                    throw;
+                }
 
                 var assistant = new ChatMessage
                 {
@@ -367,6 +437,14 @@ public sealed partial class Agent(
                     foreach (var call in completion.ToolCalls)
                     {
                         ct.ThrowIfCancellationRequested();
+                        if (steering?.IsAbortRequested == true)
+                        {
+                            // M-B: 在途批次中 pending 的调用（含 mutating）不再执行——
+                            // 用户喊"停"之后，已经排队但还没开始的写入/命令必须踩刹车。
+                            cancelled = true;
+                            events.Publish(new WarningEvent("已收到 steering 中止请求，本批次剩余工具调用不再执行。"));
+                            break;
+                        }
                         var resolved = toolRegistry.Resolve(call.Name);
                         if (resolved is not null && !resolved.Mutating)
                         {
@@ -377,29 +455,32 @@ public sealed partial class Agent(
                             if (readOnlyBatch.Count > 0)
                             {
                                 foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
-                                var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct))).ConfigureAwait(false);
+                                var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedTools))).ConfigureAwait(false);
                                 for (var i = 0; i < batchResults.Length; i++)
                                     HandleToolResult(readOnlyBatch[i], batchResults[i]);
                                 readOnlyBatch.Clear();
                             }
 
                             PublishWorkflow(step, "tool", call.Name);
-                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, turnScope, turnPlan, ct).ConfigureAwait(false));
+                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, turnScope, turnPlan, ct, quarantinedTools).ConfigureAwait(false));
                         }
                     }
+
+                    if (cancelled) break; // steering abort：跳过批次尾部与后续收尾逻辑
 
                     if (readOnlyBatch.Count > 0)
                     {
                         foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
-                        var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct))).ConfigureAwait(false);
+                        var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedTools))).ConfigureAwait(false);
                         for (var i = 0; i < batchResults.Length; i++)
                             HandleToolResult(readOnlyBatch[i], batchResults[i]);
                     }
 
                     // Plan discipline: compare the executed work against the declared plan
                     // and nudge when they drift (finished-but-still-working / stale statuses).
+                    // Deferred during wrap-up: the summary must not share budget with nudges.
                     var planNudge = planGuard.Evaluate(turnPlan, completion.ToolCalls.Count, planToolCalls);
-                    if (planNudge is not null)
+                    if (planNudge is not null && !wrapUpRequested)
                     {
                         sessionStore.Append(session, ChatMessage.User(planNudge.Notice));
                         events.Publish(new WarningEvent(planNudge.Warning));
@@ -477,7 +558,11 @@ public sealed partial class Agent(
                 }
 
                 // Model believes it is done. If it changed files, prove the project still builds.
-                if (mutated && ShouldVerify(workspace, agentConfig) && repairAttempts < agentConfig.MaxRepairAttempts)
+                // Skipped once wrap-up took over: repair turns are step-budgeted too, so a
+                // verification failure injected at maxSteps+1 could never run its repair —
+                // a "dead" corrective notice the model is told to act on but cannot.
+                if (mutated && ShouldVerify(workspace, agentConfig) && repairAttempts < agentConfig.MaxRepairAttempts
+                    && !wrapUpRequested)
                 {
                     PublishWorkflow(step, "verify", "构建验证");
                     var repairMessage = await RunVerificationAsync(workspace, repairAttempts + 1, ct).ConfigureAwait(false);
@@ -493,6 +578,7 @@ public sealed partial class Agent(
                 // Answer completeness: a turn that changed files should tell the user what
                 // changed. If the final answer names none of the touched files, ask once.
                 if (mutated && !answerCompletenessNudged && completion.Text.Length > 0
+                    && !wrapUpRequested
                     && !AgentHeuristics.MentionsAnyChange(completion.Text, turnScope.Changes))
                 {
                     answerCompletenessNudged = true;
@@ -579,6 +665,15 @@ public sealed partial class Agent(
             events.Publish(new TurnCompletedEvent(
                 session.Header.Id, cancelled, error,
                 ledger is null ? null : ledger.Changes.Select(c => ToRelativePath(c.AbsolutePath, workspace.Root)).ToList()));
+
+            // H-C 回合结束触发式沉淀提示：有实际执行步骤的成功回合给一条客户端可见的
+            // 轻提示（不进模型上下文、零 token 成本）——回合内自觉写入优先，后台
+            // ConsolidationRunner 的定时扫描兜底，双通道补齐「经历→记忆」。
+            if (error is null && !cancelled && turnScope.Steps.Count > 0)
+            {
+                events.Publish(new StatusEvent(
+                    "本回合有实际改动。如有值得长期记住的约定或决定，告诉我即可沉淀；后台记忆固化也会定期扫描近期会话。"));
+            }
         }
         return new AgentTurnResult(finalText, cancelled, error);
     }
@@ -590,6 +685,31 @@ public sealed partial class Agent(
 
     private void PublishWorkflow(int step, string kind, string label, string? detail = null) =>
         events.Publish(new WorkflowEvent(step, kind, label, detail));
+
+    /// <summary>
+    /// M-C: 单请求图片 token 预算——模型窗口的 10%（钳制 1k..8k tokens），与
+    /// <see cref="ContextPlanner.EstimateImageTokens(ChatImageAttachment)"/> 同一量纲。
+    /// 视觉历史超过该预算时更早的图被剥离，当前关键截图优先。
+    /// </summary>
+    private static int VisionImageTokenBudget(ModelInfo model) =>
+        Math.Clamp((int)(model.Model.ContextWindow * 0.10), 1_000, 8_000);
+
+    /// <summary>
+    /// H-E: 当前模型的 token 估算校准系数（actual/estimated 的 EWMA）。ProviderManager
+    /// 每次成功请求后把偏差写回 ModelTokenStats，这里读出来乘进后续估算——低估（系数&gt;1）
+    /// 时窗口预算收紧避免超限 400，高估（系数&lt;1）时放宽避免过早压缩。
+    /// </summary>
+    private double TokenCalibration(ModelInfo model)
+    {
+        if (_tokenStats is null) return 1.0;
+        var key = $"{model.Provider.Id}|{model.Model.Id}";
+        return _ratioCache.GetOrAdd(key, static (_, state) =>
+        {
+            var (stats, providerId, modelId) = state;
+            try { return stats.GetRatio(providerId, modelId); }
+            catch (Exception) { return 1.0; } // 校准不可用时退回纯启发式
+        }, (_tokenStats, model.Provider.Id, model.Model.Id));
+    }
 
     /// <summary>True when the provider stopped because the output-token cap was hit, not because it finished.</summary>
     private static bool IsOutputTruncated(string? finishReason) =>

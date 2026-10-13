@@ -11,6 +11,7 @@ public sealed class AgentSteeringQueue
     private readonly Lock _gate = new();
     private readonly Queue<ChatMessage> _messages = new();
     private bool _accepting = true;
+    private bool _abortRequested;
 
     public bool TryEnqueue(ChatMessage message)
     {
@@ -20,6 +21,26 @@ public sealed class AgentSteeringQueue
             _messages.Enqueue(message);
             return true;
         }
+    }
+
+    /// <summary>
+    /// M-B: steering abort（显式 opt-in）。默认语义下引导消息在下一步边界才生效；
+    /// abort 是硬动作——agent 停止执行在途工具批次（pending 的 mutating 调用也不再
+    /// 执行）并以"被用户中止"收尾。回合已结束时返回 false（无事可中止）。
+    /// </summary>
+    public bool RequestAbort()
+    {
+        lock (_gate)
+        {
+            _abortRequested = true;
+            return _accepting;
+        }
+    }
+
+    /// <summary>True when an abort was requested and the turn has not been closed yet.</summary>
+    public bool IsAbortRequested
+    {
+        get { lock (_gate) return _abortRequested && _accepting; }
     }
 
     public IReadOnlyList<ChatMessage> Drain()

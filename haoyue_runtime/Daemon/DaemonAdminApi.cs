@@ -1007,6 +1007,73 @@ internal sealed class DaemonAdminApi(
         return status.ToJsonString();
     }
 
+    /// <summary>
+    /// 本地模型预热（model.preload）：把指定模型的权重装进驻留槽（不占用推理槽、
+    /// 不阻塞调用方之外的请求）。已驻留时零成本返回；失败抛错（消息含重试/降级/
+    /// 版本诊断）。进度经调用方（daemon）以 model.load.progress 广播。
+    /// </summary>
+    public async Task<string> PreloadModelAsync(JsonObject parameters, IProgress<LocalLoadProgress> progress, CancellationToken ct)
+    {
+        var reference = RequiredString(parameters, "model");
+        var model = runtime.Models.Resolve(reference)
+                    ?? throw new DaemonRequestException($"Model not found: {reference}");
+        if (!model.Provider.IsLocal)
+            throw new DaemonRequestException($"model.preload 仅支持本地模型（{model.Ref} 是 {model.Provider.Kind}）");
+        if (sharedLocalModels is null)
+            throw new DaemonRequestException("本地模型库未初始化");
+
+        var path = Providers.LocalModels.ResolveModelPath(model.Provider, model.Model);
+        if (!File.Exists(path))
+            throw new DaemonRequestException($"模型文件不存在：{path}");
+        if (Providers.LocalModels.IsProjectorFileName(Path.GetFileName(path)))
+            throw new DaemonRequestException($"{model.Model.Id} 是多模态投影器文件（mmproj），不能作为聊天模型加载。");
+
+        var tier = Providers.LocalLlmClient.TierFor(
+            sharedLocalModels.Tuning, model.Provider, model.Model, path, sharedLocalModels.Metadata);
+        var mmprojPath = sharedLocalModels.Metadata.ResolveMmproj(
+            Providers.LocalModels.ResolveDirectory(model.Provider.ModelsDirectory), model.Model.MmprojPath);
+        var report = await sharedLocalModels.PreloadAsync(
+            path,
+            Providers.LocalLlmClient.BuildLoadParams(path, model.Provider, model.Model, tier),
+            Providers.LocalLlmClient.LoadSignature(model.Provider, model.Model, tier) + "|" + (mmprojPath ?? "nommproj"),
+            mmprojPath,
+            progress,
+            ct).ConfigureAwait(false);
+
+        return new JsonObject
+        {
+            ["model"] = model.Ref,
+            ["path"] = path,
+            ["resident"] = sharedLocalModels.IsLoaded,
+            ["loadReport"] = report is null ? null : new JsonObject
+            {
+                ["attempts"] = report.Attempts,
+                ["degradedToCpu"] = report.DegradedToCpu,
+                ["verified"] = report.Verified,
+                ["loadDurationMs"] = report.LoadDurationMs,
+                ["effectiveGpuLayers"] = report.EffectiveGpuLayers,
+                ["note"] = report.Note,
+            },
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// 主动卸载全部常驻本地权重（model.unload）：归还内存/显存。有活跃推理的槽
+    /// 标记待销毁，由最后一个推理结束后释放。返回卸载前常驻的模型数。
+    /// </summary>
+    public async Task<string> UnloadLocalModelsAsync(CancellationToken ct)
+    {
+        if (sharedLocalModels is null)
+            throw new DaemonRequestException("本地模型库未初始化");
+        var resident = sharedLocalModels.ResidentCount;
+        await sharedLocalModels.UnloadAsync(ct).ConfigureAwait(false);
+        return new JsonObject
+        {
+            ["unloaded"] = resident,
+            ["resident"] = sharedLocalModels.ResidentCount,
+        }.ToJsonString();
+    }
+
     public async Task<string> FetchProviderModelsAsync(JsonObject parameters, CancellationToken ct)
     {
         var id = RequiredString(parameters, "id");
@@ -1084,6 +1151,22 @@ internal sealed class DaemonAdminApi(
             else
                 model.MmprojPath = null;
         }
+        if (parameters["fallbackModelId"] is JsonValue fallbackValue)
+        {
+            // 备用模型：空串清除；自引用拒绝（链不形成环）；存在性在解析时宽容处理
+            // （id 写错时回退链长为 1，请求路径照常报错，不阻断保存）。
+            if (fallbackValue.TryGetValue(out string? fallbackId) && !string.IsNullOrWhiteSpace(fallbackId))
+            {
+                var trimmed = fallbackId.Trim();
+                if (trimmed.Equals(modelId, StringComparison.OrdinalIgnoreCase))
+                    throw new DaemonRequestException("params.fallbackModelId 不能指向模型自身");
+                model.FallbackModelId = trimmed;
+            }
+            else
+            {
+                model.FallbackModelId = null;
+            }
+        }
         if (parameters["load"] is JsonObject loadNode)
             model.Load = LocalModelSettings.FromJson(loadNode);
         else if (parameters.ContainsKey("load"))
@@ -1155,19 +1238,53 @@ internal sealed class DaemonAdminApi(
             result["autoMmprojPath"] = LocalModels.ResolveMmprojPath(provider, model);
             result["isMultimodal"] = LocalModels.ResolveMmprojPath(provider, model) is not null
                                      || model.Capabilities.Vision;
-            result["residentInMemory"] = sharedLocalModels?.IsLoaded == true;
-            var report = sharedLocalModels?.LastLoadReport;
-            if (report is not null)
+            result["fallbackModelId"] = model.FallbackModelId;
+            if (sharedLocalModels is { } local)
             {
-                result["loadReport"] = new JsonObject
+                result["residentInMemory"] = local.IsLoaded;
+                result["residentCount"] = local.ResidentCount;
+                result["maxResidentModels"] = local.MaxResidentModels;
+                result["concurrency"] = local.MaxConcurrency;
+                result["supportsPrefixReuse"] = local.SupportsPrefixReuse;
+                result["idleUnloadMinutes"] = local.IdleUnloadMinutes;
+                result["estimatedLoadMs"] = local.Fingerprints.EstimatedLoadMs(path);
+                var slots = new JsonArray();
+                foreach (var residency in local.Snapshot())
                 {
-                    ["attempts"] = report.Attempts,
-                    ["degradedToCpu"] = report.DegradedToCpu,
-                    ["verified"] = report.Verified,
-                    ["loadDurationMs"] = report.LoadDurationMs,
-                    ["effectiveGpuLayers"] = report.EffectiveGpuLayers,
-                    ["note"] = report.Note,
-                };
+                    slots.Add((JsonNode)new JsonObject
+                    {
+                        ["path"] = residency.Path,
+                        ["loadSignature"] = residency.LoadSignature,
+                        ["weightBytes"] = residency.WeightBytes,
+                        ["activeLeases"] = residency.RefCount,
+                        ["lastUsedUtc"] = residency.LastUsedUtc.ToString("O"),
+                        ["degradedToCpu"] = residency.Report?.DegradedToCpu,
+                        ["verified"] = residency.Report?.Verified,
+                    });
+                }
+                result["residentSlots"] = slots;
+                var report = local.LastLoadReport;
+                if (report is not null)
+                {
+                    result["loadReport"] = new JsonObject
+                    {
+                        ["attempts"] = report.Attempts,
+                        ["degradedToCpu"] = report.DegradedToCpu,
+                        ["verified"] = report.Verified,
+                        ["loadDurationMs"] = report.LoadDurationMs,
+                        ["effectiveGpuLayers"] = report.EffectiveGpuLayers,
+                        ["note"] = report.Note,
+                    };
+                }
+                if (local.Fingerprints.LastFailure(path) is { } failure)
+                {
+                    result["lastFailure"] = new JsonObject
+                    {
+                        ["at"] = failure.At.ToString("O"),
+                        ["error"] = failure.Error,
+                        ["consecutiveFailures"] = local.Fingerprints.ConsecutiveFailures(path),
+                    };
+                }
             }
         }
         return result.ToJsonString();

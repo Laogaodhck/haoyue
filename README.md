@@ -40,7 +40,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 🤖 多提供商与模型
 
 - **OpenAI 兼容 / Anthropic / Google**：主流云端模型开箱即用
-- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；加载失败自动重试（GPU 卸载失败自动降级 CPU），加载完成后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）
+- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；加载失败自动重试（GPU 卸载失败自动降级 CPU），加载完成后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）；多模型 LRU 驻留（默认 2 个，嵌入/聊天交替零重载，实测 **6.4~6.9×** 加速）、daemon 启动后台预热、加载进度实时广播（阶段 + ETA）、header/mmproj 元数据缓存（换文件自动失效）、空闲权重自动回收（默认 20 分钟）、备用模型回退与 GGUF 版本 / ABI 兼容性早期诊断——详见 [本地模型加载优化报告](haoyue_doc/本地模型加载优化报告-2026-10-14.md)
 - **本地多模态视觉**：GGUF 配套 mmproj 权重自动发现，本地模型可直接"看"对话中的图片与工具截图——带图请求自动降级 CPU 上下文规避上游 CUDA 慢路径，文本轮保持 GPU 全速
 - **智能路由**：快速、均衡、质量、经济、离线多种策略，自动重试、指数退避与熔断器故障转移
 - **用量统计**：Token 计数、成本与模型分布，桌面端图表可视化
@@ -50,7 +50,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **内置工具**：文件读/写/编辑（diff 精确应用）、grep/glob、bash、网页搜索与抓取、任务规划、屏幕捕获
 - **文档创作链**：`doc_render` 工具把 Markdown 渲染为 docx / xlsx / pptx 产物（标题/列表/引用样式完整映射、管道表格落为真实电子表格行列、H1 分页出幻灯片），复用内置 doc_toolkit（纯 Python、离线），产物统一落 `.haoyue/outputs/documents/`；Python 运行时不可用时工具自动隐藏。配套官方技能：报告成文（Word）、数据表生成（Excel）、演示稿生成（PPT）
 - **MCP**：stdio 与 SSE 传输，自动发现工具/提示/资源；提示注入有每服务器 24 个、总量 48 个的限额，超限原因在 MCP 状态中可见
-- **连接器生态**：连接器包规范（`connectors/schema/connector.schema.json`）+ 首批 11 个官方连接器——浏览器（Playwright）、Git、GitHub、邮箱（IMAP/SMTP）、日历 ICS、RSS、剪贴板、Notion、SQLite、HTTP API 通用器、系统通知；后六个由随包分发的单文件本地 MCP 服务器承载（纯 Python 标准库、零外部依赖），secret 配置项加密落盘。`haoyue connectors list / install / uninstall` 两步完成「发现 → 可用」，规范见 [connectors README](connectors/README.md)
+- **连接器生态**：连接器包规范（`connectors/schema/connector.schema.json`）+ 首批 11 个官方连接器——浏览器（Playwright）、Git、GitHub、邮箱（IMAP/SMTP）、日历 ICS、RSS、剪贴板、Notion、SQLite、HTTP API 通用器、系统通知；后六个由随包分发的单文件本地 MCP 服务器承载（纯 Python 标准库、零外部依赖），secret 配置项加密落盘。`haoyue connectors list / install / uninstall` 两步完成「发现 → 可用」，规范见 [connectors README](connectors/README.md)；安装后随包迁移仍可用——内置本地服务器路径失效时连接前自动重解析并持久化（自愈），无需手动重装
 - **技能系统**：目录式技能（`skill.yaml` + `prompt.txt`），manifest v2 支持触发关键词、工具白名单与参数收集；技能变更后扫描热加载，无需重启；**30 个官方技能**随目录分发（深度研究、周报、数据清洗、截图 OCR 入库、依赖审计、竞品扫描、文档三件套等），桌面端技能市场一键安装
 - **多模态输出**：`image_generate` 图像生成（OpenAI 兼容 images/generations 端点，b64/url 双通道），产物落 `.haoyue/outputs/images/` 并可回灌视觉核验链；未配置图像模型时工具自动隐藏（本地扩散模型不在进程内推理能力内，可接 ComfyUI/SD 兼容网关，见 [部署与隔离 Runbook](haoyue_doc/runbooks/deployment-isolation.md)）
 - **允许的网站（外部网站访问白名单）**：`web.allowedSites` 配置后 `web_fetch` 仅能抓取列表中的站点与 localhost（127.x / ::1 始终可用），支持 `https://*.example.com` 子域通配（根域需单独添加）；运行时强制、每次执行现读配置，桌面端「设置 → 允许的网站」卡片可视化增删（RPC `web.allowedGet` / `web.allowedSet`），变更立即生效无需重启
@@ -61,7 +61,8 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **高容错检索**：同义词扩展、全半角归一化、CJK 二元分词与编辑距离兜底——错别字、中英混排也能命中；支持自定义同义词表热重载
 - **语义检索层**：配置 embedding 能力模型后，知识检索自动升级为「词法 + 余弦相似度」混合排序（0.6/0.4 融合），向量按 (工作区, 词条, 模型) 缓存于 SQLite；任一环节失败自动整体退回纯词法方案——语义是增强，不是依赖。双通道接入：HTTP 走 OpenAI 兼容 /embeddings（Ollama / LM Studio / 云端均可）；本地 GGUF 嵌入模型（`capabilities.embedding = true`）直接进程内推理，零网络依赖
 - **规则与记忆**：AGENTS.md 工作区规则自动注入（带来源信封、优先级钉死），MEMORY.md 长期记忆支持自动 / 手动管理
-- **项目事实层**：`fact_save` 沉淀带来源、置信度、可选 TTL 的结构化短句事实（`.haoyue/facts.json`），自动注入后续回合并标注"待确认"，到期自动失效——介于 MEMORY.md 与知识库之间的中间记忆层
+- **项目事实层**：`fact_save` 沉淀带来源、置信度、可选 TTL 的结构化短句事实（`.haoyue/facts.json`），自动注入后续回合并标注"待确认"，到期自动失效——介于 MEMORY.md 与知识库之间的中间记忆层；`fact_search` 按主题检索、`fact_forget` 撤销错误事实；同主题新事实可显式 `supersedes` 或自动仲裁（词条 Jaccard ≥ 0.45 且置信度不低于旧），被取代事实退出注入但保留供审计，冲突事实注入时带「采信前先向用户确认」标注
+- **记忆固化（ConsolidationRunner）**：daemon 每 6 小时把近期会话经验自动提炼为项目事实（隔离回合 + 幂等去重 + 冲突仲裁兜底，模型只判断"什么值得记住"），有实际执行步骤的成功回合结束给一条轻提示——「经历 → 记忆」不再依赖模型当回合自觉；`agent.memoryConsolidationEnabled` 可关闭
 
 ### 🤝 多代理协作
 
@@ -78,6 +79,12 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **单写者收敛**：CLI 的配置写操作自动委托给在线 daemon（`config.save`），离线才回退本地——彻底消除多写点竞争
 - **提示预算**：上下文注入总量超 24k token 时按降级秩逆序丢弃（知识库 → 技能正文 → MCP → 目录/记忆），System/Developer 消息永不丢弃，丢弃动作在会话中明示
 - **回合回滚（TurnScope）**：每个回合维护步骤账本与补偿栈，`write`/`edit` 的文件变更可一键撤销（`agent.undo`）；桌面端回合完成后出现撤销横幅；daemon 崩溃后启动对账，提示未完成回合的可恢复文件
+- **回合级失败工具隔离**：同一（工具，参数签名）失败达到换策略阈值后，该工具在本回合剩余时间内直接拒绝执行——把"摆烂重试同一命令"的最坏消耗从 MaxSteps 全烧压到阈值即刹车（硬动作，模型无法绕过）
+- **bash 进程树治理**：默认路径自托管进程执行——Windows kill-on-close Job / Unix setsid 进程组整组 SIGKILL，超时不留孤儿进程；超时前已产生的输出回传模型而非整体丢弃
+- **工具输出尾部优先截断**：非零退出码 / 超时的输出按 head+tail 折叠保留（构建与测试日志的失败摘要、exit code、统计几乎总在尾部），成功输出保持头截断
+- **token 估算实测校准**：per-model EWMA 校准系数（钳制 0.5~2.5）随每次请求回写，上下文预算按该模型实测口径收敛，不再系统性高估 / 低估
+- **视觉历史跨回合治理**：仅保留最近 6 条含图消息 + SHA256 内容去重 + 图片 token 双预算，图片不再跨回合重复上传
+- **会话保留策略**：过期会话自动归档、无引用孤儿图片清理、每日至多一次 VACUUM（`agent.sessionRetentionDays`，默认 90，0 = 关闭）
 
 ### 📋 后台任务队列
 
@@ -266,7 +273,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（753 用例，覆盖率门槛 ≥70%）
+├── haoyue_tests/         # 运行时单元测试（873 用例，覆盖率门槛 ≥70%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
@@ -448,7 +455,7 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test haoyue_tests      # 运行时测试（753 用例）
+dotnet test haoyue_tests      # 运行时测试（873 用例）
 dotnet test haoyue_cli_tests  # CLI 测试
 
 # 桌面端（需先 pnpm install）
@@ -510,6 +517,9 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - 跨语言契约治理（Contract First）、测试金字塔与覆盖率门槛
 - NLP 与 HCI 全面优化评估报告、知识库优化说明
 - 模型加载模块增强实施方案（逐模型加载配置、自动重试与 CPU 降级、加载后推理自检）
+- Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
+- 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - ProviderManager 并发与参数审查
 
 重大技术选型以 [ADR（架构决策记录）](haoyue_doc/adr/README.md) 文档化（已回填 8 篇），每个内置工具与官方技能配有 [Runbook 操作手册](haoyue_doc/runbooks/README.md)（护栏测试强制）。

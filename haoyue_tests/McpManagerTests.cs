@@ -162,7 +162,7 @@ public class McpManagerTests : IDisposable
         var text = await huge.Resolver(RenderContext(), CancellationToken.None);
 
         Assert.NotNull(text);
-        Assert.Contains("middle section trimmed", text);
+        Assert.Contains("注入截断", text);
         Assert.True(text!.Length < oversized.Length);
     }
 

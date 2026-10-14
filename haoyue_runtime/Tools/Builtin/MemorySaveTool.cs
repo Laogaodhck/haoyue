@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Prompts;
 
@@ -28,29 +29,16 @@ public sealed class MemorySaveTool(IPromptProvider prompts) : BuiltinTool(prompt
         if (string.IsNullOrEmpty(content))
             return ToolResult.Fail("content is required");
         var topic = GetString(arguments, "topic")?.Trim();
-        var line = $"- {DateTimeOffset.Now:yyyy-MM-dd} {(string.IsNullOrEmpty(topic) ? "" : $"[{topic}] ")}{content}";
 
-        var file = context.Workspace.MemoryFile;
-        try
-        {
-            Directory.CreateDirectory(context.Workspace.MemoryDir);
-            var existing = File.Exists(file) ? await File.ReadAllTextAsync(file, ct).ConfigureAwait(false) : "";
-            if (existing.Split('\n').Any(l => l.Contains(content, StringComparison.OrdinalIgnoreCase)))
-                return ToolResult.Ok(
-                    $"该内容已存在于工作区记忆中，未重复写入：\n{line}", "Memory already recorded");
-            if (existing.Length > 0 && !existing.EndsWith('\n'))
-                existing += "\n";
-            // 原子写（temp+rename）：MEMORY.md 是用户策展内容且无备份，崩溃时绝不能
-            // 留下半截文件——WriteAtomicAsync 与文件工具共用同一保障。
-            await WriteAtomicAsync(file, existing + line + "\n", ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return ToolResult.Fail($"无法写入记忆文件：{ex.Message}");
-        }
+        var append = await MemoryFileWriter.AppendAsync(
+            context.Workspace.MemoryFile, content, topic, ct).ConfigureAwait(false);
+        if (append.Result == MemoryFileWriter.Status.Rejected)
+            return ToolResult.Fail(append.Message ?? "无法写入工作区记忆");
+        if (append.Result == MemoryFileWriter.Status.Duplicate)
+            return ToolResult.Ok($"{append.Message}：\n{append.Line}", "Memory already recorded");
 
-        return ToolResult.Ok(
-            $"已写入工作区记忆（MEMORY.md）：\n{line}\n该记忆会在此工作区的后续回合自动注入系统提示。",
-            "Memory saved");
+        var summary = $"已写入工作区记忆（MEMORY.md）：\n{append.Line}\n该记忆会在此工作区的后续回合自动注入系统提示。";
+        if (append.Message is { } warning) summary += $"\n{warning}";
+        return ToolResult.Ok(summary, "Memory saved");
     }
 }

@@ -145,7 +145,9 @@ public sealed record MemoryConsolidationCompletedEvent(
     int SessionsScanned,
     int FactsAdded,
     int FactsSuperseded,
-    string? Error = null) : RuntimeEvent;
+    string? Error = null,
+    int MemoryPromoted = 0,
+    string? MemoryNote = null) : RuntimeEvent;
 
 /// <summary>Explicit user feedback on a finished turn (P4 thumbs-down). The defect
 /// aggregator turns each negative feedback into its own defect report so the next

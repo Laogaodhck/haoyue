@@ -243,25 +243,27 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
 
         // 记忆分层·项目事实层（FactsStore）：带来源/置信度/过期时间的短句事实，
         // 注入排在 MEMORY.md 之后（DegradeRank 11 vs 10，预算紧张时先丢事实层）。
-        // 低置信事实显式标注「待确认」，避免模型把推断当定论。
+        // 不再整块灌入：按当前用户消息的相关性取 top-K（无关事实只会稀释提示），
+        // 用户明确给出的事实（source=user）保底带上，选中集同时回写使用信号供衰减用。
         registry.Register(new PromptContribution("project-facts", PromptSlot.Memory, DegradeRank: 11, Resolver: (ctx, _) =>
         {
             if (ctx.WorkspaceRoot is null) return ValueTask.FromResult<string?>(null);
-            List<FactEntry> facts;
+            FactsStore.FactSelection selection;
             try
             {
-                var store = new FactsStore();
-                store.PurgeExpiredForRoot(ctx.WorkspaceRoot);
-                facts = [.. store.ListActiveForRoot(ctx.WorkspaceRoot)];
+                selection = new FactsStore().SelectForInjection(
+                    ctx.WorkspaceRoot,
+                    ctx.Variables.TryGetValue("user_message", out var message) ? message : null,
+                    configStore.Config.Agent.FactsInjectTopK);
             }
             catch (Exception)
             {
                 return ValueTask.FromResult<string?>(null);
             }
-            if (facts.Count == 0) return ValueTask.FromResult<string?>(null);
+            if (selection.Facts.Count == 0) return ValueTask.FromResult<string?>(null);
             // M-D: 按置信度→新者优先排序；同主题的多条事实（自动仲裁未覆盖的残余冲突）
             // 从第二条起显式标注冲突与采信顺序——模型不再靠猜，也知道可以先问用户。
-            var ordered = facts
+            var ordered = selection.Facts
                 .OrderByDescending(f => f.Confidence)
                 .ThenByDescending(f => f.CreatedAt)
                 .ToList();
@@ -271,16 +273,24 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                 {
                     var topic = f.Topic ?? "general";
                     var conflicting = !seenTopics.Add(topic);
-                    return $"- [{topic}] ({f.Source}, 置信度 {f.Confidence:0.0}{(f.Confidence < 0.7 ? "，待确认" : "")})"
+                    return $"- [{topic}] ({f.Source}, 置信度 {f.Confidence:0.0}{(f.Confidence < 0.7 ? "，待确认" : "")}"
+                        + (f.DenialCount > 0 ? $", 已被否认 {f.DenialCount} 次" : "") + ")"
                         + (conflicting ? " ⚠ 与同主题更高优先级的事实冲突，采信前请先向用户确认" : "")
                         + $" {f.Content}";
                 })
                 .ToList();
+            // 只带了 top-K 就必须说明还剩多少、怎么取——否则模型会把缺省当成「没有相关事实」。
+            var omitted = selection.ActiveTotal - ordered.Count;
+            var tail = omitted > 0
+                ? $"\n\n本次按相关性只带入了 {ordered.Count}/{selection.ActiveTotal} 条事实，另有 {omitted} 条未注入；"
+                  + "需要时用 fact_search 按关键词取，切勿把这里的缺省当成「事实层是空的」。"
+                : "\n\n以上为自动沉淀的项目事实：置信度低（待确认）的条目使用前请先核实；与当前任务无关的事实可忽略。";
             var text = "## 项目事实（自动沉淀，带来源与置信度）\n"
                 + string.Join("\n", lines)
-                + "\n\n以上为自动沉淀的项目事实：置信度低（待确认）的条目使用前请先核实；与当前任务无关的事实可忽略。需要沉淀新事实时使用 fact_save 工具。";
+                + tail
+                + "\n需要沉淀新事实时使用 fact_save 工具。";
             return ValueTask.FromResult<string?>(prompts.TryGet("builtin/facts") is { } template
-                ? template.Replace("{{facts}}", string.Join("\n", lines))
+                ? template.Replace("{{facts}}", string.Join("\n", lines) + tail)
                 : text);
         }));
     }

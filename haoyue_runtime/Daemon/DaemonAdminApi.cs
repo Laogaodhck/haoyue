@@ -2311,6 +2311,11 @@ internal sealed class DaemonAdminApi(
             ["isGlobal"] = workspace.IsGlobal,
             ["exists"] = content is not null,
             ["content"] = content ?? "",
+            ["chars"] = content?.Length ?? 0,
+            ["lines"] = content?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length ?? 0,
+            ["charLimit"] = MemoryBudget.MaxChars,
+            ["lineLimit"] = MemoryBudget.MaxLines,
+            ["warning"] = content is null ? null : MemoryBudget.ApproachingWarning(content),
         }.ToJsonString();
     }
 
@@ -2318,19 +2323,31 @@ internal sealed class DaemonAdminApi(
     {
         var workspace = SessionWorkspace(parameters);
         var content = RequiredString(parameters, "content");
+        // 与 memory_save 工具同一额度：桌面编辑器整篇覆盖写入也不能绕过上限，
+        // 否则上限只在模型侧生效、用户一保存就把它撑破了。
+        if (MemoryBudget.Overflow(content) is { } overflow)
+            throw new DaemonRequestException(overflow);
+        var file = workspace.MemoryFile;
         try
         {
             Directory.CreateDirectory(workspace.MemoryDir);
-            File.WriteAllText(workspace.MemoryFile, content);
+            // 原子替换：MEMORY.md 无备份，崩溃或断电不能留下半截文件。
+            var temp = file + ".tmp";
+            File.WriteAllText(temp, content);
+            File.Move(temp, file, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            try { if (File.Exists(file + ".tmp")) File.Delete(file + ".tmp"); } catch (Exception) { }
             throw new DaemonRequestException($"无法写入记忆文件：{ex.Message}");
         }
         return new JsonObject
         {
-            ["path"] = workspace.MemoryFile,
+            ["path"] = file,
             ["isGlobal"] = workspace.IsGlobal,
+            ["chars"] = content.Length,
+            ["limit"] = MemoryBudget.MaxChars,
+            ["warning"] = MemoryBudget.ApproachingWarning(content),
         }.ToJsonString();
     }
 

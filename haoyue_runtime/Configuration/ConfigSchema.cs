@@ -60,6 +60,8 @@ public static class ConfigSchema
         New("agent.scheduledTurnTimeoutSeconds", "int", 1_800, min: 60, max: 86_400),
         New("agent.language", "enum", "auto", allowed: ["auto", "zh", "en"], view: ViewBoth),
         New("agent.memoryMode", "enum", "auto", allowed: ["auto", "manual"]),
+        // 事实层每回合注入条数上限：整块灌入会随库增大稀释提示，故按相关性取 top-K。
+        New("agent.factsInjectTopK", "int", 12, min: 1, max: 50),
         New("agent.networkEnabled", "bool", true),
         New("agent.visionModel", "string", null),
         New("agent.delegationEnabled", "bool", true),

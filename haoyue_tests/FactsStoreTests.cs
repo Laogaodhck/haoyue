@@ -56,7 +56,7 @@ public sealed class FactsStoreTests : IDisposable
         File.WriteAllText(file, raw);
 
         Assert.DoesNotContain(_store.ListActiveForRoot(_dir), f => f.Id == entry.Id);
-        Assert.Equal(1, _store.PurgeExpiredForRoot(_dir));
+        Assert.Equal(1, _store.CompactForRoot(_dir));
         Assert.Empty(_store.ListActiveForRoot(_dir));
     }
 
@@ -90,6 +90,162 @@ public sealed class FactsStoreTests : IDisposable
         Assert.True(_store.ForgetForRoot(_dir, entry.Id));
         Assert.Empty(_store.ListActiveForRoot(_dir));
         Assert.False(_store.ForgetForRoot(_dir, entry.Id));
+    }
+
+    // ---------------------------------------------------------------- lifecycle
+
+    [Fact]
+    public void SupersededFacts_AreTombstonesUntilRetentionEnds_ThenDeleted()
+    {
+        var old = _store.Add(_dir, "部署走 Jenkins", "deploy", confidence: 1.0);
+        _store.Add(_dir, "部署走 GitHub Actions", "deploy", confidence: 1.0, supersedes: old.Id);
+
+        // 保留期内：不注入，但文件里仍有审计痕迹。
+        Assert.Contains("Jenkins", File.ReadAllText(FactsStore.FactsFileForRoot(_dir)));
+        Assert.DoesNotContain(_store.ListActiveForRoot(_dir), f => f.Content == "部署走 Jenkins");
+
+        // 把墓碑时间拨到保留期之外：必须真的删掉，否则墓碑会一路堆积在文件里。
+        SetField(old.Id, "supersededAt", DaysAgo(FactsStore.TombstoneRetentionDays + 5));
+        Assert.Equal(1, _store.CompactForRoot(_dir));
+        Assert.DoesNotContain("Jenkins", File.ReadAllText(FactsStore.FactsFileForRoot(_dir)));
+    }
+
+    [Fact]
+    public void Capacity_CountsOnlyActiveFacts_SoTombstonesCannotEvictThem()
+    {
+        // 129 条高置信墓碑 + 1 条低置信活跃事实：旧口径按整体置信度取前 100，
+        // 会把唯一活跃的事实当成"最不值得留"的那条删掉。
+        var file = FactsStore.FactsFileForRoot(_dir);
+        var rows = new JsonArray();
+        for (var i = 0; i < 129; i++)
+        {
+            rows.Add(Node($"f{i}", $"历史部署方式 {i}", 1.0, supersededBy: "live"));
+        }
+        rows.Add(Node("live", "现行部署方式", 0.5));
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, rows.ToJsonString());
+
+        _store.CompactForRoot(_dir);
+
+        var active = _store.ListActiveForRoot(_dir);
+        Assert.Single(active);
+        Assert.Equal("现行部署方式", active[0].Content);
+    }
+
+    [Fact]
+    public void UnusedFacts_DecayInConfidence_AndUserFactsAreExempt()
+    {
+        var agentFact = _store.Add(_dir, "推断出来的构建命令", confidence: 0.8);
+        var userFact = _store.Add(_dir, "用户明确要求的命名规范", source: "user", confidence: 1.0);
+        var stale = DaysAgo(FactsStore.UnusedDecayDays + 1);
+        SetField(agentFact.Id, "createdAt", stale);
+        SetField(userFact.Id, "createdAt", stale);
+
+        _store.CompactForRoot(_dir);
+
+        var after = _store.ListActiveForRoot(_dir);
+        Assert.True(after.Single(f => f.Id == agentFact.Id).Confidence < 0.8);
+        Assert.Equal(1.0, after.Single(f => f.Id == userFact.Id).Confidence);
+    }
+
+    [Fact]
+    public void Demote_LowersConfidenceAndCountsDenial_WithoutDeleting()
+    {
+        var entry = _store.Add(_dir, "错误的假设", confidence: 0.9);
+
+        var demoted = _store.Demote(_dir, entry.Id);
+
+        Assert.NotNull(demoted);
+        Assert.Equal(0.5, demoted!.Confidence);
+        Assert.Equal(1, demoted.DenialCount);
+        Assert.Contains(_store.ListActiveForRoot(_dir), f => f.Id == entry.Id);
+        Assert.Null(_store.Demote(_dir, "不存在的事实原文"));
+    }
+
+    [Fact]
+    public void SelectForInjection_TakesRelevantTopK_AndKeepsUserFactsPinned()
+    {
+        _store.Add(_dir, "构建命令是 dotnet build", "build", confidence: 0.9);
+        _store.Add(_dir, "无关的厨房偏好", "life", confidence: 0.9);
+        _store.Add(_dir, "回复统一用中文", "language", source: "user", confidence: 1.0);
+
+        var selection = _store.SelectForInjection(_dir, "dotnet build 构建命令", topK: 2);
+
+        Assert.Contains(selection.Facts, f => f.Content == "构建命令是 dotnet build");
+        Assert.Contains(selection.Facts, f => f.Content == "回复统一用中文"); // pinned 用户指令
+        Assert.DoesNotContain(selection.Facts, f => f.Content == "无关的厨房偏好");
+        Assert.Equal(3, selection.ActiveTotal);
+        // 被注入过 = 有使用记录，衰减判定才有依据。
+        Assert.All(selection.Facts, f => Assert.True(f.UseCount >= 1 && f.LastUsedAt is not null));
+    }
+
+    [Fact]
+    public void SelectForInjection_WithoutQuery_FallsBackToConfidenceOrder()
+    {
+        _store.Add(_dir, "低置信推断", confidence: 0.4);
+        _store.Add(_dir, "高置信事实", confidence: 1.0);
+
+        var selection = _store.SelectForInjection(_dir, null, topK: 1);
+
+        Assert.Single(selection.Facts);
+        Assert.Equal("高置信事实", selection.Facts[0].Content);
+    }
+
+    [Fact]
+    public void Search_RecordsUsageSoHitCountsFeedDecay()
+    {
+        var entry = _store.Add(_dir, "缓存失效策略是 write-through", "cache", confidence: 0.9);
+
+        _store.SearchForRoot(_dir, "write-through 缓存");
+        _store.SearchForRoot(_dir, "write-through 缓存");
+
+        var after = _store.ListActiveForRoot(_dir).Single(f => f.Id == entry.Id);
+        Assert.Equal(2, after.UseCount);
+        Assert.NotNull(after.LastUsedAt);
+    }
+
+    [Fact]
+    public void Search_KeepsTombstonesAndExpiredRowsInTheFile()
+    {
+        // 检索命中会回写使用计数，但绝不能顺手把非活跃行当垃圾丢掉。
+        var old = _store.Add(_dir, "被取代的旧说法", "deploy", confidence: 1.0);
+        _store.Add(_dir, "被取代的旧说法 已纠正", "deploy", confidence: 1.0, supersedes: old.Id);
+
+        _store.SearchForRoot(_dir, "deploy");
+
+        // 回写使用计数时落盘的必须是全量列表：只存活跃集会顺手删掉墓碑与过期行。
+        var rows = JsonNode.Parse(File.ReadAllText(FactsStore.FactsFileForRoot(_dir))!)!.AsArray();
+        Assert.Equal(2, rows.Count);
+        Assert.Contains(rows, f => (string?)f!["supersededBy"] == null);
+        Assert.Contains(rows, f => (string?)f!["supersededBy"] is not null);
+    }
+
+    /// <summary>改写 facts.json 里某条事实的字段，用来伪造「很久没用」或「墓碑已过期」。</summary>
+    private void SetField(string id, string field, string? value)
+    {
+        var file = FactsStore.FactsFileForRoot(_dir);
+        var rows = JsonNode.Parse(File.ReadAllText(file)!)!.AsArray();
+        rows.Single(f => f!["id"]!.GetValue<string>() == id)[field] = value is null ? null : JsonValue.Create(value);
+        File.WriteAllText(file, rows.ToJsonString());
+    }
+
+    private static string DaysAgo(int days) => DateTimeOffset.UtcNow.AddDays(-days).ToString("yyyy-MM-ddTHH:mm:sszzz");
+
+    private static JsonObject Node(string id, string content, double confidence, string? supersededBy = null)
+    {
+        var node = new JsonObject
+        {
+            ["id"] = id,
+            ["content"] = content,
+            ["confidence"] = confidence,
+            ["createdAt"] = DaysAgo(1),
+        };
+        if (supersededBy is not null)
+        {
+            node["supersededBy"] = supersededBy;
+            node["supersededAt"] = DaysAgo(1);
+        }
+        return node;
     }
 
     // ---------------------------------------------------------------- tool

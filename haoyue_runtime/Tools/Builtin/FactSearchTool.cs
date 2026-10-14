@@ -39,9 +39,11 @@ public sealed class FactSearchTool(IPromptProvider prompts) : BuiltinTool(prompt
                     "No facts matched"));
 
             var lines = hits.Select(f =>
-                $"- #{f.Id} [{f.Topic ?? "general"}] ({f.Source}, 置信度 {f.Confidence:0.0}{(f.ExpiresAt is { } at ? $"，过期 {at:yyyy-MM-dd}" : "")}) {f.Content}");
+                $"- #{f.Id} [{f.Topic ?? "general"}] ({f.Source}, 置信度 {f.Confidence:0.0}"
+                + (f.DenialCount > 0 ? $"，已否认 {f.DenialCount} 次" : "")
+                + (f.ExpiresAt is { } at ? $"，过期 {at:yyyy-MM-dd}" : "") + $") {f.Content}");
             var output = $"命中 {hits.Count} 条事实：\n" + string.Join("\n", lines)
-                + "\n用 fact_forget 并传入 #id 可撤销过期或错误的事实。";
+                + "\n确认不再需要就用 fact_forget 传 #id 删除；是错的则再加 countAsWrong=true 降置信度保留痕迹。";
             return Task.FromResult(ToolResult.Ok(output, $"Found {hits.Count} facts"));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -54,9 +56,11 @@ public sealed class FactSearchTool(IPromptProvider prompts) : BuiltinTool(prompt
 /// <summary>
 /// Removes a wrong or outdated fact by its #id (from fact_search) or by exact content.
 /// Fills the gap where the model could write facts but never retract them — cleanup
-/// previously depended on TTL expiry or capacity eviction. Not Mutating, following
-/// the fact_save/memory_save precedent: facts-layer metadata management stays usable
-/// in readonly modes.
+/// previously depended on TTL expiry or capacity eviction. <c>countAsWrong</c> adds the
+/// missing demotion path: the fact stays for audit value but loses confidence, so a
+/// user correction is visible instead of silently rewriting history. Not Mutating,
+/// following the fact_save/memory_save precedent: facts-layer metadata management stays
+/// usable in readonly modes.
 /// </summary>
 public sealed class FactForgetTool(IPromptProvider prompts) : BuiltinTool(prompts)
 {
@@ -65,17 +69,33 @@ public sealed class FactForgetTool(IPromptProvider prompts) : BuiltinTool(prompt
     public override string StatusLabel => "Removing fact";
 
     public override JsonObject ParameterSchema => ToolSchema.Object(
-        ("id", ToolSchema.String("要删除的事实 #id（来自 fact_search），或与事实内容完全一致的原文"), true));
+        ("id", ToolSchema.String("要删除的事实 #id（来自 fact_search），或与事实内容完全一致的原文"), true),
+        ("countAsWrong", ToolSchema.Boolean(
+            "填 true 表示「这条是错的」而非「不再需要」：不删除，改为降置信度并记一次否认，"
+            + "保留供审计与同类错误反思；置信度触底后由容量淘汰自然出局"), false));
 
     public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
         var id = GetString(arguments, "id")?.Trim();
         if (string.IsNullOrEmpty(id))
             return Task.FromResult(ToolResult.Fail("id is required"));
+        var disputed = arguments["countAsWrong"] is JsonValue flag
+            && flag.TryGetValue<bool>(out var value) && value;
 
         try
         {
             var store = new FactsStore();
+            if (disputed)
+            {
+                var demoted = store.Demote(context.Workspace.Root, id);
+                return demoted is null
+                    ? Task.FromResult(ToolResult.Fail(
+                        $"没有找到该事实（{id}）。请先用 fact_search 确认 #id；降级按完整 #id 或完整内容原文匹配。"))
+                    : Task.FromResult(ToolResult.Ok(
+                        $"事实已降级（#{demoted.Id}，置信度 {demoted.Confidence:0.0}，累计否认 {demoted.DenialCount} 次）："
+                        + $"\n{demoted.Content}\n它仍在事实层里，但排序已退到候选末尾；确认彻底无用再去掉 countAsWrong 重调一次删除。",
+                        "Fact confidence demoted"));
+            }
             return Task.FromResult(store.ForgetForRoot(context.Workspace.Root, id)
                 ? ToolResult.Ok($"事实已删除：{id}", "Fact removed")
                 : ToolResult.Fail(

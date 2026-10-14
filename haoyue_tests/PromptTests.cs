@@ -169,9 +169,30 @@ public sealed class PromptTests : IDisposable
         var text = new string('a', 20_000);
         var fit = ContextPlanner.FitInjectedText(text, maxTokens: 100);
 
-        Assert.True(ContextPlanner.EstimateTokens(fit) <= 120);
-        Assert.Contains("middle section trimmed", fit);
-        Assert.StartsWith(new string('a', 200), fit);
+        // 截断提示条自身也算预算，所以整体必须落在申请额度内而不是「加个尾巴再超一点」。
+        Assert.True(ContextPlanner.EstimateTokens(fit) <= 100);
+        Assert.Contains("注入截断", fit);
+        // 保头保尾：两端仍是原文的前缀/后缀，中间缺省由提示条说明。
+        var head = fit[..fit.IndexOf('\n')];
+        var tail = fit[fit.LastIndexOf('\n')..].TrimStart('\n');
+        Assert.True(head.Length > 0 && text.StartsWith(head));
+        Assert.True(tail.Length > 0 && text.EndsWith(tail));
+    }
+
+    [Fact]
+    public void FitInjectedText_TrimIsAnnouncedAndPaidForOutOfTheBudget()
+    {
+        var text = string.Concat(Enumerable.Repeat("记忆内容 memory entry ", 4_000));
+
+        var fit = ContextPlanner.FitInjectedText(text, maxTokens: 600, label: "MEMORY.md");
+
+        // 静默截断是原缺陷：模型读到缺半截却以为那就是全文。
+        Assert.Contains("MEMORY.md", fit);
+        Assert.Contains("省略", fit);
+        Assert.Contains("read_file", fit);
+        // 提示条本身也算预算，不能因为加了标记反而超出注入额度。
+        Assert.True(ContextPlanner.EstimateTokens(fit) <= 600,
+            $"fitted fragment costs {ContextPlanner.EstimateTokens(fit)} tokens over a 600 budget");
     }
 
     [Fact]

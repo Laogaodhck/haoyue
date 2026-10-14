@@ -25,15 +25,19 @@ public sealed record ConsolidationRunResult(
     int FactsAdded,
     int FactsSuperseded,
     string? SessionId,
-    string? Error);
+    string? Error,
+    int MemoryPromoted = 0,
+    string? MemoryNote = null);
 
 /// <summary>
 /// H-C 记忆固化引擎：把「经历」变「记忆」的自动化沉淀链路。定时扫描近期更新过的
 /// 会话（全局 + 全部已注册项目工作区），在一次隔离回合里提炼候选事实，按来源
 /// 工作区写回 FactsStore——幂等去重与 M-D 冲突仲裁由存储层兜底，模型只负责判断
-/// 「什么值得记住」。与 ReflectionRunner 同构：隔离回合、JSON 输出契约、单航班、
-/// 墙钟预算、anti-self-feeding（自己的固化会话不再被扫描）。低置信事实照常入库，
-/// 注入侧自带「待确认」标注，不把推断当定论。
+/// 「什么值得记住」。模型标了 durable 的高置信条目额外晋升到该工作区的 MEMORY.md
+/// （只读模式下不写，条数与额度由 MemoryFileWriter/MemoryBudget 兜底），否则固化永远只能
+/// 写事实层，策展记忆层只能靠用户手抄。与 ReflectionRunner 同构：隔离回合、JSON
+/// 输出契约、单航班、墙钟预算、anti-self-feeding（自己的固化会话不再被扫描）。
+/// 低置信事实照常入库，注入侧自带「待确认」标注，不把推断当定论。
 /// </summary>
 public sealed class ConsolidationRunner
 {
@@ -46,6 +50,10 @@ public sealed class ConsolidationRunner
     private const int MaxEntryChars = 1_200;
     /// <summary>固化会话标题标记：跨进程识别自己的产物，避免自我回喂。</summary>
     internal const string SessionTitle = "记忆固化（后台）";
+    /// <summary>单轮可晋升进 MEMORY.md 的条数上限：策展文件被后台写手灌满是最坏结局。</summary>
+    private const int MaxMemoryPromotionsPerPass = 5;
+    /// <summary低于此置信度不晋升：MEMORY.md 每回合整段注入，把推断当定论会持续误导。</summary>
+    private const double DurableMinConfidence = 0.85;
 
     private readonly HaoyueRuntime _runtime;
     private readonly IFileLockCoordinator _fileLocks;
@@ -97,7 +105,8 @@ public sealed class ConsolidationRunner
             _gate.Release();
         }
         _runtime.Events.Publish(new MemoryConsolidationCompletedEvent(
-            result.SessionId ?? "-", result.SessionsScanned, result.FactsAdded, result.FactsSuperseded, result.Error));
+            result.SessionId ?? "-", result.SessionsScanned, result.FactsAdded, result.FactsSuperseded,
+            result.Error, result.MemoryPromoted, result.MemoryNote));
         return result;
     }
 
@@ -154,25 +163,57 @@ public sealed class ConsolidationRunner
         var store = new FactsStore();
         var added = 0;
         var merged = 0;
+        var promoted = 0;
+        var skipped = new List<string>();
+        var memoryMode = MemoryMode.Normalize(_runtime.ConfigStore.Config.Agent.MemoryMode);
         foreach (var fact in facts)
         {
             if (fact.Entry < 1 || fact.Entry > entries.Count) continue;
-            var root = entries[fact.Entry - 1].Root;
-            var before = store.ListActiveForRoot(root).Count;
+            var source = entries[fact.Entry - 1].Workspace;
+            var before = store.ListActiveForRoot(source.Root).Count;
             store.Add(
-                root, fact.Content, fact.Topic,
+                source.Root, fact.Content, fact.Topic,
                 source: "agent", confidence: fact.Confidence, supersedes: fact.Supersedes);
-            var after = store.ListActiveForRoot(root).Count;
+            var after = store.ListActiveForRoot(source.Root).Count;
             if (after > before) added++;
             else merged++; // 幂等刷新或仲裁合并：净增长为零
+
+            if (!fact.Durable) continue;
+            if (promoted >= MaxMemoryPromotionsPerPass)
+            {
+                skipped.Add("本轮晋升条数已达上限");
+                continue;
+            }
+            // 手动管理模式下 MEMORY.md 归用户所有，后台写手不得插手；注入侧同时带只读契约。
+            if (memoryMode == MemoryMode.Manual)
+            {
+                skipped.Add("记忆为手动管理模式，未改写 MEMORY.md");
+                continue;
+            }
+            if (fact.Confidence < DurableMinConfidence)
+            {
+                skipped.Add($"低置信条目未晋升（{fact.Confidence:0.0} < {DurableMinConfidence:0.0}）");
+                continue;
+            }
+            var append = await MemoryFileWriter.AppendAsync(
+                source.MemoryFile, fact.Content, fact.Topic, ct).ConfigureAwait(false);
+            if (append.Result == MemoryFileWriter.Status.Written) promoted++;
+            else skipped.Add(append.Message ?? append.Result.ToString());
         }
-        return new ConsolidationRunResult(entries.Count, added, merged, sessionId, null);
+        return new ConsolidationRunResult(
+            entries.Count, added, merged, sessionId, null, promoted,
+            skipped.Count > 0 ? string.Join("；", skipped.Distinct(StringComparer.OrdinalIgnoreCase)) : null);
     }
 
     // ---------------------------------------------------------------- scan
 
-    /// <summary>One scanned session: which workspace it belongs to + a compact digest.</summary>
-    internal sealed record SessionDigest(string Root, string Digest);
+    /// <summary>One scanned session: which workspace it belongs to + a compact digest.
+    /// The whole WorkspaceInfo (not just the root) travels with it because durable
+    /// promotions need that workspace's MEMORY.md path, not only facts.json.</summary>
+    internal sealed record SessionDigest(WorkspaceInfo Workspace, string Digest)
+    {
+        public string Root => Workspace.Root;
+    }
 
     /// <summary>
     /// Scans recently-updated sessions across the runtime's current workspace plus
@@ -195,7 +236,7 @@ public sealed class ConsolidationRunner
                 if (IsOwnSession(header)) continue;
                 var session = _runtime.Sessions.Load(workspace, header.Id);
                 if (session is null || session.Messages.Count == 0) continue;
-                digests.Add(new SessionDigest(workspace.Root, DigestOf(session)));
+                digests.Add(new SessionDigest(workspace, DigestOf(session)));
                 if (digests.Count >= MaxScanSessions) return digests;
             }
         }
@@ -265,16 +306,22 @@ public sealed class ConsolidationRunner
         sb.AppendLine("- content 用一句话说清；topic 用简短英文标签（build / test / deploy / convention / env / decision / preference 等）。");
         sb.AppendLine("- confidence：用户明确说过的填 0.9~1.0，从代码或日志推断出的填 0.5~0.8。");
         sb.AppendLine("- 纠正旧事实时，supersedes 填旧事实的完整内容（可选）。");
+        sb.AppendLine("- 只有「值得长期放在策展记忆里」的条目才加 durable:true：用户明确表达过的偏好、长期有效的项目约定。");
+        sb.AppendLine($"  durable 条目会同时追加进该工作区的 MEMORY.md（每回合整段注入系统提示），所以宁缺勿滥，"
+            + $"一轮最多晋升 {MaxMemoryPromotionsPerPass} 条；低置信（<{DurableMinConfidence:0.0}）"
+            + "与手动管理模式下程序会自行拒绝，不需要你重复标注。");
         sb.AppendLine("- 没有值得沉淀的内容就返回空数组，不要硬凑。");
         sb.AppendLine();
         sb.AppendLine("## 输出契约（必须遵守）");
         sb.AppendLine("回复必须以一个 ```json 围栏代码块结尾，且只包含以下形态：");
-        sb.AppendLine("{\"facts\":[{\"entry\":1,\"content\":\"构建用 pnpm build\",\"topic\":\"build\",\"confidence\":0.9}]}");
+        sb.AppendLine("{\"facts\":[{\"entry\":1,\"content\":\"构建用 pnpm build\",\"topic\":\"build\",\"confidence\":0.9},"
+            + "{\"entry\":2,\"content\":\"回复统一使用中文\",\"topic\":\"preference\",\"confidence\":1.0,\"durable\":true}]}");
         sb.AppendLine("{\"facts\":[]}");
         return sb.ToString();
     }
 
-    internal sealed record ParsedFact(int Entry, string Content, string? Topic, double Confidence, string? Supersedes);
+    internal sealed record ParsedFact(
+        int Entry, string Content, string? Topic, double Confidence, string? Supersedes, bool Durable = false);
 
     /// <summary>Extracts the trailing ```json conclusion block; null facts means parse failure.</summary>
     internal static (List<ParsedFact>? Facts, string? Error) ParseFacts(string text)
@@ -310,7 +357,8 @@ public sealed class ConsolidationRunner
                     content,
                     obj["topic"]?.GetValue<string>()?.Trim(),
                     Math.Clamp(confidence, 0, 1),
-                    obj["supersedes"]?.GetValue<string>()?.Trim()));
+                    obj["supersedes"]?.GetValue<string>()?.Trim(),
+                    ReadBool(obj["durable"])));
             }
             return (facts, null);
         }
@@ -324,6 +372,17 @@ public sealed class ConsolidationRunner
             return (null, $"结论块字段类型异常：{ex.Message}");
         }
     }
+
+    /// <summary>Tolerant boolean read: models emit durable as true / "true" / 1 interchangeably,
+    /// and a GetValue&lt;bool&gt; throw on one stray field would discard the whole pass.</summary>
+    private static bool ReadBool(JsonNode? node) => node?.GetValueKind() switch
+    {
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.String => node.GetValue<string>().Trim().ToLowerInvariant() is "true" or "1" or "yes",
+        JsonValueKind.Number => node.GetValue<double>() >= 1,
+        _ => false,
+    };
 
     /// <summary>Default turn host: an isolated runtime sharing daemon infrastructure.</summary>
     private async Task<AgentTurnResult> RunIsolatedTurnAsync(

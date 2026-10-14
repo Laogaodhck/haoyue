@@ -255,6 +255,11 @@ public sealed class AgentConfig
     /// </summary>
     public string MemoryMode { get; set; } = "auto";
     /// <summary>
+    /// 每回合注入的项目事实条数上限。事实层按与当前用户消息的相关性挑 top-K，
+    /// 不再是整块灌入：库越大提示越稀释，无关事实还会挤占上下文预算。
+    /// </summary>
+    public int FactsInjectTopK { get; set; } = 12;
+    /// <summary>
     /// Global network access switch. When false, network tools (web_search, web_fetch) are stripped
     /// and the agent prompt enforces offline operation across all workspaces.
     /// </summary>

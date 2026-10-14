@@ -2190,6 +2190,9 @@ public sealed class DaemonServer : IAsyncDisposable
                     ["factsSuperseded"] = consolidated.FactsSuperseded,
                 };
                 if (!string.IsNullOrWhiteSpace(consolidated.Error)) consolidatedDetails["error"] = consolidated.Error;
+                consolidatedDetails["memoryPromoted"] = consolidated.MemoryPromoted;
+                if (!string.IsNullOrWhiteSpace(consolidated.MemoryNote))
+                    consolidatedDetails["memoryNote"] = consolidated.MemoryNote;
                 await BroadcastAsync(0, "memory.consolidated", "记忆固化完成", ct, consolidatedDetails)
                     .ConfigureAwait(false);
                 continue;

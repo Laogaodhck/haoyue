@@ -130,23 +130,42 @@ public static class ContextPlanner
     /// <summary>
     /// Truncates a single injected text fragment to <paramref name="maxTokens"/>, keeping
     /// both the head and tail so file paths / constraints and final decisions stay visible.
+    /// The cut is announced in-band: the previous silent middle-removal left the model
+    /// reading half of MEMORY.md while the file on disk stayed complete, so it answered
+    /// from a partial memory and nobody could tell. The marker states how much is missing
+    /// and how to get it.
     /// </summary>
-    public static string FitInjectedText(string text, int maxTokens = MaxInjectedFragmentTokens)
+    public static string FitInjectedText(string text, int maxTokens = MaxInjectedFragmentTokens, string? label = null)
     {
         if (string.IsNullOrWhiteSpace(text) || EstimateTokens(text) <= maxTokens)
             return text;
 
-        // The char budget follows the text's own script density so the fitted result
-        // estimates at (or near) the requested token budget for CJK and Latin alike.
-        var budgetChars = Math.Max(1, (int)(maxTokens * CharsPerTokenFor(text)));
-        var headChars = budgetChars / 2;
-        var tailChars = budgetChars - headChars;
-        var head = text[..headChars];
-        var tail = text[^tailChars..];
-        return head
-               + "\n\n… [middle section trimmed: injected context exceeded the token budget] …\n\n"
-               + tail;
+        var source = string.IsNullOrWhiteSpace(label) ? "注入内容" : label.Trim();
+        var totalTokens = EstimateTokens(text);
+        var droppedTokens = Math.Max(1, totalTokens - maxTokens);
+        // The marker is part of the injected payload, so it is paid for out of the budget:
+        // otherwise a "fitted" fragment could exceed maxTokens by the banner's own size.
+        var marker = BuildTrimMarker(source, totalTokens, droppedTokens);
+        var contentTokens = Math.Max(1, maxTokens - EstimateTokens($"\n\n{marker}\n\n"));
+
+        // CharsPerTokenFor is a ratio of the WHOLE text, so the assembled estimate is only
+        // approximately the budget: shrink until the actual payload fits rather than trusting
+        // the arithmetic and returning a "fitted" fragment that still overruns.
+        while (true)
+        {
+            var budgetChars = Math.Min(Math.Max(2, (int)(contentTokens * CharsPerTokenFor(text))), text.Length - 1);
+            var headChars = budgetChars / 2;
+            var tailChars = budgetChars - headChars;
+            var fitted = text[..headChars] + "\n\n" + marker + "\n\n" + text[^tailChars..];
+            if (EstimateTokens(fitted) <= maxTokens || contentTokens <= 1 || headChars + tailChars <= 2)
+                return fitted;
+            contentTokens -= Math.Max(1, contentTokens / 8);
+        }
     }
+
+    private static string BuildTrimMarker(string source, int totalTokens, int droppedTokens)
+        => $"⚠ [Haoyue 注入截断：{source}原文约 {totalTokens} tokens，本次省略中间约 {droppedTokens} tokens。"
+         + "缺省不代表内容不存在——需要完整内容请用 read_file 读取该文件。] ⚠";
 
     /// <summary>
     /// Trust boundary for third-party prompt text (MCP prompts/resources, imported skill

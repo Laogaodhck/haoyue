@@ -215,4 +215,100 @@ public sealed class ConsolidationRunnerTests : IDisposable
         Assert.Equal(0, completed.FactsAdded);
         Assert.Null(completed.Error);
     }
+
+    // ---------------------------------------------------------------- MEMORY.md 晋升
+
+    [Fact]
+    public async Task RunAsync_DurableFact_PromotesIntoWorkspaceMemory()
+    {
+        SeedSession("以后所有回复都用中文");
+        var runner = NewRunner(Scripted(
+            "```json\n{\"facts\":[{\"entry\":1,\"content\":\"回复统一使用中文\",\"topic\":\"preference\","
+            + "\"confidence\":1.0,\"durable\":true}]}\n```"));
+
+        var result = await runner.RunAsync("test", CancellationToken.None);
+
+        Assert.Equal(1, result.MemoryPromoted);
+        Assert.Null(result.MemoryNote);
+        var memory = await File.ReadAllTextAsync(_runtime.Workspace.MemoryFile);
+        Assert.Contains("回复统一使用中文", memory);
+        Assert.Contains("[preference]", memory);
+        // 事实层与记忆层双写：晋升不代替事实入库。
+        Assert.Contains(new FactsStore().ListActiveForRoot(_runtime.Workspace.Root),
+            f => f.Content == "回复统一使用中文");
+    }
+
+    [Fact]
+    public async Task RunAsync_DurableFact_StillSupersededByManualMemoryMode()
+    {
+        // 手动管理模式下 MEMORY.md 归用户，后台写手不得插手——但要说明为什么没写。
+        SeedSession();
+        _runtime.ConfigStore.Config.Agent.MemoryMode = MemoryMode.Manual;
+        var runner = NewRunner(Scripted(
+            "```json\n{\"facts\":[{\"entry\":1,\"content\":\"回复统一使用中文\",\"confidence\":1.0,\"durable\":true}]}\n```"));
+
+        var result = await runner.RunAsync("test", CancellationToken.None);
+
+        Assert.Equal(0, result.MemoryPromoted);
+        Assert.Contains("手动", result.MemoryNote);
+        Assert.Equal(1, result.FactsAdded);
+        Assert.False(File.Exists(_runtime.Workspace.MemoryFile));
+    }
+
+    [Fact]
+    public async Task RunAsync_LowConfidenceDurable_IsKeptOutOfMemory()
+    {
+        SeedSession();
+        var runner = NewRunner(Scripted(
+            "```json\n{\"facts\":[{\"entry\":1,\"content\":\"大概是用 pnpm 吧\",\"confidence\":0.6,\"durable\":true}]}\n```"));
+
+        var result = await runner.RunAsync("test", CancellationToken.None);
+
+        Assert.Equal(0, result.MemoryPromoted);
+        Assert.Contains("低置信", result.MemoryNote);
+        Assert.False(File.Exists(_runtime.Workspace.MemoryFile));
+    }
+
+    [Fact]
+    public async Task RunAsync_DurablePromotion_IsCappedPerPass()
+    {
+        SeedSession();
+        var facts = string.Join(",", Enumerable.Range(1, 7).Select(i =>
+            $"{{\"entry\":1,\"content\":\"约定 {i}\",\"confidence\":1.0,\"durable\":true}}"));
+        var runner = NewRunner(Scripted($"```json\n{{\"facts\":[{facts}]}}\n```"));
+
+        var result = await runner.RunAsync("test", CancellationToken.None);
+
+        Assert.Equal(7, result.FactsAdded);
+        Assert.Equal(5, result.MemoryPromoted);
+        Assert.Contains("上限", result.MemoryNote);
+        Assert.Equal(5, (await File.ReadAllTextAsync(_runtime.Workspace.MemoryFile))
+            .Split('\n').Count(l => l.Contains("约定 ")));
+    }
+
+    [Fact]
+    public async Task RunAsync_RepeatedDurableFact_DoesNotDuplicateMemoryLine()
+    {
+        SeedSession();
+        var conclusion = "```json\n{\"facts\":[{\"entry\":1,\"content\":\"回复统一使用中文\",\"confidence\":1.0,\"durable\":true}]}\n```";
+        Assert.Equal(1, (await NewRunner(Scripted(conclusion)).RunAsync("test", CancellationToken.None)).MemoryPromoted);
+
+        SeedSession("再确认一次语言偏好");
+        var second = await NewRunner(Scripted(conclusion)).RunAsync("test", CancellationToken.None);
+
+        Assert.Equal(0, second.MemoryPromoted);
+        Assert.Contains("已存在", second.MemoryNote);
+        Assert.Single((await File.ReadAllTextAsync(_runtime.Workspace.MemoryFile))
+            .Split('\n').Where(l => l.Contains("回复统一使用中文")));
+    }
+
+    [Fact]
+    public void BuildPrompt_AdvertisesDurablePromotionContract()
+    {
+        var prompt = NewRunner((_, _, _, _) => Task.FromResult(new AgentTurnResult("```json\n{\"facts\":[]}\n```", false, null)))
+            .BuildPrompt([new ConsolidationRunner.SessionDigest(_runtime.Workspace, "诉求：以后都用中文")]);
+
+        Assert.Contains("durable", prompt);
+        Assert.Contains("MEMORY.md", prompt);
+    }
 }

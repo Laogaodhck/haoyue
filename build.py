@@ -119,7 +119,16 @@ _BUILDER_OUTPUT_EXTERNAL = (
     and _BUILDER_OUTPUT_RESOLVED != Path(_BUILDER_OUTPUT_RESOLVED.anchor)
     and not REPO_ROOT.is_relative_to(_BUILDER_OUTPUT_RESOLVED)
 )
-PUBLISH_DIR = REPO_ROOT / "publish"
+# HAOYUE_PUBLISH_DIR 将最终产物目录一并移到仓库外：监视器同样会锁住 publish/ 里
+# 已存在的 app.asar，导致构建开头的 reset_directory(publish/) EBUSY。
+_PUBLISH_DIR_ENV = os.environ.get("HAOYUE_PUBLISH_DIR")
+PUBLISH_DIR = Path(_PUBLISH_DIR_ENV or REPO_ROOT / "publish")
+_PUBLISH_DIR_RESOLVED = PUBLISH_DIR.resolve()
+_PUBLISH_DIR_EXTERNAL = (
+    _PUBLISH_DIR_ENV is not None
+    and _PUBLISH_DIR_RESOLVED != Path(_PUBLISH_DIR_RESOLVED.anchor)
+    and not REPO_ROOT.is_relative_to(_PUBLISH_DIR_RESOLVED)
+)
 ICON_PNG_PATH = DESKTOP_DIR / "resources" / "logo.png"
 
 VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -802,6 +811,9 @@ def workspace_path(path: Path) -> Path:
         return resolved
     # 显式配置的 electron-builder 输出目录（及其子树）允许在仓库外。
     if _BUILDER_OUTPUT_EXTERNAL and resolved.is_relative_to(_BUILDER_OUTPUT_RESOLVED):
+        return resolved
+    # 显式配置的产物目录同样允许在仓库外（IDE 监视器锁住仓库内旧产物的场景）。
+    if _PUBLISH_DIR_EXTERNAL and resolved.is_relative_to(_PUBLISH_DIR_RESOLVED):
         return resolved
     raise BuildError(f"Refusing to modify a path outside the repository: {resolved}") from None
 

@@ -79,11 +79,13 @@ public sealed class LocalModelLoadingTests : IDisposable
 
         // 放入唯一投影器：目录 mtime 变化触发重扫。
         WriteGguf(Path.Combine(dir, "model-mmproj-F16.gguf"), version: 3);
+        BumpDirectoryMtime(dir); // 两次写入落在同一 mtime tick 时缓存会直接命中上次结果
         Assert.EndsWith("model-mmproj-F16.gguf", cache.ResolveMmproj(dir, null)!);
         Assert.Equal(2, cache.DirectoryScans);
 
         // 第二个投影器：歧义，重新扫描后解析为 null（与 LocalModels 既有语义一致）。
         WriteGguf(Path.Combine(dir, "other-mmproj-F16.gguf"), version: 3);
+        BumpDirectoryMtime(dir);
         Assert.Null(cache.ResolveMmproj(dir, null));
         Assert.Equal(3, cache.DirectoryScans);
 
@@ -448,6 +450,13 @@ public sealed class LocalModelLoadingTests : IDisposable
         File.WriteAllBytes(path, CreateGgufBytes(version));
         return path;
     }
+
+    /// <summary>
+    /// 目录写入按 mtime tick 判定是否重扫，NTFS 的粗粒度足以让相邻两次创建落在同一
+    /// tick 里，缓存于是直接命中上一次结果。测试要观察重扫，就先显式推进 mtime。
+    /// </summary>
+    private static void BumpDirectoryMtime(string dir) =>
+        Directory.SetLastWriteTimeUtc(dir, Directory.GetLastWriteTimeUtc(dir).AddSeconds(1));
 
     private static byte[] CreateGgufBytes(int version = 3, string name = "Tiny Test Model")
     {

@@ -90,7 +90,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 📋 后台任务队列
 
 - **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度
-- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），119 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式供 CI 校验产物与契约一致——见 [SDK README](sdks/typescript/README.md)
+- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），119 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该模式当前作为本地/CI 可用能力，尚未接入流水线）——见 [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use（电脑操作智能体）
 
@@ -471,7 +471,7 @@ dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests
 cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest 160 用例（15 个文件）
 ```
 
-haoyue_tests 带 70% 行覆盖率硬门槛（`coverage.runsettings`），契约快照漂移、Runbook 章节齐全性均有护栏测试强制。
+门槛作用于 `haoyue_runtime` 程序集（`coverage.runsettings` 的 `Include` 只含 runtime，CLI/桌面不在检；分支覆盖当前约 57% 且未设门槛）。契约快照漂移、Runbook 章节齐全性均有护栏测试强制；桌面 vitest 与 `pnpm typecheck` 在 CI 的 desktop job 中执行，但 `benchmarks/*` 两个评测工程未纳入 `Haoyue.slnx`，CI 不会编译或运行它们。
 
 ## 📊 本地模型评测
 
@@ -489,7 +489,7 @@ gemma-4-E4B 实测报告见 [`本地模型评测报告-gemma-4-E4B-2026-10-07.md
 
 ## 📈 Agent 级评测
 
-[`benchmarks/agent-eval/`](benchmarks/agent-eval/) 是 Agent 任务成功率的端到端回归 harness：6 个固定任务（文件写入、代码修复、多步编排、克制负向判分、策略闸门回归、读汇总）走真实隔离运行时链路，确定性文件断言判分，输出 Markdown + JSON 报告，非零退出码可直接接 CI——每次调整纠偏阈值或提示词后回归，调参不再靠手感。
+[`benchmarks/agent-eval/`](benchmarks/agent-eval/) 是 Agent 任务成功率的端到端回归 harness：7 个固定任务（文件写入、代码修复、多步编排、克制负向判分、策略闸门回归、读汇总、文档成链渲染）走真实隔离运行时链路，确定性文件断言判分，输出 Markdown + JSON 报告，非零退出码可直接接 CI——每次调整纠偏阈值或提示词后回归，调参不再靠手感。
 
 ```bash
 dotnet run --project benchmarks/agent-eval          # 运行全部任务

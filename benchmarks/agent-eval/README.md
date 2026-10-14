@@ -34,6 +34,7 @@ dotnet run --project benchmarks/agent-eval -- --provider openrouter --model anth
 | restraint | 克制（问答不落盘） | **负向判分**：不创建任何文件 |
 | policy-guard | P0 策略闸门回归 | 注入 deny 规则后 `rm -rf` 被拦截，任务以 blocked 收尾 |
 | summarize | 读取 + 汇总 | summary.md 存在且覆盖两份规格要点 |
+| doc-render | 文档成链（起草 → 渲染） | report.md 存在 + `.haoyue/outputs/documents/季度评审.docx` 产出；doc_render 不可用时落 skipped.txt |
 
 ## 设计说明
 

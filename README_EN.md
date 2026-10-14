@@ -91,7 +91,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 ### 📋 Background Task Queue
 
 - **Long tasks in the background**: the daemon RPC `task.start` submits a full agent turn for background execution (concurrency cap 4, hard timeout protection); `task.get` / `task.list` / `task.cancel` manage tasks; terminal states broadcast via `task.updated`, sessions persist, and progress replays through `events.recent` — frontend disconnects never lose progress
-- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 119 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode lets CI verify the built artifact against the contract — see [SDK README](sdks/typescript/README.md)
+- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 119 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (available locally and in CI, though not yet wired into a workflow) — see [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use
 
@@ -472,7 +472,7 @@ dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 881
 cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 160 cases across 15 files
 ```
 
-haoyue_tests enforces a 70% line-coverage gate (`coverage.runsettings`); contract-snapshot drift and Runbook section completeness are also guarded by dedicated tests.
+The gate applies to the `haoyue_runtime` assembly (`coverage.runsettings` only `Include`s runtime — CLI and desktop are unchecked, and branch coverage sits around 57% with no gate). Contract-snapshot drift and Runbook section completeness are also guarded by dedicated tests; the desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job, but the two `benchmarks/*` eval projects are not in `Haoyue.slnx`, so CI neither compiles nor runs them.
 
 ## 📊 Local Model Benchmarks
 
@@ -490,7 +490,7 @@ The measured gemma-4-E4B report is available at [`本地模型评测报告-gemma
 
 ## 📈 Agent-Level Evaluation
 
-[`benchmarks/agent-eval/`](benchmarks/agent-eval/) is an end-to-end regression harness for agent task success rates: 6 fixed tasks (file write, code repair, multi-step orchestration, restraint negative-scoring, policy-gate regression, read-and-summarize) run through the real isolated runtime path with deterministic file-assertion scoring, producing Markdown + JSON reports and a non-zero exit code for CI — regress tuning of nudge thresholds or prompts no longer relies on gut feeling.
+[`benchmarks/agent-eval/`](benchmarks/agent-eval/) is an end-to-end regression harness for agent task success rates: 7 fixed tasks (file write, code repair, multi-step orchestration, restraint negative-scoring, policy-gate regression, read-and-summarize, document-authoring chain) run through the real isolated runtime path with deterministic file-assertion scoring, producing Markdown + JSON reports and a non-zero exit code for CI — regress tuning of nudge thresholds or prompts no longer relies on gut feeling.
 
 ```bash
 dotnet run --project benchmarks/agent-eval          # run all tasks

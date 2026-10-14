@@ -79,6 +79,28 @@ python publish_npm.py --rids win-x64 --pack --release-assets dist/cli
 
 Linux 产物可追加 `--sign` 生成 SHA256SUMS 与 GPG 分离签名（内置默认签名密钥指纹，可用环境变量 `HAOYUE_GPG_KEY_ID` 覆盖）。
 
+### 输出目录重定向（IDE / 监视器环境下必需）
+
+`build.py` 默认把 electron-builder 产物写到 `haoyue_desktop/release/`、最终归档写到仓库根 `publish/`。IDE 的文件监视器（如 Qoder）会对刚生成的 `app.asar` 等文件持续持有句柄，于是 electron-builder 的清理/改名步骤报 `EBUSY`（WinError 32），构建开头的 `reset_directory(publish/)` 同样会被挡住。两个环境变量可把产物整体移出监视范围：
+
+```bash
+# Git Bash 里环境变量必须绑在解释器之前，写成 `VAR=x printf ... | py ...` 只作用于 printf
+printf '1\n1\n' | HAOYUE_BUILDER_OUTPUT=C:/Temp/haoyue-out HAOYUE_PUBLISH_DIR=C:/Temp/haoyue-out/publish py build.py
+```
+
+| 变量 | 作用 |
+| --- | --- |
+| `HAOYUE_BUILDER_OUTPUT` | electron-builder 输出目录（默认 `haoyue_desktop/release`） |
+| `HAOYUE_PUBLISH_DIR` | 最终产物目录（默认仓库根 `publish/`），`build-manifest.json` 一并落此处 |
+
+产物完整性可在重定向后核对：目标目录应出现 `Haoyue-win-x64/`、`Haoyue-portable-*.zip`（安装包构建另有 `Haoyue-Setup-*.exe`）与本次产物清单 `build-manifest.json`。
+
+> Windows 下 Git Bash 无 `python` 别名，本手册所有 `python …` 命令在 Git Bash 中用 `py …` 执行（CI 用 `python`，无需改动）。
+
+### 打包版验收要点
+
+运行时（.NET）修复必须重新打包才对使用安装版/便携版的用户生效。多客户端相关的改动（广播、事件泵）要在打包版上实测：同时拉起桌面端与一个 daemon 探针连接，确认两侧都收到 `model.load.progress` / `delta` / `done`，且 `%APPDATA%\haoyue-desktop\logs\daemon.log` 无 `Unhandled exception`、无 `Daemon broadcast failed`、结尾为正常退出而非 `exit code=1`。诊断链路见 [本地模型回合无输出诊断与修复](haoyue_doc/本地模型回合无输出诊断与修复-2026-10-14.md)。
+
 ## 故障排查
 
 | 现象 | 处理 |
@@ -87,4 +109,5 @@ Linux 产物可追加 `--sign` 生成 SHA256SUMS 与 GPG 分离签名（内置�
 | tag 与版本号不符 | 删除并重建 tag：`git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z`，再重新打 |
 | npm 提示版本已存在 | npm 不支持覆盖发布；递增版本重发 |
 | 桌面端 electron 下载缓慢/失败 | 流水线已固定使用官方下载源；本地默认走 npmmirror 镜像，可用 `ELECTRON_MIRROR` 覆盖 |
+| 本地打包 `EBUSY` / `WinError 32`（清理 `win-unpacked.tmp` 或重置 `publish/` 时） | IDE 文件监视器仍持有刚生成的 `app.asar`。用 `HAOYUE_BUILDER_OUTPUT` 与 `HAOYUE_PUBLISH_DIR` 把产物重定向到仓库外（见「输出目录重定向」）；残留的 `win-unpacked.tmp` 删不掉就先重跑一次（句柄通常已释放），仍占用则留在原地——它已被 gitignore，不影响产物 |
 | 需要重跑 | Actions → 该次运行 → Re-run failed jobs |

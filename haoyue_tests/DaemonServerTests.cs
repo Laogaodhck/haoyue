@@ -1296,6 +1296,41 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Knowledge_SemanticStatusBuild_AndRetrievalCarriesSemanticState()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "knowledge.save", new JsonObject
+        {
+            ["title"] = "构建命令",
+            ["content"] = "使用 pnpm build 构建桌面端",
+        });
+        await connection.ReadAsync();
+
+        // 测试配置里没有声明向量化能力的模型：状态必须说「没配」并给出原因，
+        // 而不是报「已启用但每条嵌入都失败」的假象。
+        await connection.SendAsync(2, "knowledge.semantic.status");
+        var status = ParseData(await connection.ReadAsync());
+        Assert.False(status["enabled"]!.GetValue<bool>());
+        Assert.Equal(1, status["total"]!.GetValue<int>());
+        Assert.Equal(1, status["pending"]!.GetValue<int>());
+        Assert.Contains("嵌入模型", status["reason"]!.GetValue<string>());
+
+        // 建索引同样把原因回传，不留半个静默的索引。
+        await connection.SendAsync(3, "knowledge.semantic.build", new JsonObject { ["batch"] = 4 });
+        var built = ParseData(await connection.ReadAsync());
+        Assert.Equal(0, built["embedded"]!.GetValue<int>());
+        Assert.NotNull(built["error"]);
+
+        // 检索结果附带语义状态，界面才能说明这次是语义还是纯词法。
+        await connection.SendAsync(4, "knowledge.retrieve", new JsonObject { ["query"] = "构建" });
+        var retrieved = ParseData(await connection.ReadAsync());
+        Assert.Equal(1, retrieved["count"]!.GetValue<int>());
+        Assert.False(retrieved["semantic"]!["enabled"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task Knowledge_TagsExport_TagFilter_AndSaveById()
     {
         var connection = await StartServerAsync(

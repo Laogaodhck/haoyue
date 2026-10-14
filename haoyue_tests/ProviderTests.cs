@@ -1200,6 +1200,52 @@ public sealed class ProviderTests : IDisposable
         Assert.Equal("HTTP 401: bad key", ex.Message);
     }
 
+    [Fact]
+    public async Task EmbedBatchAsync_SendsTheWholeBatchToTheClientInOneCall()
+    {
+        // 本地通道每次 EmbedAsync 都要重新租用/加载权重：批量入口必须把整批发给一次客户端调用，
+        // 否则一次语义建索引就是 N 次权重往返，回合卡到像没输出。
+        var client = new RecordingEmbeddingClient("openai");
+        var manager = NewManagerWithClients(
+            _store, _registry, Path.Combine(_dir, "usage-embed.jsonl"), client);
+
+        var result = await manager.EmbedBatchAsync(["甲", "乙", "丙"], "alpha/big", CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(3, result!.Vectors.Count);
+        Assert.Equal(["甲", "乙", "丙"], client.LastInputs.ToArray());
+    }
+
+    [Fact]
+    public async Task EmbedBatchAsync_WithoutEmbeddingCapableModel_ReturnsNullForCallerDegradation()
+    {
+        var manager = NewManager();
+
+        Assert.Null(await manager.EmbedBatchAsync(["甲"], null, CancellationToken.None));
+    }
+
+    private sealed class RecordingEmbeddingClient(string kind) : ILlmClient
+    {
+        public int Calls { get; private set; }
+        public List<string> LastInputs { get; private set; } = [];
+
+        public string Kind => kind;
+
+        public Task<EmbeddingResult?> EmbedAsync(
+            ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default)
+        {
+            Calls++;
+            LastInputs = [.. inputs];
+            return Task.FromResult<EmbeddingResult?>(
+                new EmbeddingResult([.. inputs.Select((_, index) => new float[] { index, 1 })], model ?? ""));
+        }
+
+        public IAsyncEnumerable<LlmStreamEvent> StreamAsync(
+            LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
+            => throw new NotSupportedException();
+    }
+
     private static ProviderManager NewManagerWithClients(
         ConfigStore store,
         ModelRegistry registry,

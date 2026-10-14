@@ -1573,7 +1573,7 @@ public sealed class DaemonServer : IAsyncDisposable
 
                     case "knowledge.search":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
-                            _ => Task.FromResult(_admin.SearchKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                            ct => _admin.SearchKnowledge(Params(request), ct), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
                     case "knowledge.save":
@@ -1653,7 +1653,17 @@ public sealed class DaemonServer : IAsyncDisposable
 
                     case "knowledge.retrieve":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
-                            _ => Task.FromResult(_admin.RetrieveKnowledge(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                            ct => _admin.RetrieveKnowledge(Params(request), ct), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.semantic.status":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.SemanticStatus(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "knowledge.semantic.build":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            ct => _admin.BuildSemanticIndex(Params(request), ct), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
                     case "memory.get":

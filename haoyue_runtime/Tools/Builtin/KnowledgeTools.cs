@@ -61,13 +61,16 @@ public sealed class KnowledgeSearchTool(
     }
 
     /// <summary>语义层当前不可信的原因（供 summary 与缺陷统计消费）；语义完全正常时返回 null。</summary>
-    private static string? SemanticCaveat(HybridSearchOutcome outcome) => outcome.EmbeddingError switch
+    private static string? SemanticCaveat(HybridSearchOutcome outcome)
     {
-        { Length: > 0 } message => $"语义检索失效，本次为纯词法结果：{message}",
-        _ when outcome.PendingVectors > 0
-            => $"语义索引未建全，还有 {outcome.PendingVectors} 条没有向量（可用 knowledge.index.build 一次性补齐）",
-        _ => null,
-    };
+        if (outcome.EmbeddingError is { Length: > 0 } message)
+            return $"语义检索本次失效，结果是纯词法排序：{message}";
+        if (outcome.DisabledReason is { Length: > 0 } reason)
+            return $"语义检索未启用，结果是纯词法排序：{reason}";
+        if (outcome.PendingVectors > 0)
+            return $"语义索引未建全，还有 {outcome.PendingVectors} 条没有向量（请在知识中心点「建立语义索引」，或调用 knowledge.semantic.build 分批补齐）";
+        return null;
+    }
 
     private async Task<(IReadOnlyList<KnowledgeEntry> Matches, HybridSearchOutcome Outcome)> SearchAsync(
         string scope, string query, int limit, CancellationToken ct)
@@ -75,7 +78,9 @@ public sealed class KnowledgeSearchTool(
         var entries = knowledge.LoadScope(scope);
         var route = semantic.CreateRoute(configStore.Config);
         if (route is null)
-            return (KnowledgeSearchRanker.Rank(entries, query, limit), new HybridSearchOutcome([]));
+            // 「没配模型」和「配了但这次坏了」要分开说：前者是配置问题，用户能自己修。
+            return (KnowledgeSearchRanker.Rank(entries, query, limit),
+                new HybridSearchOutcome([], DisabledReason: semantic.Status(scope, entries, configStore.Config).Reason));
 
         try
         {

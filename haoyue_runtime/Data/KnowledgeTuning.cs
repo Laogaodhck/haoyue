@@ -60,8 +60,12 @@ public static class KnowledgeTuning
     /// <summary>融合分低于该门槛即视为「知识库里没有答案」，不再把最不离谱的条目当结果返回。</summary>
     public const double MinHybridScore = 0.15;
 
-    /// <summary>单次检索现场补嵌的条目上限：超出的计入 PendingVectors，交给显式建索引通道。</summary>
-    public const int MaxEmbedPerSearch = 64;
+    /// <summary>
+    /// 单次检索现场补嵌的条目上限。刻意只够「刚存的几条立刻可语义召回」：整库补齐属于显式
+    /// 建索引通道（knowledge.semantic.build），塞进模型的工具调用里会让本地通道一次前向
+    /// 几十遍，回合卡到像没输出。超出的计入 PendingVectors 并回报给用户。
+    /// </summary>
+    public const int MaxEmbedPerSearch = 8;
 
     private static readonly object Gate = new();
 

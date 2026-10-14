@@ -1700,19 +1700,17 @@ internal sealed class DaemonAdminApi(
             runtime.Knowledge.ListInfo(HaoyueDatabase.ScopeKey(workspace), limit, notebookId, tag));
     }
 
-    public string SearchKnowledge(JsonObject parameters)
+    public async Task<string> SearchKnowledge(JsonObject parameters, CancellationToken ct)
     {
         var workspace = SessionWorkspace(parameters);
         var query = RequiredString(parameters, "query");
         var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 50, 1, 100);
-        var tag = OptionalString(parameters, "tag");
         var notebookId = OptionalId(parameters, "notebookId");
-        return KnowledgeInfoPayload(workspace,
-            runtime.Knowledge.RetrieveInfo(
-                HaoyueDatabase.ScopeKey(workspace), query,
-                notebookId is long nb ? [nb] : null, null, limit, tag));
+        var (infos, semantic) = await RetrieveHybridAsync(
+            workspace, query, notebookId is long nb ? [nb] : null, null,
+            OptionalString(parameters, "tag"), limit, ct).ConfigureAwait(false);
+        return KnowledgeInfoPayload(workspace, infos, semantic);
     }
-
     /// <summary>Distinct tags with occurrence counts plus the total entry count of the scope (or one notebook).</summary>
     public string KnowledgeTags(JsonObject parameters)
     {
@@ -1995,18 +1993,122 @@ internal sealed class DaemonAdminApi(
 
     /// <summary>
     /// Ranked retrieval across the whole scope or selected notebooks/sources,
-    /// every hit annotated with its notebook/source origin.
+    /// every hit annotated with its notebook/source origin. Hybrid when an embedding
+    /// route exists — see <see cref="RetrieveHybridAsync"/>.
     /// </summary>
-    public string RetrieveKnowledge(JsonObject parameters)
+    public async Task<string> RetrieveKnowledge(JsonObject parameters, CancellationToken ct)
     {
         var workspace = SessionWorkspace(parameters);
         var query = RequiredString(parameters, "query");
         var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 8, 1, 50);
-        var tag = OptionalString(parameters, "tag");
-        return KnowledgeInfoPayload(workspace,
-            runtime.Knowledge.RetrieveInfo(
-                HaoyueDatabase.ScopeKey(workspace), query,
-                OptionalIdList(parameters, "notebookIds"), OptionalIdList(parameters, "sourceIds"), limit, tag));
+        var (infos, semantic) = await RetrieveHybridAsync(
+            workspace, query, OptionalIdList(parameters, "notebookIds"), OptionalIdList(parameters, "sourceIds"),
+            OptionalString(parameters, "tag"), limit, ct).ConfigureAwait(false);
+        return KnowledgeInfoPayload(workspace, infos, semantic);
+    }
+
+    /// <summary>
+    /// 检索的混合通道：候选池按笔记本/来源/标签筛出（不做词法裁剪，否则语义层看不到
+    /// 用户没命中关键词的那部分），再交给 <see cref="KnowledgeSemanticIndex"/> 融合排序。
+    /// 语义不可用（没配嵌入模型）或嵌入失败时退回词法顺序——检索结果不能因为语义层
+    /// 坏掉而变空，但也不能假装还是语义结果，所以 <c>semantic</c> 节点把真实状态一并返回。
+    /// </summary>
+    private async Task<(IReadOnlyList<KnowledgeEntryInfo> Infos, JsonObject Semantic)> RetrieveHybridAsync(
+        Haoyue.Runtime.Workspaces.WorkspaceInfo workspace, string query,
+        IReadOnlyList<long>? notebookIds, IReadOnlyList<long>? sourceIds, string? tag, int limit, CancellationToken ct)
+    {
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var pool = runtime.Knowledge.CollectInfos(scope, notebookIds, sourceIds, tag, 2000);
+        var entries = pool.Select(info => info.Entry).ToList();
+        var byId = pool.ToDictionary(info => info.Entry.Id, info => info);
+        var status = runtime.SemanticIndex.Status(scope, entries, runtime.ConfigStore.Config);
+
+        IReadOnlyList<KnowledgeEntryInfo> Lexical() =>
+            KnowledgeSearchRanker.Rank(entries, query, limit).Select(entry => byId[entry.Id]).ToList();
+
+        if (!status.Enabled)
+            return (Lexical(), SemanticNode(status, degraded: false, embeddedNow: 0, pending: status.Pending, error: null));
+
+        var route = runtime.SemanticIndex.CreateRoute(runtime.ConfigStore.Config)!;
+        try
+        {
+            var outcome = await runtime.SemanticIndex.SearchHybridAsync(
+                scope, entries, query, limit, route.Client, route.CacheKey, ct).ConfigureAwait(false);
+            if (outcome.EmbeddingError is not null)
+                // 语义失效时融合分只剩词法项，且还要过绝对阈值——比纯词法排序更严，
+                // 会把原本能看到的弱命中筛掉。退回完整词法排序，并把原因标在 semantic 节点上。
+                return (Lexical(), SemanticNode(status, degraded: true, embeddedNow: 0, pending: status.Pending, error: outcome.EmbeddingError));
+
+            return (outcome.Entries.Select(entry => byId[entry.Id]).ToList(),
+                SemanticNode(status, degraded: false, embeddedNow: outcome.EmbeddedNow, pending: outcome.PendingVectors, error: null));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return (Lexical(), SemanticNode(status, degraded: true, embeddedNow: 0, pending: status.Pending, error: ex.Message));
+        }
+    }
+
+    private static JsonObject SemanticNode(SemanticIndexStatus status, bool degraded, int embeddedNow, int pending, string? error) => new()
+    {
+        ["enabled"] = status.Enabled,
+        ["model"] = status.Model,
+        ["total"] = status.Total,
+        ["embedded"] = status.Embedded,
+        ["pending"] = pending,
+        ["embeddedNow"] = embeddedNow,
+        ["degraded"] = degraded,
+        ["reason"] = status.Reason,
+        ["error"] = error,
+    };
+
+    /// <summary>语义索引状态（纯本地读取，不发网络请求）：桌面知识中心据此显示语义/词法与待建数量。</summary>
+    public string SemanticStatus(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var status = runtime.SemanticIndex.Status(scope, runtime.Knowledge.LoadScope(scope), runtime.ConfigStore.Config);
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["enabled"] = status.Enabled,
+            ["model"] = status.Model,
+            ["total"] = status.Total,
+            ["embedded"] = status.Embedded,
+            ["pending"] = status.Pending,
+            ["reason"] = status.Reason,
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// 分批建语义索引：一次只嵌 <c>batch</c> 条（默认 32，上限 128），返回本次进度与剩余量。
+    /// 桌面按 <c>pending</c> 循环调用即可，单批保持在客户端 60 秒超时窗口内。
+    /// </summary>
+    public async Task<string> BuildSemanticIndex(JsonObject parameters, CancellationToken ct)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        var batch = OptionalId(parameters, "batch") is long value
+            ? (int)Math.Clamp(value, 1, KnowledgeSemanticIndex.MaxBuildBatch)
+            : KnowledgeSemanticIndex.DefaultBuildBatch;
+        var entries = runtime.Knowledge.LoadScope(scope);
+        var result = await runtime.SemanticIndex.BuildAsync(
+            scope, entries, runtime.ConfigStore.Config, batch, ct).ConfigureAwait(false);
+        return new JsonObject
+        {
+            ["workspace"] = workspace.Root,
+            ["isGlobal"] = workspace.IsGlobal,
+            ["embedded"] = result.Embedded,
+            ["failed"] = result.Failed,
+            ["total"] = result.Total,
+            ["pending"] = result.Pending,
+            ["model"] = result.Model,
+            ["error"] = result.Error,
+        }.ToJsonString();
     }
 
     // ───────────────────── knowledge center: helpers ───────────────────────
@@ -2371,20 +2473,25 @@ internal sealed class DaemonAdminApi(
         return node;
     }
 
-    private static string KnowledgeInfoPayload(Haoyue.Runtime.Workspaces.WorkspaceInfo workspace, IReadOnlyList<KnowledgeEntryInfo> infos)
+    private static string KnowledgeInfoPayload(
+        Haoyue.Runtime.Workspaces.WorkspaceInfo workspace,
+        IReadOnlyList<KnowledgeEntryInfo> infos,
+        JsonObject? semantic = null)
     {
         var data = new JsonArray();
         foreach (var info in infos)
         {
             data.Add((JsonNode)InfoNode(info));
         }
-        return new JsonObject
+        var payload = new JsonObject
         {
             ["workspace"] = workspace.Root,
             ["isGlobal"] = workspace.IsGlobal,
             ["count"] = data.Count,
             ["entries"] = data,
-        }.ToJsonString();
+        };
+        if (semantic is not null) payload["semantic"] = semantic;
+        return payload.ToJsonString();
     }
 
     public string Usage(JsonObject parameters)

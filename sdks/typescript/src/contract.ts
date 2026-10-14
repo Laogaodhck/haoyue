@@ -30,15 +30,16 @@ export type MethodName =
   | "knowledge.delete" | "knowledge.import" | "knowledge.tags" | "knowledge.export"
   | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list" | "knowledge.notebook.save"
   | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list" | "knowledge.source.read"
-  | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve" | "memory.get"
-  | "memory.save" | "rules.list" | "rules.save" | "rules.delete"
-  | "usage.get" | "usage.timeline" | "session.list" | "session.search"
-  | "session.get" | "session.truncate" | "session.fork" | "session.update"
-  | "session.archive" | "session.delete" | "session.resume" | "session.new"
-  | "project.list" | "project.upsert" | "project.remove" | "evolution.inspect"
-  | "evolution.reflect" | "evolution.pending-list" | "evolution.decide" | "evolution.history"
-  | "evolution.stats" | "evolution.config.get" | "evolution.config.set" | "doctor"
-  | "doctor.run" | "lock.list" | "factory.reset"
+  | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve" | "knowledge.semantic.status"
+  | "knowledge.semantic.build" | "memory.get" | "memory.save" | "rules.list"
+  | "rules.save" | "rules.delete" | "usage.get" | "usage.timeline"
+  | "session.list" | "session.search" | "session.get" | "session.truncate"
+  | "session.fork" | "session.update" | "session.archive" | "session.delete"
+  | "session.resume" | "session.new" | "project.list" | "project.upsert"
+  | "project.remove" | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list"
+  | "evolution.decide" | "evolution.history" | "evolution.stats" | "evolution.config.get"
+  | "evolution.config.set" | "doctor" | "doctor.run" | "lock.list"
+  | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -543,7 +544,7 @@ export const METHODS: readonly MethodInfo[] = [
   {
     name: "knowledge.search",
     category: "knowledge",
-    description: "\u9ad8\u5bb9\u9519\u77e5\u8bc6\u68c0\u7d22",
+    description: "\u9ad8\u5bb9\u9519\u77e5\u8bc6\u68c0\u7d22\uff08\u914d\u4e86\u5d4c\u5165\u6a21\u578b\u65f6\u8d70\u8bed\u4e49+\u8bcd\u6cd5\u6df7\u5408\u6392\u5e8f\uff09",
     paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "limit": {"description": "1..100，缺省 50", "type": "integer"}, "notebookId": {"description": "限定单笔记本", "type": "integer"}, "query": {"description": "检索词", "type": "string"}, "tag": {"description": "仅返回携带该标签的条目", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["query"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
@@ -655,8 +656,22 @@ export const METHODS: readonly MethodInfo[] = [
   {
     name: "knowledge.retrieve",
     category: "knowledge",
-    description: "\u8de8\u7b14\u8bb0\u672c\u5e26\u51fa\u5904\u68c0\u7d22",
+    description: "\u8de8\u7b14\u8bb0\u672c\u5e26\u51fa\u5904\u68c0\u7d22\uff08\u914d\u4e86\u5d4c\u5165\u6a21\u578b\u65f6\u8d70\u8bed\u4e49+\u8bcd\u6cd5\u6df7\u5408\u6392\u5e8f\uff09",
     paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "limit": {"description": "1..50，缺省 8", "type": "integer"}, "notebookIds": {"description": "限定笔记本 id 列表", "type": "array"}, "query": {"description": "检索词", "type": "string"}, "sourceIds": {"description": "限定来源 id 列表", "type": "array"}, "tag": {"description": "仅返回携带该标签的条目", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["query"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "knowledge.semantic.status",
+    category: "knowledge",
+    description: "\u8bed\u4e49\u7d22\u5f15\u72b6\u6001\uff08\u662f\u5426\u542f\u7528/\u6a21\u578b/\u5df2\u5d4c\u5165\u6761\u6570/\u5f85\u5efa\u6761\u6570/\u4e0d\u53ef\u7528\u539f\u56e0\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "knowledge.semantic.build",
+    category: "knowledge",
+    description: "\u5206\u6279\u5efa\u7acb\u8bed\u4e49\u7d22\u5f15\uff08\u4e00\u6b21\u5d4c\u5165 batch \u6761\uff0c\u8fd4\u56de\u5269\u4f59 pending\uff09",
+    paramsSchema: {"properties": {"batch": {"description": "1..128，缺省 32", "type": "integer"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

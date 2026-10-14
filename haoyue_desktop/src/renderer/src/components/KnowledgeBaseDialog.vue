@@ -35,6 +35,8 @@ interface KnowledgePayload {
   isGlobal: boolean
   count: number
   entries: KnowledgeEntry[]
+  /** 仅 knowledge.retrieve 返回：本轮排序是否真的用上了语义通道。 */
+  semantic?: SemanticState
 }
 
 interface KnowledgeNotebook {
@@ -122,6 +124,31 @@ interface SynonymsPayload {
   content: string
 }
 
+/**
+ * 语义索引状态。`knowledge.semantic.status` 与检索响应里的 `semantic` 节点共用这套字段，
+ * 后者额外带 embeddedNow/degraded/error（本次检索的实际降级原因）。
+ */
+interface SemanticState {
+  enabled: boolean
+  model?: string | null
+  total: number
+  embedded: number
+  pending: number
+  embeddedNow?: number
+  degraded?: boolean
+  reason?: string | null
+  error?: string | null
+}
+
+interface SemanticBuildPayload {
+  embedded: number
+  failed: number
+  total: number
+  pending: number
+  model?: string | null
+  error?: string | null
+}
+
 const SCOPE_OPTIONS = [
   { value: 'workspace', label: '当前工作区', description: '仅此工作区可用' },
   { value: 'global', label: '全局', description: '跨工作区共享' }
@@ -158,6 +185,11 @@ const form = reactive({ title: '', content: '', tags: '' })
 const tagCounts = ref<TagCount[]>([])
 const activeTag = ref('')
 const exporting = ref(false)
+
+// 语义索引面板：状态来自 knowledge.semantic.status，建索引按批循环调用 knowledge.semantic.build。
+const semantic = ref<SemanticState | null>(null)
+const indexing = ref(false)
+const indexProgress = ref('')
 
 // 同义词表编辑器：读取/保存 ~/.haoyue/knowledge/synonyms.txt，保存后检索立即生效。
 const showSynonyms = ref(false)
@@ -209,6 +241,14 @@ async function requestJson<T>(method: string, params: Record<string, unknown> = 
   return JSON.parse(response.data) as T
 }
 
+/** 需要放宽单次超时的调用（整批嵌入可能很慢）走这个入口，其余一律用 requestJson。 */
+async function requestJsonWithTimeout<T>(
+  method: string, params: Record<string, unknown>, timeoutMs: number
+): Promise<T> {
+  const response = await window.haoyue.daemon.request(method, params, { timeoutMs })
+  return JSON.parse(response.data) as T
+}
+
 function scopeParams(): Record<string, unknown> {
   return scope.value === 'global' ? { global: true } : {}
 }
@@ -232,10 +272,101 @@ async function loadEntries(): Promise<void> {
       : await requestJson<KnowledgePayload>('knowledge.list', { ...scopeParams(), ...tagParams, ...notebookParams() })
     entries.value = payload.entries
     workspaceLabel.value = payload.workspace
+    // 检索响应自带的 semantic 节点比状态快照更准（含本次是否降级），有就覆盖。
+    if (payload.semantic) semantic.value = payload.semantic
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
     loading.value = false
+  }
+}
+
+/** 语义索引状态是辅助视图：读取失败静默降级为 null，不打断主列表（与 loadTags 一致）。 */
+async function loadSemantic(): Promise<void> {
+  try {
+    semantic.value = await requestJson<SemanticState>('knowledge.semantic.status', scopeParams())
+  } catch {
+    semantic.value = null
+  }
+}
+
+/**
+ * 单批嵌入条数。取小值是因为一次 RPC 只嵌这一批：本地 GGUF 首次调用还要把权重读进内存，
+ * 批次越小越不容易顶穿单次请求超时；整库靠下面这个循环逐批推进。
+ */
+const BUILD_BATCH = 16
+const BUILD_TIMEOUT_MS = 300_000
+/** 防呆上限：正常库里 pending 会在远少于这个轮次内清零。 */
+const BUILD_MAX_ROUNDS = 2_000
+
+let buildCancelled = false
+
+const semanticEnabled = computed(() => semantic.value?.enabled === true)
+const semanticPending = computed(() => semantic.value?.pending ?? 0)
+
+/** 语义通道的可读写状态：未启用时直接给出原因，启用时给出覆盖进度。 */
+const semanticLabel = computed(() => {
+  const status = semantic.value
+  if (!status) return '语义索引状态未知'
+  if (!status.enabled) return '语义检索未启用'
+  if (status.pending > 0) return `语义检索已启用 · 已嵌入 ${status.embedded}/${status.total}，${status.pending} 条待建`
+  return `语义检索已启用 · ${status.total} 条已全部嵌入`
+})
+
+/** 为什么不是语义排序：未启用的原因（配置）优先，其次是本次检索的失败原因。 */
+const semanticDetail = computed(() => {
+  const status = semantic.value
+  if (!status) return ''
+  return status.error || (status.enabled ? '' : status.reason) || ''
+})
+
+/** 未启用或已全部嵌入时不给点：按钮亮着却必然失败，不如让用户先读原因。 */
+const semanticBuildBlocked = computed(() =>
+  indexing.value || !semanticEnabled.value || semanticPending.value === 0)
+
+const semanticBuildTitle = computed(() => {
+  if (indexing.value) return '正在分批建立语义索引'
+  if (!semanticEnabled.value) return semanticDetail.value || '语义检索未启用'
+  return '把剩余条目分批嵌入，直到待建数为 0'
+})
+
+async function buildIndex(): Promise<void> {
+  if (semanticBuildBlocked.value) return
+  indexing.value = true
+  buildCancelled = false
+  error.value = ''
+  notice.value = ''
+  const params = { ...scopeParams(), batch: BUILD_BATCH }
+  let embeddedThisRun = 0
+  try {
+    for (let round = 0; round < BUILD_MAX_ROUNDS; round++) {
+      const result = await requestJsonWithTimeout<SemanticBuildPayload>(
+        'knowledge.semantic.build', params, BUILD_TIMEOUT_MS)
+      embeddedThisRun += result.embedded
+      if (result.error) {
+        error.value = `语义索引中断（本次已嵌入 ${embeddedThisRun} 条）：${result.error}`
+        break
+      }
+      indexProgress.value = `已嵌入 ${result.total - result.pending} / ${result.total} 条`
+      if (result.pending <= 0) {
+        notice.value = embeddedThisRun > 0
+          ? `语义索引已建完，本次新增 ${embeddedThisRun} 条向量`
+          : '语义索引已是完整状态，无需重建'
+        break
+      }
+      if (result.embedded === 0) {
+        // 一批里一条都没嵌上、又没给出错误：继续循环只会原地打转。
+        error.value = `语义索引未能推进，仍有 ${result.pending} 条待建`
+        break
+      }
+      if (buildCancelled) break
+    }
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    indexProgress.value = ''
+    indexing.value = false
+    await loadSemantic()
   }
 }
 
@@ -275,7 +406,7 @@ async function loadTags(): Promise<void> {
 }
 
 async function refreshAll(): Promise<void> {
-  await Promise.all([loadEntries(), loadTags(), loadNotebooks(), loadSources()])
+  await Promise.all([loadEntries(), loadTags(), loadNotebooks(), loadSources(), loadSemantic()])
 }
 
 /** 选中笔记本：条目与标签按笔记本过滤，搜索词保留继续在该笔记本内检索。 */
@@ -314,7 +445,7 @@ watch(scope, (next, previous) => {
   expandedSourceIds.value = new Set()
   sourcePreviews.value = new Map()
   // 清空搜索词会触发 query watcher 重载列表；只有原本没有搜索词时才需要显式刷新。
-  if (hadQuery) void Promise.all([loadTags(), loadNotebooks()])
+  if (hadQuery) void Promise.all([loadTags(), loadNotebooks(), loadSemantic()])
   else void refreshAll()
 })
 
@@ -561,7 +692,7 @@ async function importFiles(): Promise<void> {
     } else {
       await loadEntries()
     }
-    await Promise.all([loadTags(), loadNotebooks(), loadSources()])
+    await Promise.all([loadTags(), loadNotebooks(), loadSources(), loadSemantic()])
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -628,7 +759,7 @@ async function saveForm(): Promise<void> {
     }
     editingId.value = null
     showForm.value = false
-    await Promise.all([loadTags(), loadNotebooks()])
+    await Promise.all([loadTags(), loadNotebooks(), loadSemantic()])
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -656,7 +787,7 @@ async function removeEntry(entry: KnowledgeEntry): Promise<void> {
       activeTag.value = ''
       await loadEntries()
     }
-    await loadNotebooks()
+    await Promise.all([loadNotebooks(), loadSemantic()])
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   }
@@ -746,11 +877,17 @@ function openSynonymsFolder(): void {
 }
 
 watch(() => props.open, (open) => {
-  if (!open) return
+  if (!open) {
+    // 关页面即停掉在跑的建索引循环；daemon 那一批仍会跑完，但不再续下一批。
+    buildCancelled = true
+    return
+  }
   scope.value = 'workspace'
   query.value = ''
   activeTag.value = ''
   tagCounts.value = []
+  semantic.value = null
+  indexProgress.value = ''
   expandedIds.value = new Set()
   notice.value = ''
   showForm.value = false
@@ -910,6 +1047,23 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
             <Plus v-if="!showForm" :size="15" /> {{ showForm ? '取消编辑' : '添加知识' }}
           </button>
           <SelectMenu v-model="sort" :options="SORT_OPTIONS" label="排序方式" class="knowledge-sort" />
+        </div>
+
+        <div v-if="semantic" class="knowledge-semantic" role="status" aria-live="polite">
+          <span class="stat-chip" :class="{ warn: !semanticEnabled }">{{ semanticLabel }}</span>
+          <span v-if="semanticEnabled && semantic.model" class="knowledge-semantic-meta" :title="`嵌入模型：${semantic.model}`">
+            {{ semantic.model }}
+          </span>
+          <span v-if="indexProgress" class="knowledge-semantic-meta">{{ indexProgress }}</span>
+          <span v-if="semantic.degraded && semantic.error" class="knowledge-semantic-reason">
+            本次检索已退回纯词法排序：{{ semantic.error }}
+          </span>
+          <span v-else-if="semanticDetail" class="knowledge-semantic-reason">{{ semanticDetail }}</span>
+          <button class="secondary-button knowledge-semantic-build" :disabled="semanticBuildBlocked"
+            :title="semanticBuildTitle" @click="buildIndex">
+            <LoaderCircle v-if="indexing" class="spin" :size="14" />
+            {{ indexing ? '建立索引中' : '建立语义索引' }}
+          </button>
         </div>
 
         <div v-if="tagCounts.length > 0" class="knowledge-tags" role="group" aria-label="按标签筛选">
@@ -1361,6 +1515,43 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 .knowledge-tag:hover {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+/* 工具栏下方的语义通道状态行：进度、降级原因与一键建索引入口。 */
+.knowledge-semantic {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 22px 0;
+}
+
+/* 未启用语义通道时用危险色提示：检索结果只是词法排序，覆盖度低得多。 */
+.knowledge-semantic .stat-chip.warn {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.knowledge-semantic-meta {
+  overflow: hidden;
+  max-width: 260px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-semantic-reason {
+  flex: 1 1 240px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.knowledge-semantic-build {
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 /* 工具栏下方的标签聚合行：点击精确筛选，激活态用强调色标记。 */
@@ -1964,6 +2155,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 
   .knowledge-tags {
     padding: 8px 16px 0;
+  }
+
+  .knowledge-semantic {
+    padding: 8px 16px 0;
+  }
+
+  .knowledge-semantic-build {
+    margin-left: 0;
   }
 
   .knowledge-synonyms,

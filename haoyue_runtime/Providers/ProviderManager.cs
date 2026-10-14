@@ -43,6 +43,38 @@ public interface IProviderManager
     /// client kind exists or none is configured — callers degrade (e.g. to keyword search).
     /// </summary>
     Task<EmbeddingResult?> EmbedAsync(string input, string? modelRef = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// 是否存在可用的嵌入目标（显式引用能解析，或注册表里有声明 embedding 能力的模型）。
+    /// 默认实现假定存在，第三方实现不必改动；<see cref="ProviderManager"/> 给出精确答案，
+    /// 语义索引状态据此区分「压根没配模型」与「配了但这次嵌入失败」——此前委派路由恒存在，
+    /// 状态会声称语义可用，而每条嵌入都以 "no embedding-capable provider" 收场。
+    /// </summary>
+    bool HasEmbeddingTarget(string? modelRef = null) => true;
+
+    /// <summary>
+    /// Embeds a batch of inputs through one embedding-capable model and returns one vector
+    /// per input in input order. <see cref="ProviderManager"/> overrides the default body
+    /// with a single model call: the local GGUF path leases and loads weights per call, so
+    /// the fallback below turns one index build into N weight round trips — exactly the
+    /// "turn looks frozen" failure mode the semantic layer is meant to avoid.
+    /// </summary>
+    async Task<EmbeddingResult?> EmbedBatchAsync(
+        IReadOnlyList<string> inputs, string? modelRef = null, CancellationToken ct = default)
+    {
+        var vectors = new List<float[]>(inputs.Count);
+        var model = string.Empty;
+        foreach (var input in inputs)
+        {
+            var result = await EmbedAsync(input, modelRef, ct).ConfigureAwait(false);
+            if (result is null) return null;
+            if (result.Vectors.Count == 0)
+                throw new InvalidOperationException($"Embedding model '{result.Model}' returned no vectors.");
+            vectors.Add(result.Vectors[^1]);
+            model = result.Model;
+        }
+        return new EmbeddingResult(vectors, model);
+    }
 }
 
 public sealed class ProviderManager(
@@ -426,24 +458,44 @@ public sealed class ProviderManager(
     }
 
     /// <inheritdoc />
-    public async Task<EmbeddingResult?> EmbedAsync(string input, string? modelRef = null, CancellationToken ct = default)
-    {
-        ModelInfo? target;
-        if (!string.IsNullOrWhiteSpace(modelRef))
-        {
-            target = registry.Resolve(modelRef!)
-                ?? throw new LlmException($"Unknown embedding model '{modelRef}'.", retryable: false);
-        }
-        else
-        {
-            // First enabled model flagged capabilities.embedding wins (priority order from the registry).
-            target = registry.All().FirstOrDefault(m => m.Capabilities.Embedding);
-        }
+    public Task<EmbeddingResult?> EmbedAsync(string input, string? modelRef = null, CancellationToken ct = default)
+        => EmbedBatchAsync([input], modelRef, ct);
 
+    /// <inheritdoc />
+    public bool HasEmbeddingTarget(string? modelRef = null)
+    {
+        try
+        {
+            return ResolveEmbeddingTarget(modelRef) is not null;
+        }
+        catch (LlmException)
+        {
+            // 引用写错（提供商或模型 id 不存在）同样是「没有可用嵌入目标」。
+            return false;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<EmbeddingResult?> EmbedBatchAsync(
+        IReadOnlyList<string> inputs, string? modelRef = null, CancellationToken ct = default)
+    {
+        if (inputs.Count == 0) return new EmbeddingResult([], string.Empty);
+
+        var target = ResolveEmbeddingTarget(modelRef);
         if (target is null) return null; // nothing embedding-capable configured — caller degrades
 
         var client = clientFactory.GetClient(target.Provider.Kind);
-        return await client.EmbedAsync(target.Provider, [input], target.Model.Id, ct).ConfigureAwait(false);
+        return await client.EmbedAsync(target.Provider, inputs, target.Model.Id, ct).ConfigureAwait(false);
+    }
+
+    private ModelInfo? ResolveEmbeddingTarget(string? modelRef)
+    {
+        if (!string.IsNullOrWhiteSpace(modelRef))
+            return registry.Resolve(modelRef!)
+                ?? throw new LlmException($"Unknown embedding model '{modelRef}'.", retryable: false);
+
+        // First enabled model flagged capabilities.embedding wins (priority order from the registry).
+        return registry.All().FirstOrDefault(m => m.Capabilities.Embedding);
     }
 
     // ---------------------------------------------------------------- helpers

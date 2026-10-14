@@ -477,7 +477,7 @@ public static class DaemonContract
             ("limit", SInteger("1..2000，缺省 500"), false),
             ("tag", SString("仅返回携带该标签的条目"), false),
             ("notebookId", SInteger("仅列出该笔记本的条目"), false))),
-        M("knowledge.search", "knowledge", "高容错知识检索", parameters: Scope(
+        M("knowledge.search", "knowledge", "高容错知识检索（配了嵌入模型时走语义+词法混合排序）", parameters: Scope(
             ("query", SString("检索词"), true),
             ("tag", SString("仅返回携带该标签的条目"), false),
             ("notebookId", SInteger("限定单笔记本"), false),
@@ -523,12 +523,15 @@ public static class DaemonContract
             ("id", SInteger("来源 id"), true))),
         M("knowledge.source.refresh", "knowledge", "重新抓取/读取来源并重建分块条目", parameters: Scope(
             ("id", SInteger("来源 id"), true))),
-        M("knowledge.retrieve", "knowledge", "跨笔记本带出处检索", parameters: Scope(
+        M("knowledge.retrieve", "knowledge", "跨笔记本带出处检索（配了嵌入模型时走语义+词法混合排序）", parameters: Scope(
             ("query", SString("检索词"), true),
             ("notebookIds", SArray("限定笔记本 id 列表"), false),
             ("sourceIds", SArray("限定来源 id 列表"), false),
             ("tag", SString("仅返回携带该标签的条目"), false),
             ("limit", SInteger("1..50，缺省 8"), false))),
+        M("knowledge.semantic.status", "knowledge", "语义索引状态（是否启用/模型/已嵌入条数/待建条数/不可用原因）", parameters: Scope()),
+        M("knowledge.semantic.build", "knowledge", "分批建立语义索引（一次嵌入 batch 条，返回剩余 pending）", parameters: Scope(
+            ("batch", SInteger("1..128，缺省 32"), false))),
 
         // memory
         M("memory.get", "memory", "读取 MEMORY.md 长期记忆", parameters: KnowledgeScope),

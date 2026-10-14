@@ -13,15 +13,16 @@ namespace Haoyue.Tests;
 public class KnowledgeSemanticTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "haoyue-kb-sem-" + Guid.NewGuid().ToString("N"));
+    private readonly HaoyueDatabase _database;
     private readonly KnowledgeStore _store;
     private readonly KnowledgeSemanticIndex _index;
 
     public KnowledgeSemanticTests()
     {
         Directory.CreateDirectory(_dir);
-        var database = new HaoyueDatabase(Path.Combine(_dir, "store.db"));
-        _store = new KnowledgeStore(database);
-        _index = new KnowledgeSemanticIndex(database, new LlmHttpFactory());
+        _database = new HaoyueDatabase(Path.Combine(_dir, "store.db"));
+        _store = new KnowledgeStore(_database);
+        _index = new KnowledgeSemanticIndex(_database, new LlmHttpFactory());
     }
 
     public void Dispose()
@@ -196,6 +197,226 @@ public class KnowledgeSemanticTests : IDisposable
     {
         public Task<double[][]> EmbedBatchAsync(IReadOnlyList<string> inputs, CancellationToken ct) =>
             throw new HttpRequestException("simulated outage");
+    }
+
+    // ─────────────── 显式建索引：语义状态 + 分批补齐 ───────────────
+
+    /// <summary>指向一个 HTTP 嵌入提供商的配置：CreateRoute 直接命中，不发请求。</summary>
+    private static HaoyueConfig EmbeddingConfig() => new()
+    {
+        Providers =
+        [
+            new ProviderConfig
+            {
+                Id = "p2",
+                BaseUrl = "https://embed.example.com/v1",
+                Models = [new ModelConfig { Id = "embed-model", Capabilities = new ModelCapabilities { Embedding = true } }],
+            },
+        ],
+    };
+
+    [Fact]
+    public void Status_SemanticDisabled_SaysWhyInsteadOfLookingEmpty()
+    {
+        _store.Save("w", "部署流程", "docker compose up", null);
+        var config = EmbeddingConfig();
+        config.Knowledge.SemanticEnabled = false;
+
+        var status = _index.Status("w", _store.LoadScope("w"), config);
+
+        Assert.False(status.Enabled);
+        Assert.NotNull(status.Reason);
+        Assert.Contains("semanticEnabled", status.Reason);
+    }
+
+    [Fact]
+    public async Task Status_CountsCachedVectorsAgainstTheEntrySet()
+    {
+        for (var i = 0; i < 3; i++) _store.Save("w", $"条目 {i}", $"内容 {i}", null);
+        var entries = _store.LoadScope("w");
+        var config = EmbeddingConfig();
+
+        var before = _index.Status("w", entries, config);
+        Assert.True(before.Enabled);
+        Assert.Equal(3, before.Total);
+        Assert.Equal(0, before.Embedded);
+        Assert.Equal(3, before.Pending);
+
+        // 与 Status 用同一个缓存键命名空间（模型切换会让向量空间作废，缓存键必须来自路由本身）。
+        await _index.BuildAsync("w", entries, new FakeEmbeddingClient(new Dictionary<string, double[]>()),
+            _index.CreateRoute(config)!.CacheKey, 2, CancellationToken.None);
+
+        var after = _index.Status("w", entries, config);
+        Assert.Equal(2, after.Embedded);
+        Assert.Equal(1, after.Pending);
+    }
+
+    [Fact]
+    public async Task BuildAsync_EmbedsStableBatchesUntilPendingDrains()
+    {
+        for (var i = 0; i < 10; i++) _store.Save("w", $"条目 {i}", $"内容 {i}", null);
+        var entries = _store.LoadScope("w");
+        var client = new FakeEmbeddingClient(new Dictionary<string, double[]>());
+
+        var first = await _index.BuildAsync("w", entries, client, "test-model", 4, CancellationToken.None);
+        Assert.Equal(4, first.Embedded);
+        Assert.Equal(6, first.Pending);
+
+        var second = await _index.BuildAsync("w", entries, client, "test-model", 4, CancellationToken.None);
+        Assert.Equal(4, second.Embedded);
+        Assert.Equal(2, second.Pending);
+
+        var third = await _index.BuildAsync("w", entries, client, "test-model", 4, CancellationToken.None);
+        Assert.Equal(2, third.Embedded);
+        Assert.Equal(0, third.Pending);
+
+        // 已经全部有向量时不再外呼：调用方循环到 pending 归零就能停。
+        var inputsAfterFullBuild = client.Inputs.Count;
+        var idle = await _index.BuildAsync("w", entries, client, "test-model", 4, CancellationToken.None);
+        Assert.Equal(0, idle.Embedded);
+        Assert.Equal(0, idle.Pending);
+        Assert.Equal(inputsAfterFullBuild, client.Inputs.Count);
+    }
+
+    [Fact]
+    public async Task BuildAsync_BatchIsClampedToTheSingleRequestCeiling()
+    {
+        for (var i = 0; i < KnowledgeSemanticIndex.MaxBuildBatch + 2; i++)
+            _store.Save("w", $"条目 {i}", $"内容 {i}", null);
+        var client = new FakeEmbeddingClient(new Dictionary<string, double[]>());
+
+        // 一次 RPC 嵌完整库会把请求顶到桌面 60 秒超时之外，批大小必须封在上限里。
+        var result = await _index.BuildAsync(
+            "w", _store.LoadScope("w"), client, "test-model", 100_000, CancellationToken.None);
+
+        Assert.Equal(KnowledgeSemanticIndex.MaxBuildBatch, result.Embedded);
+        Assert.Equal(2, result.Pending);
+    }
+
+    [Fact]
+    public async Task BuildAsync_EmbeddingFailure_ReportsReasonInsteadOfLeavingHalfBuiltSilently()
+    {
+        _store.Save("w", "构建命令", "pnpm build", null);
+
+        var result = await _index.BuildAsync(
+            "w", _store.LoadScope("w"), new ThrowingEmbeddingClient(), "test-model", 8, CancellationToken.None);
+
+        Assert.Equal(0, result.Embedded);
+        Assert.Equal(1, result.Failed);
+        Assert.Contains("simulated outage", result.Error);
+    }
+
+    [Fact]
+    public async Task BuildAsync_NoEmbeddingRoute_ReportsDisabled()
+    {
+        _store.Save("w", "构建命令", "pnpm build", null);
+        var config = new HaoyueConfig();
+        config.Knowledge.SemanticEnabled = false;
+
+        var result = await _index.BuildAsync("w", _store.LoadScope("w"), config, 8, CancellationToken.None);
+
+        Assert.Equal(0, result.Embedded);
+        Assert.NotNull(result.Error);
+    }
+
+    [Fact]
+    public void MaxEmbedPerSearch_StaysSmallEnoughToNotStallATurn()
+    {
+        // 工具调用里的内联补嵌只够让刚存的几条立刻可语义召回；整库补齐属于建索引通道。
+        // 这条上限被抬大就等于把「回合卡死」重新请回来。
+        Assert.True(KnowledgeTuning.MaxEmbedPerSearch <= 8,
+            $"检索内联补嵌上限已达 {KnowledgeTuning.MaxEmbedPerSearch}，整库补齐必须走 knowledge.semantic.build");
+    }
+
+    [Fact]
+    public async Task DelegatingRoute_EmbedsWholeBatchInOneProviderCall()
+    {
+        // 本地 GGUF / 非 HTTP 引用走 ProviderManager。逐条 EmbedAsync 会让每条都重新租用
+        // 权重，一次建索引变成 N 次加载往返——正是「像没输出」的成因之一。
+        var providers = new BatchRecordingProviderManager();
+        var index = new KnowledgeSemanticIndex(_database, new LlmHttpFactory(), providers);
+        var config = new HaoyueConfig { Providers = [] };
+        config.Knowledge.EmbeddingModel = "local/embed";
+
+        var route = index.CreateRoute(config);
+        Assert.NotNull(route);
+        var vectors = await route!.Client.EmbedBatchAsync(["甲", "乙", "丙"], CancellationToken.None);
+
+        Assert.Equal(1, providers.BatchCalls);
+        Assert.Equal(0, providers.SingleCalls);
+        Assert.Equal(3, vectors.Length);
+        Assert.Equal(["甲", "乙", "丙"], providers.LastInputs.ToArray());
+    }
+
+    [Fact]
+    public async Task EmbedBatchDefault_ImplementsItselfOverSingleEmbedForThirdPartyProviders()
+    {
+        IProviderManager providers = new SingleOnlyProviderManager();
+
+        var result = await providers.EmbedBatchAsync(["甲", "乙"], null, CancellationToken.None);
+
+        Assert.Equal(2, result!.Vectors.Count);
+        Assert.Equal(2, ((SingleOnlyProviderManager)providers).SingleCalls);
+    }
+
+    /// <summary>
+    /// 只实现单条嵌入的 IProviderManager（模拟第三方实现/测试替身）。
+    /// 它刻意不声明 EmbedBatchAsync——接口便落到默认成员，验证逐条回退仍然可用。
+    /// </summary>
+    private sealed class SingleOnlyProviderManager : IProviderManager
+    {
+        public int SingleCalls;
+
+        public ModelInfo ResolveActive(WorkspaceConfig? workspace = null) => throw new NotSupportedException();
+        public IReadOnlyList<ModelInfo> BuildCandidates(WorkspaceConfig? workspace = null) => throw new NotSupportedException();
+        public ModelInfo? ResolveModel(string reference) => null;
+        public IAsyncEnumerable<LlmStreamEvent> StreamAsync(
+            Func<ModelInfo, LlmRequest> requestFactory, WorkspaceConfig? workspace, CancellationToken ct,
+            Func<ModelInfo, bool>? candidateFilter = null) => throw new NotSupportedException();
+        public Task<(bool Success, string Detail, double LatencyMs)> TestModelAsync(ModelInfo model, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<IReadOnlyList<string>> FetchModelsAsync(
+            ProviderConfig provider, string? url = null, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<EmbeddingResult?> EmbedAsync(string input, string? modelRef = null, CancellationToken ct = default)
+        {
+            SingleCalls++;
+            return Task.FromResult<EmbeddingResult?>(new EmbeddingResult([new float[] { 1, 0 }], "stub/embed"));
+        }
+    }
+
+    /// <summary>整批一次调用替身（生产里由 ProviderManager 覆盖默认成员达成同样效果）。</summary>
+    private sealed class BatchRecordingProviderManager : IProviderManager
+    {
+        public int BatchCalls;
+        public int SingleCalls;
+        public List<string> LastInputs = [];
+
+        public ModelInfo ResolveActive(WorkspaceConfig? workspace = null) => throw new NotSupportedException();
+        public IReadOnlyList<ModelInfo> BuildCandidates(WorkspaceConfig? workspace = null) => throw new NotSupportedException();
+        public ModelInfo? ResolveModel(string reference) => null;
+        public IAsyncEnumerable<LlmStreamEvent> StreamAsync(
+            Func<ModelInfo, LlmRequest> requestFactory, WorkspaceConfig? workspace, CancellationToken ct,
+            Func<ModelInfo, bool>? candidateFilter = null) => throw new NotSupportedException();
+        public Task<(bool Success, string Detail, double LatencyMs)> TestModelAsync(ModelInfo model, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<IReadOnlyList<string>> FetchModelsAsync(
+            ProviderConfig provider, string? url = null, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<EmbeddingResult?> EmbedAsync(string input, string? modelRef = null, CancellationToken ct = default)
+        {
+            SingleCalls++;
+            throw new NotSupportedException("委派客户端必须走整批入口，单条入口不该被用到。");
+        }
+
+        public Task<EmbeddingResult?> EmbedBatchAsync(
+            IReadOnlyList<string> inputs, string? modelRef = null, CancellationToken ct = default)
+        {
+            BatchCalls++;
+            LastInputs = [.. inputs];
+            return Task.FromResult<EmbeddingResult?>(new EmbeddingResult(
+                [.. inputs.Select((_, index) => new float[] { index, 1 })], "stub/embed"));
+        }
     }
 
     [Fact]

@@ -360,6 +360,20 @@ public sealed partial class KnowledgeStore
     public IReadOnlyList<KnowledgeEntryInfo> RetrieveInfo(
         string scope, string query, IReadOnlyList<long>? notebookIds, IReadOnlyList<long>? sourceIds, int limit, string? tag = null)
     {
+        var infos = CollectInfos(scope, notebookIds, sourceIds, tag, 2000);
+        var ranked = KnowledgeSearchRanker.Rank(infos.Select(info => info.Entry).ToList(), query, limit);
+        var byId = infos.ToDictionary(info => info.Entry.Id, info => info);
+        return ranked.Select(entry => byId[entry.Id]).ToList();
+    }
+
+    /// <summary>
+    /// The filtered candidate pool without any ranking — the hybrid retrieval path
+    /// needs entries the lexical ranker drops (score 0) so the semantic layer can
+    /// still surface a paraphrase nobody typed a keyword of.
+    /// </summary>
+    public IReadOnlyList<KnowledgeEntryInfo> CollectInfos(
+        string scope, IReadOnlyList<long>? notebookIds, IReadOnlyList<long>? sourceIds, string? tag, int limit)
+    {
         EnsureScopeReady(scope);
         var filterSql = (notebookIds, sourceIds) switch
         {
@@ -386,9 +400,7 @@ public sealed partial class KnowledgeStore
         if (!string.IsNullOrWhiteSpace(tag))
             infos = infos.Where(info => HasTag(info.Entry.Tags, tag)).ToList();
 
-        var ranked = KnowledgeSearchRanker.Rank(infos.Select(info => info.Entry).ToList(), query, limit);
-        var byId = infos.ToDictionary(info => info.Entry.Id, info => info);
-        return ranked.Select(entry => byId[entry.Id]).ToList();
+        return infos.Take(limit).ToList();
     }
 
     // ─────────────────────────── shared helpers ─────────────────────────

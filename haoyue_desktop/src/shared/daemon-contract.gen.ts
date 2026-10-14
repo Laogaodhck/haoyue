@@ -175,6 +175,8 @@ export const DAEMON_METHODS = [
   'knowledge.source.delete',
   'knowledge.source.refresh',
   'knowledge.retrieve',
+  'knowledge.semantic.status',
+  'knowledge.semantic.build',
   'memory.get',
   'memory.save',
   'rules.list',

@@ -77,12 +77,40 @@ public sealed record EmbeddingRoute(IEmbeddingClient Client, string CacheKey);
 /// <param name="PendingVectors">因单次嵌入上限本次没建的向量数——语义召回不完整，应显式建索引。</param>
 /// <param name="EmbeddingError">语义层失效原因。此前三层空 catch 静默降级，用户无从知道自己
 /// 处在语义还是纯词法，也不知道配置错了什么。</param>
+/// <param name="DisabledReason">语义层根本没启用/没配好时的原因（与 EmbeddingError 区分：
+/// 一个是配置问题、一个是这次调用失败）。</param>
 /// </summary>
 public sealed record HybridSearchOutcome(
     IReadOnlyList<KnowledgeEntry> Entries,
     int EmbeddedNow = 0,
     int PendingVectors = 0,
-    string? EmbeddingError = null);
+    string? EmbeddingError = null,
+    string? DisabledReason = null);
+
+/// <summary>
+/// 语义索引的可见状态：桌面与 CLI 用它回答「我现在用的是语义还是纯词法、还差多少」。
+/// Enabled = 嵌入路由可用（总开关与嵌入模型都存在）；Model = 向量空间的缓存键，未启用时为
+/// null；Reason = 未启用的原因，可直接展示给用户——此前语义失效对用户完全不可见。
+/// </summary>
+public sealed record SemanticIndexStatus(
+    bool Enabled,
+    string? Model,
+    int Total,
+    int Embedded,
+    int Pending,
+    string? Reason);
+
+/// <summary>
+/// 一次建索引批次的产出。Pending 是本次之后仍缺向量的条目数——调用方按它循环批次直到
+/// 归零，每批都只是一次有界的 RPC，不会顶穿桌面客户端的 60 秒超时。
+/// </summary>
+public sealed record SemanticBuildResult(
+    int Embedded,
+    int Failed,
+    int Total,
+    int Pending,
+    string? Model,
+    string? Error);
 
 /// <summary>
 /// Semantic layer on top of the lexical knowledge search: entries and queries are
@@ -129,7 +157,7 @@ public sealed class KnowledgeSemanticIndex(HaoyueDatabase database, ILlmHttpFact
             }
             // Local GGUF / non-HTTP references go through the provider manager, which
             // knows the model registry and the local weight cache.
-            return providers is null
+            return providers is null || !providers.HasEmbeddingTarget(reference)
                 ? null
                 : new EmbeddingRoute(new DelegatingEmbeddingClient(providers, reference), reference);
         }
@@ -144,8 +172,10 @@ public sealed class KnowledgeSemanticIndex(HaoyueDatabase database, ILlmHttpFact
         }
 
         // No HTTP embedding provider — the provider manager auto-selects (local GGUF
-        // path). Null at embed time degrades the search to lexical ordering.
-        return providers is null
+        // path). Only when something embedding-capable is actually registered: a route
+        // that can never embed would make the status claim "语义已启用" while every
+        // embedding fails, which is exactly the invisibility this layer is meant to end.
+        return providers is null || !providers.HasEmbeddingTarget(null)
             ? null
             : new EmbeddingRoute(new DelegatingEmbeddingClient(providers, null), "auto");
     }
@@ -265,6 +295,95 @@ public sealed class KnowledgeSemanticIndex(HaoyueDatabase database, ILlmHttpFact
         return new HybridSearchOutcome(scored, batch.Count, pending, embeddingError);
     }
 
+    /// <summary>
+    /// 语义索引状态：向量缓存覆盖了多少条目、为什么不可用。纯本地读取，不发网络请求，
+    /// 桌面可以在打开知识中心时随时调用。
+    /// </summary>
+    public SemanticIndexStatus Status(string scope, IReadOnlyList<KnowledgeEntry> entries, HaoyueConfig config)
+    {
+        var route = CreateRoute(config);
+        if (route is null)
+            return new SemanticIndexStatus(false, null, entries.Count, 0, entries.Count, DisabledReason(config));
+
+        var cached = LoadVectors(scope, route.CacheKey);
+        var embedded = entries.Count(entry => cached.ContainsKey(entry.Id));
+        return new SemanticIndexStatus(true, route.CacheKey, entries.Count, embedded, entries.Count - embedded, null);
+    }
+
+    /// <summary>单次建索引请求嵌入的条目数。</summary>
+    public const int DefaultBuildBatch = 32;
+
+    /// <summary>单次建索引请求嵌入的条目上限——与 <see cref="KnowledgeTuning.MaxEmbedPerSearch"/> 同理，
+    /// 一次 RPC 不能嵌完整库，否则本地通道会把请求顶到客户端超时之外。</summary>
+    public const int MaxBuildBatch = 128;
+
+    /// <summary>显式建索引（配置入口）：解析嵌入路由后交给按客户端注入的重载。</summary>
+    public Task<SemanticBuildResult> BuildAsync(
+        string scope, IReadOnlyList<KnowledgeEntry> entries, HaoyueConfig config, int batch, CancellationToken ct)
+    {
+        var route = CreateRoute(config);
+        return route is null
+            ? Task.FromResult(new SemanticBuildResult(0, 0, entries.Count, entries.Count, null, DisabledReason(config)))
+            : BuildAsync(scope, entries, route.Client, route.CacheKey, batch, ct);
+    }
+
+    /// <summary>
+    /// 显式建索引：为缺向量的条目补嵌一批，向量落库后永久复用。
+    /// 与检索内联补嵌（<see cref="KnowledgeTuning.MaxEmbedPerSearch"/>，只够让刚存的小库立刻可语义召回）
+    /// 分道扬镳：整库补齐必须走这条有界的通道，而不是塞进模型的工具调用里。
+    /// 顺序按条目 id 稳定推进，调用方循环到 <see cref="SemanticBuildResult.Pending"/> 归零即可。
+    /// </summary>
+    public async Task<SemanticBuildResult> BuildAsync(
+        string scope, IReadOnlyList<KnowledgeEntry> entries, IEmbeddingClient client, string modelKey,
+        int batch, CancellationToken ct)
+    {
+        var size = Math.Clamp(batch, 1, MaxBuildBatch);
+        var cached = LoadVectors(scope, modelKey);
+        var missing = entries
+            .Where(entry => !cached.ContainsKey(entry.Id))
+            .OrderBy(entry => entry.Id)
+            .ToList();
+        var current = missing.Take(size).ToList();
+        var pending = missing.Count;
+
+        if (current.Count == 0)
+            return new SemanticBuildResult(0, 0, entries.Count, 0, modelKey, null);
+
+        double[][] vectors;
+        try
+        {
+            vectors = await client.EmbedBatchAsync([.. current.Select(EmbedTextFor)], ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 建索引是用户主动触发的：失败原因必须原样回传，而不是静默留下半个索引。
+            return new SemanticBuildResult(0, current.Count, entries.Count, pending, modelKey, Describe(ex));
+        }
+
+        var fresh = new List<(long Id, double[] Vector)>();
+        for (var i = 0; i < current.Count; i++)
+        {
+            if (i >= vectors.Length || vectors[i].Length == 0) continue;
+            fresh.Add((current[i].Id, vectors[i]));
+        }
+        if (fresh.Count > 0) SaveVectors(scope, modelKey, fresh);
+
+        var embedded = fresh.Count;
+        return new SemanticBuildResult(
+            embedded, current.Count - embedded, entries.Count, pending - embedded, modelKey, null);
+    }
+
+    private static string DisabledReason(HaoyueConfig config) =>
+        !config.Knowledge.SemanticEnabled
+            ? "语义检索总开关已关闭（knowledge.semanticEnabled = false）。"
+            : config.Knowledge.EmbeddingModel is { Length: > 0 } reference
+                ? $"嵌入模型「{reference}」解析不到：检查提供商 id 与模型 id，并给该模型勾上向量化能力（capabilities.embedding）。"
+                : "没有可用的嵌入模型：给某个提供商的模型勾上向量化能力（capabilities.embedding），或指定 knowledge.embeddingModel。";
+
     private static string Describe(Exception ex) =>
         ex is HttpRequestException or JsonException or InvalidOperationException or FormatException
             ? ex.Message
@@ -299,22 +418,22 @@ public sealed class KnowledgeSemanticIndex(HaoyueDatabase database, ILlmHttpFact
         return normA == 0 || normB == 0 ? 0 : dot / (Math.Sqrt(normA) * Math.Sqrt(normB));
     }
 
-    /// <summary>Routes embeddings through the provider manager: covers local GGUF
-    /// models (in-process llama.cpp) and any future provider kind with embeddings.</summary>
+    /// <summary>
+    /// Routes embeddings through the provider manager: covers local GGUF models
+    /// (in-process llama.cpp) and any future provider kind with embeddings.
+    /// 整批一次调用：本地通道每次 EmbedAsync 都要重新租用权重，逐条发送会让一次建索引
+    /// 变成 N 次加载往返——正是「回合像没输出」的成因之一。
+    /// </summary>
     private sealed class DelegatingEmbeddingClient(IProviderManager providers, string? modelRef) : IEmbeddingClient
     {
         public async Task<double[][]> EmbedBatchAsync(IReadOnlyList<string> inputs, CancellationToken ct)
         {
-            var vectors = new double[inputs.Count][];
-            for (var i = 0; i < inputs.Count; i++)
-            {
-                var result = await providers.EmbedAsync(inputs[i], modelRef, ct).ConfigureAwait(false)
-                    ?? throw new HttpRequestException("no embedding-capable provider is available.");
-                if (result.Vectors.Count == 0)
-                    throw new HttpRequestException("embedding endpoint returned no vectors.");
-                vectors[i] = [.. result.Vectors[^1].Select(value => (double)value)];
-            }
-            return vectors;
+            var result = await providers.EmbedBatchAsync(inputs, modelRef, ct).ConfigureAwait(false)
+                ?? throw new HttpRequestException("no embedding-capable provider is available.");
+            if (result.Vectors.Count != inputs.Count)
+                throw new HttpRequestException(
+                    $"embedding model '{result.Model}' returned {result.Vectors.Count} vectors for {inputs.Count} inputs.");
+            return [.. result.Vectors.Select(vector => vector.Select(value => (double)value).ToArray())];
         }
     }
 

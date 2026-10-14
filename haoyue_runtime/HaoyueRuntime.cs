@@ -45,6 +45,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     public HaoyueDatabase Database => _services.GetRequiredService<HaoyueDatabase>();
     public LocalModelCache LocalModels => _services.GetRequiredService<LocalModelCache>();
     public KnowledgeStore Knowledge => _services.GetRequiredService<KnowledgeStore>();
+    public KnowledgeSemanticIndex SemanticIndex => _services.GetRequiredService<KnowledgeSemanticIndex>();
     public SkillManager Skills => _services.GetRequiredService<SkillManager>();
     public ExtensionManager Extensions { get; } = ExtensionManager.CreateDefault();
     public IMcpManager Mcp => _services.GetRequiredService<IMcpManager>();

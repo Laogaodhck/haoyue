@@ -447,7 +447,7 @@ export class DaemonClient {
     knowledgeList: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("knowledge.list", params),
     /**
-     * 高容错知识检索
+     * 高容错知识检索（配了嵌入模型时走语义+词法混合排序）
      * 终态事件：result, error
      */
     knowledgeSearch: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
@@ -543,11 +543,23 @@ export class DaemonClient {
     knowledgeSourceRefresh: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("knowledge.source.refresh", params),
     /**
-     * 跨笔记本带出处检索
+     * 跨笔记本带出处检索（配了嵌入模型时走语义+词法混合排序）
      * 终态事件：result, error
      */
     knowledgeRetrieve: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("knowledge.retrieve", params),
+    /**
+     * 语义索引状态（是否启用/模型/已嵌入条数/待建条数/不可用原因）
+     * 终态事件：result, error
+     */
+    knowledgeSemanticStatus: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("knowledge.semantic.status", params),
+    /**
+     * 分批建立语义索引（一次嵌入 batch 条，返回剩余 pending）
+     * 终态事件：result, error
+     */
+    knowledgeSemanticBuild: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("knowledge.semantic.build", params),
   };
 
   /** mcp 类别方法。 */

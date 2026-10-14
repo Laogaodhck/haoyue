@@ -4,8 +4,10 @@ using Haoyue.Runtime;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
+using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Workspaces;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Haoyue.Benchmarks.AgentEval;
 
@@ -140,43 +142,57 @@ public static class Program
 
         var sw = Stopwatch.StartNew();
         string? error = null;
-        try
+        // 每个回合都是全新会话 + 全新运行时实例：记忆/检索类任务要的正是
+        // 「上一轮沉淀、下一轮才见得出得来」，同进程同会话跑等于自己给自己递答案。
+        var prompts = new List<string> { task.Prompt };
+        prompts.AddRange(task.FollowUps ?? []);
+        for (var turn = 0; turn < prompts.Count; turn++)
         {
-            var workspace = new WorkspaceManager().Detect(workspaceDir);
-            var fileLocks = new FileLockCoordinator();
-            var owner = $"agent-eval/{task.Id}";
-            await using var runtime = HaoyueRuntime.CreateIsolated(workspace, fileLocks, owner);
-
-            // 策略回归任务注入专属拒绝规则，验证 P0 闸门的强制行为。
-            if (task.DenyRules is { Count: > 0 })
+            try
             {
-                runtime.ConfigStore.Config.Agent.ToolPolicy.Deny = [.. task.DenyRules.Select(rule =>
-                    new Haoyue.Runtime.Tools.ToolPolicyRule
-                    {
-                        Tool = rule.Tool, Pattern = rule.Pattern, Reason = rule.Reason,
-                    })];
-            }
-            // 文档任务显式指向仓库内 doc_toolkit，不依赖 cwd 碰运气。
-            runtime.ConfigStore.Config.DocRender.ToolkitPath =
-                Path.Combine(_repoRoot, "doc_toolkit");
-            // 供应商/模型覆盖：已在 Main 前置校验存在性，这里仅切换本次评测进程的活动项，
-            // 不写回配置文件。
-            if (providerOverride is { } pid)
-            {
-                runtime.ConfigStore.Config.Provider = pid;
-                runtime.ConfigStore.Config.Model = modelOverride;
-            }
-            if (maxStepsOverride > 0)
-                runtime.ConfigStore.Config.Agent.MaxSteps = maxStepsOverride;
+                var workspace = new WorkspaceManager().Detect(workspaceDir);
+                var fileLocks = new FileLockCoordinator();
+                var owner = $"agent-eval/{task.Id}/t{turn}";
+                // 台账与知识库指向工作区内的临时库：默认注册用的是全局 ~/.haoyue 库，
+                // 记忆/检索任务会往真实知识库留条目、往真实账本留会话——评测不该污染用户数据。
+                await using var runtime = HaoyueRuntime.CreateIsolated(
+                    workspace, fileLocks, owner,
+                    services => services.AddSingleton(new HaoyueDatabase(
+                        Path.Combine(workspaceDir, "eval.db"))));
 
-            var session = runtime.Sessions.Create(workspace, networkEnabled: false);
-            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
-            var result = await runtime.Agent.RunTurnAsync(session, workspace, task.Prompt, cts.Token).ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(result.Error)) error = result.Error;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
+                // 策略回归任务注入专属拒绝规则，验证 P0 闸门的强制行为。
+                if (task.DenyRules is { Count: > 0 })
+                {
+                    runtime.ConfigStore.Config.Agent.ToolPolicy.Deny = [.. task.DenyRules.Select(rule =>
+                        new Haoyue.Runtime.Tools.ToolPolicyRule
+                        {
+                            Tool = rule.Tool, Pattern = rule.Pattern, Reason = rule.Reason,
+                        })];
+                }
+                // 文档任务显式指向仓库内 doc_toolkit，不依赖 cwd 碰运气。
+                runtime.ConfigStore.Config.DocRender.ToolkitPath =
+                    Path.Combine(_repoRoot, "doc_toolkit");
+                // 供应商/模型覆盖：已在 Main 前置校验存在性，这里仅切换本次评测进程的活动项，
+                // 不写回配置文件。
+                if (providerOverride is { } pid)
+                {
+                    runtime.ConfigStore.Config.Provider = pid;
+                    runtime.ConfigStore.Config.Model = modelOverride;
+                }
+                if (maxStepsOverride > 0)
+                    runtime.ConfigStore.Config.Agent.MaxSteps = maxStepsOverride;
+
+                var session = runtime.Sessions.Create(workspace, networkEnabled: false);
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                var result = await runtime.Agent.RunTurnAsync(session, workspace, prompts[turn], cts.Token).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(result.Error))
+                    error = $"第 {turn + 1} 回合：{result.Error}";
+            }
+            catch (Exception ex)
+            {
+                error = $"第 {turn + 1} 回合：{ex.Message}";
+            }
+            if (error is not null) break;
         }
         sw.Stop();
 

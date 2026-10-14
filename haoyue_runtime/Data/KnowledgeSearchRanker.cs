@@ -141,33 +141,33 @@ public static class KnowledgeSearchRanker
     }
 
     /// <summary>
-    /// Ranks entries for a query. Exact matches (if any) win; otherwise a fuzzy
-    /// pass over title/tags gives typo tolerance. Ordering: token coverage first,
-    /// then score, then recency — identical to the legacy order for single-token
-    /// queries.
+    /// Corpus-wide lexical pass: verbatim scoring first, and only when *nothing* matched
+    /// verbatim does the edit-distance fallback on short fields run, so one typo does not
+    /// blank the result set. Shared by <see cref="Rank"/> and the hybrid channel — the
+    /// semantic path used to re-implement only the verbatim half, which silently made
+    /// typo-tolerance disappear as soon as an embedding model was configured.
+    /// <paramref name="Fuzzy"/> marks entries whose evidence came from that fallback:
+    /// their per-token score is 1 rather than 3+2+2, so an absolute normalization keeps
+    /// them a tier below verbatim matches instead of pretending they are equal.
     /// </summary>
-    public static IReadOnlyList<KnowledgeEntry> Rank(IEnumerable<KnowledgeEntry> entries, string? query, int limit)
+    public static IReadOnlyList<(KnowledgeEntry Entry, int Score, int Covered, bool Fuzzy)> ScoreCorpus(
+        IEnumerable<KnowledgeEntry> entries, IReadOnlyList<KnowledgeQueryToken> tokens)
     {
-        var tokens = BuildTokens(query);
         if (tokens.Count == 0) return [];
-
-        var scored = new List<(KnowledgeEntry Entry, int Score, int Covered, double Coverage)>();
-        foreach (var entry in entries)
+        var materialized = entries as IReadOnlyList<KnowledgeEntry> ?? entries.ToList();
+        var scored = new List<(KnowledgeEntry, int, int, bool)>();
+        foreach (var entry in materialized)
         {
-            var title = Normalize(entry.Title);
-            var content = Normalize(entry.Content);
-            var tags = Normalize(entry.Tags);
-            var (score, covered) = ScoreEntry(title, content, tags, tokens);
-            if (score > 0)
-                scored.Add((entry, score, covered, (double)covered / tokens.Count));
+            var (score, covered) = ScoreEntry(
+                Normalize(entry.Title), Normalize(entry.Content), Normalize(entry.Tags), tokens);
+            if (score > 0) scored.Add((entry, score, covered, false));
         }
 
         if (scored.Count == 0)
         {
             // Nothing matched verbatim — fall back to edit-distance matching on
-            // short fields so one typo does not blank the result set. Bigrams are
-            // excluded from fuzzy matching (too small to be meaningful).
-            foreach (var entry in entries)
+            // short fields. Bigrams are excluded from fuzzy matching (too small to be meaningful).
+            foreach (var entry in materialized)
             {
                 var title = Normalize(entry.Title);
                 var tags = Normalize(entry.Tags);
@@ -184,13 +184,26 @@ public static class KnowledgeSearchRanker
                         covered++;
                     }
                 }
-                if (score > 0)
-                    scored.Add((entry, score, covered, (double)covered / tokens.Count));
+                if (score > 0) scored.Add((entry, score, covered, true));
             }
         }
+        return scored;
+    }
 
+    /// <summary>
+    /// Ranks entries for a query. Exact matches (if any) win; otherwise a fuzzy
+    /// pass over title/tags gives typo tolerance. Ordering: token coverage first,
+    /// then score, then recency — identical to the legacy order for single-token
+    /// queries.
+    /// </summary>
+    public static IReadOnlyList<KnowledgeEntry> Rank(IEnumerable<KnowledgeEntry> entries, string? query, int limit)
+    {
+        var tokens = BuildTokens(query);
+        if (tokens.Count == 0) return [];
+
+        var scored = ScoreCorpus(entries, tokens);
         return scored
-            .OrderByDescending(c => c.Coverage)
+            .OrderByDescending(c => (double)c.Covered / tokens.Count)
             .ThenByDescending(c => c.Score)
             .ThenByDescending(c => c.Entry.UpdatedAt, StringComparer.Ordinal)
             .Take(limit)

@@ -9,7 +9,11 @@ public sealed record EvalJudge(
     string Path,
     string? Text = null);
 
-/// <summary>一个评测任务：独立临时工作区 + 预置文件 + 提示词 + 判分集。</summary>
+/// <summary>
+/// 一个评测任务：独立临时工作区 + 预置文件 + 提示词 + 判分集。
+/// <see cref="FollowUps"/> 里的后续提示词各自开一个**新会话**（并且换一个新的隔离运行时实例）
+/// 执行，专用于记忆/检索这类「这一轮写进去、下一轮才见得出得来」的跨会话能力。
+/// </summary>
 public sealed record EvalTask(
     string Id,
     string Name,
@@ -18,14 +22,16 @@ public sealed record EvalTask(
     IReadOnlyList<(string Path, string Content)>? Setup = null,
     int MaxSteps = 24,
     /// <summary>注入的 agent.toolPolicy 拒绝规则（用于策略回归任务）。</summary>
-    IReadOnlyList<(string Tool, string Pattern, string Reason)>? DenyRules = null);
+    IReadOnlyList<(string Tool, string Pattern, string Reason)>? DenyRules = null,
+    /// <summary>后续回合提示词，每轮都是全新会话；判分在所有回合结束后执行。</summary>
+    IReadOnlyList<string>? FollowUps = null);
 
 public static class EvalTasks
 {
     /// <summary>
     /// 固定任务集（可扩展）。设计原则：每个任务针对一类 Agent 能力
-    /// （文件写入 / 代码修复 / 多步执行 / 克制不越权 / 策略拦截 / 汇总），
-    /// 判分完全确定性，换模型与调参后可重复回归。
+    /// （文件写入 / 代码修复 / 多步执行 / 克制不越权 / 策略拦截 / 汇总 / 文档成链 /
+    /// 跨会话记忆 / 知识库检索），判分完全确定性，换模型与调参后可重复回归。
     /// </summary>
     public static IReadOnlyList<EvalTask> Default { get; } =
     [
@@ -109,5 +115,44 @@ public static class EvalTasks
                 new EvalJudge("fileExists", ".haoyue/outputs/documents/季度评审.docx"),
             ],
             MaxSteps: 30),
+
+        // 记忆断层此前只被单元测试覆盖（写文件、注入预算），从未跑过真链路：
+        // 「上一轮沉淀的东西，换一个新会话后模型到底看不看得到」没有任何确定性证据。
+        // 这两个任务把它变成可回归的通过率——第二轮是全新会话 + 全新运行时实例，
+        // 靠读文件/联网蒙对不可能通过（提示词里明确禁止，且判分的串只存在于记忆/知识库里）。
+        new EvalTask(
+            "memory-recall",
+            "长期记忆跨会话召回",
+            "这是一条团队约定，请用 memory_save 工具写入工作区长期记忆（不要创建任何文件）：本项目的发布门禁命令是 dotnet test Haoyue.slnx -c Release，产物签名工具是 signtool。写完后回复「已记录」。",
+            [
+                new EvalJudge("fileExists", "recall.md"),
+                new EvalJudge("fileContains", "recall.md", "dotnet test Haoyue.slnx"),
+                new EvalJudge("fileContains", "recall.md", "signtool"),
+                // 蒙对通道：记忆里没有的东西不允许被写成「答案」，编造即失败。
+                new EvalJudge("fileNotContains", "recall.md", "不知道"),
+            ],
+            MaxSteps: 16,
+            FollowUps:
+            [
+                "只依据工作区长期记忆回答两个问题：本项目的发布门禁命令是什么？产物签名用什么工具？" +
+                "把答案写入 recall.md，两行，第一行命令、第二行工具名。" +
+                "禁止读取任何项目文件、禁止联网、禁止执行命令；记忆里查不到就写「不知道」。",
+            ]),
+
+        new EvalTask(
+            "knowledge-retrieval",
+            "知识库检索跨会话召回",
+            "请用 knowledge_save 工具把下面这条排障结论存进知识库（不要创建任何文件）：标题「导出接口超时口径」，内容「导出任务超时上限 93 秒，超过即中止并标记 partial」，标签「导出,超时」。完成后回复「已入库」。",
+            [
+                new EvalJudge("fileExists", "export-timeout.md"),
+                new EvalJudge("fileContains", "export-timeout.md", "93"),
+                new EvalJudge("fileNotContains", "export-timeout.md", "不知道"),
+            ],
+            MaxSteps: 16,
+            FollowUps:
+            [
+                "用 knowledge_search 工具查询「导出任务超时」，把命中的超时上限秒数写入 export-timeout.md 一行。" +
+                "禁止读取任何项目文件、禁止联网；知识库里查不到就写「不知道」。",
+            ]),
     ];
 }

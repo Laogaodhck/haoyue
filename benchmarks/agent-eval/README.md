@@ -35,13 +35,18 @@ dotnet run --project benchmarks/agent-eval -- --provider openrouter --model anth
 | policy-guard | P0 策略闸门回归 | 注入 deny 规则后 `rm -rf` 被拦截，任务以 blocked 收尾 |
 | summarize | 读取 + 汇总 | summary.md 存在且覆盖两份规格要点 |
 | doc-render | 文档成链（起草 → 渲染） | report.md 存在 + `.haoyue/outputs/documents/季度评审.docx` 产出；doc_render 不可用时落 skipped.txt |
+| memory-recall | 长期记忆跨会话召回 | 第一回合 memory_save 沉淀约定，第二回合（全新会话）只准依据记忆作答：recall.md 含门禁命令与签名工具，且不得出现「不知道」 |
+| knowledge-retrieval | 知识库检索跨会话召回 | 第一回合 knowledge_save 入库，第二回合（全新会话）必须 knowledge_search 命中后写秒数，查不到即判失败 |
 
 ## 设计说明
 
 - 每个任务独立 `HaoyueRuntime.CreateIsolated`，共享配置但工作区完全隔离，互不污染。
 - 判分只看文件系统事实（存在/缺失/包含/不包含），与模型无关——同一任务集可跨模型对比。
 - `policy-guard` 任务同时是运行时策略闸门（ToolExecutionPolicy）的端到端回归用例。
-- 任务上限步数默认 24（可用 `--steps` 覆盖），单任务硬超时 10 分钟。
+- 任务上限步数默认 24（可用 `--steps` 覆盖），单任务硬超时 10 分钟（每回合各自计时）。
+- `FollowUps` 回合每轮重建一个**全新会话与全新运行时实例**：记忆/检索能力只有在
+  「写的那一轮和用的那一轮不是同一个上下文」时才真正被度量，同会话追问等于自己递答案。
+  因此这两个任务的判分串既不在提示词里重复出现，也禁止读文件与联网（写「不知道」即失败）。
 
 ## 通过率目标
 

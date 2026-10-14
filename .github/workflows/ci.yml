@@ -28,6 +28,10 @@ jobs:
         run: python version.py check
       - name: Build
         run: dotnet build Haoyue.slnx -c Release
+      - name: Build agent-eval benchmark
+        # 评测工程不在 Haoyue.slnx 里（dotnet test 会把无测试适配器的可执行工程当失败），
+        # 不单独编译就等于它的改动永远进不了 CI —— 多回合判分逻辑改坏了也没人知道。
+        run: dotnet build benchmarks/agent-eval/agent-eval.csproj -c Release
       - name: Test
         run: dotnet test Haoyue.slnx -c Release --no-build --collect:"XPlat Code Coverage;Format=cobertura" --settings haoyue_tests/coverage.runsettings --results-directory ./coverage
       - name: Upload coverage

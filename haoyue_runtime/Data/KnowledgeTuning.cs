@@ -57,8 +57,15 @@ public static class KnowledgeTuning
     /// <summary>低于该余弦相似度的语义信号直接归零：弱相关不该换算成排名加分。</summary>
     public const double MinSemanticSimilarity = 0.25;
 
-    /// <summary>融合分低于该门槛即视为「知识库里没有答案」，不再把最不离谱的条目当结果返回。</summary>
-    public const double MinHybridScore = 0.15;
+    /// <summary>
+    /// 词法证据的绝对下限（归一口径：<c>score / (tokens × (3+2+2))</c>）。
+    /// 取代原先的融合分门槛：0.6 权重乘在词法分上，再要求总分 ≥ 0.15，等价于把词法
+    /// 下限偷偷抬到 0.25——而错别字回退通道每词满分只有 1（归一后 1/7 ≈ 0.143），
+    /// 于是「唯一证据是纠错命中」的条目永远进不来，混合通道一启用就把容错能力弄丢了。
+    /// 现在两通道各设各的门：任一边过线即入围，融合分只负责排序。
+    /// 0.12 高于「多词查询只蹭到一个词」的噪声（1/21 ≈ 0.048），低于单词纠错满分。
+    /// </summary>
+    public const double MinLexicalScore = 0.12;
 
     /// <summary>
     /// 单次检索现场补嵌的条目上限。刻意只够「刚存的几条立刻可语义召回」：整库补齐属于显式

@@ -191,9 +191,15 @@ public sealed class KnowledgeSemanticIndex(HaoyueDatabase database, ILlmHttpFact
     /// · 语义侧用**绝对余弦**，不再除以候选最大值——归一后必有一项等于 1.0，名义 0.4 的
     ///   权重在任何查询下都被吃满，实际排序被语义主导，且相似度只有 0.31 的条目也会伪装成
     ///   0.4 的满权重信号；
-    /// · 两侧各设绝对门槛（<see cref="KnowledgeTuning.MinSemanticSimilarity"/>、
-    ///   <see cref="KnowledgeTuning.MinHybridScore"/>），替代原先的 <c>Final &gt; 0</c>——
-    ///   负例查询（知识库里确实没有答案）必须返回空，而不是把最不离谱的条目当答案送回模型。
+    /// · 入围按**单通道**绝对门槛判定（<see cref="KnowledgeTuning.MinLexicalScore"/> /
+    ///   <see cref="KnowledgeTuning.MinSemanticSimilarity"/>），融合分只决定顺序。
+    ///   此前门槛乘在融合分上，等价于把词法下限偷偷抬到 0.25，错别字回退通道（满分 1/7）
+    ///   永远进不来；
+    /// · 词法侧与 <see cref="KnowledgeSearchRanker.Rank"/> 共用同一次评分
+    ///   （<see cref="KnowledgeSearchRanker.ScoreCorpus"/>），否则配了 embedding 模型之后
+    ///   容错通道会整条消失——混合检索自己抄了一遍精确匹配，漏掉了编辑距离回退。
+    /// 负例查询（知识库里确实没有答案）两路都过不了门槛，必须返回空，
+    /// 而不是把最不离谱的条目当答案送回模型。
     /// </summary>
     public async Task<HybridSearchOutcome> SearchHybridAsync(
         string scope, IReadOnlyList<KnowledgeEntry> entries, string query, int limit,
@@ -202,18 +208,13 @@ public sealed class KnowledgeSemanticIndex(HaoyueDatabase database, ILlmHttpFact
         var tokens = KnowledgeSearchRanker.BuildTokens(query);
         if (tokens.Count == 0) return new HybridSearchOutcome([]);
 
-        // Lexical side — same scoring the plain search uses.
+        // Lexical side — same scoring the plain search uses, typo fallback included.
         var maxLexical = tokens.Count * (KnowledgeTuning.TitleWeight + KnowledgeTuning.ContentWeight + KnowledgeTuning.TagsWeight);
         var lexical = new Dictionary<long, double>();
-        foreach (var entry in entries)
-        {
-            var (score, _) = KnowledgeSearchRanker.ScoreEntry(
-                KnowledgeSearchRanker.Normalize(entry.Title),
-                KnowledgeSearchRanker.Normalize(entry.Content),
-                KnowledgeSearchRanker.Normalize(entry.Tags),
-                tokens);
-            lexical[entry.Id] = maxLexical > 0 ? Math.Min(1.0, score / (double)maxLexical) : 0;
-        }
+        foreach (var hit in KnowledgeSearchRanker.ScoreCorpus(entries, tokens))
+            lexical[hit.Entry.Id] = maxLexical > 0
+                ? Math.Min(1.0, hit.Score / (double)maxLexical)
+                : 0;
 
         // Semantic side — cached vectors first. 缺向量的条目按词法相关性优先、单次上限内
         // 现场补嵌：一次工具调用不能把整库（单来源可达 200 chunk）全量嵌入，本地通道逐条
@@ -280,12 +281,17 @@ public sealed class KnowledgeSemanticIndex(HaoyueDatabase database, ILlmHttpFact
             .Select(entry =>
             {
                 var similarity = semantic.GetValueOrDefault(entry.Id);
-                // 绝对相似度门槛之下的语义分直接归零：弱相关的向量相似不该换算成排名信号。
+                var lexicalScore = lexical.GetValueOrDefault(entry.Id);
+                // 语义分低于绝对门槛直接归零：弱相关的向量相似不该换算成排名加分。
                 var semanticTerm = similarity >= KnowledgeTuning.MinSemanticSimilarity ? similarity : 0d;
-                return (Entry: entry, Final: lexical.GetValueOrDefault(entry.Id) * KnowledgeTuning.HybridLexicalWeight
-                                                  + semanticTerm * KnowledgeTuning.HybridSemanticWeight);
+                // 入围看单通道证据是否足够硬，融合分只决定顺序。
+                var admitted = lexicalScore >= KnowledgeTuning.MinLexicalScore
+                               || similarity >= KnowledgeTuning.MinSemanticSimilarity;
+                return (Entry: entry, Admitted: admitted,
+                        Final: lexicalScore * KnowledgeTuning.HybridLexicalWeight
+                               + semanticTerm * KnowledgeTuning.HybridSemanticWeight);
             })
-            .Where(pair => pair.Final >= KnowledgeTuning.MinHybridScore)
+            .Where(pair => pair.Admitted)
             .OrderByDescending(pair => pair.Final)
             .ThenByDescending(pair => pair.Entry.UpdatedAt, StringComparer.Ordinal)
             .Take(limit)

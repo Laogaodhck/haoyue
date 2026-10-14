@@ -51,6 +51,13 @@ public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
     public IReadOnlyList<TurnStepRecord> Steps { get { lock (_gate) return [.. _steps]; } }
     public IReadOnlyList<UndoableFileChange> Changes { get { lock (_gate) return [.. _changes]; } }
 
+    /// <summary>
+    /// 崩溃对账观察者（daemon 逐步骤重写 active-turns 日志）。放在台账上而不是 Agent 实例上，
+    /// 是为了让共享父台账的子代理步骤同样进日志：否则一次崩溃会留下「文件已改但日志里没有」的
+    /// 子任务痕迹，对账报告不完整。
+    /// </summary>
+    public Action<TurnStepRecord>? MutatingStepObserved { get; set; }
+
     /// <summary>Appends one executed step to the ledger.</summary>
     public void RecordStep(string kind, string tool, string target, bool compensable, bool success)
     {

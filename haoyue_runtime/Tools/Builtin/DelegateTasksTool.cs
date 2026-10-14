@@ -57,7 +57,8 @@ public sealed class DelegateTasksTool(IPromptProvider prompts, IAgentDelegator d
 
         try
         {
-            var results = await delegator.RunSubTasksAsync(context.Workspace, tasks, role, ct).ConfigureAwait(false);
+            var results = await delegator.RunSubTasksAsync(
+                context.Workspace, tasks, role, context.TurnScope, ct).ConfigureAwait(false);
 
             var report = new System.Text.StringBuilder();
             var failed = 0;

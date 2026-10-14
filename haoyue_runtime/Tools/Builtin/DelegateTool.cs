@@ -38,7 +38,10 @@ public sealed class DelegateTool(IPromptProvider prompts, IAgentDelegator delega
 
         try
         {
-            var result = await delegator.RunSubTaskAsync(context.Workspace, task, role, ct).ConfigureAwait(false);
+            // context.TurnScope 把父回合的执行台账交给子代理共享：子任务写下的文件因此
+            // 进入父回合的补偿栈，agent.undo 能一次撤销整回合。
+            var result = await delegator.RunSubTaskAsync(
+                context.Workspace, task, role, context.TurnScope, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(result.Error))
                 return ToolResult.Fail($"子任务失败：{result.Error}");
             if (result.Cancelled)

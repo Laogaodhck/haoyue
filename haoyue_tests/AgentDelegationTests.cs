@@ -138,6 +138,90 @@ public class AgentDelegationTests : IDisposable
         Assert.Contains("sub-answer", mainHistoryText);
     }
 
+    // ---------------------------------------------------------------- 台账继承（B4）
+
+    [Fact]
+    public async Task Delegation_SubAgentWrite_LandsInParentLedgerAndUndo()
+    {
+        // 子代理写文件过去只进它自己那次「回合」的台账，而子会话无人可撤销——
+        // agent.undo 只能回滚主回合自己的改动，整条子任务链留下的文件成为孤儿。
+        var workspace = ProjectWorkspace("ledger-one");
+        var target = Path.Combine(workspace.Root, "sub-note.md");
+        var store = LedgerStore();
+        var capture = new ScriptedTurnsFactory();
+        capture.Completions.AddRange(
+        [
+            ToolStep("delegate_task", new JsonObject { ["task"] = "把部署说明写入 sub-note.md" }),
+            ToolStep("write_file", new JsonObject { ["path"] = target, ["content"] = "部署说明" }),
+            new LlmCompletion { Text = "已写入 sub-note.md", FinishReason = "stop" },
+            new LlmCompletion { Text = "子任务完成，sub-note.md 已生成", FinishReason = "stop" },
+        ]);
+
+        await using var runtime = BuildLedgerRuntime(workspace, store, capture);
+        var session = runtime.Sessions.Create(workspace);
+        using var subscription = runtime.Events.Subscribe();
+
+        var result = await runtime.Agent.RunTurnAsync(session, workspace, "委派子任务写部署说明", CancellationToken.None);
+        Assert.True(result.Error is null, result.Error ?? "ok");
+        Assert.True(File.Exists(target));
+
+        var ledger = runtime.UndoRegistry.Peek(session.Header.Id);
+        Assert.NotNull(ledger);
+        var change = Assert.Single(ledger!.Changes, c => c.AbsolutePath == target);
+        Assert.Null(change.PreviousContent); // 新建文件：撤销即删除
+
+        // 同一批改动只能有一个撤销入口：子会话既不落账，也不在终态事件里报可撤销文件。
+        var terminals = Terminals(subscription);
+        Assert.Equal(2, terminals.Count);
+        Assert.Single(terminals, t => t.UndoableFiles is { Count: > 0 });
+        Assert.Null(Assert.Single(terminals, t => t.SessionId != session.Header.Id).UndoableFiles);
+
+        var (restored, failed) = await ledger.ApplyAsync();
+        Assert.Empty(failed);
+        Assert.Single(restored);
+        Assert.False(File.Exists(target));
+    }
+
+    [Fact]
+    public async Task Delegation_NestedSubAgents_GrandchildWrite_ReachesRootLedger()
+    {
+        // 第二层以下同样要转发台账：ChildDelegator 漏掉 parentScope 的话，孙子代理写的文件
+        // 又会回到「无人可撤销」的状态，而且父回合的崩溃日志里也看不到这一步。
+        var workspace = ProjectWorkspace("ledger-two");
+        var target = Path.Combine(workspace.Root, "nested.md");
+        var store = LedgerStore();
+        store.Config.Agent.DelegationMaxDepth = 2;
+        var capture = new ScriptedTurnsFactory();
+        capture.Completions.AddRange(
+        [
+            ToolStep("delegate_task", new JsonObject { ["task"] = "再委派一层，把结论写入 nested.md" }),
+            ToolStep("delegate_task", new JsonObject { ["task"] = "把结论写入 nested.md" }),
+            ToolStep("write_file", new JsonObject { ["path"] = target, ["content"] = "结论" }),
+            new LlmCompletion { Text = "已写入 nested.md", FinishReason = "stop" },
+            new LlmCompletion { Text = "子任务完成：nested.md 已写好", FinishReason = "stop" },
+            new LlmCompletion { Text = "全部完成，见 nested.md", FinishReason = "stop" },
+        ]);
+
+        await using var runtime = BuildLedgerRuntime(workspace, store, capture);
+        var session = runtime.Sessions.Create(workspace);
+
+        var result = await runtime.Agent.RunTurnAsync(session, workspace, "两层委派写文件", CancellationToken.None);
+        Assert.True(result.Error is null, result.Error ?? "ok");
+
+        var ledger = runtime.UndoRegistry.Peek(session.Header.Id);
+        Assert.NotNull(ledger);
+        Assert.Contains(target, ledger!.Changes.Select(c => c.AbsolutePath));
+
+        // 三层模型请求：主 → 子（仍可委派）→ 孙（深度耗尽，看不到委派工具）。
+        Assert.Equal(6, capture.Requests.Count);
+        Assert.Contains("delegate_task", capture.Requests[1].Tools.Select(tool => tool.Name));
+        Assert.DoesNotContain("delegate_task", capture.Requests[2].Tools.Select(tool => tool.Name));
+        Assert.Contains("把结论写入 nested.md", capture.Requests[2].Messages.Single(m => m.Role == ChatRole.User).Text);
+
+        await ledger.ApplyAsync();
+        Assert.False(File.Exists(target));
+    }
+
     // ---------------------------------------------------------------- parallel delegation
 
     [Fact]
@@ -247,6 +331,58 @@ public class AgentDelegationTests : IDisposable
 
     private WorkspaceInfo GlobalWorkspace() => new WorkspaceManager().CreateGlobal(_dir);
 
+    /// <summary>
+    /// 项目工作区：write_file 的写边界只有在非全局工作区才是工作区根（全局会话落在进程
+    /// cwd），台账测试需要一个可预测的落盘目录。
+    /// </summary>
+    private WorkspaceInfo ProjectWorkspace(string tag)
+    {
+        var root = Path.Combine(_dir, tag);
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "package.json"), "{}");
+        return new WorkspaceManager().Detect(root);
+    }
+
+    private ConfigStore LedgerStore()
+    {
+        var store = new ConfigStore(Path.Combine(_dir, "config.json"), Path.Combine(_dir, "state.json"));
+        store.Config.Providers.Clear();
+        store.Config.Providers.Add(new ProviderConfig
+        {
+            Id = "openai", Kind = "openai", BaseUrl = "https://test.local/v1",
+            Models = [new ModelConfig { Id = "text-only", ContextWindow = 8_000, MaxOutput = 256 }],
+        });
+        store.Config.Provider = "openai";
+        store.Config.Model = "text-only";
+        store.Config.Routing.Fallback = ["openai/text-only"];
+        return store;
+    }
+
+    private HaoyueRuntime BuildLedgerRuntime(
+        WorkspaceInfo workspace, ConfigStore store, ILlmClientFactory capture) =>
+        HaoyueRuntime.CreateIsolated(workspace, configureServices: services =>
+        {
+            services.AddSingleton<IConfigStore>(store);
+            services.AddSingleton(new HaoyueDatabase(Path.Combine(_dir, "state.db")));
+            services.AddSingleton<ILlmHttpFactory>(new LlmHttpFactory());
+            services.AddSingleton(capture);
+            services.AddSingleton(new CircuitBreaker(store.Config.Routing.Retry));
+        });
+
+    private static LlmCompletion ToolStep(string tool, JsonObject arguments) => new()
+    {
+        ToolCalls = [new ToolCallRequest("c1", tool, arguments.ToJsonString())],
+    };
+
+    /// <summary>回合已 await 完成，事件总线是无界队列，直接排空即可拿到全部终态事件。</summary>
+    private static List<TurnCompletedEvent> Terminals(IEventSubscription subscription)
+    {
+        var terminals = new List<TurnCompletedEvent>();
+        while (subscription.Reader.TryRead(out var evt))
+            if (evt is TurnCompletedEvent completed) terminals.Add(completed);
+        return terminals;
+    }
+
     private sealed class StubTool(string name) : ITool
     {
         public string Name => name;
@@ -270,6 +406,40 @@ public class AgentDelegationTests : IDisposable
             LastWorkspace = workspace;
             LastTask = task;
             return Task.FromResult(Next ?? new AgentTurnResult("", false, null));
+        }
+    }
+
+    /// <summary>
+    /// 按脚本顺序逐步应答。超出脚本长度直接抛错而不是重复最后一步——静默兜底会把
+    /// 「多出一整个模型回合」（比如台账补写、收尾提示）这类回归藏起来。
+    /// </summary>
+    private sealed class ScriptedTurnsFactory : ILlmClientFactory
+    {
+        public List<LlmRequest> Requests { get; } = [];
+        public List<LlmCompletion> Completions { get; } = [];
+        private int _call;
+
+        public ILlmClient GetClient(string kind) => new ScriptedClient(this);
+
+        private sealed class ScriptedClient(ScriptedTurnsFactory owner) : ILlmClient
+        {
+            public string Kind => "openai";
+
+            public Task<EmbeddingResult?> EmbedAsync(
+                ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default)
+                => Task.FromResult<EmbeddingResult?>(null);
+
+            public async IAsyncEnumerable<LlmStreamEvent> StreamAsync(
+                LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
+            {
+                owner.Requests.Add(request);
+                await Task.Yield();
+                var index = Interlocked.Increment(ref owner._call) - 1;
+                if (index >= owner.Completions.Count)
+                    throw new InvalidOperationException(
+                        $"脚本只有 {owner.Completions.Count} 步，第 {index + 1} 次模型请求没有预置应答");
+                yield return new LlmCompleted(owner.Completions[index]);
+            }
         }
     }
 

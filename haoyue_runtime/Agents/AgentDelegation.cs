@@ -52,6 +52,20 @@ public interface IAgentDelegator
         var composed = tasks.Select(AgentRole.Resolve(role).ComposeTask).ToList();
         return await RunSubTasksAsync(workspace, composed, ct).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// 带父回合执行台账的委派：子代理共享 <paramref name="parentScope"/>，其文件改动落进
+    /// 父回合的补偿栈，<c>agent.undo</c> 一次撤销整回合（含子任务）。默认实现退化回独立子回合
+    /// （台账不共享），既有实现（测试桩、进化实验室）无需改动。
+    /// </summary>
+    Task<AgentTurnResult> RunSubTaskAsync(
+        WorkspaceInfo workspace, string task, string? role, TurnExecutionScope? parentScope, CancellationToken ct) =>
+        RunSubTaskAsync(workspace, task, role, ct);
+
+    /// <summary>批量委派版的台账共享，语义同 <see cref="RunSubTaskAsync(WorkspaceInfo,string,string?,TurnExecutionScope?,CancellationToken)"/>。</summary>
+    Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
+        WorkspaceInfo workspace, IReadOnlyList<string> tasks, string? role, TurnExecutionScope? parentScope, CancellationToken ct) =>
+        RunSubTasksAsync(workspace, tasks, role, ct);
 }
 
 /// <summary>
@@ -130,13 +144,16 @@ public sealed class AgentDelegator(
     IEventBus events,
     IFileLockCoordinator fileLocks,
     FileLockScope lockScope,
-    ISkillManager? skills = null) : IAgentDelegator
+    ISkillManager? skills = null,
+    TurnUndoRegistry? undoRegistry = null,
+    IToolExecutionPolicy? toolPolicy = null) : IAgentDelegator
 {
     public const string DelegateToolName = "delegate_task";
     public const string ParallelDelegateToolName = "delegate_tasks";
 
     public async Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, CancellationToken ct) =>
-        await RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: false, allowedTools: null).ConfigureAwait(false);
+        await RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: false, allowedTools: null, parentScope: null)
+            .ConfigureAwait(false);
 
     /// <summary>S7：角色化委派——组合角色任务文本并按预设收敛子代理工具视图。</summary>
     async Task<AgentTurnResult> IAgentDelegator.RunSubTaskAsync(
@@ -144,14 +161,25 @@ public sealed class AgentDelegator(
     {
         var preset = role is { Length: > 0 } ? AgentRole.Resolve(role) : null;
         var effectiveTask = preset?.ComposeTask(task) ?? task;
-        return await RunSubTaskAsync(workspace, effectiveTask, ct, depth: 0, parallel: false, allowedTools: preset?.AllowedTools)
-            .ConfigureAwait(false);
+        return await RunSubTaskAsync(workspace, effectiveTask, ct, depth: 0, parallel: false, allowedTools: preset?.AllowedTools,
+            parentScope: null).ConfigureAwait(false);
+    }
+
+    /// <summary>委派时共享父回合台账：子代理写的文件因此可在父回合一次撤销。</summary>
+    async Task<AgentTurnResult> IAgentDelegator.RunSubTaskAsync(
+        WorkspaceInfo workspace, string task, string? role, TurnExecutionScope? parentScope, CancellationToken ct)
+    {
+        var preset = role is { Length: > 0 } ? AgentRole.Resolve(role) : null;
+        var effectiveTask = preset?.ComposeTask(task) ?? task;
+        return await RunSubTaskAsync(workspace, effectiveTask, ct, depth: 0, parallel: false,
+            allowedTools: preset?.AllowedTools, parentScope: parentScope).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
         WorkspaceInfo workspace, IReadOnlyList<string> tasks, CancellationToken ct)
     {
-        var runs = tasks.Select(task => RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: true, allowedTools: null));
+        var runs = tasks.Select(task => RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: true,
+            allowedTools: null, parentScope: null));
         return await Task.WhenAll(runs).ConfigureAwait(false);
     }
 
@@ -161,20 +189,34 @@ public sealed class AgentDelegator(
     {
         var preset = role is { Length: > 0 } ? AgentRole.Resolve(role) : null;
         var composed = preset is null ? tasks : tasks.Select(preset.ComposeTask).ToList();
-        var runs = composed.Select(task => RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: true, allowedTools: preset?.AllowedTools));
+        var runs = composed.Select(task => RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: true,
+            allowedTools: preset?.AllowedTools, parentScope: null));
+        return await Task.WhenAll(runs).ConfigureAwait(false);
+    }
+
+    /// <summary>并行子任务同样共享父台账：补偿栈本身有锁，多个子代理的改动按发生顺序入栈。</summary>
+    async Task<IReadOnlyList<AgentTurnResult>> IAgentDelegator.RunSubTasksAsync(
+        WorkspaceInfo workspace, IReadOnlyList<string> tasks, string? role, TurnExecutionScope? parentScope, CancellationToken ct)
+    {
+        var preset = role is { Length: > 0 } ? AgentRole.Resolve(role) : null;
+        var composed = preset is null ? tasks : tasks.Select(preset.ComposeTask).ToList();
+        var runs = composed.Select(task => RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: true,
+            allowedTools: preset?.AllowedTools, parentScope: parentScope));
         return await Task.WhenAll(runs).ConfigureAwait(false);
     }
 
     private async Task<AgentTurnResult> RunSubTaskAsync(
         WorkspaceInfo workspace, string task, CancellationToken ct, int depth, bool parallel,
-        IReadOnlyList<string>? allowedTools)
+        IReadOnlyList<string>? allowedTools, TurnExecutionScope? parentScope)
     {
         var subTools = BuildSubToolView(depth, parallel, allowedTools);
         var subAgent = new Agent(
             configStore, providerManager, subTools, promptProvider, promptComposer,
-            workspaceManager, sessionStore, verifier, events, fileLocks, lockScope, skills);
+            workspaceManager, sessionStore, verifier, events, fileLocks, lockScope, skills,
+            undoRegistry, toolPolicy);
         var session = sessionStore.Create(workspace);
-        return await subAgent.RunTurnAsync(session, workspace, task, ct).ConfigureAwait(false);
+        return await subAgent.RunTurnAsync(session, workspace, task, ct, inheritedScope: parentScope)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -211,14 +253,38 @@ public sealed class AgentDelegator(
     private sealed class ChildDelegator(AgentDelegator owner, int depth) : IAgentDelegator
     {
         public Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, CancellationToken ct) =>
-            owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: false, allowedTools: null);
+            owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: false, allowedTools: null, parentScope: null);
 
         public async Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
             WorkspaceInfo workspace, IReadOnlyList<string> tasks, CancellationToken ct)
         {
             // A child may fan out too, but its children never delegate (parallel rule).
             var results = await Task.WhenAll(
-                tasks.Select(task => owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: true, allowedTools: null)))
+                tasks.Select(task => owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: true,
+                    allowedTools: null, parentScope: null)))
+                .ConfigureAwait(false);
+            return results;
+        }
+
+        // 嵌套委派的台账转发：子代理拿到的 turnScope 就是父回合那个对象，
+        // 所以这里必须把它继续交给孙子代理，否则第二层以下的改动仍然撤销不了。
+        async Task<AgentTurnResult> IAgentDelegator.RunSubTaskAsync(
+            WorkspaceInfo workspace, string task, string? role, TurnExecutionScope? parentScope, CancellationToken ct)
+        {
+            var preset = role is { Length: > 0 } ? AgentRole.Resolve(role) : null;
+            var effectiveTask = preset?.ComposeTask(task) ?? task;
+            return await owner.RunSubTaskAsync(workspace, effectiveTask, ct, depth, parallel: false,
+                allowedTools: preset?.AllowedTools, parentScope: parentScope).ConfigureAwait(false);
+        }
+
+        async Task<IReadOnlyList<AgentTurnResult>> IAgentDelegator.RunSubTasksAsync(
+            WorkspaceInfo workspace, IReadOnlyList<string> tasks, string? role, TurnExecutionScope? parentScope, CancellationToken ct)
+        {
+            var preset = role is { Length: > 0 } ? AgentRole.Resolve(role) : null;
+            var composed = preset is null ? tasks : tasks.Select(preset.ComposeTask).ToList();
+            var results = await Task.WhenAll(
+                composed.Select(task => owner.RunSubTaskAsync(workspace, task, ct, depth, parallel: true,
+                    allowedTools: preset?.AllowedTools, parentScope: parentScope)))
                 .ConfigureAwait(false);
             return results;
         }

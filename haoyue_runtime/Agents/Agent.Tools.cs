@@ -147,7 +147,7 @@ public sealed partial class Agent
             call.Name == "delegate_task" ? "subtask" : "tool",
             call.Name, filePath ?? argsSummary, compensable, result.Success);
         if (compensable && tool.Mutating)
-            MutatingStepObserved?.Invoke(turnScope.Steps[^1]);
+            turnScope.MutatingStepObserved?.Invoke(turnScope.Steps[^1]);
 
         return new ToolExecution(
             ChatMessage.ToolResult(call.Id, call.Name, result.Output, result.Success, result.Diff, filePath, result.Images),

@@ -54,6 +54,7 @@ public sealed partial class Agent(
     /// Optional daemon hook: invoked for every mutating step so the crash journal can
     /// carry an executed-steps ledger for post-crash reconciliation. Set by the daemon
     /// before the turn starts; null in CLI / test contexts.
+    /// 回合开始时挂到 <see cref="TurnExecutionScope"/> 上，因此共享父台账的子代理步骤也进日志。
     /// </summary>
     public Action<TurnStepRecord>? MutatingStepObserved { get; set; }
 
@@ -93,6 +94,10 @@ public sealed partial class Agent(
         return string.Join("\n", lines);
     }
 
+    /// <param name="inheritedScope">
+    /// 委派链上层回合的执行台账。传入时本回合的步骤与文件补偿直接记入父台账（而不是新建一份），
+    /// 因此 <c>agent.undo</c> 能一次撤销整回合——包括子代理写下的文件。为 null 时是独立回合。
+    /// </param>
     public async Task<AgentTurnResult> RunTurnAsync(
         AgentSession session,
         WorkspaceInfo workspace,
@@ -100,7 +105,8 @@ public sealed partial class Agent(
         CancellationToken ct,
         ReasoningLevel? reasoningLevel = null,
         IReadOnlyList<ChatImageAttachment>? images = null,
-        AgentSteeringQueue? steering = null)
+        AgentSteeringQueue? steering = null,
+        TurnExecutionScope? inheritedScope = null)
     {
         // Empty input would burn a model round on a guaranteed-empty answer. Text OR
         // images must be present; the desktop and CLI frontends never send both empty,
@@ -165,7 +171,11 @@ public sealed partial class Agent(
         // Per-turn execution ledger + compensation stack (retrospective, not a
         // prospective plan): every tool execution appends a step; file tools register
         // their pre-turn content for user-confirmed undo after the turn ends.
-        var turnScope = new TurnExecutionScope(session.Header.Id, workspace.Root);
+        // 委派子代理共享父回合的台账（inheritedScope）：否则子代理写的文件既进不了父回合的
+        // 补偿栈、也没有任何会话能撤销它——「一键撤销本回合」会漏掉整条子任务链。
+        var turnScope = inheritedScope ?? new TurnExecutionScope(session.Header.Id, workspace.Root);
+        // daemon 每回合在 Agent 实例上挂崩溃日志观察者；继承父台账时观察者已在父作用域上。
+        turnScope.MutatingStepObserved ??= MutatingStepObserved;
 
         // Per-turn plan state: update_plan writes here (via ToolContext.PlanTracker) and
         // the guard below turns plan drift into targeted corrective notices.
@@ -737,11 +747,13 @@ public sealed partial class Agent(
             // Deposit the undo ledger and tell clients what can be reverted. A failed or
             // cancelled turn gets an explicit warning; a successful turn carries the file
             // list on the completion event so the UI can offer undo anyway.
+            // 继承父台账时不在子会话上落账：补偿栈归父回合，父回合结束时统一 deposit，
+            // 否则同一批文件改动会有两份互不相干的撤销入口（撤销两次或漏撤一次）。
             var failedTurn = error is not null || cancelled;
             var ledger = turnScope.BuildLedger(failedTurn);
             if (ledger is not null)
             {
-                _undoRegistry?.Deposit(ledger);
+                if (inheritedScope is null) _undoRegistry?.Deposit(ledger);
                 if (failedTurn)
                 {
                     events.Publish(new WarningEvent(
@@ -751,7 +763,9 @@ public sealed partial class Agent(
 
             events.Publish(new TurnCompletedEvent(
                 session.Header.Id, cancelled, error,
-                ledger is null ? null : ledger.Changes.Select(c => ToRelativePath(c.AbsolutePath, workspace.Root)).ToList(),
+                inheritedScope is not null || ledger is null
+                    ? null
+                    : ledger.Changes.Select(c => ToRelativePath(c.AbsolutePath, workspace.Root)).ToList(),
                 turnOutcome));
 
             // H-C 回合结束触发式沉淀提示：有实际执行步骤的成功回合给一条客户端可见的

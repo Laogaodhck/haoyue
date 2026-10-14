@@ -404,6 +404,7 @@ public static class RuntimeServiceCollectionExtensions
         // daemon; single-turn (CLI) runtimes fall back to the no-op implementation.
         services.AddSingleton<IFileLockCoordinator>(coordinator ?? new NoopFileLockCoordinator());
         services.AddSingleton(new FileLockScope(turnOwner ?? ""));
+        services.AddSingleton<Haoyue.Runtime.Tools.IToolExecutionPolicy, Haoyue.Runtime.Tools.ToolExecutionPolicy>();
         services.AddSingleton<IAgentDelegator, AgentDelegator>();
         services.AddSingleton<TurnUndoRegistry>();
         services.AddSingleton<Agent>();

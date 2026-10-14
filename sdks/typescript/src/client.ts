@@ -351,7 +351,7 @@ export class DaemonClient {
     contractExport: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("contract.export", params),
     /**
-     * 查询事件溯源日志
+     * 查询事件溯源日志（重连补播：稳定事件名 + camelCase 载荷 + 会话归属）
      * 终态事件：result, error
      */
     eventsRecent: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>

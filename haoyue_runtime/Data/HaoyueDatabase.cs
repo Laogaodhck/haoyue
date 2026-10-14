@@ -88,13 +88,19 @@ public sealed class HaoyueDatabase
         transaction.Commit();
     }
 
-    /// <summary>Most recent journal entries, oldest first, ready for replay.</summary>
-    public IReadOnlyList<PersistedEvent> RecentEvents(int limit = 100)
+    /// <summary>
+    /// Most recent journal entries, oldest first, ready for replay.
+    /// <paramref name="afterId"/> is the reconnect cursor: only rows with a larger id
+    /// are returned, so a client that dropped its socket can ask for exactly what it missed.
+    /// </summary>
+    public IReadOnlyList<PersistedEvent> RecentEvents(int limit = 100, long afterId = 0)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id, timestamp, type, payload FROM events ORDER BY id DESC LIMIT $limit;";
+        command.CommandText = "SELECT id, timestamp, type, payload FROM events "
+            + "WHERE id > $afterId ORDER BY id DESC LIMIT $limit;";
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, EventJournal.RetainedEvents));
+        command.Parameters.AddWithValue("$afterId", Math.Max(0, afterId));
         var events = new List<PersistedEvent>();
         using (var reader = command.ExecuteReader())
         {

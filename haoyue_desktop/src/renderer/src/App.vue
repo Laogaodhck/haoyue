@@ -51,6 +51,7 @@ import TaskStepList from './components/TaskStepList.vue'
 import { computeTurnTaskSteps, type TaskStep } from './task-planner'
 import { confirmAction } from './confirmation'
 import { finalizeAssistantBubbles, markThreadInterrupted } from './conversation-state'
+import { journalCursor, openTurnsOf, recoverTurns, type JournalRow, type RecoveredTurn } from './turn-recovery'
 import { isForbiddenProjectPath } from './project-paths'
 import { retryRuntimeConnection, RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
 import { ReasoningLevel } from './types'
@@ -545,6 +546,7 @@ async function loadRuntimeState(): Promise<void> {
     mode.value = modeResponse.data
     await refreshAllProjectSessions()
     await migrateImplicitDocumentsProject()
+    await replayMissedTerminals()
     await reconcileInterruptedTurns()
 
     if (!activeThread.value) {
@@ -592,6 +594,63 @@ async function reconcileInterruptedTurns(): Promise<void> {
   if (active?.sessionId && interruptedIds.has(active.sessionId)) {
     await selectThread(active.id)
   }
+}
+
+// 断线期间结束的回合收不到实时终态帧：帧带的是请求 id，重连后那条请求已经不存在了。
+// 台账行是唯一线索，于是带上「见过的最大行号」只补播缺的那几行；否则任务会永远卡在运行中，
+// 队列也不会继续下发。
+let lastJournalId = 0
+
+async function replayMissedTerminals(): Promise<void> {
+  if (!daemonState.value.connected) return
+  const opens = openTurnsOf(threads.value)
+  if (opens.length === 0) return
+  let rows: JournalRow[] = []
+  try {
+    const response = await window.haoyue.daemon.request('events.recent', { limit: 500, after: lastJournalId })
+    const parsed = JSON.parse(response.data) as JournalRow[]
+    if (Array.isArray(parsed)) rows = parsed
+  } catch {
+    return
+  }
+  lastJournalId = journalCursor(rows, lastJournalId)
+  const recovered = recoverTurns(rows, opens)
+  for (const item of recovered) {
+    const thread = threads.value.find((candidate) => candidate.id === item.threadId)
+    if (thread) await applyRecoveredTurn(thread, item)
+  }
+  if (recovered.length === 0) return
+  const titles = recovered
+    .map((item) => threads.value.find((candidate) => candidate.id === item.threadId)?.title ?? '任务')
+  void window.haoyue?.notify?.(
+    '已补回断线期间的结果',
+    recovered.length === 1
+      ? `「${titles[0]}」在连接中断期间已经结束，结果与失败原因已补回。`
+      : `${recovered.length} 个任务（${titles.join('、')}）在连接中断期间已经结束，结果已补回。`)
+}
+
+/** 台账行没有回答正文，先回会话存储整体重载，再补终态标记——顺序反了会被水合覆盖掉。 */
+async function applyRecoveredTurn(thread: ThreadItem, recovered: RecoveredTurn): Promise<void> {
+  thread.running = false
+  thread.requestId = undefined
+  thread.assistantId = undefined
+  thread.phase = undefined
+  thread.activeTurnToken = undefined
+  thread.pendingGuidance = 0
+  finalizeAssistantBubbles(thread.messages, recovered.outcome === 'error' ? 'error' : 'done')
+  thread.undoableFiles = recovered.undoableFiles
+  await reloadThreadSession(thread, projects.value.find((project) => project.id === thread.projectId))
+  const bubble = thread.messages.findLast((item) => item.role === 'assistant')
+  if (bubble) {
+    if (recovered.finishReason) bubble.finishReason = recovered.finishReason
+    if (recovered.outcome === 'cancelled') bubble.interrupted = true
+    if (recovered.outcome === 'error') {
+      bubble.state = 'error'
+      bubble.errorDetail = recovered.error ?? bubble.errorDetail
+      if (!bubble.content) bubble.content = formatTurnFailure(recovered.error ?? '').content
+    }
+  }
+  scheduleQueuedDrain(thread)
 }
 
 async function handleRebuildConfig(): Promise<void> {

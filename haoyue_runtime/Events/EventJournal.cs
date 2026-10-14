@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Haoyue.Runtime.Data;
 using Microsoft.Data.Sqlite;
 
@@ -35,6 +37,75 @@ public static class EventJournal
     ];
 
     public static bool IsPersistent(RuntimeEvent evt) => PersistentTypes.Contains(evt.GetType().Name);
+
+    /// <summary>
+    /// 台账行的回放投影：稳定事件名（snake_case）+ camelCase 载荷 + 会话归属。
+    /// 直接把 C# 记录名和 PascalCase 属性丢给客户端，等于要求每个客户端都复制一份
+    /// 类型字典；重连回放要的只是「哪个会话的哪一回合怎么结束的」。
+    /// </summary>
+    public static JsonObject Project(HaoyueDatabase.PersistedEvent persisted)
+    {
+        JsonNode? payload = null;
+        try
+        {
+            payload = JsonNode.Parse(persisted.Payload);
+        }
+        catch (JsonException)
+        {
+            // 载荷损坏时仍要把行本身回放出去，客户端才能推进游标、跳过坏行。
+        }
+        var body = payload as JsonObject;
+        var projected = body is null ? payload?.DeepClone() : Camelize(body);
+        var row = new JsonObject
+        {
+            ["id"] = persisted.Id,
+            ["timestamp"] = persisted.Timestamp,
+            ["type"] = persisted.Type,
+            ["event"] = WireName(persisted.Type),
+            ["payload"] = projected,
+        };
+        if (projected is JsonObject camel
+            && camel.TryGetPropertyValue("sessionId", out var session)
+            && session is JsonValue && session.GetValueKind() == JsonValueKind.String)
+            row["sessionId"] = session.GetValue<string>();
+        return row;
+    }
+
+    /// <summary><c>TurnCompletedEvent</c> → <c>turn_completed</c>；连续大写按缩写词整体处理。</summary>
+    public static string WireName(string typeName)
+    {
+        var name = typeName.EndsWith("Event", StringComparison.Ordinal)
+            ? typeName[..^"Event".Length]
+            : typeName;
+        var builder = new StringBuilder(name.Length + 8);
+        for (var i = 0; i < name.Length; i++)
+        {
+            var current = name[i];
+            if (char.IsUpper(current) && i > 0
+                && (!char.IsUpper(name[i - 1]) || (i + 1 < name.Length && char.IsLower(name[i + 1]))))
+                builder.Append('_');
+            builder.Append(char.ToLowerInvariant(current));
+        }
+        return builder.ToString();
+    }
+
+    private static JsonObject Camelize(JsonObject source)
+    {
+        var target = new JsonObject();
+        foreach (var pair in source)
+            target[LowerFirst(pair.Key)] = CamelizeNode(pair.Value);
+        return target;
+    }
+
+    private static JsonNode? CamelizeNode(JsonNode? node) => node switch
+    {
+        JsonObject body => Camelize(body),
+        JsonArray items => new JsonArray([.. items.Select(CamelizeNode)]),
+        _ => node?.DeepClone(),
+    };
+
+    private static string LowerFirst(string key) =>
+        string.IsNullOrEmpty(key) || char.IsLower(key[0]) ? key : char.ToLowerInvariant(key[0]) + key[1..];
 
     /// <summary>
     /// Serializes the concrete event record. Oversized payloads (for example a

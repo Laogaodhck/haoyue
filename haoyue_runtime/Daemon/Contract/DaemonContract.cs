@@ -326,8 +326,9 @@ public static class DaemonContract
             },
         }),
         M("contract.export", "core", "导出完整契约文档（JSON Schema）", parameters: EmptyParams),
-        M("events.recent", "core", "查询事件溯源日志", parameters: SObject(
-            ("limit", SInteger("返回条数，缺省 100"), false))),
+        M("events.recent", "core", "查询事件溯源日志（重连补播：稳定事件名 + camelCase 载荷 + 会话归属）", parameters: SObject(
+            ("limit", SInteger("返回条数，缺省 100"), false),
+            ("after", SInteger("只返回 id 大于该值的行，即客户端见过的最后一条台账 id"), false))),
         M("shutdown", "core", "请求 daemon 优雅退出", ["bye"], EmptyParams),
 
         // chat

@@ -75,8 +75,8 @@ export const METHODS: readonly MethodInfo[] = [
   {
     name: "events.recent",
     category: "core",
-    description: "\u67e5\u8be2\u4e8b\u4ef6\u6eaf\u6e90\u65e5\u5fd7",
-    paramsSchema: {"properties": {"limit": {"description": "返回条数，缺省 100", "type": "integer"}}, "type": "object"},
+    description: "\u67e5\u8be2\u4e8b\u4ef6\u6eaf\u6e90\u65e5\u5fd7\uff08\u91cd\u8fde\u8865\u64ad\uff1a\u7a33\u5b9a\u4e8b\u4ef6\u540d + camelCase \u8f7d\u8377 + \u4f1a\u8bdd\u5f52\u5c5e\uff09",
+    paramsSchema: {"properties": {"after": {"description": "只返回 id 大于该值的行，即客户端见过的最后一条台账 id", "type": "integer"}, "limit": {"description": "返回条数，缺省 100", "type": "integer"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

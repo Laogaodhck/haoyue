@@ -647,16 +647,12 @@ public sealed class DaemonServer : IAsyncDisposable
 
                     case "events.recent":
                     {
+                        // 断线重连的补播通道：客户端带上见过的最大 id，只取之后的行。
                         var limit = Params(request)["limit"]?.GetValue<int>() ?? 100;
+                        var afterId = Params(request)["after"]?.GetValue<long>() ?? 0;
                         var journal = new JsonArray();
-                        foreach (var persisted in _runtime.Database.RecentEvents(limit))
-                            journal.Add(new JsonObject
-                            {
-                                ["id"] = persisted.Id,
-                                ["timestamp"] = persisted.Timestamp,
-                                ["type"] = persisted.Type,
-                                ["payload"] = JsonNode.Parse(persisted.Payload),
-                            });
+                        foreach (var persisted in _runtime.Database.RecentEvents(limit, afterId))
+                            journal.Add(EventJournal.Project(persisted));
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", journal.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }

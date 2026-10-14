@@ -1663,9 +1663,49 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var journal = JsonNode.Parse((await connection.ReadAsync())["data"]!.GetValue<string>())!.AsArray();
         Assert.Equal(2, journal.Count);
         Assert.Equal("ErrorEvent", journal[0]!["type"]!.GetValue<string>());
-        Assert.Equal("first", journal[0]!["payload"]!["Message"]!.GetValue<string>());
-        Assert.Equal("WarningEvent", journal[1]!["type"]!.GetValue<string>());
-        Assert.Equal("second", journal[1]!["payload"]!["Message"]!.GetValue<string>());
+        Assert.Equal("error", journal[0]!["event"]!.GetValue<string>());
+        Assert.Equal("first", journal[0]!["payload"]!["message"]!.GetValue<string>());
+        Assert.Equal("warning", journal[1]!["event"]!.GetValue<string>());
+        Assert.Equal("second", journal[1]!["payload"]!["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task EventsRecent_CarriesSessionId_SoReconnectsCanAttributeTerminals()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        _runtime!.Events.Publish(new TurnCompletedEvent("session-9", false, null, null, "stop"));
+
+        await connection.SendAsync(1, "events.recent", new JsonObject { ["limit"] = 10 });
+        var journal = JsonNode.Parse((await connection.ReadAsync())["data"]!.GetValue<string>())!.AsArray();
+        var row = Assert.Single(journal);
+        Assert.Equal("turn_completed", row!["event"]!.GetValue<string>());
+        Assert.Equal("session-9", row["sessionId"]!.GetValue<string>());
+        Assert.Equal("stop", row["payload"]!["finishReason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task EventsRecent_AfterParameter_ReturnsOnlyNewerRows()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        _runtime!.Events.Publish(new ErrorEvent("seen"));
+        await connection.SendAsync(1, "events.recent", new JsonObject { ["limit"] = 10 });
+        var first = JsonNode.Parse((await connection.ReadAsync())["data"]!.GetValue<string>())!.AsArray();
+        var cursor = first[^1]!["id"]!.GetValue<long>();
+
+        // 客户端记账后再次拉取：没有新事件时返回空集，不会把同一条终态二次灌进界面。
+        await connection.SendAsync(2, "events.recent", new JsonObject { ["limit"] = 10, ["after"] = cursor });
+        Assert.Empty(JsonNode.Parse((await connection.ReadAsync())["data"]!.GetValue<string>())!.AsArray());
+
+        _runtime!.Events.Publish(new WarningEvent("newer"));
+        await connection.SendAsync(3, "events.recent", new JsonObject { ["limit"] = 10, ["after"] = cursor });
+        var replayed = JsonNode.Parse((await connection.ReadAsync())["data"]!.GetValue<string>())!.AsArray();
+        var row = Assert.Single(replayed);
+        Assert.Equal("warning", row!["event"]!.GetValue<string>());
+        Assert.True(row["id"]!.GetValue<long>() > cursor);
     }
 
     [Fact]

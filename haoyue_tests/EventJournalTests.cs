@@ -89,6 +89,57 @@ public sealed class EventJournalTests : IDisposable
     }
 
     [Fact]
+    public void Project_UsesStableWireNames_CamelPayload_AndSessionId()
+    {
+        var completed = new TurnCompletedEvent("s-7", false, null, ["a.cs"], "stop");
+        var row = EventJournal.Project(new HaoyueDatabase.PersistedEvent(
+            3, DateTimeOffset.UtcNow.ToString("O"), completed.GetType().Name, EventJournal.Serialize(completed)));
+
+        Assert.Equal(3, row["id"]!.GetValue<long>());
+        Assert.Equal("turn_completed", row["event"]!.GetValue<string>());
+        Assert.Equal("s-7", row["sessionId"]!.GetValue<string>());
+        var payload = row["payload"]!.AsObject();
+        Assert.False(payload.ContainsKey("SessionId"));
+        Assert.Equal("stop", payload["finishReason"]!.GetValue<string>());
+        Assert.Equal("a.cs", payload["undoableFiles"]![0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Project_KeepsTheRowWhenThePayloadIsCorrupt()
+    {
+        var row = EventJournal.Project(new HaoyueDatabase.PersistedEvent(9, "2026-01-01T00:00:00Z", "UsageRecordedEvent", "{oops"));
+        Assert.Equal("usage_recorded", row["event"]!.GetValue<string>());
+        Assert.Null(row["payload"]);
+        Assert.False(row.ContainsKey("sessionId"));
+    }
+
+    [Theory]
+    [InlineData("TurnStartedEvent", "turn_started")]
+    [InlineData("MemoryConsolidationCompletedEvent", "memory_consolidation_completed")]
+    [InlineData("UsageRecordedEvent", "usage_recorded")]
+    [InlineData("RetrievalMissEvent", "retrieval_miss")]
+    [InlineData("MCPUpdatedEvent", "mcp_updated")]
+    public void WireName_MatchesTheStableSnakeCase(string typeName, string expected) =>
+        Assert.Equal(expected, EventJournal.WireName(typeName));
+
+    [Fact]
+    public void RecentEvents_AfterCursor_ReplaysOnlyNewerRows_OldestFirst()
+    {
+        for (var i = 1; i <= 5; i++)
+            _database.AppendEvent(DateTimeOffset.UtcNow, "TestEvent", $"{{\"index\":{i}}}");
+
+        var all = _database.RecentEvents(limit: 100);
+        Assert.Equal(5, all.Count);
+        var firstId = all[0].Id;
+
+        var tail = _database.RecentEvents(limit: 100, afterId: firstId);
+        Assert.Equal(4, tail.Count);
+        Assert.All(tail, item => Assert.True(item.Id > firstId));
+        // 游标推进后重复请求应为空集：客户端不会二次收到同一条终态。
+        Assert.Empty(_database.RecentEvents(limit: 100, afterId: tail[^1].Id));
+    }
+
+    [Fact]
     public void AppendEvent_PrunesTheJournalToTheRetentionWindow()
     {
         for (var i = 0; i < EventJournal.RetainedEvents + 10; i++)

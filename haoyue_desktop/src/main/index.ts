@@ -12,6 +12,7 @@ import iconIco from '../../resources/favicon.ico?asset'
 const appIcon = process.platform === 'win32' ? iconIco : iconPng
 import type { DaemonMessage, DaemonRequestOptions, RevertDiffItem } from '../shared/ipc.js'
 import { DaemonClient } from './daemon-client.js'
+import { openDaemonLogSink } from './daemon-log.js'
 import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
 import {
   destroyComputerOverlay,
@@ -101,20 +102,25 @@ async function ensureDaemonRunning(): Promise<void> {
     windowsHide: true
   })
   managedDaemon = child
-  // stdout 是 pipe 但没有任何消费者：一旦 runtime 开始向 stdout 输出（日志/异常），
-  // 管道缓冲写满即阻塞 daemon 进程。保持排水，避免潜在的整进程假死。
-  child.stdout?.resume()
+  const daemonLog = openDaemonLogSink(join(app.getPath('userData'), 'logs'))
+  // stdout 是 pipe 且必须有消费者：以前只排水不落地，但原生层 abort 前的最后一句
+  // 断言（显存不足等）往往就在这两条流上，丢掉它「发消息没回复」就只能靠猜。
+  child.stdout?.on('data', (chunk) => daemonLog.append(chunk.toString()))
 
   let startupError: Error | null = null
   let childStderr = ''
   child.stderr?.on('data', (chunk) => {
-    childStderr += chunk.toString()
+    const text = chunk.toString()
+    daemonLog.append(text)
+    childStderr += text
     if (childStderr.length > 4000) childStderr = childStderr.slice(-4000)
   })
   child.once('error', (error) => {
     startupError = error
   })
-  child.once('exit', (code) => {
+  child.once('exit', (code, signal) => {
+    daemonLog.writeMarker(`daemon exit code=${code ?? 'null'} signal=${signal ?? 'none'}`)
+    daemonLog.close()
     if (managedDaemon === child) managedDaemon = null
     if (code !== 0 && code !== null) {
       console.error(`Haoyue Runtime exited with code ${code}. Stderr: ${childStderr}`)
@@ -124,7 +130,10 @@ async function ensureDaemonRunning(): Promise<void> {
     // over 30s counts as healthy and resets the attempt budget.
     if (Date.now() - daemonStartedAt > 30_000) daemonRestartAttempts = 0
     if (daemonRestartAttempts >= maxDaemonRestartAttempts) {
-      showNativeNotification('Haoyue Runtime 已退出', '自动重启多次失败，请重启 Haoyue 应用。')
+      const reason = childStderr.split('\n').map((line) => line.trim()).filter(Boolean).pop() ?? ''
+      showNativeNotification(
+        'Haoyue Runtime 已退出',
+        `${reason || `退出码 ${code ?? '未知'}`}（自动重启多次失败，完整记录见 logs/daemon.log）`)
       return
     }
     daemonRestartAttempts++

@@ -132,6 +132,18 @@ public sealed class TerminalRenderer : IDisposable
                 _modelRef = $"{model.ProviderId}/{model.ModelId}";
                 break;
 
+            case ModelLoadProgressEvent load:
+                // 本地权重冷加载可达一两分钟，状态行显示阶段与进度，
+                // 否则首条消息看起来像「发了没反应」。
+                _status = load.Phase switch
+                {
+                    "Ready" => "Thinking",
+                    "Failed" => "Model load failed",
+                    _ => $"Loading model {load.Percent:F0}%",
+                };
+                _statusDetail = load.Message ?? "";
+                break;
+
             case ThinkingDeltaEvent thinking:
                 if (!_thinkingActive)
                     _thinkingStartedAt = Environment.TickCount64;

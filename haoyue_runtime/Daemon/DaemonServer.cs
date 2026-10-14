@@ -90,6 +90,10 @@ public sealed class DaemonServer : IAsyncDisposable
     private Timer? _localModelIdleTimer;
     // H-C 记忆固化：6h 周期的后台定时器（单航班在 ConsolidationRunner 内部）。
     private Timer? _consolidationTimer;
+    // 固化让路定时器：用户回合在飞时把背景固化推迟到它触发之后（并发加载两份本地
+    // 权重会耗尽显存并让 daemon 被原生层 abort）。
+    private Timer? _consolidationDeferralTimer;
+    private static readonly TimeSpan ConsolidationDeferral = TimeSpan.FromMinutes(2);
     private readonly ConsolidationRunner _consolidation;
 
     // Configuration and workspace administration remains serialized, while agent turns
@@ -227,6 +231,8 @@ public sealed class DaemonServer : IAsyncDisposable
         _scheduleEventsTask = BroadcastHostEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
         _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token, _sharedLocalModels);
         _admin.McpStatusChanged += OnMcpStatusChanged;
+        // 回合内的懒加载也走同一条进度通道（调用方不传 IProgress，旁路事件覆盖全部加载）。
+        _sharedLocalModels.LoadProgressObserved += PublishModelLoadProgress;
         _admin.EvolutionConfigChanged += ScheduleAutoReflect;
         ScheduleAutoReflect();
     }
@@ -236,6 +242,8 @@ public sealed class DaemonServer : IAsyncDisposable
     {
         _consolidationTimer?.Dispose();
         _consolidationTimer = null;
+        _consolidationDeferralTimer?.Dispose();
+        _consolidationDeferralTimer = null;
         _maintenanceTimer?.Dispose();
         _maintenanceTimer = null;
         _localModelIdleTimer?.Dispose();
@@ -2042,32 +2050,45 @@ public sealed class DaemonServer : IAsyncDisposable
     /// ModelRef 用文件名——本地模型 id 即 GGUF 文件名。
     /// </summary>
     private IProgress<Providers.LocalLoadProgress> LocalLoadProgress() =>
-        new Progress<Providers.LocalLoadProgress>(progress =>
+        new Progress<Providers.LocalLoadProgress>(PublishModelLoadProgress);
+
+    private void PublishModelLoadProgress(Providers.LocalLoadProgress progress)
+    {
+        try
         {
-            try
-            {
-                _runtime.Events.Publish(new ModelLoadProgressEvent(
-                    Path.GetFileName(progress.ModelPath),
-                    progress.Phase.ToString(),
-                    progress.Percent,
-                    progress.ElapsedMs,
-                    progress.EstimatedRemainingMs,
-                    progress.Message));
-            }
-            catch (Exception)
-            {
-                // 进度事件绝不影响加载。
-            }
-        });
+            _runtime.Events.Publish(new ModelLoadProgressEvent(
+                Path.GetFileName(progress.ModelPath),
+                progress.Phase.ToString(),
+                progress.Percent,
+                progress.ElapsedMs,
+                progress.EstimatedRemainingMs,
+                progress.Message));
+        }
+        catch (Exception)
+        {
+            // 进度事件绝不影响加载。
+        }
+    }
 
     /// <summary>
     /// H-C 记忆固化的后台触发：单航班与墙钟预算都在 ConsolidationRunner 内部，
     /// 这里只负责 fire-and-forget 与彻底容错（固化是背景杂务，失败留待下一周期）。
+    /// 固化本身要跑一个隔离回合，用的是活跃模型——本地 GGUF 与用户回合并发加载会
+    /// 驻留两份权重，显存放不下时原生层直接 abort 掉整个 daemon（用户侧表现为
+    /// 「发消息没有回复」）。因此有用户回合在飞时先让路，两分钟后重试。
     /// </summary>
     private void StartConsolidation()
     {
         if (_shutdown.IsCancellationRequested) return;
         if (!_runtime.ConfigStore.Config.Agent.MemoryConsolidationEnabled) return;
+        if (_sessionTurns.Count > 0)
+        {
+            // 定时器常驻但不重复触发：每次让路都重新设 2 分钟，多次请求合并成一次重试。
+            _consolidationDeferralTimer ??= new Timer(
+                _ => StartConsolidation(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _consolidationDeferralTimer.Change(ConsolidationDeferral, Timeout.InfiniteTimeSpan);
+            return;
+        }
         _ = Task.Run(async () =>
         {
             try

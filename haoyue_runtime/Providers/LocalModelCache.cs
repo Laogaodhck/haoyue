@@ -133,6 +133,13 @@ public sealed class LocalModelCache : IDisposable
     }
 
     /// <summary>
+    /// 加载进度旁路：任何一次权重加载（含对话回合的懒加载）都会上报，不依赖调用方
+    /// 是否传入 IProgress。daemon 订阅它把进度广播给客户端——冷加载要两分钟以上，
+    /// 没有反馈时界面看起来就像「发消息没反应」。
+    /// </summary>
+    public event Action<LocalLoadProgress>? LoadProgressObserved;
+
+    /// <summary>
     /// 加载（或复用）模型文件并返回其独占 lease。加载签名与当前权重不一致时重新
     /// 加载；不一致的旧权重不立即卸载，交给 LRU / 空闲回收——嵌入与聊天模型交替
     /// 时双方都保持驻留。mmproj 有效时随权重加载并在 lease 上暴露；投影器损坏
@@ -548,22 +555,23 @@ public sealed class LocalModelCache : IDisposable
 
         void Report(LocalLoadPhase phase, int attempt, bool degraded, string? message = null)
         {
-            if (progress is null) return;
             var elapsed = stopwatch.ElapsedMilliseconds;
             var remaining = eta is { } estimate ? Math.Max(0, estimate - elapsed) : (long?)null;
+            var snapshot = new LocalLoadProgress
+            {
+                ModelPath = path,
+                Phase = phase,
+                Attempt = attempt,
+                Degraded = degraded,
+                ElapsedMs = elapsed,
+                EstimatedRemainingMs = remaining,
+                Message = message,
+                Percent = LocalLoadProgress.InterpolatedPercent(phase, elapsed, remaining),
+            };
             try
             {
-                progress.Report(new LocalLoadProgress
-                {
-                    ModelPath = path,
-                    Phase = phase,
-                    Attempt = attempt,
-                    Degraded = degraded,
-                    ElapsedMs = elapsed,
-                    EstimatedRemainingMs = remaining,
-                    Message = message,
-                    Percent = LocalLoadProgress.InterpolatedPercent(phase, elapsed, remaining),
-                });
+                progress?.Report(snapshot);
+                LoadProgressObserved?.Invoke(snapshot);
             }
             catch (Exception)
             {
@@ -638,6 +646,8 @@ public sealed class LocalModelCache : IDisposable
                 _fingerprints.RecordFailure(path, ex.Message);
                 var diagnosis = ModelCompatibility.DiagnoseFailure(_fingerprints, path);
                 var history = _fingerprints.ConsecutiveFailures(path);
+                // 终态必须上报：否则客户端的加载进度会永远停在最后一个阶段上。
+                Report(LocalLoadPhase.Failed, attempt, cpuOnly, ex.Message);
                 throw new LlmException(
                     $"加载本地模型 '{fileName}' 失败（共 {attempt} 次尝试，"
                     + (wantsGpu ? "含 CPU 降级重试" : "含 1 次重试") + "）：" + string.Join("；", attempts)

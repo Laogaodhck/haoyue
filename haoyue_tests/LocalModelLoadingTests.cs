@@ -380,6 +380,25 @@ public sealed class LocalModelLoadingTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadProgressObserved_FiresWithoutCallerProgress()
+    {
+        // 对话回合走的是 progress: null 的 AcquireAsync。旁路事件必须照常上报，
+        // 否则冷加载一两分钟内界面毫无反馈，看起来就像「发消息没回复」。
+        var missing = Path.Combine(_dir, "silent.gguf");
+        using var cache = new LocalModelCache(
+            new LocalModelFingerprints(Path.Combine(_dir, "fp.json")),
+            new LocalModelMetadataCache());
+        var phases = new List<LocalLoadPhase>();
+        cache.LoadProgressObserved += progress => phases.Add(progress.Phase);
+
+        await Assert.ThrowsAsync<LlmException>(() => cache.AcquireAsync(
+            missing, _ => new LLama.Common.ModelParams(missing), "sig", null, CancellationToken.None));
+
+        Assert.Contains(LocalLoadPhase.Loading, phases);
+        Assert.Contains(LocalLoadPhase.Failed, phases);
+    }
+
+    [Fact]
     public async Task PreloadAsync_Progress_ReportsPhasesInOrder()
     {
         // 版本门路径同样产出进度事件（Probing → Failed）。

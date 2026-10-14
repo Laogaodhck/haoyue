@@ -121,6 +121,7 @@ public static class DaemonContract
     public static readonly string[] BroadcastEvents =
     [
         "schedule.updated", "schedule.upcoming", "task.updated", "evolution.reflected", "mcp.updated", "turn.interrupted",
+        "memory.consolidated", "model.load.progress",
     ];
 
     private static readonly Lazy<IReadOnlyList<DaemonMethodDoc>> _methods = new(BuildCatalog);

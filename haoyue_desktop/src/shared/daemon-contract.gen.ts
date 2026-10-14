@@ -50,6 +50,8 @@ export const DAEMON_BROADCAST_EVENTS = [
   'evolution.reflected',
   'mcp.updated',
   'turn.interrupted',
+  'memory.consolidated',
+  'model.load.progress',
 ] as const
 
 export const DAEMON_EVENT_NAMES = [
@@ -77,6 +79,8 @@ export const DAEMON_EVENT_NAMES = [
   'evolution.reflected',
   'mcp.updated',
   'turn.interrupted',
+  'memory.consolidated',
+  'model.load.progress',
 ] as const
 
 export type DaemonEventName = (typeof DAEMON_EVENT_NAMES)[number]

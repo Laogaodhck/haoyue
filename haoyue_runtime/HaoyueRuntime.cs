@@ -43,6 +43,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     public IProjectStore Projects => _services.GetRequiredService<IProjectStore>();
     public IScheduleStore Schedules => _services.GetRequiredService<IScheduleStore>();
     public HaoyueDatabase Database => _services.GetRequiredService<HaoyueDatabase>();
+    public LocalModelCache LocalModels => _services.GetRequiredService<LocalModelCache>();
     public KnowledgeStore Knowledge => _services.GetRequiredService<KnowledgeStore>();
     public SkillManager Skills => _services.GetRequiredService<SkillManager>();
     public ExtensionManager Extensions { get; } = ExtensionManager.CreateDefault();
@@ -353,7 +354,22 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<PromptComposer>();
 
         services.AddSingleton<ILlmHttpFactory, LlmHttpFactory>();
-        services.AddSingleton<LocalModelCache>();
+        // CLI 等进程内宿主没有 daemon 的进度桥接，这里把加载进度发到自己的事件总线，
+        // 否则本地权重冷加载的一两分钟内状态行毫无变化。daemon 会用共享实例覆盖本
+        // 注册（每个回合的隔离 runtime 都这样做），所以不会与桥接重复上报。
+        services.AddSingleton<LocalModelCache>(sp =>
+        {
+            var cache = new LocalModelCache();
+            var bus = sp.GetRequiredService<IEventBus>();
+            cache.LoadProgressObserved += progress => bus.Publish(new ModelLoadProgressEvent(
+                System.IO.Path.GetFileName(progress.ModelPath),
+                progress.Phase.ToString(),
+                progress.Percent,
+                progress.ElapsedMs,
+                progress.EstimatedRemainingMs,
+                progress.Message));
+            return cache;
+        });
         services.AddSingleton<ILlmClient, OpenAiCompatibleClient>();
         services.AddSingleton<ILlmClient, AnthropicClient>();
         services.AddSingleton<ILlmClient, LocalLlmClient>();

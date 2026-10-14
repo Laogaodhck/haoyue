@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text;
+using Haoyue.Runtime;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
 
 namespace Haoyue.Tests;
@@ -413,6 +415,27 @@ public sealed class LocalModelLoadingTests : IDisposable
             path, _ => new LLama.Common.ModelParams(path), "sig", null, progress, CancellationToken.None));
 
         Assert.Contains(LocalLoadPhase.Probing, phases);
+    }
+
+    [Fact]
+    public async Task RuntimeOwnedCache_PublishesProgressOnItsEventBus()
+    {
+        // CLI 这类进程内宿主没有 daemon 的进度桥接。runtime 自带的缓存必须自己把
+        // 加载进度发到事件总线，否则冷加载的一两分钟里状态行一动不动。
+        var store = new ConfigStore(
+            Path.Combine(_dir, "config.json"), Path.Combine(_dir, "state.json"));
+        using var runtime = HaoyueRuntime.Create(_dir, store);
+        using var subscription = runtime.Events.Subscribe();
+        var missing = Path.Combine(_dir, "bridge.gguf");
+
+        await Assert.ThrowsAsync<LlmException>(() => runtime.LocalModels.AcquireAsync(
+            missing, _ => new LLama.Common.ModelParams(missing), "sig", null, CancellationToken.None));
+
+        var phases = new List<string>();
+        while (subscription.Reader.TryRead(out var evt))
+            if (evt is ModelLoadProgressEvent load) phases.Add(load.Phase);
+        Assert.Contains("Loading", phases);
+        Assert.Contains("Failed", phases);
     }
 
     // ---------------------------------------------------------------- fixture

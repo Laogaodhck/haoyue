@@ -124,6 +124,20 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
 
   return function handleDaemonEvent(event: DaemonMessage): void {
     if (event.event === 'schedule.upcoming') return
+    if (event.event === 'model.load.progress') {
+      // 本地权重冷加载实测要一两分钟。没有反馈时第一条消息看起来就像「发了没反应」，
+      // 所以把加载阶段与进度写成运行阶段标签，Ready 后交还给常规的思考提示。
+      const phase = typeof event.details?.phase === 'string' ? event.details.phase : ''
+      const percent = typeof event.details?.percent === 'number' ? event.details.percent : 0
+      const loading = threads.value.find((item) => item.running)
+      if (!loading) return
+      loading.phase = phase === 'Ready'
+        ? '思考中'
+        : phase === 'Failed'
+          ? '本地模型加载失败'
+          : `加载本地模型 ${Math.round(percent * 100)}%`
+      return
+    }
     if (event.event === 'turn.interrupted') {
       // N17: the daemon recovered a session whose turn was killed mid-flight by a
       // crash. Clear the stale running state (otherwise the spinner sticks forever)

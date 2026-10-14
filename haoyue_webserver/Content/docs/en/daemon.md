@@ -64,6 +64,8 @@ The `requestId` parameter is optional; omitting it cancels all active turns on t
 
 Assistant messages returned by `session.get` carry `modelRef` (`provider/model`) so clients can label which model produced each answer. Streaming events are `thinking`, `delta`, `steer`, `status`, `image_view`, `tool_start`, `tool_done`, and `workflow`. The `workflow` event carries `details` with `step`, `kind` (`start`/`think`/`tool`/`verify`/`repair`/`compact`/`done`/`error`), `label`, and `detail` so clients can count the execution steps of the turn. `steer` indicates that additional guidance has entered the active turn's context; `details.imageId` on `image_view` identifies the uploaded image entering the model request. Terminal events are `done`, `cancelled`, and `error`.
 
+The Daemon also broadcasts events that belong to no request (`id` is 0): `schedule.updated`, `schedule.upcoming`, `task.updated`, `evolution.reflected`, `mcp.updated`, `turn.interrupted`, `memory.consolidated`, and `model.load.progress`. `model.load.progress` carries `details` with `model`, `phase` (Queued / Probing / Loading / Verifying / Projector / Ready / Failed), `percent` (0..1), `elapsedMs`, and `estimatedRemainingMs`. Cold-loading local GGUF weights takes one to two minutes, so clients show "loading local model N%" on the first message instead of looking dead; the progress channel covers lazy loads inside a chat turn, not only `model.preload`.
+
 ## Other Methods
 
 | Method | Parameters | Description |
@@ -110,6 +112,10 @@ The Daemon starts listening before MCP initialization continues in the backgroun
 
 Each `chat` request is assigned an isolated Runtime, workspace Prompt/Skills state, MCP registrations, and event subscription. A connection or multiple connections can therefore run any number of turns concurrently; practical concurrency is determined by CPU, memory, Provider throughput, and local I/O. Administrative configuration writes are serialized only to prevent file races and do not block running turns.
 
+Background memory consolidation runs at Daemon start and every 6 hours afterwards. It is itself an Agent turn and uses the same local model as chat. When a consolidation tick fires while a user turn is running, it is deferred by 2 minutes and retried (repeated requests collapse into one retry): keeping two copies of the weights resident exhausts VRAM and aborts the Daemon inside the native layer, which is how replies disappear.
+
 ## Desktop Daemon lifecycle
 
 Packaged Desktop first connects to the local endpoint. If no Daemon is present, it starts the self-contained Runtime under `resources/runtime` and probes for readiness using 24 short attempts. Desktop tracks only the child process it creates. On exit it sends `shutdown`, waits for graceful termination, and kills the child only after a timeout. If Desktop connected to an externally started Daemon, exiting Desktop only disconnects the client.
+
+Desktop persists the stdout and stderr of the Runtime it spawns to `<userData>/logs/daemon.log` (on Windows packaging, `%APPDATA%\haoyue-desktop\logs\daemon.log`). Each spawn appends a separator line and process exit appends the exit code and signal; the file rotates to `daemon.prev.log` once it exceeds 8 MB. The last native assertion before a crash (for example an out-of-memory trap) usually only reaches these two streams, so this log is the first place to look when "a message gets no reply". After several failed automatic restarts the notification shows the last error line and points at this file.

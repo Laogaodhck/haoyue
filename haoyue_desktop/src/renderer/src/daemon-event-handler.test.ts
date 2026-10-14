@@ -314,3 +314,63 @@ describe('daemon event handler — turn undo ledger (TurnScope)', () => {
     expect(thread.undoableFiles).toEqual(['ok.ts'])
   })
 })
+
+describe('daemon event handler — local model load progress', () => {
+  function runningThread(): ThreadItem {
+    return {
+      id: 't1',
+      title: '任务',
+      updatedAt: Date.now(),
+      messages: [],
+      sessionId: 's1',
+      running: true,
+      phase: '思考中'
+    }
+  }
+
+  function loadEvent(phase: string, percent: number): DaemonMessage {
+    return {
+      id: 0,
+      event: 'model.load.progress',
+      data: '本地模型加载进度',
+      details: { model: 'gemma.gguf', phase, percent }
+    }
+  }
+
+  it('labels the running thread with the loading phase', () => {
+    const context = createContext()
+    const thread = runningThread()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(loadEvent('Loading', 0.624))
+
+    expect(thread.phase).toBe('加载本地模型 62%')
+  })
+
+  it('ignores progress when no thread is running', () => {
+    const context = createContext()
+    const thread = runningThread()
+    thread.running = false
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(loadEvent('Loading', 0.3))
+
+    expect(thread.phase).toBe('思考中')
+  })
+
+  it('keeps the chip alive on ready and reports failure', () => {
+    const context = createContext()
+    const thread = runningThread()
+    thread.phase = '加载本地模型 62%'
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(loadEvent('Ready', 1))
+    expect(thread.phase).toBe('思考中')
+
+    handler(loadEvent('Failed', 1))
+    expect(thread.phase).toBe('本地模型加载失败')
+  })
+})

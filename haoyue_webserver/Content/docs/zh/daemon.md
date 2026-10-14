@@ -66,6 +66,8 @@ Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放
 
 流式事件包括 `thinking`、`delta`、`steer`、`status`、`image_view`、`tool_start`、`tool_done` 和 `workflow`。`workflow` 的 `details` 含 `step`、`kind`（start/think/tool/verify/repair/compact/done/error）、`label` 与 `detail`，用于客户端统计当前 turn 的执行步数。`steer` 表示附加指导已经进入当前 turn 的上下文；`image_view` 的 `details.imageId` 指明模型正在查看哪张上传图片。终止事件包括 `done`、`cancelled` 和 `error`。
 
+Daemon 还会主动广播与任何请求无关的事件（`id` 为 0）：`schedule.updated`、`schedule.upcoming`、`task.updated`、`evolution.reflected`、`mcp.updated`、`turn.interrupted`、`memory.consolidated` 和 `model.load.progress`。`model.load.progress` 的 `details` 含 `model`、`phase`（Queued / Probing / Loading / Verifying / Projector / Ready / Failed）、`percent`（0..1）、`elapsedMs` 与 `estimatedRemainingMs`。本地 GGUF 权重的冷加载需要一到两分钟，客户端据此在首条消息上显示"加载本地模型 N%"，而不是让界面看起来毫无反应；进度通道覆盖对话回合里的懒加载，不只在 `model.preload` 时上报。
+
 ## 其他方法
 
 | 方法 | 参数 | 说明 |
@@ -122,8 +124,12 @@ Daemon 会先建立 IPC 监听，再在后台初始化 MCP。`mcp.reload`、MCP 
 
 Daemon 对每个 `chat` 请求按 `sessionId` 创建独立的 Agent turn。每个 turn 使用隔离的 Runtime、Prompt/Skills、MCP 注册和事件订阅，因此同一连接或多个连接可以并发运行任意数量的任务；并发度由 CPU、内存、Provider 和本机 I/O 性能共同决定。管理类配置写入仍然串行化，避免配置文件互相覆盖，但不会阻塞已经启动的 Agent turn。
 
+后台记忆固化在 Daemon 启动时以及之后每 6 小时运行一次，它本身也是一个 Agent turn，并使用与对话相同的本地模型。若触发时已有用户回合在飞，固化会推迟 2 分钟后重试（多次请求合并为一次重试）：本地模型同时驻留两份权重会耗尽显存，把 Daemon 直接压到原生层崩溃、回复因此消失。
+
 Daemon 进程内维护一个集中式文件写锁协调器（Task Coordinator），作为所有并发 turn 的文件锁唯一信任源。`write_file` 和 `edit_file` 在修改文件前会先按工作区+文件路径申请写锁：锁空闲则授予并完成修改后释放；锁被其他任务占用时工具最多等待 30 秒，超时后返回明确的失败提示（附当前持有者），要求模型等待并重新读取最新内容后重试。`edit_file` 在拿到锁后才读取文件，因此修改总是作用于磁盘上的最新内容，避免并行任务互相覆盖或产生无效编辑。turn 结束时（含取消）协调器会释放该任务持有的全部锁。可通过 `lock.list` 查看当前占用表。
 
 ## Desktop 的 Daemon 生命周期
 
 打包版 Desktop 启动时先连接本地端点。若没有 Daemon，它会从 `resources/runtime` 启动自包含 Runtime，并在 24 次短间隔探测内等待端点就绪。Desktop 只记录自己创建的子进程；退出时向该实例发送 `shutdown`，等待其退出，超时后才终止进程。若启动时连接的是外部 Daemon，退出 Desktop 只断开连接。
+
+Desktop 会把自管 Runtime 的 stdout 与 stderr 落盘到 `<userData>/logs/daemon.log`（Windows 打包版即 `%APPDATA%\haoyue-desktop\logs\daemon.log`），每次启动写入一行分隔标记，进程退出时追加退出码与信号；单文件超过 8 MB 时滚动为 `daemon.prev.log`。原生层崩溃前的最后一条断言（例如显存不足）通常只出现在这两条流上，所以排查"发消息没有回复"应先看这个文件。自动重启多次失败时，通知会直接给出最后一行错误并指向该日志。

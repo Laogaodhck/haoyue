@@ -46,6 +46,42 @@ public sealed class ConfigSchemaTests : IDisposable
     }
 
     [Fact]
+    public void EveryDefaultConfigLeaf_IsRegistered_NoUnmanagedFields()
+    {
+        // 反向漂移守卫：正向守卫只保证「登记了的默认值没写错」，管不到「新增字段忘了登记」。
+        // 未登记字段等于游离在校验与文档之外——越界不钳制、类型错不回退、设置页看不到。
+        var seeded = JsonNode.Parse(
+            System.Text.Json.JsonSerializer.Serialize(
+                DefaultHaoyueConfig.Build(), HaoyueJsonContext.Default.HaoyueConfig))!.AsObject();
+
+        var leaves = new List<string>();
+        CollectLeaves(seeded, "", leaves);
+
+        // schemaVersion 由 ConfigSchema 自身记账并迁移，不属于用户可编辑字段。
+        var managed = leaves.Where(path => !string.Equals(path, "schemaVersion", StringComparison.Ordinal));
+        var missing = managed.Where(path => ConfigSchema.Find(path) is null).OrderBy(p => p).ToList();
+        Assert.True(missing.Count == 0,
+            $"未登记字段（{missing.Count} 个，校验与文档均不覆盖）：\n{string.Join("\n", missing)}");
+    }
+
+    /// <summary>Flattens the serialized default config into dotted leaf paths. Objects recurse;
+    /// arrays (user-data lists) and empty objects (dictionary-keyed containers such as
+    /// mcp.servers) are leaves themselves — their children are per-item user data.</summary>
+    private static void CollectLeaves(JsonNode? node, string path, List<string> leaves)
+    {
+        switch (node)
+        {
+            case JsonObject obj when obj.Count > 0:
+                foreach (var pair in obj)
+                    CollectLeaves(pair.Value, path.Length == 0 ? pair.Key : $"{path}.{pair.Key}", leaves);
+                break;
+            default:
+                if (path.Length > 0) leaves.Add(path);
+                break;
+        }
+    }
+
+    [Fact]
     public void Normalize_ClampsTurnBudgetFields_AndLeavesUserDataArraysAlone()
     {
         var root = JsonNode.Parse("""

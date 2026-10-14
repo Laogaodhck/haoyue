@@ -40,6 +40,10 @@ public static class ConfigSchema
         New("model", "string", null, view: ViewBoth),
         New("temperature", "double", null, min: 0, max: 2, view: ViewBoth),
 
+        // 提供商清单是用户数据本体（含 API key 引用、模型表）：登记容器本身，
+        // 子项由 ProviderConfig / ConfigStore 逐项容错，不做默认值回填。
+        New("providers", "array", null, view: ViewBoth),
+
         // agent
         New("agent.maxSteps", "int", 40, min: 1, max: 500),
         New("agent.autoVerify", "bool", true, view: ViewBoth),
@@ -66,11 +70,36 @@ public static class ConfigSchema
         New("agent.visionModel", "string", null),
         New("agent.delegationEnabled", "bool", true),
         New("agent.delegationMaxDepth", "int", 1, min: 1, max: 4),
+        New("agent.reasoningLevel", "enum", "high",
+            allowed: ["none", "low", "medium", "high", "max", "xhigh", "ultra"], view: ViewBoth),
+        New("agent.rulesEnabled", "bool", true),
+        // 会话保留天数：0 = 关闭自动归档与孤儿清理（L-D 维护周期）。
+        New("agent.sessionRetentionDays", "int", 90, min: 0, max: 3_650),
+        New("agent.scheduleWebhookUrl", "string", null, view: ViewBoth),
+        // H-C 记忆固化：定时把近期会话沉淀为项目事实；lookback 与 ConsolidationRunner 的钳制同值。
+        New("agent.memoryConsolidationEnabled", "bool", true),
+        New("agent.memoryConsolidationLookbackDays", "int", 3, min: 1, max: 30),
+        // 本地模型驻留/并发/回收：显存与内存的直接旋钮，越界值只会造成 OOM 或空转。
+        New("agent.localModelMaxResident", "int", 2, min: 1, max: 16),
+        New("agent.localModelConcurrency", "int", 1, min: 1, max: 16),
+        New("agent.localModelIdleUnloadMinutes", "int", 20, min: 0, max: 1_440),
+        New("agent.localModelPreload", "bool", false),
+        // 工具执行策略闸门（运行时强制，模型无法绕过）。规则列表本身是用户数据。
+        New("agent.toolPolicy.enabled", "bool", true),
+        New("agent.toolPolicy.builtinBashGuard", "bool", true),
+        New("agent.toolPolicy.allow", "array", null),
+        New("agent.toolPolicy.deny", "array", null),
+        // Windows Job Object 沙箱；0 表示该项不限制。
+        New("agent.bashSandbox.enabled", "bool", false),
+        New("agent.bashSandbox.memoryLimitMb", "int", 2_048, min: 0, max: 262_144),
+        New("agent.bashSandbox.maxProcesses", "int", 256, min: 0, max: 4_096),
+        New("agent.bashSandbox.uiRestrictions", "bool", true),
         // 用户数据型（数组，无默认值）：登记是为了进入文档与漂移治理，
         // 路径解析仍由 PathGuard 逐项容错。
         New("agent.extraReadableRoots", "array", null, view: ViewBoth),
 
         // routing
+        New("routing.fallback", "array", null, view: ViewBoth),
         New("routing.failoverEnabled", "bool", true),
         New("routing.deepSeekOptimizationEnabled", "bool", false),
         New("routing.loadBalance", "enum", "priority",
@@ -82,6 +111,46 @@ public static class ConfigSchema
         New("routing.retry.circuitBreakThreshold", "int", 4, min: 1, max: 20),
         New("routing.retry.circuitCooldownSeconds", "double", 60.0, min: 1, max: 3_600),
         New("routing.retry.chainBudgetSeconds", "double", 120.0, min: 10, max: 3_600),
+
+        // 知识库语义层：semanticEnabled 关闭或没有可用 embedding 模型时检索自动退回纯词法，
+        // 关闭原因经 knowledge.semantic.status / 检索 summary 对用户可见。
+        New("knowledge.semanticEnabled", "bool", true),
+        New("knowledge.embeddingModel", "string", null),
+
+        // 图像生成（image_generate 工具）。未配置可用图像模型时工具自动隐藏。
+        New("imageGen.model", "string", null),
+        New("imageGen.size", "string", "1024x1024"),
+
+        // 文档渲染（doc_render 工具）：空路径 = 按内置探测链自动定位。
+        New("docRender.enabled", "bool", true),
+        New("docRender.toolkitPath", "string", ""),
+        New("docRender.pythonPath", "string", ""),
+
+        // 外部访问白名单：空列表 = 不限制（用户数据型）。
+        New("web.allowedSites", "array", null),
+
+        // 进化引擎：反思触发（产出始终等人工采纳）。
+        New("evolution.autoReflect", "bool", false),
+        New("evolution.intervalMinutes", "int", 360, min: 30, max: 10_080),
+        New("evolution.thresholdEnabled", "bool", false),
+        New("evolution.thresholdSignals", "int", 5, min: 1, max: 50),
+
+        // Computer Use 子系统的独立开关组（默认关闭，启用不影响其余能力）。
+        New("computerUse.enabled", "bool", false),
+        New("computerUse.driver", "enum", "auto", allowed: ["auto", "windows", "linux", "mac", "vision"]),
+        New("computerUse.shellEnabled", "bool", true),
+        New("computerUse.systemControlEnabled", "bool", true),
+        New("computerUse.pythonPath", "string", ""),
+        New("computerUse.maxStepsPerTurn", "int", 30, min: 0, max: 1_000),
+        New("computerUse.actionDelayMs", "int", 300, min: 0, max: 10_000),
+
+        // Network Ops 插件（默认关闭）；allowMutating 关闭后只允许只读查询。
+        New("networkOps.enabled", "bool", false),
+        New("networkOps.allowMutating", "bool", true),
+        New("networkOps.timeoutSeconds", "int", 60, min: 1, max: 600),
+
+        // 按服务器名键控的字典：容器整体登记为用户数据，子项由 McpConfig 逐项容错。
+        New("mcp.servers", "object", null),
     ];
 
     private static ConfigField New(string path, string type, object? @default,

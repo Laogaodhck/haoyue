@@ -1415,6 +1415,8 @@ internal sealed class DaemonAdminApi(
         server.Transport = OptionalString(input, "transport") ?? server.Transport;
         server.Command = OptionalString(input, "command") ?? server.Command;
         server.Url = OptionalString(input, "url") ?? server.Url;
+        if (input.TryGetPropertyValue("cwd", out _))
+            server.Cwd = OptionalString(input, "cwd");
         server.Enabled = input["enabled"]?.GetValue<bool?>() ?? server.Enabled;
         if (input["args"] is JsonArray args)
             server.Args = args.Select(node => node?.GetValue<string>() ?? "").Where(value => value.Length > 0).ToList();
@@ -1458,6 +1460,7 @@ internal sealed class DaemonAdminApi(
         {
             server.Command = null;
             server.Args = null;
+            server.Cwd = null; // only meaningful for the local subprocess
         }
 
         ValidateMcpServer(name, server);
@@ -2761,6 +2764,7 @@ internal sealed class DaemonAdminApi(
         ["transport"] = server.Transport,
         ["command"] = server.Command,
         ["args"] = Strings(server.Args ?? []),
+        ["cwd"] = server.Cwd,
         ["url"] = server.Url,
         ["envKeys"] = Strings(server.Env is null ? Enumerable.Empty<string>() : server.Env.Keys),
         ["headerKeys"] = Strings(server.Headers is null ? Enumerable.Empty<string>() : server.Headers.Keys),

@@ -129,6 +129,53 @@ public class McpTransportTests
         await client.InitializeAsync(cts.Token);
     }
 
+    [Fact]
+    public async Task StdioTransport_StartsChildInConfiguredWorkingDirectory()
+    {
+        // The git connector regression: `uvx mcp-server-git --repository .` resolves
+        // "." against the CHILD's cwd — the transport must honor an explicit working
+        // directory instead of inheriting the daemon's own (install dir in the
+        // packaged desktop). The node child echoes process.cwd() back in serverInfo.
+        if (OperatingSystem.IsWindows() && StdioMcpTransport.ResolveOnPath("node") is null) return;
+
+        var workdir = Path.Combine(Path.GetTempPath(), $"haoyue-mcp-cwd-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workdir);
+        const string script =
+            "const rl=require('readline').createInterface({input:process.stdin});" +
+            "rl.once('line',l=>{const m=JSON.parse(l);" +
+            "process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2024-11-05',capabilities:{},serverInfo:{name:'cwd-probe',version:process.cwd()}}})+'\\n')});";
+
+        try
+        {
+            await using var transport = new StdioMcpTransport("node", ["-e", script], null, workdir);
+            await transport.StartAsync(CancellationToken.None);
+            await transport.SendAsync(new JsonObject
+            {
+                ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "initialize",
+            }, CancellationToken.None);
+
+            var reply = await transport.Incoming.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(20));
+            var reported = reply["result"]?["serverInfo"]?["version"]?.GetValue<string>();
+            Assert.Equal(
+                Path.GetFullPath(workdir).TrimEnd(Path.DirectorySeparatorChar),
+                reported!.TrimEnd(Path.DirectorySeparatorChar),
+                ignoreCase: OperatingSystem.IsWindows());
+        }
+        finally
+        {
+            try { Directory.Delete(workdir, true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task StdioTransport_MissingWorkingDirectoryFailsWithClearError()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"haoyue-mcp-nope-{Guid.NewGuid():N}");
+        var transport = new StdioMcpTransport("node", [], null, missing);
+        var ex = await Assert.ThrowsAsync<McpException>(() => transport.StartAsync(CancellationToken.None));
+        Assert.Contains(missing, ex.Message);
+    }
+
     private sealed class DelegatingMockHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

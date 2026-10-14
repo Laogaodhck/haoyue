@@ -400,6 +400,14 @@ public sealed class McpServerConfig
     public Dictionary<string, string>? Env { get; set; }
     public string? Url { get; set; }
     /// <summary>
+    /// Working directory for a stdio child process — absolute, or relative to the
+    /// session workspace root. When null the child starts in the workspace root;
+    /// leaving it unset otherwise made children inherit the daemon's own cwd (the
+    /// app install dir in the packaged desktop), which breaks servers resolving "."
+    /// against the project (e.g. mcp-server-git --repository .).
+    /// </summary>
+    public string? Cwd { get; set; }
+    /// <summary>
     /// Optional HTTP headers for remote transports (sse / http / streamable-http), e.g.
     /// "Authorization": "Bearer …". Values may carry the "secret:" prefix written by
     /// the credential store; they are resolved right before a transport is created and

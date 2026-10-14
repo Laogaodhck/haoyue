@@ -242,7 +242,7 @@ public class McpSecretsTests
         Exception? failure = null;
         try
         {
-            method!.Invoke(null, new object?[] { "test", server });
+            method!.Invoke(null, new object?[] { "test", server, null });
         }
         catch (System.Reflection.TargetInvocationException ex)
         {

@@ -18,6 +18,8 @@ export interface McpFormValue {
   headers: string
   enabled: boolean
   // ---- expert-mode fields (collapsed by default; the main path never touches them) ----
+  /** stdio 子进程工作目录；留空默认使用当前工作区根目录。 */
+  cwd: string
   /** Remote connect timeout in seconds as a UI string; '' = runtime default (10s). */
   connectTimeoutSeconds: string
   /** Tool names (one per line) always treated as mutating regardless of the name heuristic. */
@@ -37,6 +39,7 @@ export interface McpServerSummary {
   command?: string
   args: string[]
   url?: string
+  cwd?: string | null
   envKeys: string[]
   /** Remote header key names only — values never leave the runtime. */
   headerKeys?: string[]
@@ -115,6 +118,7 @@ export function createMcpFormValue(): McpFormValue {
     env: '',
     headers: '',
     enabled: true,
+    cwd: '',
     connectTimeoutSeconds: '',
     mutatingTools: '',
     readOnlyTools: '',
@@ -405,6 +409,7 @@ export function mcpFormFromServer(server: McpServerSummary): McpFormValue {
     env: '',
     headers: '',
     enabled: server.enabled,
+    cwd: server.cwd ?? '',
     connectTimeoutSeconds: server.connectTimeoutSeconds?.toString() ?? '',
     mutatingTools: (server.mutatingTools ?? []).join('\n'),
     readOnlyTools: (server.readOnlyTools ?? []).join('\n'),
@@ -517,6 +522,9 @@ export function buildMcpServerPayload(form: McpFormValue): Record<string, unknow
     const tokens = tokenizeCommand(form.connection)
     server.command = tokens[0] ?? ''
     server.args = tokens.slice(1)
+    // Always resent: an empty string clears the stored value, keeping the
+    // round-trip lossless when the user removes a custom working directory.
+    server.cwd = form.cwd.trim()
     // Only stdio servers consume process environment variables today.
     const env = parseEnvText(form.env)
     if (env) server.env = env

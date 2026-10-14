@@ -42,7 +42,7 @@ public sealed class McpManager(
     IConfigStore configStore,
     IToolRegistry toolRegistry,
     IPromptRegistry promptRegistry,
-    Func<string, McpServerConfig, IMcpTransport>? transportFactory = null) : IMcpManager
+    Func<string, McpServerConfig, string?, IMcpTransport>? transportFactory = null) : IMcpManager
 {
     /// <summary>
     /// Upper bound of resource contributions registered per server: a file-tree
@@ -60,7 +60,7 @@ public sealed class McpManager(
     /// per-fragment fit this bounds worst-case injected MCP prompt text.</summary>
     private const int MaxPromptContributionsTotal = 48;
 
-    private readonly Func<string, McpServerConfig, IMcpTransport> _transportFactory = transportFactory ?? CreateTransport;
+    private readonly Func<string, McpServerConfig, string?, IMcpTransport> _transportFactory = transportFactory ?? CreateTransport;
     private readonly List<McpClient> _clients = [];
     private readonly List<IDisposable> _registrations = [];
     private readonly List<McpServerStatus> _status = [];
@@ -155,7 +155,7 @@ public sealed class McpManager(
                 progress?.Report($"连接 MCP 服务器 {name}（共 {total} 个）");
                 try
                 {
-                    var status = await ConnectOneAsync(name, server, ct).ConfigureAwait(false);
+                    var status = await ConnectOneAsync(name, server, workspace.Root, ct).ConfigureAwait(false);
                     results[index] = status;
                     progress?.Report($"MCP 服务器 {name} 就绪（{status.ToolCount} tools）");
                 }
@@ -182,13 +182,13 @@ public sealed class McpManager(
         }
     }
 
-    private async Task<McpServerStatus> ConnectOneAsync(string name, McpServerConfig server, CancellationToken ct)
+    private async Task<McpServerStatus> ConnectOneAsync(string name, McpServerConfig server, string? workspaceRoot, CancellationToken ct)
     {
         var remote = IsRemoteTransport(server.Transport);
         HealBundledServerArgs(name, server);
         for (var attempt = 1; ; attempt++)
         {
-            IMcpTransport transport = _transportFactory(name, server);
+            IMcpTransport transport = _transportFactory(name, server, workspaceRoot);
 
             var client = new McpClient(name, transport);
             using var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -425,7 +425,7 @@ public sealed class McpManager(
         }
     }
 
-    private static IMcpTransport CreateTransport(string name, McpServerConfig server)
+    private static IMcpTransport CreateTransport(string name, McpServerConfig server, string? workspaceRoot)
     {
         // Credentials (env / headers) are stored with an optional "secret:" prefix;
         // resolve them at the last possible moment — the plaintext only exists in
@@ -457,7 +457,7 @@ public sealed class McpManager(
         return server.Transport.ToLowerInvariant() switch
         {
             "stdio" when !string.IsNullOrWhiteSpace(server.Command) =>
-                new StdioMcpTransport(server.Command!, server.Args, env),
+                new StdioMcpTransport(server.Command!, server.Args, env, ResolveStdioCwd(server.Cwd, workspaceRoot)),
             "sse" or "http" or "streamable-http" or "streamable_http" when !string.IsNullOrWhiteSpace(server.Url) =>
                 new HttpMcpTransport(
                     server.Url!,
@@ -467,6 +467,29 @@ public sealed class McpManager(
                 throw new McpException($"Transport '{server.Transport}' is reserved but not implemented yet."),
             _ => throw new McpException($"Server '{name}': invalid transport/command/url combination."),
         };
+    }
+
+    /// <summary>
+    /// Working directory for a stdio child: explicit cwd (absolute, or relative to
+    /// the workspace root) wins; otherwise default to the workspace root so args
+    /// like `--repository .` resolve against the project the agent is working on
+    /// instead of the daemon's own cwd (the install dir in the packaged desktop).
+    /// A missing default falls back to the inherited cwd; a missing explicit cwd is
+    /// left as-is so the transport surfaces the typo as a clear error.
+    /// </summary>
+    internal static string? ResolveStdioCwd(string? configured, string? workspaceRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            var candidate = configured.Trim();
+            return Path.IsPathRooted(candidate) || workspaceRoot is null
+                ? candidate
+                : Path.GetFullPath(Path.Combine(workspaceRoot, candidate));
+        }
+
+        return !string.IsNullOrWhiteSpace(workspaceRoot) && Directory.Exists(workspaceRoot)
+            ? workspaceRoot
+            : null;
     }
 
     private static string DescribeConnectionError(Exception error) => error switch

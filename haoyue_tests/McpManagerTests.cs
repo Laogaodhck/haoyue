@@ -45,7 +45,7 @@ public class McpManagerTests : IDisposable
 
         var promptRegistry = new PromptRegistry();
         var manager = new McpManager(configStore, new ToolRegistry(), promptRegistry,
-            transportFactory: (_, _) => transport);
+            transportFactory: (_, _, _) => transport);
         return (manager, promptRegistry);
     }
 
@@ -336,7 +336,7 @@ public class McpManagerTests : IDisposable
 
         var promptRegistry = new PromptRegistry();
         var manager = new McpManager(configStore, new ToolRegistry(), promptRegistry,
-            transportFactory: (_, _) => new FakeMcpTransport { Responder = PromptListResponder(30) });
+            transportFactory: (_, _, _) => new FakeMcpTransport { Responder = PromptListResponder(30) });
         await using var _ = manager;
 
         var statuses = await manager.ConnectAllAsync(workspace, CancellationToken.None);
@@ -347,6 +347,69 @@ public class McpManagerTests : IDisposable
         var beta = statuses.Single(s => s.Name == "beta");
         Assert.NotNull(beta.Warnings);
         Assert.True(beta.Warnings.Count > 0);
+    }
+
+    [Fact]
+    public async Task ConnectAllAsync_PassesWorkspaceRootToTransportFactory()
+    {
+        var workspace = new WorkspaceInfo { Root = Path.Combine(_dir, "cwd-ws"), ProjectKinds = [] };
+        Directory.CreateDirectory(workspace.Root);
+
+        var configStore = new ConfigStore(
+            Path.Combine(_dir, $"{Guid.NewGuid():N}-config.json"),
+            Path.Combine(_dir, $"{Guid.NewGuid():N}-state.json"));
+        configStore.Config.Mcp.Servers["demo"] = new McpServerConfig
+        {
+            Transport = "stdio",
+            Command = "fake-command",
+            Enabled = true,
+        };
+
+        string? capturedRoot = null;
+        var manager = new McpManager(configStore, new ToolRegistry(), new PromptRegistry(),
+            (_, _, root) =>
+            {
+                capturedRoot = root;
+                return new FakeMcpTransport
+                {
+                    Responder = message => message["method"]?.GetValue<string>() == "initialize"
+                        ? InitializeResult
+                        : new JsonObject { ["tools"] = new JsonArray() },
+                };
+            });
+        await using var _ = manager;
+
+        var statuses = await manager.ConnectAllAsync(workspace, CancellationToken.None);
+        Assert.True(statuses.Single(s => s.Name == "demo").Connected);
+        // stdio 子进程默认工作目录 = 会话工作区根目录，`--repository .` 之类的
+        // 相对参数才能解析到项目本身而不是 daemon 的安装目录。
+        Assert.Equal(workspace.Root, capturedRoot);
+    }
+
+    [Fact]
+    public void ResolveStdioCwd_ConfiguredWinsOtherwiseWorkspaceRoot()
+    {
+        var other = Path.Combine(_dir, $"cwd-other-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(other);
+
+        // 显式绝对路径原样保留；相对路径按工作区根目录展开。
+        Assert.Equal(other, McpManager.ResolveStdioCwd(other, _dir));
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(_dir, "nested")),
+            McpManager.ResolveStdioCwd("nested", _dir));
+        // 未配置时默认取存在的工作区根目录；空白配置视为未配置。
+        Assert.Equal(_dir, McpManager.ResolveStdioCwd(null, _dir));
+        Assert.Equal(_dir, McpManager.ResolveStdioCwd("  ", _dir));
+    }
+
+    [Fact]
+    public void ResolveStdioCwd_DefaultFallsBackWhenWorkspaceMissing()
+    {
+        var missing = Path.Combine(_dir, $"missing-{Guid.NewGuid():N}");
+        Assert.Null(McpManager.ResolveStdioCwd(null, missing));
+        Assert.Null(McpManager.ResolveStdioCwd(null, null));
+        // 显式配置的目录保留原样，由 transport 报出「工作目录不存在」的明确错误。
+        Assert.Equal(missing, McpManager.ResolveStdioCwd(missing, null));
     }
 
     private static Func<JsonObject, JsonObject> PromptListResponder(int promptCount) => message =>

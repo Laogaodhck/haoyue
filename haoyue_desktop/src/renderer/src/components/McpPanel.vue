@@ -292,6 +292,7 @@ function resetDetailState(): void {
   newEnvKey.value = ''
   newHeaderKey.value = ''
   advancedOpen.value = Boolean(
+    form.cwd ||
     form.connectTimeoutSeconds ||
     form.mutatingTools ||
     form.readOnlyTools ||
@@ -695,6 +696,10 @@ watch(form, () => {
           <label v-if="remote" class="form-field">
             <FieldLabel en="Transport" zh="传输协议" help="网址默认使用 Streamable HTTP；老旧服务器可选 SSE。" />
             <SelectMenu v-model="form.transport" :options="MCP_TRANSPORT_OPTIONS.filter((o) => o.value !== 'stdio')" label="MCP 连接方式" />
+          </label>
+          <label v-if="!remote" class="form-field full-width">
+            <FieldLabel en="Working directory" zh="工作目录" help="stdio 子进程的启动目录；留空默认使用当前工作区根目录，可填绝对路径或相对工作区的路径。" />
+            <input v-model="form.cwd" class="form-input" type="text" placeholder="留空 = 工作区根目录" autocomplete="off" spellcheck="false" />
           </label>
           <label v-if="remote" class="form-field">
             <FieldLabel en="Connect timeout" zh="连接超时（秒）" help="1~120；留空使用默认 10 秒，内网慢服务器可调大。" />

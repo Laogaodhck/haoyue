@@ -269,6 +269,7 @@ public static class DaemonContract
         ("transport", SString("传输方式（stdio / sse）"), false),
         ("command", SString("stdio 启动命令"), false),
         ("url", SString("远程服务地址"), false),
+        ("cwd", SString("stdio 子进程工作目录；留空默认当前工作区根目录"), false),
         ("enabled", SBoolean("是否启用"), false),
         ("args", SArray("命令参数"), false),
         ("env", SString("环境变量对象"), false));

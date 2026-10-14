@@ -15,8 +15,11 @@ public interface IMcpTransport : IAsyncDisposable
 }
 
 /// <summary>stdio transport: spawns the server process, newline-delimited JSON-RPC over stdin/stdout.</summary>
-public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? args, IReadOnlyDictionary<string, string>? env)
-    : IMcpTransport
+public sealed class StdioMcpTransport(
+    string command,
+    IReadOnlyList<string>? args,
+    IReadOnlyDictionary<string, string>? env,
+    string? workingDirectory = null) : IMcpTransport
 {
     // Encoding.UTF8 carries a BOM preamble that StreamWriter emits before the first
     // line; Node-based MCP servers fail JSON.parse on "\uFEFF{...}" and silently
@@ -83,6 +86,13 @@ public sealed class StdioMcpTransport(string command, IReadOnlyList<string>? arg
         {
             startInfo.FileName = command;
             foreach (var arg in args ?? []) startInfo.ArgumentList.Add(arg);
+        }
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            if (!Directory.Exists(workingDirectory))
+                throw new McpException($"MCP 服务器工作目录不存在：{workingDirectory}");
+            startInfo.WorkingDirectory = workingDirectory;
         }
 
         if (env is not null)

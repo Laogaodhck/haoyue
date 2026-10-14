@@ -194,6 +194,7 @@ describe('buildMcpServerPayload', () => {
       command: 'npx',
       args: ['-y', '@modelcontextprotocol/server-filesystem'],
       url: '',
+      cwd: '',
       enabled: true,
       env: { TOKEN: 'abc', EMPTY: '' }
     })
@@ -276,6 +277,26 @@ describe('buildMcpServerPayload', () => {
     expect(payload).not.toHaveProperty('trustReadOnly')
     expect(payload).not.toHaveProperty('oauthDisabled')
   })
+
+  it('sends the stdio working directory and clears it when empty', () => {
+    const withCwd = buildMcpServerPayload(makeForm({
+      name: 'git', connection: 'uvx mcp-server-git --repository .', cwd: ' E:\\repo '
+    }))
+    expect(withCwd.cwd).toBe('E:\\repo')
+
+    const withoutCwd = buildMcpServerPayload(makeForm({
+      name: 'git', connection: 'uvx mcp-server-git', cwd: ''
+    }))
+    expect(withoutCwd.cwd).toBe('')
+  })
+
+  it('restores the stored working directory into the form', () => {
+    const form = mcpFormFromServer({
+      ...remoteServer, transport: 'stdio', command: 'uvx', args: ['mcp-server-git'],
+      url: undefined, cwd: 'E:\\repo'
+    })
+    expect(form.cwd).toBe('E:\\repo')
+  })
 })
 
 describe('buildMcpTogglePayload', () => {
@@ -323,6 +344,7 @@ describe('mcpFormFromServer', () => {
       env: '',
       headers: '',
       enabled: true,
+      cwd: '',
       connectTimeoutSeconds: '',
       mutatingTools: '',
       readOnlyTools: '',
@@ -427,6 +449,7 @@ describe('MCP_PRESETS', () => {
       command: 'npx',
       args: ['-y', '@modelcontextprotocol/server-github'],
       url: '',
+      cwd: '',
       enabled: true,
       env: { GITHUB_PERSONAL_ACCESS_TOKEN: '' }
     })
@@ -461,6 +484,7 @@ describe('MCP_PRESETS', () => {
         command: shape.command,
         args: shape.args,
         url: '',
+        cwd: '',
         enabled: true
       })
     }

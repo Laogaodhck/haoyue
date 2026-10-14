@@ -5474,6 +5474,41 @@ select:focus-visible {
   min-height: 60px;
 }
 
+.diagnostics-log-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.diagnostics-log-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diagnostics-log-path {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.diagnostics-log-tail {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .check-status {
   display: inline-flex;
   min-width: 58px;

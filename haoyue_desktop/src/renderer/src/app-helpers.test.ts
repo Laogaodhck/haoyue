@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyModelError, extractModelError, formatTokenCount, messageMatches, normalizePath, pathName, samePath, stripModelErrorBlock } from './app-helpers'
+import { classifyModelError, classifyTurnFailure, extractModelError, formatTokenCount, formatTurnFailure, messageMatches, normalizePath, pathName, samePath, stripModelErrorBlock } from './app-helpers'
 
 describe('formatTokenCount', () => {
   it('formats millions with M suffix correctly without unnecessary trailing zeros', () => {
@@ -151,6 +151,29 @@ describe('extractModelError / stripModelErrorBlock', () => {
   it('keeps earlier error blocks when a newer turn appended one', () => {
     const doubled = block + '\n\n后续正文\n\n模型调用失败：\n```text\n    boom\n```'
     expect(stripModelErrorBlock(doubled)).toBe('半截回答\n\n后续正文')
+  })
+})
+
+describe('classifyTurnFailure / formatTurnFailure', () => {
+  it('把首事件超时和连不上后台分开', () => {
+    expect(classifyTurnFailure(new Error('请求超时：Runtime 在 30 秒内未响应'))).toBe('first_event_timeout')
+    expect(classifyTurnFailure(new Error('Unable to connect to the named pipe'))).toBe('daemon_unreachable')
+    expect(classifyTurnFailure(new Error('协议版本不兼容'))).toBe('daemon_unreachable')
+    expect(classifyTurnFailure(new Error('daemon 返回错误：参数无效'))).toBe('request_failed')
+  })
+
+  it('文案不再一律说成连不上，且指出后台日志入口', () => {
+    const timeout = formatTurnFailure(new Error('请求超时：Runtime 在 30 秒内未响应'))
+    expect(timeout.content).not.toContain('无法连接')
+    expect(timeout.content).toContain('设置 → 诊断')
+    expect(timeout.detail).toBe('请求超时：Runtime 在 30 秒内未响应')
+  })
+
+  it('详情块可从 content 复原，正文只留提示语', () => {
+    const failure = formatTurnFailure(new Error('HTTP 500: boom'))
+    expect(extractModelError(failure.content)).toBe('HTTP 500: boom')
+    expect(stripModelErrorBlock(failure.content)).not.toContain('```')
+    expect(stripModelErrorBlock(failure.content)).toContain('这一回合失败了')
   })
 })
 

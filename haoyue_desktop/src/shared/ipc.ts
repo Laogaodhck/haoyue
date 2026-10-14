@@ -70,6 +70,18 @@ export interface AppInfo {
   documentsPath: string
   /** Home profile used to reject non-project paths (user profile / Haoyue state dir). */
   userProfilePath: string
+  /** 后台（daemon）原生输出落盘目录；诊断页要能打开它，否则用户按提示「去看日志」却找不到文件。 */
+  logDir: string
+  daemonLogFile: string
+}
+
+/** `daemon.log` 尾部若干行（已在主进程脱敏）。 */
+export interface DaemonLogTailInfo {
+  path: string
+  text: string
+  totalBytes: number
+  skippedBytes: number
+  error?: string
 }
 
 export type AppearanceTheme = 'system' | 'light' | 'dark'
@@ -122,6 +134,7 @@ export interface DesktopApi {
   selectGgufFile(): Promise<string | null>
   showItemInFolder(path: string): Promise<void>
   saveTextFile(defaultName: string, content: string): Promise<string | null>
+  readDaemonLogTail(lines: number): Promise<DaemonLogTailInfo>
   closeApp(): Promise<void>
   openDevTools(): Promise<void>
   setTheme(theme: AppearanceTheme): Promise<void>

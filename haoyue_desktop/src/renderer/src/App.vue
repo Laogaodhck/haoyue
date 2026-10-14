@@ -57,6 +57,7 @@ import { ReasoningLevel } from './types'
 import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, ThreadItem, ThreadStats, ToolActivity } from './types'
 import {
   formatPromptWithFiles,
+  formatTurnFailure,
   hydrateMessages,
   makeId,
   messageMatches,
@@ -106,6 +107,8 @@ const appInfo = ref<AppInfo>({
   version: '0.1.0',
   platform: 'win32',
   supportsMica: false,
+  logDir: '',
+  daemonLogFile: '',
   defaultWorkspace: '',
   documentsPath: '',
   userProfilePath: ''
@@ -1491,9 +1494,13 @@ async function runMessageTurn(
     const failedAssistant = thread.messages.findLast((item) => item.role === 'assistant') ?? assistant
     terminalAssistant = failedAssistant
     failedAssistant.state = 'error'
+    // 一条文案不能说清三种事：后台没起来、后台起了但迟迟不回第一个字、请求被拒。
+    // 以前全写成「无法连接 Haoyue Daemon」，用户照着提示去重启后台反而弄坏正在加载的回合。
+    const failure = formatTurnFailure(error)
+    failedAssistant.errorDetail = failure.detail
     if (!failedAssistant.content) {
-      const detail = error instanceof Error ? error.message : String(error)
-      failedAssistant.content = `无法连接 Haoyue Daemon。\n\n\`\`\`text\n${detail}\n\`\`\``
+      // 详情同时进 content：重开会话后只剩纯文本，「查看技术详情」靠它复原。
+      failedAssistant.content = failure.content
     }
   } finally {
     // A terminal event may already have started the next queued turn. Do not let

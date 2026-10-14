@@ -12,7 +12,7 @@ import iconIco from '../../resources/favicon.ico?asset'
 const appIcon = process.platform === 'win32' ? iconIco : iconPng
 import type { DaemonMessage, DaemonRequestOptions, RevertDiffItem } from '../shared/ipc.js'
 import { DaemonClient } from './daemon-client.js'
-import { openDaemonLogSink } from './daemon-log.js'
+import { openDaemonLogSink, readDaemonLogTail } from './daemon-log.js'
 import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
 import {
   destroyComputerOverlay,
@@ -81,6 +81,11 @@ function resolveRuntimeExecutable(): string | null {
   return found
 }
 
+/** Electron 主进程持有的后台日志目录；诊断页与日志落盘共用同一条路径。 */
+function daemonLogDir(): string {
+  return join(app.getPath('userData'), 'logs')
+}
+
 async function ensureDaemonRunning(): Promise<void> {
   const existing = await daemon.connect()
   if (existing.connected) return
@@ -102,7 +107,7 @@ async function ensureDaemonRunning(): Promise<void> {
     windowsHide: true
   })
   managedDaemon = child
-  const daemonLog = openDaemonLogSink(join(app.getPath('userData'), 'logs'))
+  const daemonLog = openDaemonLogSink(daemonLogDir())
   // stdout 是 pipe 且必须有消费者：以前只排水不落地，但原生层 abort 前的最后一句
   // 断言（显存不足等）往往就在这两条流上，丢掉它「发消息没回复」就只能靠猜。
   child.stdout?.on('data', (chunk) => daemonLog.append(chunk.toString()))
@@ -364,14 +369,19 @@ function createWindow(): void {
 }
 
 function registerIpc(): void {
+  const logDir = daemonLogDir()
   ipcMain.handle('app:info', () => ({
     version: app.getVersion(),
     platform: process.platform,
     supportsMica,
     defaultWorkspace: is.dev ? resolve(app.getAppPath(), '..') : app.getPath('userData'),
     documentsPath: app.getPath('documents'),
-    userProfilePath: app.getPath('home')
+    userProfilePath: app.getPath('home'),
+    logDir,
+    daemonLogFile: join(logDir, 'daemon.log')
   }))
+
+  ipcMain.handle('app:daemon-log-tail', (_event, lines: number) => readDaemonLogTail(logDir, Number(lines)))
 
   ipcMain.handle('app:select-workspace', async () => {
     const options: Electron.OpenDialogOptions = {

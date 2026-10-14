@@ -19,6 +19,7 @@ const api: DesktopApi = {
   selectGgufFile: () => ipcRenderer.invoke('app:select-gguf-file'),
   showItemInFolder: (path) => ipcRenderer.invoke('app:show-item', path),
   saveTextFile: (defaultName, content) => ipcRenderer.invoke('app:save-text-file', defaultName, content),
+  readDaemonLogTail: (lines) => ipcRenderer.invoke('app:daemon-log-tail', lines),
   closeApp: () => ipcRenderer.invoke('app:close'),
   openDevTools: () => ipcRenderer.invoke('app:open-devtools'),
   setTheme: (theme) => ipcRenderer.invoke('app:set-theme', theme),

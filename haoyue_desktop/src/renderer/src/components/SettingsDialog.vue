@@ -34,6 +34,7 @@ import {
   Zap
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import type { AppInfo } from '../../../shared/ipc'
 import { confirmAction } from '../confirmation'
 import ExpertsPanel from './ExpertsPanel.vue'
 import McpPanel from './McpPanel.vue'
@@ -46,6 +47,7 @@ import AllowedSitesDialog from './AllowedSitesDialog.vue'
 import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
+import { buildDiagnosticsBundle, diagnosticsFileName } from '../diagnostics-bundle'
 import {
   EVOLUTION_INTERVAL_OPTIONS,
   TREND_KEY_LABELS,
@@ -236,6 +238,13 @@ const checks = ref<HealthCheck[]>([])
 const usage = ref<UsageInfo[]>([])
 const usageDays = ref<number>(14)
 const timeline = ref<TimelinePoint[]>([])
+/** 后台（daemon）日志：路径由主进程给出，尾部行在主进程脱敏后回传。 */
+const desktopInfo = ref<AppInfo | null>(null)
+const logTail = ref('')
+const logNote = ref('')
+const logBytes = ref(0)
+const logSkippedBytes = ref(0)
+const logBusy = ref(false)
 const selectedModel = ref('')
 const providerEditorOpen = ref(false)
 const editingProviderId = ref<string | null>(null)
@@ -1086,6 +1095,84 @@ async function loadDiagnostics(): Promise<void> {
   checks.value = healthData
   usage.value = usageData
   timeline.value = timelineData
+  void loadDaemonLogTail()
+}
+
+const logFile = computed(() => desktopInfo.value?.daemonLogFile ?? '')
+
+/**
+ * 后台日志此前只有主进程在写，产品里没有任何入口，而排障指引第一条就是「先看 daemon.log」。
+ * 尾部行由主进程读取并脱敏，渲染进程拿不到文件路径以外的能力。
+ */
+async function loadDaemonLogTail(lines = 200): Promise<void> {
+  logBusy.value = true
+  try {
+    if (!desktopInfo.value) desktopInfo.value = await window.haoyue.getAppInfo()
+    const tail = await window.haoyue.readDaemonLogTail(lines)
+    logBytes.value = tail.totalBytes
+    logSkippedBytes.value = tail.skippedBytes
+    logTail.value = tail.error ? `读取失败：${tail.error}` : tail.text
+    if (tail.error) {
+      logNote.value = tail.error
+    } else if (tail.totalBytes === 0) {
+      logNote.value = '日志还没有内容（后台未启动过，或刚轮转）'
+    } else {
+      const skipped = tail.skippedBytes > 0 ? ` · 之前 ${Math.round(tail.skippedBytes / 1024)} KB 已省略` : ''
+      logNote.value = `${Math.round(tail.totalBytes / 1024)} KB · 末尾 ${lines} 行${skipped}`
+    }
+  } catch (reason) {
+    logTail.value = ''
+    logNote.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    logBusy.value = false
+  }
+}
+
+function copyLogPath(): void {
+  if (!logFile.value) return
+  void navigator.clipboard.writeText(logFile.value).then(
+    () => { notice.value = `已复制日志路径：${logFile.value}` },
+    () => { notice.value = logFile.value }
+  )
+}
+
+function openDaemonLogFolder(): void {
+  const info = desktopInfo.value
+  if (!info) return
+  // 日志文件还没生成时展示目录，否则展示文件本身——两种都让人能把日志拷出来。
+  showPath(logFile.value || info.logDir)
+}
+
+async function exportDiagnosticsBundle(): Promise<void> {
+  beginAction('diagnostics.bundle')
+  try {
+    await loadDaemonLogTail(400)
+    if (!desktopInfo.value) desktopInfo.value = await window.haoyue.getAppInfo()
+    const generatedAt = new Date()
+    const info = desktopInfo.value
+    const bundle = buildDiagnosticsBundle({
+      generatedAt,
+      appVersion: info.version,
+      platform: info.platform,
+      logDir: info.logDir,
+      daemonLogFile: info.daemonLogFile,
+      daemonConnected: props.daemonConnected,
+      daemonEndpoint: props.daemonEndpoint,
+      usageDays: usageDays.value,
+      checks: checks.value,
+      usage: usage.value,
+      totals: totalUsage.value,
+      logTail: logTail.value,
+      logBytes: logBytes.value,
+      skippedLogBytes: logSkippedBytes.value
+    })
+    const saved = await window.haoyue.saveTextFile(diagnosticsFileName(generatedAt), bundle)
+    notice.value = saved ? `诊断包已导出到 ${saved}` : '已取消导出'
+  } catch (reason) {
+    fail(reason)
+  } finally {
+    endAction()
+  }
 }
 
 watch(usageDays, () => {
@@ -2135,6 +2222,38 @@ onBeforeUnmount(() => {
                 {{ check.ok ? '正常' : '异常' }}
               </span>
             </div>
+          </section>
+
+          <!-- Daemon log & diagnostics bundle -->
+          <div class="diagnostics-sub-heading">
+            <div>
+              <h4>后台日志与诊断包</h4>
+              <small>{{ logNote || '后台原生输出落盘位置；崩溃、显存不足、首字慢的线索都在这里' }}</small>
+            </div>
+            <div class="diagnostics-log-actions">
+              <button class="secondary-button" :disabled="!desktopInfo" @click="openDaemonLogFolder">
+                <FolderOpen :size="15" /> 打开日志
+              </button>
+              <button class="secondary-button" :disabled="!logFile" @click="copyLogPath">
+                <Save :size="15" /> 复制路径
+              </button>
+              <button class="secondary-button" :disabled="logBusy" @click="loadDaemonLogTail()">
+                <RefreshCw :size="15" :class="{ spin: logBusy }" /> 刷新末尾
+              </button>
+              <button class="secondary-button" :disabled="Boolean(action)" @click="exportDiagnosticsBundle">
+                <ScrollText :size="15" /> 导出诊断包
+              </button>
+            </div>
+          </div>
+
+          <section class="settings-group diagnostics-log-group">
+            <div class="settings-row">
+              <div>
+                <strong>日志文件</strong>
+                <small class="diagnostics-log-path">{{ logFile || '尚未取得路径' }}</small>
+              </div>
+            </div>
+            <pre class="diagnostics-log-tail">{{ logTail || '（暂无日志内容）' }}</pre>
           </section>
 
           <!-- Model Usage Detail Table -->

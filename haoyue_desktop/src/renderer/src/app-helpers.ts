@@ -402,7 +402,16 @@ export function classifyModelError(detail: string): ErrorCardMeta {
 }
 
 const MODEL_ERROR_MARKER = '模型调用失败：'
-const MODEL_ERROR_BLOCK_RE = /(?:\r?\n)+模型调用失败：\r?\n```text\n[\s\S]*?```/g
+/**
+ * 历史/重载后的消息只剩 content，技术详情必须能从文本里复原，否则「查看技术详情」按钮
+ * 在重新打开会话后就不渲染了。凡是「lead 句子 + 这一段围栏块」的形态都算详情块。
+ */
+export const ERROR_DETAIL_MARKER = '技术详情：'
+const ERROR_BLOCK_HEADLINES = ['模型调用失败', '技术详情']
+const MODEL_ERROR_BLOCK_RE = new RegExp(
+  `(?:\\r?\\n)+(?:${ERROR_BLOCK_HEADLINES.join('|')})：\\r?\\n\`\`\`text\\n[\\s\\S]*?\`\`\``,
+  'g'
+)
 
 /** Recover the raw error detail from persisted content (historical/reloaded messages).
  * A candidate chain may fail several times, so the last block wins. */
@@ -411,18 +420,61 @@ export function extractModelError(content: string): string {
   const global = new RegExp(MODEL_ERROR_BLOCK_RE.source, 'g')
   for (const match of content.matchAll(global)) {
     const fenced = match[0].match(/```text\n([\s\S]*?)(?:```|$)/)
-    detail = (fenced?.[1] ?? match[0].slice(MODEL_ERROR_MARKER.length))
+    detail = fenced?.[1] ?? match[0]
+    detail = detail
       .split(/\r?\n/)
       .map((line) => line.replace(/^ {4}/, ''))
       .join('\n')
       .trim()
   }
   if (detail) return detail
-  const marker = content.lastIndexOf(MODEL_ERROR_MARKER)
-  return marker >= 0 ? content.slice(marker + MODEL_ERROR_MARKER.length).trim() : ''
+  for (const marker of [MODEL_ERROR_MARKER, ERROR_DETAIL_MARKER]) {
+    const at = content.lastIndexOf(marker)
+    if (at >= 0) return content.slice(at + marker.length).trim()
+  }
+  return ''
 }
 
-/** "模型调用失败" blocks appended by the event handler; stripped for display. */
+/** 详情块（模型失败或后台失败追加的围栏段）在展示时剥掉，只留给人看的正文。 */
 export function stripModelErrorBlock(content: string): string {
   return content.replace(MODEL_ERROR_BLOCK_RE, '')
+}
+
+/**
+ * 回合失败的来源分类。此前所有 catch 都写成「无法连接 Haoyue Daemon」，
+ * 30 秒首事件超时（后台活着、正在加载权重）也被说成连不上，用户按提示去重启后台
+ * 反而把事情弄坏；文案必须区分「连不上」与「等太久」。
+ */
+export type TurnFailureKind = 'daemon_unreachable' | 'first_event_timeout' | 'request_failed'
+
+/** 客户端/主进程抛出的错误文本 → 失败来源。判定放在纯函数里，便于单测钉住。 */
+export function classifyTurnFailure(error: unknown): TurnFailureKind {
+  const detail = error instanceof Error ? error.message : String(error ?? '')
+  const text = detail.toLowerCase()
+  // 请求超时由 daemon-client 明确写成「请求超时：Runtime 在 N 秒内未响应」，
+  // 它要的是「再等等或看日志」，不是「重连后台」。
+  if (detail.includes('请求超时') || text.includes('no response within')) return 'first_event_timeout'
+  if (text.includes('unable to connect') || text.includes('connection failed')
+    || text.includes('connection closed') || text.includes('disconnected')
+    || text.includes('handshake') || text.includes('authentication')
+    || text.includes('econnrefused') || text.includes('enoent') || text.includes('versionmismatch')
+    || text.includes('协议版本不兼容'))
+    return 'daemon_unreachable'
+  return 'request_failed'
+}
+
+const TURN_FAILURE_LEADS: Record<TurnFailureKind, string> = {
+  daemon_unreachable: '浩玥后台（daemon）未运行或连接已断开，消息没有送出。可点击重连；反复失败请到 设置 → 诊断 打开后台日志查看原因。',
+  first_event_timeout: '后台已收到请求，但在期限内没有回第一个字。本地大模型首次加载权重、或显卡不足时这会持续几分钟——可以先看 设置 → 诊断 里的后台日志确认进展。',
+  request_failed: '这一回合失败了。可点击重试；若持续失败请展开技术详情定位原因。'
+}
+
+/**
+ * 统一的回合失败文案：lead 说清来源，围栏块带可复原的技术详情
+ * （重载后「查看技术详情」仍要能点开，详情此前只在内存里的 message.errorDetail 上）。
+ */
+export function formatTurnFailure(error: unknown): { content: string; detail: string; kind: TurnFailureKind } {
+  const kind = classifyTurnFailure(error)
+  const detail = error instanceof Error ? error.message : String(error ?? '')
+  return { kind, detail, content: `${TURN_FAILURE_LEADS[kind]}\n\n${ERROR_DETAIL_MARKER}\n\`\`\`text\n${detail}\n\`\`\`` }
 }

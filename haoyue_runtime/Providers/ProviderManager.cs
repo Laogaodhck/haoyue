@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Collections.Concurrent;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Events;
 
@@ -32,6 +34,15 @@ public interface IProviderManager
 
     /// <summary>Sends a minimal real completion to verify a model end-to-end.</summary>
     Task<(bool Success, string Detail, double LatencyMs)> TestModelAsync(ModelInfo model, CancellationToken ct = default);
+
+    /// <summary>
+    /// 工具调用能力探测。<see cref="ModelCapabilities.ToolCalling"/> 是纯用户声明，
+    /// 本地客户端直接忽略 <c>request.Tools</c>——按声明注入全量工具 schema 会让本地
+    /// 回合空谈且白烧 schema token。三态语义见 <see cref="ToolCallingSupport"/>；
+    /// <see cref="ToolCallingSupport.Unknown"/> 时调用方保持旧行为（继续注入）。
+    /// </summary>
+    Task<ToolCallingSupport> ProbeToolCallingAsync(ModelInfo model, CancellationToken ct = default)
+        => Task.FromResult(ToolCallingSupport.Supported);
 
     /// <summary>Fetches model identifiers from a provider's model-list endpoint.</summary>
     Task<IReadOnlyList<string>> FetchModelsAsync(ProviderConfig provider, string? url = null, CancellationToken ct = default);
@@ -257,6 +268,7 @@ public sealed class ProviderManager(
                         catch (LlmException ex) when (!committed && ex.Retryable && !ct.IsCancellationRequested)
                         {
                             lastError = ex;
+                            NoteToolRejection(model, builtRequest, ex);
                             Breaker.RecordFailure(model.Ref, ex.StatusCode);
                             RecordUsage(model, null, stopwatch, success: false);
 
@@ -282,6 +294,7 @@ public sealed class ProviderManager(
                         }
                         catch (LlmException ex)
                         {
+                            NoteToolRejection(model, builtRequest, ex);
                             Breaker.RecordFailure(model.Ref, ex.StatusCode);
                             RecordUsage(model, completion, stopwatch, success: false);
                             // Once the stream has yielded tokens we can no longer switch providers
@@ -499,6 +512,57 @@ public sealed class ProviderManager(
     }
 
     // ---------------------------------------------------------------- helpers
+
+    private readonly ConcurrentDictionary<string, ToolCallingSupport> _toolCallingCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 工具调用能力探测——零流量设计：本地提供方直接判 Unsupported（LocalLlmClient
+    /// 不解析 tools），用户显式关闭的能力同样不探测；远程提供方不主动发探测请求，
+    /// 而是在真实请求被提供方以 tools 相关错误拒绝时（<see cref="NoteToolRejection"/>）
+    /// 记入缓存。Unknown 表示尚无证据，调用方保持旧行为（继续注入）。
+    /// </summary>
+    public Task<ToolCallingSupport> ProbeToolCallingAsync(ModelInfo model, CancellationToken ct = default)
+    {
+        if (_toolCallingCache.TryGetValue(model.Ref, out var cached))
+            return Task.FromResult(cached);
+
+        // 用户显式关闭的能力不需要探测——按未支持处理。
+        if (!model.Model.Capabilities.ToolCalling)
+            return Task.FromResult(Cache(model.Ref, ToolCallingSupport.Unsupported));
+
+        // 本地 GGUF 通道完全忽略 request.Tools（没有原生工具协议解析），
+        // 注入 schema 只会消耗上下文且让模型"空谈工具"。
+        if (model.Provider.Kind.Equals("local", StringComparison.OrdinalIgnoreCase))
+            return Task.FromResult(Cache(model.Ref, ToolCallingSupport.Unsupported));
+
+        return Task.FromResult(ToolCallingSupport.Unknown);
+    }
+
+    /// <summary>
+    /// 远程提供方拒绝了带 tools 的请求时记录该模型不支持工具调用，后续回合不再注入
+    /// 工具 schema（第一次拒绝已经付出了真实错误代价，此处只是不再重复犯错）。
+    /// </summary>
+    private void NoteToolRejection(ModelInfo model, LlmRequest? request, LlmException ex)
+    {
+        if (request?.Tools is not { Count: > 0 }) return;
+        if (!LooksLikeToolRejection(ex.Message)) return;
+        Cache(model.Ref, ToolCallingSupport.Unsupported);
+    }
+
+    private static bool LooksLikeToolRejection(string message)
+    {
+        var text = message.ToLowerInvariant();
+        return text.Contains("tool")
+            && (text.Contains("not support") || text.Contains("unsupported") || text.Contains("unknown")
+                || text.Contains("invalid") || text.Contains("unrecognized") || text.Contains("400")
+                || text.Contains("422"));
+    }
+
+    private ToolCallingSupport Cache(string ref_, ToolCallingSupport support)
+    {
+        _toolCallingCache[ref_] = support;
+        return support;
+    }
 
     private IAsyncEnumerator<LlmStreamEvent> TryOpenStream(
         ModelInfo model, Func<ModelInfo, LlmRequest> requestFactory, CancellationToken ct, out LlmRequest request)

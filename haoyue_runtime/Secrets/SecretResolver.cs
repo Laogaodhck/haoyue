@@ -18,9 +18,11 @@ namespace Haoyue.Runtime.Secrets;
 /// Schemes:
 ///   secret:dpapi:&lt;base64&gt;   Windows DPAPI (CurrentUser scope; same user, same machine).
 ///   secret:keyring:&lt;id&gt;    freedesktop Secret Service via the secret-tool CLI (Linux).
-///   secret:file:&lt;id&gt;      AES-GCM entry in ~/.haoyue/secrets.json (macOS, Linux without a
-///                          keyring, and any other platform; file mode 0600, key derived from
-///                          the machine identifier or a generated ~/.haoyue/store.key).
+///   secret:keychain:&lt;id&gt;   macOS login keychain via native Security framework interop.
+///   secret:file:&lt;id&gt;      AES-GCM entry in ~/.haoyue/secrets.json (macOS without a
+///                          reachable keychain, Linux without a keyring, and any other
+///                          platform; file mode 0600, key derived from the machine
+///                          identifier or a generated ~/.haoyue/store.key).
 ///   (no prefix)              plaintext passthrough — legacy configs keep working unchanged.
 ///
 /// There is deliberately no platform on which <see cref="Encrypt"/> answers with plaintext:
@@ -32,8 +34,10 @@ public static class SecretResolver
     public const string Prefix = "secret:";
     private const string DpapiScheme = "secret:dpapi:";
     private const string KeyringScheme = "secret:keyring:";
+    private const string KeychainScheme = "secret:keychain:";
     internal const string FileScheme = "secret:file:";
     private const string KeyringService = "haoyue-mcp";
+    private const string KeychainService = "haoyue";
 
     public static bool IsSecret(string? value) =>
         value is not null && value.StartsWith(Prefix, StringComparison.Ordinal);
@@ -63,6 +67,13 @@ public static class SecretResolver
                 : null;
         }
 
+        if (value.StartsWith(KeychainScheme, StringComparison.Ordinal))
+        {
+            return OperatingSystem.IsMacOS()
+                ? KeychainLookup(value[KeychainScheme.Length..])
+                : null;
+        }
+
         if (value.StartsWith(FileScheme, StringComparison.Ordinal))
         {
             return FileStoreLookup(value[FileScheme.Length..]);
@@ -89,6 +100,9 @@ public static class SecretResolver
         if (OperatingSystem.IsLinux() && KeyringStore(purposeId, value))
             return KeyringScheme + purposeId;
 
+        if (OperatingSystem.IsMacOS() && KeychainStore(purposeId, value))
+            return KeychainScheme + purposeId;
+
         return FileScheme + FileStoreStore(purposeId, value);
     }
 
@@ -99,6 +113,7 @@ public static class SecretResolver
     public static string StorageScheme =>
         OperatingSystem.IsWindows() ? "dpapi"
         : OperatingSystem.IsLinux() && FindSecretTool() is not null ? "keyring"
+        : OperatingSystem.IsMacOS() && MacKeychainAvailable.Value ? "keychain"
         : "file";
 
     // ---- Windows DPAPI (crypt32) ----
@@ -180,8 +195,230 @@ public static class SecretResolver
         }
     }
 
-    // ---- Linux Secret Service (secret-tool CLI) ----
+    // ---- macOS login keychain (native Security framework interop) ----
+    //
+    // The `security` CLI is deliberately NOT used: it only accepts the secret on
+    // argv, where any local user can read it from the process list — a weaker
+    // trade than the AES-GCM file store. Native SecItem* calls keep the secret
+    // out of argv entirely. Every entry is a generic-password item under the
+    // "haoyue" service with the purpose id as its account. A keychain that is
+    // locked, absent (headless CI) or fails to load falls back to the file
+    // store — callers surface the scheme through StorageScheme warnings.
 
+    private const string SecurityFramework = "/System/Library/Frameworks/Security.framework/Security";
+    private const string CoreFoundationFramework = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+    private const int KcfStringEncodingUtf8 = 0x08000100;
+    private const int ErrSecSuccess = 0;
+    private const int ErrSecItemNotFound = -25300;
+
+    // Keychain attribute keys / values (the actual CFSTR contents — part of the
+    // stable Security framework ABI, so building them as plain CFStrings is safe).
+    private const string KSecClass = "class";
+    private const string KSecClassGenericPassword = "genp";
+    private const string KSecAttrService = "svce";
+    private const string KSecAttrAccount = "acct";
+    private const string KSecValueData = "v_Data";
+    private const string KSecReturnData = "r_Data";
+    private const string KSecMatchLimit = "m_Limit";
+    private const string KSecMatchLimitOne = "m1";
+
+    private static readonly Lazy<bool> MacKeychainAvailable = new(ProbeMacKeychain);
+
+    [DllImport(SecurityFramework)]
+    private static extern int SecItemAdd(IntPtr attributes, out IntPtr result);
+
+    [DllImport(SecurityFramework)]
+    private static extern int SecItemCopyMatching(IntPtr query, out IntPtr result);
+
+    [DllImport(SecurityFramework)]
+    private static extern int SecItemDelete(IntPtr query);
+
+    [DllImport(CoreFoundationFramework)]
+    private static extern IntPtr CFStringCreateWithCString(IntPtr alloc, string value, int encoding);
+
+    [DllImport(CoreFoundationFramework)]
+    private static extern IntPtr CFDataCreate(IntPtr alloc, byte[] bytes, int length);
+
+    [DllImport(CoreFoundationFramework)]
+    private static extern IntPtr CFDictionaryCreate(
+        IntPtr alloc, IntPtr[] keys, IntPtr[] values, int count, IntPtr keyCallbacks, IntPtr valueCallbacks);
+
+    [DllImport(CoreFoundationFramework)]
+    private static extern void CFRelease(IntPtr handle);
+
+    [DllImport(CoreFoundationFramework)]
+    private static extern IntPtr CFDataGetBytePtr(IntPtr theData);
+
+    [DllImport(CoreFoundationFramework)]
+    private static extern int CFDataGetLength(IntPtr theData);
+
+    /// <summary>
+    /// CFDictionaryCreate requires non-null callbacks; the kCFType* callbacks structs
+    /// and kCFBooleanTrue are exported variables, so their addresses come from
+    /// NativeLibrary.GetExport + one pointer dereference. Cached because every
+    /// keychain operation builds at least one dictionary.
+    /// </summary>
+    private static readonly Lazy<IntPtr> CfKeyCallbacks = new(() =>
+        ReadExport(CoreFoundationFramework, "kCFTypeDictionaryKeyCallBacks"));
+
+    private static readonly Lazy<IntPtr> CfValueCallbacks = new(() =>
+        ReadExport(CoreFoundationFramework, "kCFTypeDictionaryValueCallBacks"));
+
+    private static readonly Lazy<IntPtr> CfBooleanTrue = new(() =>
+        ReadExport(CoreFoundationFramework, "kCFBooleanTrue"));
+
+    private static IntPtr ReadExport(string library, string symbol)
+    {
+        var handle = NativeLibrary.Load(library);
+        var address = NativeLibrary.GetExport(handle, symbol);
+        return Marshal.ReadIntPtr(address);
+    }
+
+    private static bool ProbeMacKeychain()
+    {
+        const string probeId = "probe";
+        var probeValue = $"haoyue-keychain-probe-{Guid.NewGuid():N}";
+        try
+        {
+            if (!KeychainStore(probeId, probeValue)) return false;
+            var readBack = KeychainLookup(probeId);
+            KeychainDelete(probeId);
+            return readBack == probeValue;
+        }
+        catch
+        {
+            // Any interop failure means "unavailable"; the caller falls back to the file store.
+            return false;
+        }
+    }
+
+    private static bool KeychainStore(string id, string value)
+    {
+        try
+        {
+            var query = KeychainQuery(id);
+            SecItemDelete(query); // add fails when the account exists; update = delete + add.
+            CFRelease(query);
+
+            var data = CFDataCreate(IntPtr.Zero, Encoding.UTF8.GetBytes(value), Encoding.UTF8.GetByteCount(value));
+            if (data == IntPtr.Zero) return false;
+            try
+            {
+                var attributes = KeychainAttributes(id, data);
+                try
+                {
+                    var status = SecItemAdd(attributes, out var added);
+                    if (added != IntPtr.Zero) CFRelease(added);
+                    return status == ErrSecSuccess;
+                }
+                finally
+                {
+                    CFRelease(attributes);
+                }
+            }
+            finally
+            {
+                CFRelease(data);
+            }
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            // Framework unavailable (non-macOS runtime, trimmed binary): fall back.
+            return false;
+        }
+    }
+
+    private static string? KeychainLookup(string id)
+    {
+        try
+        {
+            var query = KeychainQuery(id, extra: new[]
+            {
+                (KSecReturnData, CfBooleanTrue.Value),
+                (KSecMatchLimit, CfString(KSecMatchLimitOne)),
+            });
+            try
+            {
+                var status = SecItemCopyMatching(query, out var result);
+                if (status == ErrSecItemNotFound) return null;
+                if (status != ErrSecSuccess || result == IntPtr.Zero)
+                {
+                    if (result != IntPtr.Zero) CFRelease(result);
+                    return null;
+                }
+                try
+                {
+                    var length = CFDataGetLength(result);
+                    if (length <= 0) return null;
+                    var bytes = new byte[length];
+                    Marshal.Copy(CFDataGetBytePtr(result), bytes, 0, length);
+                    return Encoding.UTF8.GetString(bytes);
+                }
+                finally
+                {
+                    CFRelease(result);
+                }
+            }
+            finally
+            {
+                CFRelease(query);
+            }
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            return null;
+        }
+    }
+
+    private static void KeychainDelete(string id)
+    {
+        try
+        {
+            var query = KeychainQuery(id);
+            SecItemDelete(query);
+            CFRelease(query);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            // Nothing to clean up when the framework is unreachable.
+        }
+    }
+
+    private static IntPtr KeychainQuery(string id) => KeychainQuery(id, extra: null);
+
+    private static IntPtr KeychainQuery(string id, (string Key, IntPtr Value)[]? extra)
+    {
+        var keys = new List<string> { KSecClass, KSecAttrService, KSecAttrAccount };
+        var values = new List<IntPtr>
+        {
+            CfString(KSecClassGenericPassword),
+            CfString(KeychainService),
+            CfString(id),
+        };
+        if (extra is not null)
+        {
+            foreach (var (key, value) in extra)
+            {
+                keys.Add(key);
+                values.Add(value);
+            }
+        }
+
+        var keyHandles = new IntPtr[keys.Count];
+        for (var i = 0; i < keys.Count; i++) keyHandles[i] = CfString(keys[i]);
+        var dict = CFDictionaryCreate(
+            IntPtr.Zero, keyHandles, values.ToArray(), keys.Count, CfKeyCallbacks.Value, CfValueCallbacks.Value);
+        foreach (var handle in keyHandles) CFRelease(handle);
+        return dict;
+    }
+
+    private static IntPtr KeychainAttributes(string id, IntPtr data) => KeychainQuery(
+        id, extra: new[] { (KSecValueData, data) });
+
+    private static IntPtr CfString(string value) =>
+        CFStringCreateWithCString(IntPtr.Zero, value, KcfStringEncodingUtf8);
+
+    // ---- Linux Secret Service (secret-tool CLI) ----
     private static bool KeyringStore(string id, string value)
     {
         if (FindSecretTool() is not { } secretTool) return false;
@@ -243,7 +480,7 @@ public static class SecretResolver
         return null;
     }
 
-    // ---- AES-GCM file store (macOS, and Linux when no Secret Service is available) ----
+    // ---- AES-GCM file store (fallback when no OS keychain is reachable) ----
     //
     // Entries live in ~/.haoyue/secrets.json (mode 0600) as
     // { "version": 1, "entries": { "<id>": "<base64 nonce||ciphertext||tag>" } }.
@@ -251,11 +488,10 @@ public static class SecretResolver
     // MachineGuid) or, where a platform exposes neither, over a random key generated
     // once into ~/.haoyue/store.key — so a copied secrets.json is useless on another
     // machine. The entry id is bound as AES-GCM associated data, preventing entry
-    // swaps. This is deliberately documented as weaker than DPAPI: same-user read
-    // access to both files suffices to recover credentials. On macOS the native
-    // alternative (login keychain via the `security` CLI) is deferred because that
-    // tool only accepts the secret on argv, where other users could read it from the
-    // process list — a weaker trade than the file store.
+    // swaps. This is deliberately documented as weaker than DPAPI/keychain: same-user
+    // read access to both files suffices to recover credentials, which is why the
+    // scheme in use is surfaced through StorageScheme warnings (macOS without a
+    // reachable login keychain, Linux without a Secret Service, headless CI).
 
     private const string SecretsFileName = "secrets.json";
     private const string StoreKeyFileName = "store.key";

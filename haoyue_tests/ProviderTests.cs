@@ -1417,4 +1417,158 @@ public sealed class ProviderTests : IDisposable
                 Content = new StringContent(body, Encoding.UTF8, mediaType ?? "application/json"),
             });
     }
+
+    // ---- tool-calling probe (P1-2.1) ----
+
+    private sealed class ProbeClient(string kind, Func<LlmRequest, IAsyncEnumerable<LlmStreamEvent>> responder)
+        : ILlmClient
+    {
+        public string Kind => kind;
+        public IAsyncEnumerable<LlmStreamEvent> StreamAsync(LlmRequest request, CancellationToken ct) =>
+            responder(request);
+        public Task<EmbeddingResult?> EmbedAsync(
+            Haoyue.Runtime.Configuration.ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default) =>
+            Task.FromResult<EmbeddingResult?>(null);
+    }
+
+    private static async IAsyncEnumerable<LlmStreamEvent> TextStream()
+    {
+        await Task.Yield();
+        yield return new LlmTextDelta("hello");
+        yield return new LlmCompleted(new LlmCompletion { Text = "hello", FinishReason = "stop" });
+    }
+
+    /// <summary>异步抛出（迭代器内部），让失败经 MoveNextAsync 表面化——与真实客户端一致。</summary>
+    private static async IAsyncEnumerable<LlmStreamEvent> ThrowingStream(string message)
+    {
+        await Task.Yield();
+        throw new LlmException(message, retryable: false);
+        yield break; // 不可达：仅为满足 async-iterator 语法
+    }
+
+    [Fact]
+    public async Task ProbeToolCalling_RemoteProvider_IsUnknownWithoutProbeTraffic()
+    {
+        // 零流量设计：远程提供方不主动发探测请求（真实失败路径上才记录拒绝）。
+        var provider = new ProviderConfig
+        {
+            Id = "tools", Kind = "openai", BaseUrl = "https://tools.test",
+            Models = [new ModelConfig { Id = "m", Capabilities = new ModelCapabilities { ToolCalling = true } }],
+        };
+        _store.Config.Providers.Add(provider);
+        var calls = 0;
+        var manager = new ProviderManager(
+            _store, _registry,
+            new LlmClientFactory([new ProbeClient("openai", _ =>
+            {
+                calls++;
+                return TextStream();
+            })]),
+            new LlmHttpFactory(),
+            new UsageTracker(new EventBus(), Path.Combine(_dir, "usage.jsonl")),
+            new EventBus());
+        var model = _registry.Resolve("tools/m")!;
+
+        Assert.Equal(ToolCallingSupport.Unknown, await manager.ProbeToolCallingAsync(model));
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public async Task ProbeToolCalling_ProviderRejectionDuringRealRequest_RecordsUnsupported()
+    {
+        var provider = new ProviderConfig
+        {
+            Id = "notools", Kind = "openai", BaseUrl = "https://notools.test",
+            Models = [new ModelConfig { Id = "m", Capabilities = new ModelCapabilities { ToolCalling = true } }],
+        };
+        _store.Config.Providers.Add(provider);
+        _store.Config.Provider = "notools";
+        _store.Config.Model = "m";
+        var manager = new ProviderManager(
+            _store, _registry,
+            new LlmClientFactory([new ProbeClient("openai", _ => ThrowingStream(
+                "400: tools parameter is not supported by this model"))]),
+            new LlmHttpFactory(),
+            new UsageTracker(new EventBus(), Path.Combine(_dir, "usage.jsonl")),
+            new EventBus());
+        var model = _registry.Resolve("notools/m")!;
+
+        // 真实请求被拒绝后（第一次付出真实错误代价），缓存记为不支持。
+        await Assert.ThrowsAsync<LlmException>(() =>
+            manager.StreamAsync(_ => new LlmRequest
+            {
+                Provider = model.Provider,
+                Model = model.Model,
+                Messages = [ChatMessage.User("hi")],
+                Tools = [new ToolDefinition("ping", "probe", new JsonObject { ["type"] = "object" })],
+            }, workspace: null, CancellationToken.None).GetAsyncEnumerator().MoveNextAsync().AsTask());
+
+        Assert.Equal(ToolCallingSupport.Unsupported, await manager.ProbeToolCallingAsync(model));
+    }
+
+    [Fact]
+    public async Task ProbeToolCalling_RejectionWithoutToolsInRequest_StaysUnknown()
+    {
+        var provider = new ProviderConfig
+        {
+            Id = "plain", Kind = "openai", BaseUrl = "https://plain.test",
+            Models = [new ModelConfig { Id = "m", Capabilities = new ModelCapabilities { ToolCalling = true } }],
+        };
+        _store.Config.Providers.Add(provider);
+        var manager = new ProviderManager(
+            _store, _registry,
+            new LlmClientFactory([new ProbeClient("openai", _ => ThrowingStream("400: bad request"))]),
+            new LlmHttpFactory(),
+            new UsageTracker(new EventBus(), Path.Combine(_dir, "usage.jsonl")),
+            new EventBus());
+        var model = _registry.Resolve("plain/m")!;
+
+        await Assert.ThrowsAsync<LlmException>(() =>
+            manager.StreamAsync(_ => new LlmRequest
+            {
+                Provider = model.Provider,
+                Model = model.Model,
+                Messages = [ChatMessage.User("hi")],
+            }, workspace: null, CancellationToken.None).GetAsyncEnumerator().MoveNextAsync().AsTask());
+
+        Assert.Equal(ToolCallingSupport.Unknown, await manager.ProbeToolCallingAsync(model));
+    }
+
+    [Fact]
+    public async Task ProbeToolCalling_LocalProvider_IsUnsupportedWithoutProbeTraffic()
+    {
+        var provider = new ProviderConfig
+        {
+            Id = "gguf", Kind = "local",
+            Models = [new ModelConfig { Id = "m", Capabilities = new ModelCapabilities { ToolCalling = true } }],
+        };
+        _store.Config.Providers.Add(provider);
+        var manager = new ProviderManager(
+            _store, _registry,
+            new LlmClientFactory([new ProbeClient("local", _ => throw new InvalidOperationException("must not be called"))]),
+            new LlmHttpFactory(),
+            new UsageTracker(new EventBus(), Path.Combine(_dir, "usage.jsonl")),
+            new EventBus());
+
+        Assert.Equal(ToolCallingSupport.Unsupported, await manager.ProbeToolCallingAsync(_registry.Resolve("gguf/m")!));
+    }
+
+    [Fact]
+    public async Task ProbeToolCalling_UndeclaredCapability_IsUnsupportedWithoutProbeTraffic()
+    {
+        var provider = new ProviderConfig
+        {
+            Id = "nodeclare", Kind = "openai", BaseUrl = "https://nodeclare.test",
+            Models = [new ModelConfig { Id = "m", Capabilities = new ModelCapabilities { ToolCalling = false } }],
+        };
+        _store.Config.Providers.Add(provider);
+        var manager = new ProviderManager(
+            _store, _registry,
+            new LlmClientFactory([new ProbeClient("openai", _ => throw new InvalidOperationException("must not be called"))]),
+            new LlmHttpFactory(),
+            new UsageTracker(new EventBus(), Path.Combine(_dir, "usage.jsonl")),
+            new EventBus());
+
+        Assert.Equal(ToolCallingSupport.Unsupported, await manager.ProbeToolCallingAsync(_registry.Resolve("nodeclare/m")!));
+    }
 }

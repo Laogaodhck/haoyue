@@ -374,6 +374,17 @@ public sealed partial class Agent(
                 var requiresVision = turnHasImages && model.Model.Capabilities.Vision;
                 var effectiveNetworkEnabled = session.Header.NetworkEnabled && agentConfig.NetworkEnabled;
                 var tools = ActiveTools(workspace, model, effectiveNetworkEnabled, skillTriggerContext);
+                // 工具调用能力探测（P1-2.1）：Capabilities.ToolCalling 是纯用户声明，
+                // 本地客户端直接忽略 request.Tools。探测明确不支持时不注入工具 schema——
+                // 否则模型空谈工具且每步白烧 schema token。Unknown（探测失败）保持旧行为。
+                if (tools.Count > 0
+                    && await providerManager.ProbeToolCallingAsync(model, ct).ConfigureAwait(false)
+                        == ToolCallingSupport.Unsupported)
+                {
+                    tools = Array.Empty<ITool>();
+                    events.Publish(new WarningEvent(
+                        $"模型 {model.Model.Id} 探测不支持工具调用，本回合不注入工具清单（避免空谈与无效的 schema 开销）。"));
+                }
                 var expertId = session.Header.ExpertId;
                 var promptKey = string.Join('|',
                     model.Provider.Id, model.Model.Id, effectiveNetworkEnabled, tools.Count,
@@ -410,10 +421,20 @@ public sealed partial class Agent(
                 // A failed compaction never aborts the turn — it falls back to the trim.
                 // Up to 3 passes per turn with a cool-down gap: very long tool-heavy turns
                 // used to hit the window a second time and degrade to hard trimming.
+                //
+                // 主动压缩（P1-2.1）：被动触发（FitToWindow 丢历史）意味着窗口已经打满，
+                // 那几步仍在硬挤，溢出后校准只对下一回合生效。投影用量（系统提示 + 历史 +
+                // 工具 schema + 输出预留）达到水位上限即提前压缩，把溢出消灭在发送前。
+                var projectedTokens = ContextPlanner.EstimateTokens(systemPrompt, calibration)
+                    + source.Sum(m => ContextPlanner.EstimateTokens(m, calibration))
+                    + cachedToolSchemaTokens
+                    + model.Model.MaxOutput;
+                var trimWouldDrop = history.Count + 4 <= source.Count;
+                var nearWatermark = windowCeiling > 0 && projectedTokens >= windowCeiling * 0.85;
                 if (agentConfig.EnableContextCompaction
                     && compactedCount < 3
                     && (compactedCount == 0 || step - lastCompactionStep >= 6)
-                    && history.Count + 4 <= source.Count)
+                    && (trimWouldDrop || nearWatermark))
                 {
                     PublishWorkflow(step, "compact", "压缩记忆");
                     await CompactContextAsync(session, workspace, model, source, systemPrompt, ct, windowCeiling, calibration, cachedToolSchemaTokens).ConfigureAwait(false);

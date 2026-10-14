@@ -118,7 +118,31 @@ public class McpSecretsTests
 
         Assert.NotEqual(plaintext, stored);
         Assert.StartsWith(SecretResolver.Prefix, stored);
-        Assert.Contains(SecretResolver.StorageScheme, new string[] { "dpapi", "keyring", "file" });
+
+        Assert.Contains(SecretResolver.StorageScheme, new string[] { "dpapi", "keyring", "keychain", "file" });
+    }
+
+    [Fact]
+    public void Resolve_KeychainScheme_OffPlatformReturnsNullInsteadOfLeakingCiphertext()
+    {
+        // P0-2：secret:keychain: 值只在 macOS 可解析。其它平台必须返回 null
+        // （调用方按「凭证丢失」处理），绝不能把 id 或密文当凭证转发。
+        if (!OperatingSystem.IsMacOS())
+            Assert.Null(SecretResolver.Resolve("secret:keychain:provider/google"));
+    }
+
+    [Fact]
+    public void Encrypt_OnMacOS_PrefersLoginKeychain()
+    {
+        // P0-2：macOS 走原生 Security framework（SecItem*，不经过 argv），
+        // 仅当 keychain 不可达（锁定/headless）才回退 AES-GCM 文件库。
+        if (OperatingSystem.IsMacOS())
+        {
+            var stored = SecretResolver.Encrypt($"test:mac-keychain:{Guid.NewGuid():N}", "sk-macos-keychain");
+            Assert.StartsWith("secret:keychain:", stored);
+            Assert.Equal("sk-macos-keychain", SecretResolver.Resolve(stored));
+            Assert.Equal("keychain", SecretResolver.StorageScheme);
+        }
     }
 
     // ---- file store key on platforms without a machine identifier ----

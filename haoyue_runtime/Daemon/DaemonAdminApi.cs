@@ -2153,8 +2153,9 @@ internal sealed class DaemonAdminApi(
         var workspace = SessionWorkspace(parameters);
         var title = RequiredString(parameters, "title");
         var content = RequiredString(parameters, "content");
-        if (content.Length > 8000)
-            throw new DaemonRequestException($"Knowledge content is too long ({content.Length} chars); keep entries under 8000 characters.");
+        if (content.Length > KnowledgeStore.MaxEntryContentChars)
+            throw new DaemonRequestException(
+                $"Knowledge content is too long ({content.Length} chars); keep entries under {KnowledgeStore.MaxEntryContentChars} characters.");
         long? id = null;
         if (parameters["id"] is JsonValue value)
         {

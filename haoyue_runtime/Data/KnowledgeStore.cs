@@ -32,6 +32,11 @@ public sealed record KnowledgeEntryInfo(
 public sealed partial class KnowledgeStore(HaoyueDatabase database)
 {
     /// <summary>
+    /// 单条目正文上限（字符）。写入侧（工具、知识中心 RPC）与语义嵌入预算共用这一个常量，
+    /// 否则嵌入预算小于正文上限会让条目尾部对向量层永久不可见。
+    /// </summary>
+    public const int MaxEntryContentChars = 8000;
+    /// <summary>
     /// Creates an entry (same-title upsert) or, when <paramref name="id"/> is given,
     /// updates that entry in place — including its title, so renaming from the
     /// desktop editor does not silently fork the entry. New entries land in

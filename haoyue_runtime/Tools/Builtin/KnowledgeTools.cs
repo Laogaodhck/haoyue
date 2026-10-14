@@ -33,11 +33,14 @@ public sealed class KnowledgeSearchTool(
 
         var limit = Math.Clamp(GetInt(arguments, "limit") ?? 8, 1, 20);
         var scope = HaoyueDatabase.ScopeKey(context.Workspace);
-        var matches = await SearchAsync(scope, query, limit, ct).ConfigureAwait(false);
+        var (matches, outcome) = await SearchAsync(scope, query, limit, ct).ConfigureAwait(false);
+        // 语义层失效或索引没建全都会显式写进 summary：用户和进化引擎都需要知道
+        // 「这次是纯词法结果」，而不是看到一个看起来一样的答案。
+        var caveat = SemanticCaveat(outcome);
         if (matches.Count == 0)
             return ToolResult.Ok(
                 "No knowledge entries matched. Use knowledge_save to record useful findings for future sessions.",
-                "No knowledge matches");
+                caveat is null ? "No knowledge matches" : $"No knowledge matches（{caveat}）");
 
         var sb = new StringBuilder();
         foreach (var entry in matches)
@@ -50,30 +53,44 @@ public sealed class KnowledgeSearchTool(
         }
         // H-B: 20 条 ×600 字符的硬切在 32K 窗口模型上会超预算 3 倍——最终输出收敛进
         // 自适应窗口预算，且 head+tail 保证靠后的条目不被整段丢弃。
+        var summary = $"{matches.Count} knowledge entries matched";
+        if (caveat is not null) summary += $"（{caveat}）";
         return ToolResult.Ok(
             context.TruncateTailPrioritized(sb.ToString().TrimEnd(), "knowledge results"),
-            $"{matches.Count} knowledge entries matched");
+            summary);
     }
 
-    private async Task<IReadOnlyList<KnowledgeEntry>> SearchAsync(string scope, string query, int limit, CancellationToken ct)
+    /// <summary>语义层当前不可信的原因（供 summary 与缺陷统计消费）；语义完全正常时返回 null。</summary>
+    private static string? SemanticCaveat(HybridSearchOutcome outcome) => outcome.EmbeddingError switch
+    {
+        { Length: > 0 } message => $"语义检索失效，本次为纯词法结果：{message}",
+        _ when outcome.PendingVectors > 0
+            => $"语义索引未建全，还有 {outcome.PendingVectors} 条没有向量（可用 knowledge.index.build 一次性补齐）",
+        _ => null,
+    };
+
+    private async Task<(IReadOnlyList<KnowledgeEntry> Matches, HybridSearchOutcome Outcome)> SearchAsync(
+        string scope, string query, int limit, CancellationToken ct)
     {
         var entries = knowledge.LoadScope(scope);
         var route = semantic.CreateRoute(configStore.Config);
         if (route is null)
-            return KnowledgeSearchRanker.Rank(entries, query, limit);
+            return (KnowledgeSearchRanker.Rank(entries, query, limit), new HybridSearchOutcome([]));
 
         try
         {
-            return await semantic.SearchHybridAsync(
+            var outcome = await semantic.SearchHybridAsync(
                 scope, entries, query, limit, route.Client, route.CacheKey, ct).ConfigureAwait(false);
+            return (outcome.Entries, outcome);
         }
         catch (OperationCanceledException)
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return KnowledgeSearchRanker.Rank(entries, query, limit);
+            return (KnowledgeSearchRanker.Rank(entries, query, limit),
+                new HybridSearchOutcome([], EmbeddingError: ex.Message));
         }
     }
 }
@@ -96,8 +113,9 @@ public sealed class KnowledgeSaveTool(KnowledgeStore knowledge, IPromptProvider 
         if (string.IsNullOrWhiteSpace(title)) return Task.FromResult(ToolResult.Fail("title is required."));
         if (string.IsNullOrWhiteSpace(content)) return Task.FromResult(ToolResult.Fail("content is required."));
 
-        if (content.Length > 8000)
-            return Task.FromResult(ToolResult.Fail($"content is too long ({content.Length} chars); keep entries under 8000 characters."));
+        if (content.Length > KnowledgeStore.MaxEntryContentChars)
+            return Task.FromResult(ToolResult.Fail(
+                $"content is too long ({content.Length} chars); keep entries under {KnowledgeStore.MaxEntryContentChars} characters."));
 
         var scope = HaoyueDatabase.ScopeKey(context.Workspace);
         var (entry, created) = knowledge.Save(scope, title, content, GetString(arguments, "tags"));

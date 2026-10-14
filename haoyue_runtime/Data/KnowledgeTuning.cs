@@ -43,6 +43,26 @@ public static class KnowledgeTuning
     /// <summary>Allowed edit distance for longer words.</summary>
     public const int FuzzyLongWordDistance = 2;
 
+    // ---------------------------------------------------------------- 混合检索融合
+    // 这一组是绝对口径的门槛，不是相对权重游戏：语义侧用原始余弦，侧写「最大值归一」
+    // 会让每条查询都必有一个满权重项（详见 KnowledgeSemanticIndex.SearchHybridAsync）。
+    // 数值是首批可用基线，后续由 KnowledgeRetrievalEvaluation 的正/负例指标驱动调整。
+
+    /// <summary>词法分在融合结果中的权重。</summary>
+    public const double HybridLexicalWeight = 0.6;
+
+    /// <summary>语义分（绝对余弦）在融合结果中的权重。</summary>
+    public const double HybridSemanticWeight = 0.4;
+
+    /// <summary>低于该余弦相似度的语义信号直接归零：弱相关不该换算成排名加分。</summary>
+    public const double MinSemanticSimilarity = 0.25;
+
+    /// <summary>融合分低于该门槛即视为「知识库里没有答案」，不再把最不离谱的条目当结果返回。</summary>
+    public const double MinHybridScore = 0.15;
+
+    /// <summary>单次检索现场补嵌的条目上限：超出的计入 PendingVectors，交给显式建索引通道。</summary>
+    public const int MaxEmbedPerSearch = 64;
+
     private static readonly object Gate = new();
 
     /// <summary>Default synonym file location; the directory is only created when the user asks.</summary>

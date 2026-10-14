@@ -137,7 +137,8 @@ public sealed class ReadFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
 
     public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
-        var path = context.ResolvePath(GetString(arguments, "path") ?? "");
+        if (!context.TryResolveReadablePath(GetString(arguments, "path") ?? "", out var path, out var pathError))
+            return Task.FromResult(ToolResult.Fail(pathError!));
         if (!File.Exists(path))
             return Task.FromResult(ToolResult.Fail($"File not found: {path}"));
 

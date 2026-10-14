@@ -94,7 +94,8 @@ public sealed class DocRenderTool(IPromptProvider prompts, IConfigStore configSt
         }
         else
         {
-            sourcePath = context.ResolvePath(sourceArg!);
+            if (!context.TryResolveReadablePath(sourceArg!, out sourcePath, out var sourceError))
+                return ToolResult.Fail(sourceError!);
             if (!File.Exists(sourcePath))
                 return ToolResult.Fail($"Source file not found: {sourcePath}");
         }

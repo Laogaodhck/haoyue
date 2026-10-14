@@ -5,6 +5,7 @@ using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Providers;
+using Haoyue.Runtime.Secrets;
 using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Tools.Builtin;
 using Haoyue.Runtime.Workspaces;
@@ -105,8 +106,107 @@ public sealed class AgentHardeningTests : IDisposable
         Assert.False(File.Exists(outside), "越界写入必须被拒绝，文件不应存在。");
     }
 
-    // ------------------------------------------------- H2: fact_search / fact_forget
+    // ------------------------------------------------- H1b: readable path boundary
 
+    [Fact]
+    public void TryResolveReadablePath_AcceptsWorkspaceContent()
+    {
+        var context = Context();
+        Assert.True(context.TryResolveReadablePath("src/a.cs", out var resolved, out var error));
+        Assert.Null(error);
+        Assert.Equal(Path.GetFullPath(Path.Combine(_dir, "src", "a.cs")), resolved);
+
+        Assert.True(context.TryResolveReadablePath(Path.Combine(_dir, "notes.md"), out _, out error));
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void TryResolveReadablePath_RejectsPathsOutsideProjectWorkspace()
+    {
+        var context = Context();
+
+        var sibling = Path.Combine(Path.GetDirectoryName(_dir)!, "elsewhere", "secrets.txt");
+        Assert.False(context.TryResolveReadablePath(sibling, out _, out var error));
+        Assert.Contains("workspace", error, StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(context.TryResolveReadablePath("../../windows/win.ini", out _, out error));
+        Assert.NotNull(error);
+    }
+
+    [Fact]
+    public void TryResolveReadablePath_HonoursExplicitExtraRoots()
+    {
+        var outside = Path.Combine(Path.GetDirectoryName(_dir)!, "shared-reads");
+        var context = new ToolContext
+        {
+            Workspace = Workspace(),
+            Events = new EventBus(),
+            Agent = new AgentConfig { ExtraReadableRoots = [outside] },
+        };
+
+        Assert.True(context.TryResolveReadablePath(Path.Combine(outside, "spec.md"), out _, out var error));
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void TryResolveReadablePath_GlobalSessionNeverReachesCredentialStores()
+    {
+        var global = new WorkspaceManager().CreateGlobal(_dir);
+        var context = Context(global);
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // 全局会话可读用户目录里的普通文件……
+        Assert.True(context.TryResolveReadablePath(Path.Combine(profile, "Documents", "note.md"), out _, out var error));
+        Assert.Null(error);
+
+        // ……但密钥、令牌库与浏览器档案始终拒绝，即使它们落在用户目录内。
+        Assert.False(context.TryResolveReadablePath(Path.Combine(profile, ".ssh", "id_rsa"), out _, out error));
+        Assert.Contains("credential", error, StringComparison.OrdinalIgnoreCase);
+        Assert.False(context.TryResolveReadablePath(Path.Combine(profile, ".aws", "credentials"), out _, out error));
+        Assert.Contains("credential", error, StringComparison.OrdinalIgnoreCase);
+
+        // 白名单是用户对某个目录的明确授权，优先于凭据过滤。
+        var withKeys = new ToolContext
+        {
+            Workspace = global,
+            Events = new EventBus(),
+            Agent = new AgentConfig { ExtraReadableRoots = [Path.Combine(profile, ".ssh")] },
+        };
+        Assert.True(withKeys.TryResolveReadablePath(Path.Combine(profile, ".ssh", "id_rsa"), out _, out var allowedError));
+        Assert.Null(allowedError);
+    }
+
+    [Fact]
+    public void TryResolveReadablePath_KeepsAuditTrailOutOfAgentReach()
+    {
+        var context = Context();
+        Assert.False(context.TryResolveReadablePath(".haoyue/audit/bash.jsonl", out _, out var error));
+        Assert.Contains("audit trail", error, StringComparison.OrdinalIgnoreCase);
+
+        // 同目录下的其他工作区文件不受影响。
+        Assert.True(context.TryResolveReadablePath(".haoyue/notes.md", out _, out error));
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public async Task ReadFileTool_RejectsEscapingPath()    {
+        var outside = Path.Combine(Path.GetTempPath(), "haoyue-read-escape-" + Guid.NewGuid().ToString("N") + ".txt");
+        await File.WriteAllTextAsync(outside, "secret");
+        var tool = new ReadFileTool(new FilePromptProvider());
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                new JsonObject { ["path"] = outside }, Context(), CancellationToken.None);
+            Assert.False(result.Success);
+            Assert.Contains("workspace", result.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
+    // ------------------------------------------------- H2: fact_search / fact_forget
     [Fact]
     public async Task FactSearch_And_Forget_RoundTrip()
     {
@@ -342,8 +442,81 @@ public sealed class AgentHardeningTests : IDisposable
         // 只读内建工具不落审计；bash 自有风险分级日志，不重复记录。
         Assert.Null(ToolAuditLog.Resolve(new StubTool("read_file", mutating: false), new JsonObject()));
         Assert.Null(ToolAuditLog.Resolve(new StubTool("bash", mutating: true), new JsonObject()));
-        Assert.Null(ToolAuditLog.Resolve(
-            new StubTool("delegate_task", mutating: true), new JsonObject()));
+
+        // P0-4：Computer-Use 的原生 shell 与其他 mutating 工具都要留痕，
+        // 否则换一个执行入口就等于绕开审计。
+        Assert.Equal(("shell-exec", "Remove-Item C:\\temp"),
+            ToolAuditLog.Resolve(new StubTool("computer_exec", mutating: true),
+                new JsonObject { ["command"] = "Remove-Item C:\\temp\nWrite-Host ok" }));
+        Assert.Equal(("tool-mutation", "delegate_task"),
+            ToolAuditLog.Resolve(new StubTool("delegate_task", mutating: true), new JsonObject()));
+    }
+
+    [Fact]
+    public void ToolAudit_Append_RedactsCredentialsInTargetAndSummary()
+    {
+        var workspace = Workspace();
+        ToolAuditLog.Append(workspace, new ToolAuditRecord(
+            DateTime.UtcNow.ToString("o"), "computer_exec", "shell-exec",
+            "curl -H 'Authorization: Bearer sk-livesecret123456' https://api.test/v1",
+            "fail", "resp {" + "\"api_key\": \"ghp_liveTokenValue999\" }", 12));
+
+        var line = File.ReadAllText(ToolAuditLog.AuditFile(workspace));
+        Assert.DoesNotContain("sk-livesecret123456", line);
+        Assert.DoesNotContain("ghp_liveTokenValue999", line);
+        Assert.Contains("Authorization", line, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BashAudit_Append_RedactsCommandSecrets()
+    {
+        var workspace = Workspace();
+        BashAuditLog.Append(workspace, new BashAuditRecord(
+            DateTime.UtcNow.ToString("o"),
+            "aws s3 cp f --access-key-id AKIAABCDEFGHIJKLMNOP && git push https://user:s3cretPass@github.com/x.git",
+            workspace.Root, "medium", ["网络访问"], "ok", 0, 30));
+
+        var line = File.ReadAllText(BashAuditLog.AuditFile(workspace));
+        Assert.DoesNotContain("AKIAABCDEFGHIJKLMNOP", line);
+        Assert.DoesNotContain("s3cretPass", line);
+        Assert.Contains("aws s3 cp f", line);
+    }
+
+    [Fact]
+    public void AuditRotation_KeepsOneGenerationPastTheWatermark()
+    {
+        var file = Path.Combine(_dir, "rotate.jsonl");
+        var filler = new string('x', 4096);
+        using (var writer = new StreamWriter(file))
+            for (var i = 0; i < AuditRotation.MaxBytes / filler.Length + 1; i++)
+                writer.Write(filler);
+        var before = new FileInfo(file).Length;
+        Assert.True(before >= AuditRotation.MaxBytes, "测试预置应超过水位。");
+
+        AuditRotation.RotateIfNeeded(file);
+
+        Assert.False(File.Exists(file));
+        Assert.True(File.Exists(Path.Combine(_dir, "rotate.prev.jsonl")));
+    }
+
+    [Fact]
+    public void CredentialRedactor_CoversHeaderQueryFlagAndTokenShapes()
+    {
+        Assert.DoesNotContain("abcdefghijkl",
+            CredentialRedactor.Redact("curl -H \"Authorization: Bearer abcdefghijkl\" https://x"));
+        Assert.DoesNotContain("supersecretvalue",
+            CredentialRedactor.Redact("https://api.test/v1?api_key=supersecretvalue&model=x"));
+        Assert.DoesNotContain("hunter2secret",
+            CredentialRedactor.Redact("docker login --password hunter2secret"));
+        Assert.DoesNotContain("MIIprivate",
+            CredentialRedactor.Redact("https://user:MIIprivatevalue@example.test/repo"));
+        Assert.DoesNotContain("sk-projAbCdEfGhIjKl",
+            CredentialRedactor.Redact("provider key sk-projAbCdEfGhIjKl"));
+
+        // 非凭据文本保持原样，且重复脱敏不会改写已脱敏结果。
+        Assert.Equal("dotnet build Haoyue.slnx", CredentialRedactor.Redact("dotnet build Haoyue.slnx"));
+        var once = CredentialRedactor.Redact("api_key = realSecretValue1");
+        Assert.Equal(once, CredentialRedactor.Redact(once));
     }
 
     [Fact]

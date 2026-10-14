@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Secrets;
@@ -13,6 +14,11 @@ public interface IConfigStore
     string? BackupConfigFile { get; }
     /// <summary>最近一次加载时 ConfigSchema 规范化/迁移产生的告警（字段回退、越界钳制、版本升级）。</summary>
     IReadOnlyList<string> ValidationWarnings { get; }
+    /// <summary>
+    /// 最近一次加载时无法加密落盘的凭据告警（明文 API Key 迁移失败）。空集合表示所有
+    /// 凭据都已是 secret: 形态或本就未设置。
+    /// </summary>
+    IReadOnlyList<string> SecretWarnings { get; }
 
     void Save();
     void SaveState();
@@ -52,6 +58,7 @@ public sealed class ConfigStore : IConfigStore
     public string? AnomalyDetail { get; private set; }
     public string? BackupConfigFile { get; private set; }
     public IReadOnlyList<string> ValidationWarnings { get; private set; } = [];
+    public IReadOnlyList<string> SecretWarnings { get; private set; } = [];
 
     public ConfigStore(string? configFile = null, string? stateFile = null)
     {
@@ -252,6 +259,7 @@ public sealed class ConfigStore : IConfigStore
 
     private HaoyueConfig LoadConfig()
     {
+        SecretWarnings = [];
         if (File.Exists(_configFile))
         {
             try
@@ -283,7 +291,12 @@ public sealed class ConfigStore : IConfigStore
                             ValidationWarnings = [.. warnings, .. migrations];
                             HasAnomaly = false;
                             AnomalyDetail = null;
-                            if (migrations.Count > 0 || MigrateProviderApiKeys(loaded))
+                            // 先算密钥迁移再判断是否写盘：`||` 的短路求值曾让「有 schema 迁移」
+                            // 的场景直接跳过密钥迁移，明文 Key 就此留在盘上。
+                            var secretWarnings = new List<string>();
+                            var secretsMigrated = MigrateProviderApiKeys(loaded, secretWarnings);
+                            SecretWarnings = secretWarnings;
+                            if (migrations.Count > 0 || secretsMigrated)
                             {
                                 // schema 版本升级或密钥迁移：清空基线并立即落盘，把迁移后的文件写回磁盘。
                                 _configBaseline = null;
@@ -321,22 +334,30 @@ public sealed class ConfigStore : IConfigStore
     }
 
     /// <summary>
-    /// 启动迁移：把历史明文 Provider ApiKey 改写为 secret: 加密引用。Encrypt 幂等
-    /// （已是 secret: 前缀或本平台无加密方案时原样返回），因此只在真正发生加密时
-    /// 返回 true 并由调用方落盘，避免每次启动重复写配置文件。
+    /// 启动迁移：把历史明文 Provider ApiKey 改写为 secret: 加密引用。Encrypt 在每个平台
+    /// 要么给出 secret: 形态、要么抛错，不再原样返回明文，因此这里不能再用「返回值等于原串」
+    /// 判断是否迁移过（旧实现在 macOS 上就是这样把明文当成「无需迁移」静默跳过的）。
+    /// 加密失败的条目保留原值并记入 <see cref="SecretWarnings"/>：将凭证降级写成明文落盘
+    /// 比留着告警更糟，用户需要被告知去重设密钥。
     /// </summary>
-    private static bool MigrateProviderApiKeys(HaoyueConfig config)
+    private static bool MigrateProviderApiKeys(HaoyueConfig config, List<string> secretWarnings)
     {
         var migrated = false;
         foreach (var provider in config.Providers)
         {
             if (string.IsNullOrEmpty(provider.ApiKey) || SecretResolver.IsSecret(provider.ApiKey))
                 continue;
-            var encrypted = SecretResolver.Encrypt($"provider/{provider.Id}", provider.ApiKey);
-            if (!string.Equals(encrypted, provider.ApiKey, StringComparison.Ordinal))
+            try
             {
-                provider.ApiKey = encrypted;
+                provider.ApiKey = SecretResolver.Encrypt($"provider/{provider.Id}", provider.ApiKey);
                 migrated = true;
+            }
+            catch (Exception ex) when (ex is CryptographicException or InvalidOperationException
+                                           or IOException or NotSupportedException)
+            {
+                secretWarnings.Add(
+                    $"provider/{provider.Id} 的 API Key 无法加密保存（{ex.Message}），当前仍以明文留在配置文件里；" +
+                    $"本平台凭证存储方案：{SecretResolver.StorageScheme}。请重新输入该密钥。");
             }
         }
         return migrated;

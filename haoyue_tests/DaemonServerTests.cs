@@ -51,6 +51,24 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Chat_ForwardsWarningEventAsNamedStreamFrame()
+    {
+        // 执行策略拒绝、模型中断保留部分输出等告警过去只进事件日志，桌面与 CLI 的
+        // 回合通道都看不到，用户只能看到「工具失败」却不知道为什么。
+        var connection = await StartServerAsync((_, _, _, _) =>
+        {
+            _runtime!.Events.Publish(new WarningEvent("工具 bash 被执行策略拒绝（deny）"));
+            return Task.FromResult(new AgentTurnResult("ok", false, null));
+        });
+
+        await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "hello" });
+        var warning = await connection.ReadUntilAsync(r => r["event"]!.GetValue<string>() == "warning");
+        Assert.Equal("工具 bash 被执行策略拒绝（deny）", warning["data"]!.GetValue<string>());
+        await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "done");
+    }
+
+    [Fact]
     public async Task ActiveChat_DoesNotBlockCancellation_AndEndsWithCancelledEvent()
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -781,10 +799,9 @@ public sealed class DaemonServerTests : IAsyncDisposable
         });
         var provider = ParseData(await connection.ReadAsync());
         Assert.True(provider["apiKeyConfigured"]!.GetValue<bool>());
-        Assert.Equal("secret-test-key", provider["apiKey"]!.GetValue<string>());
+        Assert.False(provider.ContainsKey("apiKey"), "provider 载荷不应跨管道回传明文 API Key");
 
-        // The desktop receives the directly stored key for editing. Older clients that submit
-        // an empty value still preserve it unless they explicitly request clearApiKey.
+        // 客户端不再拿到明文，因此空值必须表示「保持不变」，只有显式 clearApiKey 才删除。
         await connection.SendAsync(111, "provider.upsert", new JsonObject
         {
             ["id"] = "local",
@@ -795,7 +812,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
         });
         provider = ParseData(await connection.ReadAsync());
         Assert.True(provider["apiKeyConfigured"]!.GetValue<bool>());
-        Assert.Equal("secret-test-key", provider["apiKey"]!.GetValue<string>());
+        Assert.False(provider.ContainsKey("apiKey"));
         var reloadedStore = new ConfigStore(
             Path.Combine(_tempDir, "config.json"),
             Path.Combine(_tempDir, "state.json"));
@@ -813,7 +830,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
         });
         provider = ParseData(await connection.ReadAsync());
         Assert.False(provider["apiKeyConfigured"]!.GetValue<bool>());
-        Assert.Null(provider["apiKey"]);
+        Assert.False(provider.ContainsKey("apiKey"));
 
         await connection.SendAsync(13, "provider.use", new JsonObject { ["id"] = "local" });
         Assert.Equal("local", (await connection.ReadAsync())["data"]!.GetValue<string>());
@@ -1767,6 +1784,9 @@ public sealed class DaemonServerTests : IAsyncDisposable
         Assert.Equal(ConfigSchema.CurrentVersion, status["schemaVersion"]!.GetValue<int>());
         Assert.False(status["hasAnomaly"]!.GetValue<bool>());
         Assert.Empty(status["validationWarnings"]!.AsArray());
+        // 凭据告警必须有出口：明文 Key 迁移失败时界面靠这两个字段起横幅。
+        Assert.Empty(status["secretWarnings"]!.AsArray());
+        Assert.Contains(status["secretStorage"]!.GetValue<string>(), new string[] { "dpapi", "keyring", "file" });
     }
 
     [Fact]

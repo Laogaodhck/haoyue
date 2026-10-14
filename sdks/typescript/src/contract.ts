@@ -19,26 +19,26 @@ export type MethodName =
   | "prompt.optimize" | "provider.list" | "provider.upsert" | "provider.use"
   | "provider.remove" | "provider.test" | "provider.models.fetch" | "local.models"
   | "model.list" | "model.catalog" | "model.switch" | "model.test"
-  | "model.status" | "model.config.get" | "model.update" | "model.benchmark"
-  | "schedule.list" | "schedule.create" | "schedule.update" | "schedule.toggle"
-  | "schedule.delete" | "schedule.run" | "task.start" | "task.get"
-  | "task.list" | "task.cancel" | "mcp.list" | "mcp.upsert"
-  | "mcp.remove" | "mcp.reload" | "connectors.list" | "connectors.install"
-  | "connectors.uninstall" | "skill.list" | "skill.import" | "skill.toggle"
-  | "skill.official.list" | "skill.official.install" | "expert.list" | "knowledge.list"
-  | "knowledge.search" | "knowledge.save" | "knowledge.delete" | "knowledge.import"
-  | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save"
-  | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add"
-  | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh"
-  | "knowledge.retrieve" | "memory.get" | "memory.save" | "rules.list"
-  | "rules.save" | "rules.delete" | "usage.get" | "usage.timeline"
-  | "session.list" | "session.search" | "session.get" | "session.truncate"
-  | "session.fork" | "session.update" | "session.archive" | "session.delete"
-  | "session.resume" | "session.new" | "project.list" | "project.upsert"
-  | "project.remove" | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list"
-  | "evolution.decide" | "evolution.history" | "evolution.stats" | "evolution.config.get"
-  | "evolution.config.set" | "doctor" | "doctor.run" | "lock.list"
-  | "factory.reset"
+  | "model.status" | "model.preload" | "model.unload" | "model.config.get"
+  | "model.update" | "model.benchmark" | "schedule.list" | "schedule.create"
+  | "schedule.update" | "schedule.toggle" | "schedule.delete" | "schedule.run"
+  | "task.start" | "task.get" | "task.list" | "task.cancel"
+  | "mcp.list" | "mcp.upsert" | "mcp.remove" | "mcp.reload"
+  | "connectors.list" | "connectors.install" | "connectors.uninstall" | "skill.list"
+  | "skill.import" | "skill.toggle" | "skill.official.list" | "skill.official.install"
+  | "expert.list" | "knowledge.list" | "knowledge.search" | "knowledge.save"
+  | "knowledge.delete" | "knowledge.import" | "knowledge.tags" | "knowledge.export"
+  | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list" | "knowledge.notebook.save"
+  | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list" | "knowledge.source.read"
+  | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve" | "memory.get"
+  | "memory.save" | "rules.list" | "rules.save" | "rules.delete"
+  | "usage.get" | "usage.timeline" | "session.list" | "session.search"
+  | "session.get" | "session.truncate" | "session.fork" | "session.update"
+  | "session.archive" | "session.delete" | "session.resume" | "session.new"
+  | "project.list" | "project.upsert" | "project.remove" | "evolution.inspect"
+  | "evolution.reflect" | "evolution.pending-list" | "evolution.decide" | "evolution.history"
+  | "evolution.stats" | "evolution.config.get" | "evolution.config.set" | "doctor"
+  | "doctor.run" | "lock.list" | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -264,7 +264,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "provider.upsert",
     category: "provider",
     description: "\u521b\u5efa\u6216\u66f4\u65b0\u63d0\u4f9b\u5546",
-    paramsSchema: {"properties": {"apiKey": {"description": "API Key", "type": "string"}, "baseUrl": {"description": "API 基础地址", "type": "string"}, "clearApiKey": {"description": "清除已存 API Key", "type": "boolean"}, "enabled": {"description": "是否启用", "type": "boolean"}, "id": {"description": "提供商标识", "type": "string"}, "kind": {"description": "提供商类型", "enum": ["openai", "anthropic", "local"], "type": "string"}, "modelDetails": {"description": "模型明细列表", "items": {"properties": {"alias": {"description": "显示别名", "type": "string"}, "contextWindow": {"description": "上下文窗口", "type": "integer"}, "id": {"description": "模型 id", "type": "string"}, "maxOutput": {"description": "最大输出 token", "type": "integer"}, "vision": {"description": "是否支持视觉", "type": "boolean"}}, "required": ["id"], "type": "object"}, "type": "array"}, "modelListUrl": {"description": "模型列表地址", "type": "string"}, "modelsDirectory": {"description": "本地模型目录", "type": "string"}, "name": {"description": "显示名", "type": "string"}, "priority": {"description": "路由优先级", "type": "integer"}, "promptCaching": {"description": "提示缓存开关", "type": "boolean"}, "proxy": {"description": "代理地址", "type": "string"}, "timeoutSeconds": {"description": "请求超时（秒）", "type": "integer"}}, "required": ["id"], "type": "object"},
+    paramsSchema: {"properties": {"apiKey": {"description": "API Key（留空保持已存值；响应不回传明文）", "type": "string"}, "baseUrl": {"description": "API 基础地址", "type": "string"}, "clearApiKey": {"description": "清除已存 API Key", "type": "boolean"}, "enabled": {"description": "是否启用", "type": "boolean"}, "id": {"description": "提供商标识", "type": "string"}, "kind": {"description": "提供商类型", "enum": ["openai", "anthropic", "local"], "type": "string"}, "modelDetails": {"description": "模型明细列表", "items": {"properties": {"alias": {"description": "显示别名", "type": "string"}, "contextWindow": {"description": "上下文窗口", "type": "integer"}, "id": {"description": "模型 id", "type": "string"}, "maxOutput": {"description": "最大输出 token", "type": "integer"}, "vision": {"description": "是否支持视觉", "type": "boolean"}}, "required": ["id"], "type": "object"}, "type": "array"}, "modelListUrl": {"description": "模型列表地址", "type": "string"}, "modelsDirectory": {"description": "本地模型目录", "type": "string"}, "name": {"description": "显示名", "type": "string"}, "priority": {"description": "路由优先级", "type": "integer"}, "promptCaching": {"description": "提示缓存开关", "type": "boolean"}, "proxy": {"description": "代理地址", "type": "string"}, "timeoutSeconds": {"description": "请求超时（秒）", "type": "integer"}}, "required": ["id"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -335,6 +335,20 @@ export const METHODS: readonly MethodInfo[] = [
     category: "model",
     description: "\u672c\u5730\u6a21\u578b\u9884\u68c0\u72b6\u6001",
     paramsSchema: {"properties": {"model": {"description": "模型 ref", "type": "string"}}, "required": ["model"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "model.preload",
+    category: "model",
+    description: "\u9884\u70ed\u672c\u5730\u6a21\u578b\uff08\u6743\u91cd\u88c5\u5165\u9a7b\u7559\u69fd\uff0c\u4e0d\u5360\u63a8\u7406\u69fd\uff1b\u8fdb\u5ea6\u7ecf model.load.progress \u5e7f\u64ad\uff09",
+    paramsSchema: {"properties": {"model": {"description": "模型 ref", "type": "string"}}, "required": ["model"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "model.unload",
+    category: "model",
+    description: "\u5378\u8f7d\u5168\u90e8\u5e38\u9a7b\u672c\u5730\u6743\u91cd\uff08\u5f52\u8fd8\u5185\u5b58/\u663e\u5b58\uff1b\u6d3b\u8dc3\u63a8\u7406\u7ed3\u675f\u540e\u91ca\u653e\uff09",
+    paramsSchema: {"properties": {}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -439,7 +453,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "mcp.upsert",
     category: "mcp",
     description: "\u521b\u5efa\u6216\u66f4\u65b0 MCP \u670d\u52a1\u5668",
-    paramsSchema: {"properties": {"name": {"description": "服务器名", "type": "string"}, "scope": {"description": "写入作用域", "enum": ["workspace", "global"], "type": "string"}, "server": {"properties": {"args": {"description": "命令参数", "type": "array"}, "command": {"description": "stdio 启动命令", "type": "string"}, "enabled": {"description": "是否启用", "type": "boolean"}, "env": {"description": "环境变量对象", "type": "string"}, "transport": {"description": "传输方式（stdio / sse）", "type": "string"}, "url": {"description": "远程服务地址", "type": "string"}}, "type": "object"}}, "required": ["name", "server"], "type": "object"},
+    paramsSchema: {"properties": {"name": {"description": "服务器名", "type": "string"}, "scope": {"description": "写入作用域", "enum": ["workspace", "global"], "type": "string"}, "server": {"properties": {"args": {"description": "命令参数", "type": "array"}, "command": {"description": "stdio 启动命令", "type": "string"}, "cwd": {"description": "stdio 子进程工作目录；留空默认当前工作区根目录", "type": "string"}, "enabled": {"description": "是否启用", "type": "boolean"}, "env": {"description": "环境变量对象", "type": "string"}, "transport": {"description": "传输方式（stdio / sse）", "type": "string"}, "url": {"description": "远程服务地址", "type": "string"}}, "type": "object"}}, "required": ["name", "server"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

@@ -18,6 +18,7 @@ import {
   PanelRight,
   RefreshCw,
   Search,
+  ShieldAlert,
   Telescope,
   TerminalSquare,
   Trash2,
@@ -136,6 +137,9 @@ const configAnomaly = ref<{
   configFile?: string
   backupFile?: string
 } | null>(null)
+// 凭据存储告警（明文 API Key 无法加密迁移）。可关闭，但每次重连都会重新拉取，
+// 因为只要告警仍在，配置文件里就还有一个未加密的密钥。
+const secretWarnings = ref<string[]>([])
 const rebuildingConfig = ref(false)
 const projects = ref<ProjectItem[]>([])
 const threads = ref<ThreadItem[]>([])
@@ -504,7 +508,9 @@ async function loadRuntimeState(): Promise<void> {
           detail?: string
           configFile?: string
           backupFile?: string
+          secretWarnings?: string[]
         }
+        secretWarnings.value = status.secretWarnings ?? []
         if (status.hasAnomaly) {
           configAnomaly.value = status
         } else {
@@ -1972,6 +1978,22 @@ watch(theme, applyTheme)
           </Transition>
 
           <footer class="composer-region">
+            <!-- P0-2: 明文凭证告警。runtime 不会把无法加密的 Key 写成明文落盘，但历史配置
+                 里可能残留一个，必须由界面说清楚并指向重设入口。 -->
+            <div v-if="secretWarnings.length" class="security-banner" role="alert">
+              <ShieldAlert :size="14" aria-hidden="true" />
+              <div class="security-list">
+                <span v-for="(warning, index) in secretWarnings" :key="index" class="security-item">{{ warning }}</span>
+              </div>
+              <button type="button" class="pending-message-action" title="前往设置 · 模型服务重设该密钥"
+                @click="openSettings('models')">
+                去重设
+              </button>
+              <button type="button" class="pending-message-action" title="本次会话不再提示"
+                @click="secretWarnings = []">
+                <X :size="14" />
+              </button>
+            </div>
             <!-- Evolution engine (P3): candidate skills produced by reflection turns
                  await human review here — adopting moves the draft into the live
                  skills directory, rejecting discards it. -->

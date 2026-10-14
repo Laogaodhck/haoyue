@@ -14,6 +14,7 @@ export interface ProviderFormValue {
   baseUrl: string
   modelListUrl: string
   apiKey: string
+  clearApiKey: boolean
   models: string
   modelsDirectory: string
   modelDetails?: ModelDetailConfig[]
@@ -42,6 +43,7 @@ const props = defineProps<{
   saving?: boolean
   error?: string
   defaultModelsDirectory?: string
+  keyConfigured?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -50,7 +52,7 @@ const emit = defineEmits<{
 }>()
 
 const form = reactive<ProviderFormValue>({
-  id: '', name: '', kind: 'openai', baseUrl: '', modelListUrl: '', apiKey: '', models: '', modelsDirectory: '',
+  id: '', name: '', kind: 'openai', baseUrl: '', modelListUrl: '', apiKey: '', clearApiKey: false, models: '', modelsDirectory: '',
   enabled: true, priority: 0, timeoutSeconds: 120, proxy: '', promptCaching: true
 })
 const modelList = ref<ModelDetailConfig[]>([])
@@ -272,6 +274,8 @@ function save(): void {
     id: form.id.trim(),
     name: form.name.trim(),
     baseUrl: form.baseUrl.trim(),
+    // 「删除已存密钥」优先于本次输入，二者不会同时生效。
+    apiKey: form.clearApiKey ? '' : form.apiKey.trim(),
     models: currentModels.join('\n'),
     modelsDirectory: form.modelsDirectory.trim(),
     modelDetails: modelList.value.map((m) => ({ ...m })),
@@ -304,7 +308,7 @@ watch(() => props.open, (open) => {
   if (!showAdvanced.value) {
     resetAdvancedToDefaults()
   }
-  revealKey.value = true
+  revealKey.value = false
   scannedModels.value = []
   scanError.value = ''
   localSaveError.value = ''
@@ -395,18 +399,27 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                 <strong>{{ form.kind === 'local' ? '模型' : '鉴权与模型' }}</strong>
               </div>
               <div class="provider-form-grid">
-                <label v-if="form.kind !== 'local'" class="span-2">
-                  <FieldLabel en="API Key" zh="API 密钥" help="直接查看和修改此模型提供商保存的访问密钥；清空后保存会删除密钥。" />
-                  <span class="password-control">
-                    <input v-model="form.apiKey" :type="revealKey ? 'text' : 'password'" placeholder="sk-…"
-                      autocomplete="new-password" />
-                    <button type="button" :title="revealKey ? '隐藏 API Key' : '显示 API Key'"
-                      @click="revealKey = !revealKey">
-                      <EyeOff v-if="revealKey" :size="16" />
-                      <Eye v-else :size="16" />
-                    </button>
-                  </span>
-                </label>
+                <div v-if="form.kind !== 'local'" class="span-2 key-field-block">
+                  <label>
+                    <FieldLabel en="API Key" zh="API 密钥"
+                      help="已保存的密钥加密落盘且界面永不回显。留空保存表示保持不变；只有勾选删除才会清除。" />
+                    <span class="password-control">
+                      <input v-model="form.apiKey" :type="revealKey ? 'text' : 'password'"
+                        :placeholder="keyConfigured ? '已保存 · 留空保持不变' : 'sk-…'" autocomplete="new-password" />
+                      <button type="button" :title="revealKey ? '隐藏输入内容' : '显示输入内容'" @click="revealKey = !revealKey">
+                        <EyeOff v-if="revealKey" :size="16" />
+                        <Eye v-else :size="16" />
+                      </button>
+                    </span>
+                  </label>
+                  <div v-if="keyConfigured" class="key-state-row">
+                    <small class="scan-hint">已保存 API Key（输入新值可覆盖）</small>
+                    <label class="provider-advanced-check">
+                      <input v-model="form.clearApiKey" type="checkbox" />
+                      <span>删除已保存的 API Key</span>
+                    </label>
+                  </div>
+                </div>
                 <div class="span-2 provider-models-block">
                   <div class="provider-models-header">
                     <FieldLabel en="Models" zh="模型列表" help="此模型提供商可用的模型。可点击每行右侧设置按钮配置多模态/视觉支持与上下文参数。" required />

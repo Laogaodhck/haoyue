@@ -150,8 +150,18 @@ public sealed class ToolExecutionPolicyTests
         Assert.Equal(ToolPolicyVerdict.Allowed, decision.Verdict);
     }
 
+    [Theory]
+    [InlineData("bash")]
+    [InlineData("computer_exec")]
+    public void BuiltinGuard_AppliesToEveryShellEntry(string toolName)
+    {
+        // P0-4：computer_exec 是 Computer-Use 的原生 shell，换一个入口不能等于绕开守卫。
+        var decision = Policy.Evaluate(new StubTool(toolName), Args("rm -rf /"), new ToolPolicyConfig());
+        Assert.Equal(ToolPolicyVerdict.Denied, decision.Verdict);
+    }
+
     [Fact]
-    public void BuiltinGuard_OnlyAppliesToBash()
+    public void BuiltinGuard_SkipsNonShellTools()
     {
         var decision = Policy.Evaluate(new StubTool("not_bash"), Args("rm -rf /"), new ToolPolicyConfig());
         Assert.Equal(ToolPolicyVerdict.Allowed, decision.Verdict);

@@ -18,7 +18,8 @@ public sealed class ListDirTool(IPromptProvider prompts) : BuiltinTool(prompts)
 
     public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
-        var path = context.ResolvePath(GetString(arguments, "path") ?? ".");
+        if (!context.TryResolveReadablePath(GetString(arguments, "path") ?? ".", out var path, out var pathError))
+            return Task.FromResult(ToolResult.Fail(pathError!));
         if (!Directory.Exists(path))
             return Task.FromResult(ToolResult.Fail($"Directory not found: {path}"));
 
@@ -81,7 +82,8 @@ public sealed class GlobTool(IPromptProvider prompts) : BuiltinTool(prompts)
         if (string.IsNullOrWhiteSpace(pattern))
             return Task.FromResult(ToolResult.Fail("pattern is required."));
 
-        var root = context.ResolvePath(GetString(arguments, "path") ?? ".");
+        if (!context.TryResolveReadablePath(GetString(arguments, "path") ?? ".", out var root, out var rootError))
+            return Task.FromResult(ToolResult.Fail(rootError!));
         if (!Directory.Exists(root))
             return Task.FromResult(ToolResult.Fail($"Directory not found: {root}"));
 
@@ -128,7 +130,8 @@ public sealed class GrepTool(IPromptProvider prompts) : BuiltinTool(prompts)
             return Task.FromResult(ToolResult.Fail($"Invalid regex: {ex.Message}"));
         }
 
-        var target = context.ResolvePath(GetString(arguments, "path") ?? ".");
+        if (!context.TryResolveReadablePath(GetString(arguments, "path") ?? ".", out var target, out var targetError))
+            return Task.FromResult(ToolResult.Fail(targetError!));
         var maxResults = Math.Clamp(GetInt(arguments, "max_results") ?? 100, 1, 1000);
         var globPattern = GetString(arguments, "glob");
         Matcher? matcher = null;

@@ -651,6 +651,18 @@ export class DaemonClient {
     modelStatus: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("model.status", params),
     /**
+     * 预热本地模型（权重装入驻留槽，不占推理槽；进度经 model.load.progress 广播）
+     * 终态事件：result, error
+     */
+    modelPreload: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("model.preload", params),
+    /**
+     * 卸载全部常驻本地权重（归还内存/显存；活跃推理结束后释放）
+     * 终态事件：result, error
+     */
+    modelUnload: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("model.unload", params),
+    /**
      * 模型加载配置页全量数据（含加载设置 / mmproj / 加载报告）
      * 终态事件：result, error
      */

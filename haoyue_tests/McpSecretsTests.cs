@@ -102,11 +102,59 @@ public class McpSecretsTests
         const string plaintext = "ghp_secret-value-123";
         var stored = SecretResolver.Encrypt("test:mcp-secrets", plaintext);
 
-        // On Windows the value is DPAPI-protected; on Linux it is keyring-stored
-        // when secret-tool is available and AES-GCM file-stored (secret:file:) otherwise.
-        if (OperatingSystem.IsWindows())
-            Assert.StartsWith("secret:dpapi:", stored);
+        // On Windows the value is DPAPI-protected; everywhere else it is Secret
+        // Service (Linux with secret-tool) or AES-GCM file-stored (secret:file:).
+        Assert.StartsWith(SecretResolver.Prefix, stored);
         Assert.Equal(plaintext, SecretResolver.Resolve(stored));
+    }
+
+    [Fact]
+    public void Encrypt_NeverDowngradesPlaintextOnAnyPlatform()
+    {
+        // P0-2：旧实现在 macOS（及任何非 Windows/Linux 平台）原样返回明文，配置文件里
+        // 就此留下可读密钥，且启动迁移把「返回值等于原串」当成无需迁移而静默跳过。
+        const string plaintext = "sk-anthropic-plain-secret";
+        var stored = SecretResolver.Encrypt($"test:never-plain:{Guid.NewGuid():N}", plaintext);
+
+        Assert.NotEqual(plaintext, stored);
+        Assert.StartsWith(SecretResolver.Prefix, stored);
+        Assert.Contains(SecretResolver.StorageScheme, new string[] { "dpapi", "keyring", "file" });
+    }
+
+    // ---- file store key on platforms without a machine identifier ----
+
+    [Fact]
+    public void StoreKey_IsGeneratedOnce_CorruptionFailsLoudly()
+    {
+        // 平台机器标识缺席时用它派生文件库密钥。损坏的钥必须判为不可用（null）而不是
+        // 悄悄重新生成——新钥会让所有已存条目解不开，等同于把用户凭证清空。
+        var path = SecretResolver.StoreKeyPath();
+        var backup = File.Exists(path) ? File.ReadAllText(path) : null;
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+
+            var first = SecretResolver.PersistentStoreKeyBytes();
+            Assert.NotNull(first);
+            Assert.Equal(32, first!.Length);
+            Assert.Equal(first, SecretResolver.PersistentStoreKeyBytes());
+            Assert.True(File.Exists(path));
+
+            File.WriteAllText(path, "not-valid-base64!!");
+            Assert.Null(SecretResolver.PersistentStoreKeyBytes());
+            Assert.Equal("not-valid-base64!!", File.ReadAllText(path).Trim());
+        }
+        finally
+        {
+            if (backup is null)
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            else
+            {
+                File.WriteAllText(path, backup);
+            }
+        }
     }
 
     // ---- AES-GCM file store fallback (secret:file:) ----

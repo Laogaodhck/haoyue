@@ -1965,6 +1965,38 @@ select:focus-visible {
 }
 
 /* TurnScope undo banner: revert the latest turn's builtin file-tool changes. */
+.security-banner {
+  display: flex;
+  width: min(100%, 940px);
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 auto 8px;
+  padding: 8px 11px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  background: var(--surface-raised);
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+}
+
+.security-banner > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--danger);
+}
+
+.security-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.security-item {
+  overflow-wrap: anywhere;
+}
+
 .undo-banner {
   display: flex;
   width: min(100%, 940px);
@@ -3948,6 +3980,14 @@ select:focus-visible {
 .password-control button:hover {
   color: var(--text);
   background: var(--surface-hover);
+}
+
+.key-state-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 7px;
 }
 
 .provider-enabled-row {

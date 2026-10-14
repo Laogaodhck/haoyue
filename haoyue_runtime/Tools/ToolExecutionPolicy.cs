@@ -38,7 +38,7 @@ public interface IToolExecutionPolicy
 /// Rule-based tool execution policy. Evaluation order (first match wins):
 /// 1. explicit allow rules (user overrides, e.g. to un-block an over-broad builtin guard),
 /// 2. user deny rules,
-/// 3. builtin bash destructive-command guard (when enabled),
+/// 3. builtin destructive-command guard for shell entries (bash, computer_exec) when enabled,
 /// 4. otherwise allowed.
 /// Patterns are matched case-insensitively against the full serialized arguments JSON,
 /// so a single rule can key on both tool name and argument content.
@@ -71,7 +71,7 @@ public sealed partial class ToolExecutionPolicy : IToolExecutionPolicy
                 rule.Reason is { Length: > 0 } ? rule.Reason : "命令或参数命中了用户配置的拒绝规则。");
         }
 
-        if (config.BuiltinBashGuard && tool.Name.Equals("bash", StringComparison.OrdinalIgnoreCase))
+        if (config.BuiltinBashGuard && IsShellEntry(tool.Name))
         {
             var guard = EvaluateBuiltinBashGuard(haystacks);
             if (guard is not null)
@@ -80,6 +80,15 @@ public sealed partial class ToolExecutionPolicy : IToolExecutionPolicy
 
         return ToolPolicyDecision.Allow();
     }
+
+    /// <summary>
+    /// Tools that hand a command string to a real shell. computer_exec is the native
+    /// Computer-Use shell and takes the same guard as bash, otherwise the built-in
+    /// destructive-command block could be sidestepped by choosing the other entry point.
+    /// </summary>
+    private static bool IsShellEntry(string toolName) =>
+        toolName.Equals("bash", StringComparison.OrdinalIgnoreCase)
+        || toolName.Equals("computer_exec", StringComparison.OrdinalIgnoreCase);
 
     private static string DeEscapeJsonMarkup(string text) => text
         .Replace("\\u0026", "&")
@@ -216,7 +225,7 @@ public sealed class ToolPolicyConfig
     /// <summary>用户拒绝规则，按序评估，首个命中即拒绝。</summary>
     public List<ToolPolicyRule> Deny { get; set; } = [];
 
-    /// <summary>内置 bash 高危命令守卫开关。</summary>
+    /// <summary>内置高危命令守卫开关，作用于全部 shell 入口（bash 与 computer_exec）。</summary>
     public bool BuiltinBashGuard { get; set; } = true;
 }
 

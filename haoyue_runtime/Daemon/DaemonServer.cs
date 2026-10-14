@@ -2434,6 +2434,10 @@ public sealed class DaemonServer : IAsyncDisposable
                         ["mediaType"] = image.MediaType,
                     }),
                 StatusEvent status => (Name: (string?)"status", Data: status.Status, Details: (JsonObject?)null),
+                // 内核告警必须走线：策略拒绝的原因、上下文压缩丢块、输出截断、空回答
+                // 都只发 WarningEvent，此前它不在契约三张名单里也没有转发分支，
+                // 用户看到的是「被拦了但不知道为什么」。
+                WarningEvent warning => (Name: (string?)"warning", Data: warning.Message, Details: (JsonObject?)null),
                 ToolCallStartedEvent tool => (
                     Name: (string?)"tool_start",
                     Data: tool.ToolName,

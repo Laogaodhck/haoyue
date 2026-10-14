@@ -105,8 +105,9 @@ public static class BashRiskClassifier
 
 /// <summary>
 /// Append-only JSONL audit trail of executed bash commands, one file per workspace
-/// (<c>.haoyue/audit/bash.jsonl</c>). Writes are line-buffered appends under a lock;
-/// the file is intentionally never rotated or truncated by the runtime.
+/// (<c>.haoyue/audit/bash.jsonl</c>). Writes are line-buffered appends under a lock.
+/// Commands are credential-scrubbed before they hit the disk, and the file rotates at
+/// the shared audit watermark instead of growing without bound.
 /// </summary>
 public static class BashAuditLog
 {
@@ -127,7 +128,9 @@ public static class BashAuditLog
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             lock (Gate)
             {
-                File.AppendAllText(file, JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine);
+                AuditRotation.RotateIfNeeded(file);
+                var redacted = record with { Command = Haoyue.Runtime.Secrets.CredentialRedactor.Redact(record.Command) };
+                File.AppendAllText(file, JsonSerializer.Serialize(redacted, JsonOptions) + Environment.NewLine);
             }
         }
         catch (IOException)

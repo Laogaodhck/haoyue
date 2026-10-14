@@ -32,6 +32,7 @@ export const DAEMON_STREAM_EVENTS = [
   'usage',
   'workflow',
   'plan_update',
+  'warning',
 ] as const
 
 export const DAEMON_TERMINAL_EVENTS = [
@@ -67,6 +68,7 @@ export const DAEMON_EVENT_NAMES = [
   'usage',
   'workflow',
   'plan_update',
+  'warning',
   'pong',
   'result',
   'done',

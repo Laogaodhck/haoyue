@@ -386,6 +386,15 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         }
         break
       }
+      case 'warning': {
+        if (!message || !event.data) break
+        message.warnings ??= []
+        if (!message.warnings.includes(event.data)) message.warnings.push(event.data)
+        // A stuck model can emit one warning per step; keep the newest few so the
+        // bubble stays readable and the array cannot grow without bound.
+        if (message.warnings.length > 5) message.warnings.splice(0, message.warnings.length - 5)
+        break
+      }
       case 'done':
 
       case 'cancelled':

@@ -112,6 +112,10 @@ public static class DaemonContract
     [
         "delta", "thinking", "steer", "image_view", "status", "tool_start",
         "tool_done", "file_diff", "model_start", "usage", "workflow", "plan_update",
+        // 内核告警（执行策略拒绝、上下文压缩降级、输出截断、空回答…）。此前 WarningEvent
+        // 只在运行时内部发布，既不在契约也不在 daemon 转发分支里，用户在桌面看不到
+        // 「为什么被拦」。
+        "warning",
     ];
 
     /// <summary>请求的终态事件（错误终态 error 对所有方法隐式可用）。</summary>
@@ -209,7 +213,7 @@ public static class DaemonContract
         ("modelListUrl", SString("模型列表地址"), false),
         ("modelsDirectory", SString("本地模型目录"), false),
         ("promptCaching", SBoolean("提示缓存开关"), false),
-        ("apiKey", SString("API Key"), false),
+        ("apiKey", SString("API Key（留空保持已存值；响应不回传明文）"), false),
         ("clearApiKey", SBoolean("清除已存 API Key"), false),
         ("modelDetails", SArray("模型明细列表", SObject(
             ("id", SString("模型 id"), true),

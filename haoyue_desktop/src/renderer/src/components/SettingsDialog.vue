@@ -83,7 +83,6 @@ interface ProviderInfo {
   modelListUrl?: string
   modelsDirectory?: string
   defaultModelsDirectory?: string
-  apiKey?: string
   apiKeyConfigured: boolean
   models: string[]
   modelDetails?: ModelDetailConfig[]
@@ -102,6 +101,7 @@ interface ProviderFormValue {
   baseUrl: string
   modelListUrl: string
   apiKey: string
+  clearApiKey: boolean
   models: string
   modelsDirectory: string
   modelDetails?: ModelDetailConfig[]
@@ -242,7 +242,7 @@ const editingProviderId = ref<string | null>(null)
 
 const providerForm = reactive<ProviderFormValue>({
   id: '', name: '', kind: 'openai', baseUrl: '',
-  apiKey: '', models: '', modelsDirectory: '', modelDetails: [], enabled: true, priority: 0,
+  apiKey: '', clearApiKey: false, models: '', modelsDirectory: '', modelDetails: [], enabled: true, priority: 0,
   modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true
 })
 
@@ -1057,7 +1057,7 @@ function newProvider(): void {
   error.value = ''
   editingProviderId.value = null
   Object.assign(providerForm, {
-    id: '', name: '', kind: 'openai', baseUrl: '', apiKey: '',
+    id: '', name: '', kind: 'openai', baseUrl: '', apiKey: '', clearApiKey: false,
     models: '', modelsDirectory: '', modelDetails: [], enabled: true, priority: 0, modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true
   })
   providerEditorOpen.value = true
@@ -1072,7 +1072,7 @@ function editProvider(provider: ProviderInfo): void {
     kind: provider.kind,
     baseUrl: provider.baseUrl,
     modelListUrl: provider.modelListUrl ?? '',
-    apiKey: provider.apiKey ?? '',
+    apiKey: '', clearApiKey: false,
     models: provider.models.join('\n'),
     modelsDirectory: provider.modelsDirectory ?? '',
     modelDetails: provider.modelDetails ? provider.modelDetails.map((m) => ({ ...m })) : [],
@@ -1088,14 +1088,15 @@ function editProvider(provider: ProviderInfo): void {
 async function saveProvider(value: ProviderFormValue): Promise<void> {
   beginAction('provider.save')
   try {
-    const { apiKey, ...provider } = value
+    const { apiKey, clearApiKey, ...provider } = value
     const parameters: Record<string, unknown> = {
       ...provider,
       models: value.models.split(/\r?\n|,/).map((model) => model.trim()).filter(Boolean),
       modelDetails: value.modelDetails ?? []
     }
-    if (apiKey.trim()) parameters.apiKey = apiKey.trim()
-    else if (editingProviderId.value) parameters.clearApiKey = true
+    // 明文不再回传，表单留空即「保持已存密钥不变」；删除需要显式勾选。
+    if (clearApiKey) parameters.clearApiKey = true
+    else if (apiKey.trim()) parameters.apiKey = apiKey.trim()
     await window.haoyue.daemon.request('provider.upsert', parameters)
     providerEditorOpen.value = false
     await loadModels()
@@ -2397,6 +2398,7 @@ onBeforeUnmount(() => {
     </Transition>
   </Teleport>
   <ProviderEditorDialog :open="providerEditorOpen" :editing-id="editingProviderId" :value="providerForm"
+    :key-configured="providers.find((p) => p.id === editingProviderId)?.apiKeyConfigured ?? false"
     :saving="action === 'provider.save'" :error="providerEditorOpen ? error : ''"
     :default-models-directory="providers.find((provider) => provider.kind === 'local')?.defaultModelsDirectory"
     @close="providerEditorOpen = false" @save="saveProvider" />

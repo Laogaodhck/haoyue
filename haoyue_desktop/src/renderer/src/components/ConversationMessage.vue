@@ -320,6 +320,12 @@ function openFileLocation(path?: string): void {
         <CircleAlert :size="13" />
         <span>已手动停止，回复可能不完整</span>
       </div>
+      <ul v-if="message.warnings?.length" class="warning-notes" aria-label="运行时告警">
+        <li v-for="(warning, index) in message.warnings" :key="index" class="warning-note">
+          <CircleAlert :size="13" />
+          <span>{{ warning }}</span>
+        </li>
+      </ul>
       <div v-if="streaming && (message.state === 'thinking' || message.state === 'streaming')"
         class="response-placeholder" aria-label="AI 正在思考">
         <span /><span /><span />
@@ -574,6 +580,33 @@ function openFileLocation(path?: string): void {
   background: color-mix(in srgb, var(--text-muted) 12%, transparent);
   font-size: 11.5px;
   user-select: none;
+}
+
+.warning-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.warning-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  color: var(--warning, #b36a20);
+  background: color-mix(in srgb, var(--warning, #b36a20) 10%, transparent);
+  font-size: 11.5px;
+  line-height: 1.5;
+  user-select: none;
+}
+
+.warning-note > svg {
+  flex: none;
+  margin-top: 2px;
 }
 
 .error-card {

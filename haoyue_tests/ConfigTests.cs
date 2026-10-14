@@ -157,19 +157,39 @@ public sealed class ConfigTests : IDisposable
         var provider = Assert.Single(store.Config.Providers);
         Assert.Equal("sk-plaintext-key", provider.ResolveApiKey());
 
-        var onDisk = File.ReadAllText(configFile);
-        if (OperatingSystem.IsMacOS())
-        {
-            // macOS 没有实现凭据加密方案（与 MCP 凭据一致），迁移为 no-op。
-            Assert.Equal("sk-plaintext-key", provider.ApiKey);
-            return;
-        }
+        // 每个平台都要迁移：macOS 曾因为 Encrypt 原样返回明文而被当成「无需迁移」。
         Assert.StartsWith(SecretResolver.Prefix, provider.ApiKey);
-        Assert.DoesNotContain("sk-plaintext-key", onDisk);
+        Assert.DoesNotContain("sk-plaintext-key", File.ReadAllText(configFile));
+        Assert.Empty(store.SecretWarnings);
 
         // 已迁移的配置再次加载是幂等的（不再触发写盘），密钥仍可解析。
         var reloaded = NewStore();
         Assert.Equal("sk-plaintext-key", reloaded.Config.Providers.Single().ResolveApiKey());
+        Assert.Empty(reloaded.SecretWarnings);
+    }
+
+    [Fact]
+    public void Load_MigratesApiKey_AndSchemaVersion_InOnePass()
+    {
+        // 旧文件同时缺 schemaVersion 与带明文 Key：|| 的短路求值曾让密钥迁移整个跳过，
+        // 只剩 schema 迁移落盘。两者必须都生效。
+        var configFile = Path.Combine(_dir, "config.json");
+        File.WriteAllText(configFile, """
+        {
+            "providers": [
+                { "id": "p1", "kind": "openai", "baseUrl": "https://example.test/v1", "apiKey": "sk-both-plain" }
+            ],
+            "provider": "p1",
+            "model": "m1"
+        }
+        """);
+
+        var store = NewStore();
+
+        Assert.Equal(ConfigSchema.CurrentVersion, store.Config.SchemaVersion);
+        Assert.StartsWith(SecretResolver.Prefix, store.Config.Providers.Single().ApiKey);
+        Assert.DoesNotContain("sk-both-plain", File.ReadAllText(configFile));
+        Assert.Equal("sk-both-plain", store.Config.Providers.Single().ResolveApiKey());
     }
 
     [Fact]
@@ -177,8 +197,6 @@ public sealed class ConfigTests : IDisposable
     {
         var provider = new ProviderConfig { Id = "p", ApiKey = "legacy-plain" };
         Assert.Equal("legacy-plain", provider.ResolveApiKey());
-
-        if (OperatingSystem.IsMacOS()) return; // macOS 无加密方案，跳过往返断言
 
         provider.ApiKey = SecretResolver.Encrypt("provider/p", "sk-live");
         Assert.StartsWith(SecretResolver.Prefix, provider.ApiKey);

@@ -188,6 +188,23 @@ describe('daemon event handler — stream batching', () => {
     expect(thread2.messages[0]!.interrupted).toBeUndefined()
   })
 
+  it('collects runtime warnings onto the active assistant bubble', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+    const assistant = thread.messages[0]!
+
+    handler(chatEvent('warning', '工具 bash 被执行策略拒绝（deny）'))
+    handler(chatEvent('warning', '工具 bash 被执行策略拒绝（deny）'))
+    expect(assistant.warnings).toEqual(['工具 bash 被执行策略拒绝（deny）'])
+
+    handler(chatEvent('warning', '模型连接中断，已保留中断前生成的部分输出'))
+    expect(assistant.warnings?.length).toBe(2)
+    // 告警是补充信息，绝不能把回合状态从思考/生成中改掉。
+    expect(assistant.state).toBe('thinking')
+  })
+
   it('stores structured error detail for the error card', () => {
     const context = createContext()
     const thread = threadFixture()

@@ -47,6 +47,28 @@ public sealed class ToolContext
     }
 
     /// <summary>
+    /// Resolves a path for file-READING tools and enforces the read boundary — the
+    /// workspace root, the user's whitelisted roots and, for global sessions, the profile
+    /// directory minus credential material. Without it a read tool could dump ~/.ssh or
+    /// another user's home into the model context and ship it out via web_fetch.
+    /// </summary>
+    public bool TryResolveReadablePath(string path, out string resolved, out string? error)
+    {
+        resolved = ResolvePath(path);
+        if (!PathGuard.IsReadable(Workspace, Agent, resolved, out error)) return false;
+
+        // The trail the runtime writes about the agent must not be an input to the agent:
+        // reading it lets a prompt leak or rewrite its own history.
+        var auditDir = Path.Combine(Workspace.Root, ".haoyue", "audit");
+        if (PathGuard.IsInside(auditDir, resolved))
+        {
+            error = $"Refusing to read {resolved}: the audit trail belongs to the user, not to the agent.";
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Resolves a path for file-MUTATING tools and enforces the workspace boundary:
     /// the result must stay inside the workspace root, and well-known sensitive
     /// targets (.git internals, .env secrets, the bash audit log) are rejected even
@@ -59,13 +81,8 @@ public sealed class ToolContext
         resolved = ResolvePath(path);
         error = null;
 
-        var root = Path.GetFullPath(Workspace.IsGlobal ? Directory.GetCurrentDirectory() : Workspace.Root)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var normalized = resolved.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var inRoot = normalized.Equals(root, comparison)
-            || normalized.StartsWith(root + Path.DirectorySeparatorChar, comparison);
-        if (!inRoot)
+        var root = PathGuard.WorkspaceRoot(Workspace);
+        if (!PathGuard.IsInside(root, resolved))
         {
             error = $"Path escapes the workspace: {resolved}. File writes are restricted to the workspace root ({root}). "
                 + "Write the file inside the workspace, or ask the user to run a shell command for anything outside it.";

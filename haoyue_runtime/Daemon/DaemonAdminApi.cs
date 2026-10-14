@@ -122,6 +122,10 @@ internal sealed class DaemonAdminApi(
         ["diskSchemaVersion"] = runtime.ConfigStore.Config.SchemaVersion,
         ["validationWarnings"] = new JsonArray(
             runtime.ConfigStore.ValidationWarnings.Select(w => (JsonNode)w).ToArray()),
+        // 凭据告警：明文 Key 迁移失败时必须由界面显式呈现，而不是静默留在配置文件里。
+        ["secretWarnings"] = new JsonArray(
+            runtime.ConfigStore.SecretWarnings.Select(w => (JsonNode)w).ToArray()),
+        ["secretStorage"] = Haoyue.Runtime.Secrets.SecretResolver.StorageScheme,
     }.ToJsonString();
 
     public string RebuildConfigAndDatabase()
@@ -608,7 +612,19 @@ internal sealed class DaemonAdminApi(
         if (parameters["clearApiKey"]?.GetValue<bool>() == true)
             provider.ApiKey = null;
         else if (OptionalString(parameters, "apiKey") is { } apiKey)
-            provider.ApiKey = SecretResolver.Encrypt($"provider/{provider.Id}", apiKey);
+        {
+            // 加密不可用（文件库钥缺失/损坏）时拒绝保存：把明文写进配置文件是最坏结果。
+            try
+            {
+                provider.ApiKey = SecretResolver.Encrypt($"provider/{provider.Id}", apiKey);
+            }
+            catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException
+                                           or InvalidOperationException or IOException or NotSupportedException)
+            {
+                throw new DaemonRequestException(
+                    $"当前平台无法安全保存 API Key（{ex.Message}），配置未改动。存储方案：{SecretResolver.StorageScheme}。");
+            }
+        }
 
         if (parameters["modelDetails"] is JsonArray modelDetails)
         {
@@ -2726,7 +2742,8 @@ internal sealed class DaemonAdminApi(
         ["name"] = provider.DisplayName,
         ["kind"] = provider.Kind,
         ["baseUrl"] = provider.BaseUrl,
-        ["apiKey"] = provider.ResolveApiKey(),
+        // 明文 Key 不跨管道回传：持 token 的同用户进程都能读 provider.list。
+        // 客户端只据 apiKeyConfigured 判断状态，保存时按「未改动即不覆盖」处理。
         ["apiKeyConfigured"] = !string.IsNullOrWhiteSpace(provider.ResolveApiKey()),
         ["models"] = Strings(provider.Models.Select(model => model.Id)),
         ["modelDetails"] = new JsonArray(provider.Models.Select(m => (JsonNode)new JsonObject

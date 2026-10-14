@@ -18,10 +18,14 @@ namespace Haoyue.Runtime.Secrets;
 /// Schemes:
 ///   secret:dpapi:&lt;base64&gt;   Windows DPAPI (CurrentUser scope; same user, same machine).
 ///   secret:keyring:&lt;id&gt;    freedesktop Secret Service via the secret-tool CLI (Linux).
-///   secret:file:&lt;id&gt;      AES-GCM entry in ~/.haoyue/secrets.json (Linux fallback when no
-///                          keyring is available; file mode 0600, key derived from the
-///                          machine identifier — documented as weaker than DPAPI).
+///   secret:file:&lt;id&gt;      AES-GCM entry in ~/.haoyue/secrets.json (macOS, Linux without a
+///                          keyring, and any other platform; file mode 0600, key derived from
+///                          the machine identifier or a generated ~/.haoyue/store.key).
 ///   (no prefix)              plaintext passthrough — legacy configs keep working unchanged.
+///
+/// There is deliberately no platform on which <see cref="Encrypt"/> answers with plaintext:
+/// a store that cannot encrypt must fail loudly, because a silent plaintext return both
+/// writes the credential to disk and makes the startup migration look like a no-op.
 /// </summary>
 public static class SecretResolver
 {
@@ -70,8 +74,9 @@ public static class SecretResolver
 
     /// <summary>
     /// Encrypts a credential for storage. On Windows this is DPAPI; on Linux the
-    /// Secret Service when secret-tool is available, otherwise the AES-GCM file
-    /// store — credentials are never silently downgraded to plaintext on Linux.
+    /// Secret Service when secret-tool is available; everywhere else the AES-GCM
+    /// file store. Credentials are never silently downgraded to plaintext — a store
+    /// that cannot encrypt throws, and callers must report that instead of saving.
     /// </summary>
     public static string Encrypt(string purposeId, string value)
     {
@@ -81,15 +86,20 @@ public static class SecretResolver
         if (OperatingSystem.IsWindows())
             return DpapiScheme + DpapiProtect(value);
 
-        if (OperatingSystem.IsLinux())
-        {
-            if (KeyringStore(purposeId, value))
-                return KeyringScheme + purposeId;
-            return FileScheme + FileStoreStore(purposeId, value);
-        }
+        if (OperatingSystem.IsLinux() && KeyringStore(purposeId, value))
+            return KeyringScheme + purposeId;
 
-        return value;
+        return FileScheme + FileStoreStore(purposeId, value);
     }
+
+    /// <summary>
+    /// 本平台新存凭证会落到哪个方案（dpapi / keyring / file）。只用于状态与告警文案，
+    /// 解析端始终按值自带的前缀分派，所以这里的变化不影响已存值的可读性。
+    /// </summary>
+    public static string StorageScheme =>
+        OperatingSystem.IsWindows() ? "dpapi"
+        : OperatingSystem.IsLinux() && FindSecretTool() is not null ? "keyring"
+        : "file";
 
     // ---- Windows DPAPI (crypt32) ----
 
@@ -233,18 +243,22 @@ public static class SecretResolver
         return null;
     }
 
-    // ---- AES-GCM file store (Linux fallback when no Secret Service is available) ----
+    // ---- AES-GCM file store (macOS, and Linux when no Secret Service is available) ----
     //
-    // Entries live in ~/.haoyue/secrets.json (mode 0600 on Linux) as
+    // Entries live in ~/.haoyue/secrets.json (mode 0600) as
     // { "version": 1, "entries": { "<id>": "<base64 nonce||ciphertext||tag>" } }.
     // The key is HKDF-SHA256 over the machine identifier (/etc/machine-id, Windows
-    // MachineGuid), so a copied secrets.json is useless on another machine. The
-    // entry id is bound as AES-GCM associated data, preventing entry swaps. This
-    // is deliberately documented as weaker than DPAPI: /etc/machine-id is
-    // world-readable, so root or same-user read access to both files suffices
-    // to recover credentials.
+    // MachineGuid) or, where a platform exposes neither, over a random key generated
+    // once into ~/.haoyue/store.key — so a copied secrets.json is useless on another
+    // machine. The entry id is bound as AES-GCM associated data, preventing entry
+    // swaps. This is deliberately documented as weaker than DPAPI: same-user read
+    // access to both files suffices to recover credentials. On macOS the native
+    // alternative (login keychain via the `security` CLI) is deferred because that
+    // tool only accepts the secret on argv, where other users could read it from the
+    // process list — a weaker trade than the file store.
 
     private const string SecretsFileName = "secrets.json";
+    private const string StoreKeyFileName = "store.key";
     private const string SecretsKdfSalt = "haoyue-mcp-secrets-v1";
     private const string SecretsKdfInfo = "mcp-credential";
     private const int FileKeyByteCount = 32;
@@ -257,6 +271,14 @@ public static class SecretResolver
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".haoyue", SecretsFileName);
 
     /// <summary>
+    /// 随机库钥的位置：平台拿不到机器标识（macOS 的 IOPlatformUUID 需要额外进程，其它
+    /// 平台各不相同）时，用它派生文件库密钥。这把钥只生成一次并复用——读不到或内容损坏
+    /// 时明确失败，而不是换一把新钥把已存凭证全变成不可解析。
+    /// </summary>
+    internal static string StoreKeyPath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".haoyue", StoreKeyFileName);
+
+    /// <summary>
     /// Stores a credential in the file store and returns the entry id for the
     /// secret:file: prefix. IO or key-derivation failures throw — saving must
     /// fail loudly rather than silently storing plaintext (hard constraint).
@@ -265,7 +287,8 @@ public static class SecretResolver
     {
         var machineId = MachineIdentifierBytes()
             ?? throw new InvalidOperationException(
-                "No machine identifier is available for the file credential store on this platform.");
+                "The file credential store has no usable key on this platform: neither a machine " +
+                $"identifier nor {StoreKeyPath()} is available. The credential was not saved.");
         var path = SecretsFilePath();
         JsonObject root;
         try
@@ -287,7 +310,7 @@ public static class SecretResolver
         root["version"] = 1;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, root.ToJsonString(SecretsJsonOptions));
-        if (OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         return id;
     }
@@ -369,7 +392,7 @@ public static class SecretResolver
         {
             var guid = Registry.GetValue(
                 @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography", "MachineGuid", null) as string;
-            return string.IsNullOrEmpty(guid) ? null : Encoding.UTF8.GetBytes(guid);
+            return string.IsNullOrEmpty(guid) ? PersistentStoreKeyBytes() : Encoding.UTF8.GetBytes(guid);
         }
         if (OperatingSystem.IsLinux())
         {
@@ -380,6 +403,37 @@ public static class SecretResolver
                 if (id.Length > 0) return Encoding.UTF8.GetBytes(id);
             }
         }
-        return null;
+        return PersistentStoreKeyBytes();
+    }
+
+    /// <summary>
+    /// 生成并复用 ~/.haoyue/store.key（0600）里的随机库钥。已存在的文件内容损坏时返回
+    /// null：重建一把新钥会让所有已存条目解不开，不如让写入明确失败并由调用方告警。
+    /// </summary>
+    internal static byte[]? PersistentStoreKeyBytes()
+    {
+        var path = StoreKeyPath();
+        try
+        {
+            if (File.Exists(path))
+            {
+                var stored = File.ReadAllText(path).Trim();
+                if (stored.Length == 0) return null;
+                var key = Convert.FromBase64String(stored);
+                return key.Length == FileKeyByteCount ? key : null;
+            }
+
+            var fresh = RandomNumberGenerator.GetBytes(FileKeyByteCount);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, Convert.ToBase64String(fresh));
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            return fresh;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       || ex is FormatException or CryptographicException)
+        {
+            return null;
+        }
     }
 }

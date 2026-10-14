@@ -267,6 +267,12 @@ public sealed class AgentConfig
     /// </summary>
     public int DelegationMaxDepth { get; set; } = 1;
     /// <summary>
+    /// 读侧工作区边界之外的补充可读根目录（绝对路径）。文件读取工具默认只能访问工作区
+    /// 内内容；把目录加入这里即表示用户授权智能体读取该目录（凭据文件仍被排除）。
+    /// 全局会话额外隐式允许用户主目录，无需配置。
+    /// </summary>
+    public List<string> ExtraReadableRoots { get; set; } = [];
+    /// <summary>
     /// 工具执行强制策略（运行时闸门，先于工具执行评估，模型无法绕过）。
     /// 与提示层的 system/permissions 不同，本策略在参数解析后、工具调用前强制执行。
     /// </summary>

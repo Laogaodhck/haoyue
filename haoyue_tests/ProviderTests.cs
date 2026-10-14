@@ -391,17 +391,19 @@ public sealed class ProviderTests : IDisposable
         {
             var bytes1 = System.Text.Encoding.UTF8.GetBytes("data: hello\n\n");
             await pipe.Writer.WriteAsync(bytes1);
-            await Task.Delay(80);
+            await Task.Delay(600);
             var ping = System.Text.Encoding.UTF8.GetBytes(": keep-alive\n\n");
             await pipe.Writer.WriteAsync(ping);
-            await Task.Delay(80);
+            await Task.Delay(600);
             var bytes2 = System.Text.Encoding.UTF8.GetBytes("data: world\n\n");
             await pipe.Writer.WriteAsync(bytes2);
             pipe.Writer.Complete();
         });
 
         var messages = new List<string>();
-        await foreach (var msg in SseReader.ReadAsync(stream, TimeSpan.FromMilliseconds(120)))
+        // Each gap stays inside the 1s window while their sum exceeds it, so the
+        // stream only survives if the comment frame re-arms the watchdog.
+        await foreach (var msg in SseReader.ReadAsync(stream, TimeSpan.FromSeconds(1)))
         {
             messages.Add(msg.Data);
         }

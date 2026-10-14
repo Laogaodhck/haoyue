@@ -126,6 +126,52 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Broadcast_WithDetails_ReachesEveryConnectedClient()
+    {
+        // 回归：JsonNode 只允许一个父节点。广播把同一个 details 引用挂给每个连接时，
+        // 第二个客户端写入即抛「The node already has a parent」，事件泵异常会在
+        // DisposeAsync 处重掀掉 daemon——桌面端与 CLI 同时在线时用户侧就是「发消息没回复」。
+        var workspace = CreateWorkspace("broadcast");
+        var configStore = new ConfigStore(
+            Path.Combine(_tempDir, "config.json"),
+            Path.Combine(_tempDir, "state.json"));
+        _runtime = HaoyueRuntime.Create(
+            workspace, configStore, Path.Combine(_tempDir, "haoyue.db"),
+            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
+        var server = new DaemonServer(
+            _runtime,
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("后台完成", false, null)),
+            new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-state")),
+            null);
+        _asyncDisposables.Add(server);
+        var first = await OpenConnectionAsync(server);
+        var second = await OpenConnectionAsync(server);
+
+        // 连接注册与广播存在竞态：先用 ping 往返确认两个客户端都已进入事件泵，
+        // 否则第二个连接可能在广播发生后才注册，回归就测不到它。
+        await second.SendAsync(90, "ping");
+        await second.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 90 && r["event"]!.GetValue<string>() == "pong");
+
+        await first.SendAsync(1, "task.start", new JsonObject { ["message"] = "跑后台任务" });
+
+        async Task<JsonObject> ReadBroadcast(TestConnection connection)
+        {
+            while (true)
+            {
+                var frame = await connection.ReadAsync();
+                if (frame["event"]?.GetValue<string>() == "task.updated") return frame;
+            }
+        }
+
+        foreach (var connection in new[] { first, second })
+        {
+            var broadcast = await ReadBroadcast(connection);
+            Assert.Equal("completed", broadcast["details"]!["status"]!.GetValue<string>());
+        }
+    }
+
+    [Fact]
     public async Task TaskGet_UnknownId_ReturnsError()
     {
         var connection = await StartServerAsync(
@@ -1806,6 +1852,15 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var server = new DaemonServer(_runtime, runTurn, globalWorkspace, handshakeToken);
         _asyncDisposables.Add(server);
 
+        return await OpenConnectionAsync(server);
+    }
+
+    /// <summary>
+    /// 在一个既有 daemon 上再开一条命名管道连接。广播类回归必须让 ≥2 个客户端同时在线，
+    /// 单连接的 <see cref="StartServerAsync"/> 覆盖不到「写给第二个客户端」这条路径。
+    /// </summary>
+    private async Task<TestConnection> OpenConnectionAsync(DaemonServer server)
+    {
         var pipeName = $"haoyue-test-{Guid.NewGuid():N}";
         var serverPipe = new NamedPipeServerStream(
             pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);

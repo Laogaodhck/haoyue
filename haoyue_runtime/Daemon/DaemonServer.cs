@@ -2247,6 +2247,12 @@ public sealed class DaemonServer : IAsyncDisposable
             {
                 // The client disconnected while the broadcast was in flight.
             }
+            catch (Exception ex)
+            {
+                // 事件泵不能因为单个客户端写失败而结束：泵一死，异常会在 DisposeAsync
+                // 处重掀掉 daemon，用户侧就是「发消息没有回复」。
+                Console.Error.WriteLine($"Daemon broadcast failed ({eventName}): {ex.Message}");
+            }
         }
     }
 
@@ -2897,7 +2903,9 @@ public sealed class DaemonServer : IAsyncDisposable
             details = new JsonObject { ["code"] = code.ToWire() };
         var payload = new JsonObject { ["id"] = id, ["event"] = eventName, ["data"] = data };
         if (!string.IsNullOrWhiteSpace(sessionId)) payload["sessionId"] = sessionId;
-        if (details is not null) payload["details"] = details;
+        // JsonNode 只允许一个父节点：广播会把同一个 details 写给每个连接，直接挂引用
+        // 会在第二个客户端上抛「The node already has a parent」并掀掉整个事件泵。
+        if (details is not null) payload["details"] = details.DeepClone();
         await writerGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {

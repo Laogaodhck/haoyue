@@ -48,3 +48,4 @@
 | [ADR-20261007-evolution-signals.md](ADR-20261007-evolution-signals.md) | 进化引擎信号链：事件日志 + DefectAggregator 聚合 | 已接受 |
 | [ADR-20261007-contract-first.md](ADR-20261007-contract-first.md) | Contract First：跨语言契约单源与快照生成链 | 已接受 |
 | [ADR-20261007-config-schema-and-version.md](ADR-20261007-config-schema-and-version.md) | 统一配置源 Schema 管理器 + 版本契约 | 已接受 |
+| [ADR-20261012-connectors-over-mcp.md](ADR-20261012-connectors-over-mcp.md) | 连接器生态以 MCP 为分发格式：连接器包规范 + 随包单文件本地 MCP 服务器 | 已采纳（随 S5 落地） |

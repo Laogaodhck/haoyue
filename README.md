@@ -33,6 +33,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 
 - **清洁架构**：`haoyue_runtime` 为核心，CLI 与桌面端是它的两个前端，关注点严格分离
 - **常驻守护进程**：daemon 经 Named Pipe / Unix Socket 暴露 JSON-RPC，桌面端与 CLI 共享同一运行时、HTTP 连接池、熔断器与文件锁协调器
+- **广播与可观测**：12 个流式事件、6 个终态事件、8 个广播事件（`task.updated`、`mcp.updated`、`schedule.updated` / `schedule.upcoming`、`evolution.reflected`、`memory.consolidated`、`turn.interrupted`、`model.load.progress`）；广播为每个连接复制一份 `details`，单个客户端写失败只记日志、不掀事件泵。桌面端把自管 Runtime 的全部输出与退出码落盘 `<userData>/logs/daemon.log`——「没有回复」先看这个文件，诊断链路见 [回合无输出诊断报告](haoyue_doc/本地模型回合无输出诊断与修复-2026-10-14.md)
 - **安全接入**：启动时生成随机握手 token（`~/.haoyue/daemon.token`，仅当前用户可读），客户端首条消息必须携带 token 认证，未认证连接立即拒绝
 - **事件溯源**：关键事件（轮次、工具调用、用量、诊断、进化信号）写入 SQLite 事件日志（保留 5000 条），`events.recent` 可查询重放，重启不丢失
 - **四层扩展**：Tools、Skills、Prompts、MCP（Model Context Protocol）插件机制
@@ -89,7 +90,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 📋 后台任务队列
 
 - **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度
-- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），117 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式供 CI 校验产物与契约一致——见 [SDK README](sdks/typescript/README.md)
+- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），119 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式供 CI 校验产物与契约一致——见 [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use（电脑操作智能体）
 
@@ -143,7 +144,7 @@ haoyue doctor       # 健康检查
 ```bash
 git clone https://github.com/Laogaodhck/haoyue.git
 cd haoyue
-dotnet build
+dotnet build Haoyue.slnx -c Release   # 与 CI 一致：解决方案级 Release 构建
 
 dotnet run --project haoyue_cli              # 交互式聊天
 dotnet run --project haoyue_cli -- --continue  # 继续上一个会话
@@ -273,7 +274,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（873 用例，覆盖率门槛 ≥70%）
+├── haoyue_tests/         # 运行时单元测试（881 用例，覆盖率门槛 ≥70%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
@@ -281,8 +282,17 @@ Haoyue/
 ├── sdks/                 # 官方嵌入 SDK（TypeScript 客户端，由契约单源生成）
 ├── tools/                # 仓库工具脚本（generate_ts_sdk.py 契约 → TS SDK 生成器）
 ├── benchmarks/           # 评测 harness：本地模型评测（流畅性/速度/自修正/视觉）+ agent-eval Agent 级端到端评测
+├── marketplace/          # 技能与连接器市场站点（纯静态，data/*.json 快照由护栏测试与代码单源对齐）
 ├── models/               # 本地 GGUF 模型（开发环境，不入库）
-└── packaging/            # 打包脚本与配置
+├── packaging/            # 打包脚本与配置
+├── haoyue logo/          # 应用图标与 Logo 源文件
+├── haoyue_screenshot/    # 文档截图素材
+├── .github/workflows/    # CI（构建 + 测试 + 覆盖率门槛）、Release（发版产物）、website（文档站部署）
+├── Haoyue.slnx           # .NET 解决方案（构建与测试入口，CI 用 `dotnet build/test Haoyue.slnx -c Release`）
+├── build.py / build.cmd  # 桌面端一键全量打包：自增 patch 版本 → 跑全量测试 → electron-builder，任一环节失败回滚版本源
+├── version.py            # 统一版本号管理（CLI 横幅 / 桌面 package.json / npm 快照三处同步与 `check` 校验）
+├── publish_npm.py        # CLI → npm 打包与发布（--rids 多平台、--release-assets 生成分发归档）
+└── RELEASING.md          # 发布手册（tag 驱动流水线、产物清单、故障排查）
 ```
 
 ## ⚙️ 配置
@@ -455,11 +465,10 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test haoyue_tests      # 运行时测试（873 用例）
-dotnet test haoyue_cli_tests  # CLI 测试
+dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 881 / haoyue_cli_tests 13 用例）
 
 # 桌面端（需先 pnpm install）
-cd haoyue_desktop && pnpm test && pnpm typecheck
+cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest 160 用例（15 个文件）
 ```
 
 haoyue_tests 带 70% 行覆盖率硬门槛（`coverage.runsettings`），契约快照漂移、Runbook 章节齐全性均有护栏测试强制。
@@ -519,7 +528,8 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - 模型加载模块增强实施方案（逐模型加载配置、自动重试与 CPU 降级、加载后推理自检）
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 881+13+160、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）
 - ProviderManager 并发与参数审查
 
 重大技术选型以 [ADR（架构决策记录）](haoyue_doc/adr/README.md) 文档化（已回填 8 篇），每个内置工具与官方技能配有 [Runbook 操作手册](haoyue_doc/runbooks/README.md)（护栏测试强制）。

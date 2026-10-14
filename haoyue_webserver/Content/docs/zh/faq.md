@@ -21,10 +21,11 @@ Desktop 会自动尝试连接和重连，不需要手动运行 Runtime。从源�
 
 先看 `<userData>\logs\daemon.log`（打包版即 `%APPDATA%\haoyue-desktop\logs\daemon.log`）。Desktop 会把自管 Runtime 的输出与错误全部写进这个文件，并在子进程退出时记录退出码与信号——"没有回复"几乎总是 Runtime 已经退出并被自动重启，日志末尾就是原因。
 
-本地 GGUF 模型的两个常见原因已由 Runtime 处理：
+三个常见原因已由 Runtime 处理：
 
 1. 首条消息要等一到两分钟：权重是冷加载的。加载阶段与百分比现在会通过 `model.load.progress` 事件显示为"加载本地模型 N%"，只要这个数字在变化就说明加载正常，不是卡住。
 2. 后台记忆固化与用户回合抢显存：固化改为在有用户回合在飞时推迟 2 分钟重试，避免同时驻留两份权重把 Runtime 压到原生层崩溃。
+3. 桌面端与 CLI 同时连接时 Runtime 退出：带 details 的广播把同一个 JSON 节点挂给每个连接，而 `System.Text.Json` 不允许一个节点有两个父节点，第二个连接写入即抛异常并掀掉事件泵。现在每个连接各拿一份副本，单个客户端写失败也只写一行日志，不再拖垮整个 Runtime。
 
 若日志里反复出现显存不足，请在"模型与 Provider"换更小的量化档位，或改接远程 Provider。
 

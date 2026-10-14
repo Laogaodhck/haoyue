@@ -21,10 +21,11 @@ Desktop connects and reconnects automatically; users do not start the Runtime ma
 
 Start with `<userData>\logs\daemon.log` (`%APPDATA%\haoyue-desktop\logs\daemon.log` for the packaged app). Desktop writes everything the Runtime it spawns prints into that file and records the exit code and signal when the child process dies. "No reply" is almost always a Runtime that already exited and was restarted, and the tail of this log holds the reason.
 
-Two common local GGUF causes are now handled by the Runtime itself:
+Three common causes are now handled by the Runtime itself:
 
 1. The first message can take one to two minutes because the weights load cold. The phase and percentage now reach the client through the `model.load.progress` event and are shown as "loading local model N%", so a moving number means the load is progressing rather than stuck.
 2. Background memory consolidation no longer competes with a running turn: the tick is deferred by 2 minutes while a user turn is active, so two copies of the weights are never resident at once and the native layer is not pushed into an abort.
+3. A second client no longer takes the Runtime down. Broadcasts carrying `details` attached one shared JSON node to every connection, and `System.Text.Json` refuses a node with two parents, so the second write threw and killed the event pump. Each connection now receives its own copy, and a client that cannot be written to only costs a log line.
 
 If the log repeatedly shows exhausted VRAM, choose a smaller quantisation under “Settings → Models & Providers” or switch to a remote Provider.
 

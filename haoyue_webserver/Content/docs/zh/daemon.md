@@ -66,7 +66,7 @@ Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放
 
 流式事件包括 `thinking`、`delta`、`steer`、`status`、`image_view`、`tool_start`、`tool_done` 和 `workflow`。`workflow` 的 `details` 含 `step`、`kind`（start/think/tool/verify/repair/compact/done/error）、`label` 与 `detail`，用于客户端统计当前 turn 的执行步数。`steer` 表示附加指导已经进入当前 turn 的上下文；`image_view` 的 `details.imageId` 指明模型正在查看哪张上传图片。终止事件包括 `done`、`cancelled` 和 `error`。
 
-Daemon 还会主动广播与任何请求无关的事件（`id` 为 0）：`schedule.updated`、`schedule.upcoming`、`task.updated`、`evolution.reflected`、`mcp.updated`、`turn.interrupted`、`memory.consolidated` 和 `model.load.progress`。`model.load.progress` 的 `details` 含 `model`、`phase`（Queued / Probing / Loading / Verifying / Projector / Ready / Failed）、`percent`（0..1）、`elapsedMs` 与 `estimatedRemainingMs`。本地 GGUF 权重的冷加载需要一到两分钟，客户端据此在首条消息上显示"加载本地模型 N%"，而不是让界面看起来毫无反应；进度通道覆盖对话回合里的懒加载，不只在 `model.preload` 时上报。
+Daemon 还会主动广播与任何请求无关的事件（`id` 为 0）：`schedule.updated`、`schedule.upcoming`、`task.updated`、`evolution.reflected`、`mcp.updated`、`turn.interrupted`、`memory.consolidated` 和 `model.load.progress`。`model.load.progress` 的 `details` 含 `model`、`phase`（Queued / Probing / Loading / Verifying / Projector / Ready / Failed）、`percent`（0..1）、`elapsedMs` 与 `estimatedRemainingMs`。本地 GGUF 权重的冷加载需要一到两分钟，客户端据此在首条消息上显示"加载本地模型 N%"，而不是让界面看起来毫无反应；进度通道覆盖对话回合里的懒加载，不只在 `model.preload` 时上报。广播会写给每一个已握手的连接，`details` 为每个连接各复制一份；某个客户端写入失败只会在 stderr 记一行，不会结束事件泵。
 
 ## 其他方法
 

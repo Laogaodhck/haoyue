@@ -18,7 +18,15 @@ public class McpManagerTests : IDisposable
     private static readonly JsonObject InitializeResult = new()
     {
         ["protocolVersion"] = "2024-11-05",
-        ["capabilities"] = new JsonObject(),
+        // MCP 规范：客户端只应请求服务器声明的能力（McpClient.DeclaresCapability 据此
+        // 跳过未声明能力的 list 请求，避免对沉默服务器烧满 60s 超时）。fixture 因此
+        // 必须声明本测试Responder实际应答的 prompts/resources/tools 能力。
+        ["capabilities"] = new JsonObject
+        {
+            ["tools"] = new JsonObject(),
+            ["prompts"] = new JsonObject(),
+            ["resources"] = new JsonObject(),
+        },
     };
 
     private static PromptRenderContext RenderContext() => new() { Variables = new Dictionary<string, string>() };

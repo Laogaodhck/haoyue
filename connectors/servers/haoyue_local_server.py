@@ -467,7 +467,13 @@ def main() -> int:
             _write({"jsonrpc": "2.0", "id": msg_id, "result": result})
         elif method == "ping":
             _write({"jsonrpc": "2.0", "id": msg_id, "result": {}})
-        # 通知（无 id）与其他方法：静默忽略。
+        elif msg_id is not None:
+            # 未知方法必须回错误而不是静默：客户端对未应答请求要等满 60s 超时
+            # （prompts/list + resources/list 两次超时曾让连接固定多花 120 秒）。
+            # 标准 -32601 让支持方按"服务器不提供该能力"立即降级。
+            _write({"jsonrpc": "2.0", "id": msg_id, "error": {
+                "code": -32601, "message": f"Method not supported: {method}"}})
+        # 通知（无 id）静默忽略。
     return 0
 
 

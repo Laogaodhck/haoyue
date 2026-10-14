@@ -19,6 +19,7 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonObject>> _pending = new();
     private long _nextId;
     private Task? _dispatchLoop;
+    private JsonObject? _serverCapabilities;
 
     public string ServerName => serverName;
 
@@ -27,12 +28,13 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
         await transport.StartAsync(ct).ConfigureAwait(false);
         _dispatchLoop = Task.Run(DispatchLoopAsync, CancellationToken.None);
 
-        await RequestAsync("initialize", new JsonObject
+        var init = await RequestAsync("initialize", new JsonObject
         {
             ["protocolVersion"] = ProtocolVersion,
             ["capabilities"] = new JsonObject(),
             ["clientInfo"] = new JsonObject { ["name"] = "haoyue", ["version"] = "1.0.0" },
         }, ct).ConfigureAwait(false);
+        _serverCapabilities = init["capabilities"] as JsonObject;
 
         try
         {
@@ -48,6 +50,15 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
             // request will surface the enriched disconnect reason instead.
         }
     }
+
+    /// <summary>
+    /// True when the server's initialize response declares the given MCP capability
+    /// (prompts / resources / tools). Servers that omit a capability are not required
+    /// to answer its list request at all — asking anyway used to burn a full 60s
+    /// request timeout against silent servers before the fail-soft degradation.
+    /// </summary>
+    private bool DeclaresCapability(string name) =>
+        _serverCapabilities is null || _serverCapabilities[name] is not null;
 
     public async Task<IReadOnlyList<McpTool>> ListToolsAsync(CancellationToken ct)
     {
@@ -84,6 +95,7 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
 
     public async Task<IReadOnlyList<McpPrompt>> ListPromptsAsync(CancellationToken ct)
     {
+        if (!DeclaresCapability("prompts")) return []; // server declared no prompt support
         try
         {
             var result = await RequestAsync("prompts/list", new JsonObject(), ct).ConfigureAwait(false);
@@ -120,6 +132,7 @@ public sealed class McpClient(string serverName, IMcpTransport transport) : IAsy
 
     public async Task<IReadOnlyList<McpResource>> ListResourcesAsync(CancellationToken ct)
     {
+        if (!DeclaresCapability("resources")) return []; // server declared no resource support
         try
         {
             var result = await RequestAsync("resources/list", new JsonObject(), ct).ConfigureAwait(false);

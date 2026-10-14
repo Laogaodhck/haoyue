@@ -1628,6 +1628,16 @@ def main() -> int:
             rid: str = meta["rid"]
             runtime_stage: Path = meta["runtime_stage"]
             with console.status(f"[bold blue]正在编译与发布 .NET 自包含 Runtime ({cur_platform} {rid})...[/bold blue]", spinner="dots"):
+                # 本地推理原生后端：Windows 平台启用 CUDA12（NVIDIA 机器 GPU 卸载，
+                # 25k token 级系统提示的 prefill 从 CPU 的数分钟降到秒级）；其余平台
+                # 维持 csproj 默认的 CPU 后端。
+                publish_props = [
+                    "-p:PublishSingleFile=true",
+                    "-p:DebugType=None",
+                    "-p:DebugSymbols=false",
+                ]
+                if cur_platform == PLATFORM_WINDOWS:
+                    publish_props.append("-p:LlamaBackend=Cuda12")
                 run(
                     dotnet,
                     [
@@ -1639,9 +1649,7 @@ def main() -> int:
                         rid,
                         "--self-contained",
                         "true",
-                        "-p:PublishSingleFile=true",
-                        "-p:DebugType=None",
-                        "-p:DebugSymbols=false",
+                        *publish_props,
                         "-o",
                         str(runtime_stage),
                     ],

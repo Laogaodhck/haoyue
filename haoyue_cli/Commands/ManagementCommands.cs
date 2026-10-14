@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Diagnostics;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Daemon;
@@ -270,7 +271,10 @@ public static class McpCommands
         test.SetAction(async (_, ct) =>
         {
             await using var rt = CliHost.CreateRuntime();
-            var statuses = await rt.ConnectMcpAsync(ct);
+            var started = Stopwatch.StartNew();
+            var progress = new Progress<string>(text =>
+                AnsiConsole.MarkupLineInterpolated($"[gray]{started.Elapsed.TotalSeconds,6:F1}s  {Markup.Escape(text)}[/]"));
+            var statuses = await rt.Mcp.ConnectAllAsync(rt.Workspace, ct, progress);
             if (statuses.Count == 0)
             {
                 AnsiConsole.MarkupLine("[gray]No MCP servers configured.[/]");

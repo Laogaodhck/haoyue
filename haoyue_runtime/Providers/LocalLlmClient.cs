@@ -40,6 +40,33 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// <summary>解码速率低于该值（tok/s）且开启思考时，向上层附缩短思考预算的提示（P5）。</summary>
     private const double SlowDecodeHintTokensPerSecond = 10;
 
+    private static int _gpuBackendWarned;
+
+    /// <summary>
+    /// GPU 后端能力诊断：配置要求把权重卸载到显存（GpuLayerCount > 0），但当前加载的
+    /// llama 原生后端不支持 GPU offload（典型：用 LLamaSharp.Backend.Cpu 构建）时，
+    /// 推理实际全程走 CPU——大提示 prefill 会慢两个数量级，用户侧表现为长时间停在
+    /// "正在准备"。进程生命周期内只警告一次（stderr；daemon 与 CLI 均捕获/透传）。
+    /// </summary>
+    private static void WarnGpuBackendMissingOnce(string providerId, string modelId, int requestedGpuLayers)
+    {
+        if (requestedGpuLayers <= 0) return;
+        if (NativeApi.llama_supports_gpu_offload()) return;
+        if (Interlocked.Exchange(ref _gpuBackendWarned, 1) == 1) return;
+        Console.Error.WriteLine(
+            $"[haoyue] WARNING: provider '{providerId}' requests GpuLayers={requestedGpuLayers} for '{modelId}',"
+            + " but the loaded llama native backend does not support GPU offload"
+            + " (CPU build of LLamaSharp.Backend). Inference will run fully on CPU and large prompts"
+            + " will prefill extremely slowly. Rebuild with -p:LlamaBackend=Cuda12 on NVIDIA machines.");
+    }
+
+    /// <summary>
+    /// 首输出超时（15 分钟）：覆盖权重加载 + 长提示预填充——CPU 后端上 25k token 级
+    /// 系统提示的 prefill 实测上限约 14 分钟，GPU 后端为秒级。没有这道兜底时，加载
+    /// 卡死或极端慢的 prefill 会让回合永远停在"正在准备"而无任何终态。
+    /// </summary>
+    internal static readonly TimeSpan FirstOutputTimeout = TimeSpan.FromMinutes(15);
+
     /// <summary>
     /// 计算本请求的自适应档位。仅在「自动」语义下生效（AutoOptimize 且提供商级未显式
     /// 配置 GpuLayers）；模型形状来自 GGUF header + 文件大小（经元数据缓存，重复请求
@@ -167,7 +194,11 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             var attempt = model == request.Model ? request : request with { Model = model };
             var streamed = false;
             var failed = false;
-            var enumerator = StreamOnceAsync(attempt, ct).GetAsyncEnumerator(ct);
+            // 首输出超时闸门：只约束第一个事件之前（权重加载 + prefill）的窗口，
+            // 拿到第一个事件后解除——生成阶段逐 token 快速产出，不需要整体限时。
+            using var firstOutputGate = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var enumerator = StreamOnceAsync(attempt, firstOutputGate.Token).GetAsyncEnumerator(ct);
+            var awaitingFirstOutput = true;
             try
             {
                 while (true)
@@ -175,7 +206,24 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                     bool moved;
                     try
                     {
-                        moved = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                        if (awaitingFirstOutput)
+                        {
+                            firstOutputGate.CancelAfter(FirstOutputTimeout);
+                            moved = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                            firstOutputGate.CancelAfter(Timeout.InfiniteTimeSpan);
+                            awaitingFirstOutput = false;
+                        }
+                        else
+                        {
+                            moved = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException) when (awaitingFirstOutput && !ct.IsCancellationRequested)
+                    {
+                        throw new LlmException(
+                            $"本地模型 {model.Id} 在 {FirstOutputTimeout.TotalMinutes:F0} 分钟内未产出任何输出"
+                            + "（权重加载或长提示预填充超时）。请改用更小的模型，或确认已启用 CUDA 后端构建。",
+                            retryable: false);
                     }
                     catch (LlmException ex) when (hasNext && !streamed)
                     {
@@ -220,8 +268,15 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         // mmproj 始终参与解析与加载签名（即使本轮纯文本），避免图片轮/文本轮交替时
         // 签名漂移导致权重反复重载。解析经元数据缓存（目录 mtime 键），重复请求
         // 不再枚举模型目录。
-        var mmprojPath = cache.Metadata.ResolveMmproj(
-            LocalModels.ResolveDirectory(request.Provider.ModelsDirectory), request.Model.MmprojPath);
+        // 目录扫描的自动匹配只对声明视觉能力的模型生效：models 目录里常驻着为某个
+        // 多模态模型准备的投影器（如 gemma 的 mmproj），纯文本模型若也被自动配上，
+        // 会白白加载近 1GB 的无关投影器（读盘 + tensor 解析）再因 n_embd 不匹配
+        // 丢弃，冷启动凭空多出数十秒；显式配置的 MmprojPath 仍然无条件尊重。
+        var mmprojPath = string.IsNullOrWhiteSpace(request.Model.MmprojPath)
+            && !request.Model.Capabilities.Vision
+                ? null
+                : cache.Metadata.ResolveMmproj(
+                    LocalModels.ResolveDirectory(request.Provider.ModelsDirectory), request.Model.MmprojPath);
 
         // 自适应档位（P3）：自动语义下按显存预算选档；签名携带档位身份，调档即走既有重载通道。
         var tier = TierFor(request.Provider, request.Model, path);
@@ -235,6 +290,8 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         var weights = lease.Weights;
 
         var (contextParams, signature) = BuildContextParams(path, request.Model, request.Provider, weights, tier: tier);
+        WarnGpuBackendMissingOnce(request.Provider.Id, request.Model.Id,
+            BuildLoadParams(path, request.Provider, request.Model, tier)(false).GpuLayerCount);
         string? marker = lease.Mtmd is null ? null : NativeApi.MtmdDefaultMarker();
         // 思考默认值：模型加载设置可覆盖每次请求的开关（配置页「思考」分区）。
         var thinkingEnabled = request.Model.Load?.EnableThinking ?? request.EnableThinking;
@@ -246,6 +303,14 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         var useReuse = request.Provider.LocalPrefixReuse && cache.SupportsPrefixReuse;
         if (useReuse && prompt.Length > LongDocumentChars && Tuner.LastCacheHitRate < 0.05)
             useReuse = false;
+        if (useReuse && IsHybridRecurrentState(cache.Metadata.Header(path).Architecture))
+        {
+            // 混合循环架构（Mamba2/hybrid：nemotron_h、jamba、falcon-h1 等）的 conv/ssm
+            // 状态无法按 token 区间删除或平移，KV 前缀复用的 MemorySequenceRemove 会让
+            // 循环状态与 KV 失配，第二轮调用报 InvalidInputBatch。这类模型一律走无状态
+            // 路径——GPU 全量 prefill 25k token 也只需数秒。
+            useReuse = false;
+        }
 
         var meter = new InferenceMeter(prefixReuse: useReuse, multimodal: images.Count > 0);
         IAsyncEnumerable<LlmStreamEvent> stream;
@@ -585,6 +650,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             while (common < limit && tokens[common] == history[common]) common++;
             if (common >= tokens.Count)
                 common = tokens.Count - 1; // always decode ≥1 token so sampling sees fresh logits
+            var reused = common > 0;
             if (common < history.Count)
             {
                 if (context.NativeHandle.MemoryCanShift)
@@ -602,6 +668,17 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             {
                 var (result, _, past) = await context.DecodeAsync(
                     tokens.GetRange(nPast, tokens.Count - nPast), LLamaSeqId.Zero, batch, nPast, ct);
+                if (result != DecodeResult.Ok && reused)
+                {
+                    // 复用状态错乱自愈：混合架构（Mamba2/hybrid，如 nemotron_h）的循环状态
+                    // 无法按 token 区间删除，MemorySequenceRemove 后 KV 与循环状态不一致，
+                    // llama_decode 会报 InvalidInputBatch。全清缓存按无状态路径重新 prefill
+                    // 一次——GPU 上 25k token 级提示也只要数秒，正确性优先于复用收益。
+                    context.NativeHandle.MemoryClear(true);
+                    history.Clear();
+                    common = 0;
+                    (result, _, past) = await context.DecodeAsync(tokens, LLamaSeqId.Zero, batch, 0, ct);
+                }
                 if (result != DecodeResult.Ok) throw new LLamaDecodeError(result);
                 history.AddRange(tokens.GetRange(common, tokens.Count - common));
                 nPast = past;
@@ -850,6 +927,19 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         "q8_0" => "q8_0",
         "q4_0" => "q4_0",
         _ => "none",
+    };
+
+    /// <summary>
+    /// 已知把注意力与循环状态（Mamba2/Ssm）混合在同一 memory 中的 GGUF 架构。这类架构
+    /// 的循环状态不支持 llama_memory 的按区间删除/平移（seq_remove/seq_shift），KV 前缀
+    /// 复用与上下文窗口溢出移位都不可用。名单按 GGUF general.architecture 字符串匹配，
+    /// 未知名架构保持复用启用（失败路径另有全清自愈兜底）。
+    /// </summary>
+    internal static bool IsHybridRecurrentState(string? architecture) => architecture is not null && architecture.ToLowerInvariant() switch
+    {
+        "nemotron_h" or "nemotron_h_moe" or "jamba" or "mamba" or "mamba2"
+        or "falcon_h1" or "plamo2" or "qwen3-next" or "granitehybrid" or "bailing-mamba" => true,
+        _ => false,
     };
 
     /// <summary>

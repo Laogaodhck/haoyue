@@ -2281,7 +2281,13 @@ public sealed class DaemonServer : IAsyncDisposable
             runtime.Prompts.SetWorkspaceRoot(workspace.IsGlobal ? null : workspace.PromptsDir);
             runtime.Skills.Attach(workspace);
             if (_useIsolatedTurnRuntime && runtime.Mcp.LoadServerConfigs(workspace).Count > 0)
-                await runtime.Mcp.ConnectAllAsync(workspace, turnCt).ConfigureAwait(false);
+            {
+                // MCP 连接是回合启动的主要慢环节（stdio 服务器进程冷启动 + 握手，即使
+                // 并行连接也可能持续数十秒）。把连接进度发布为 status 事件，前端在回合
+                // 受理帧之后能看到具体阶段，而不是一直停在"正在准备"。
+                var progress = new Progress<string>(text => runtime.Events.Publish(new StatusEvent(text)));
+                await runtime.Mcp.ConnectAllAsync(workspace, turnCt, progress).ConfigureAwait(false);
+            }
 
             // Crash-reconciliation hook: mutating steps update the in-memory journal
             // record (and rewrite the crash file) so a process death leaves not just a

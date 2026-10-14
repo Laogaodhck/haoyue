@@ -152,6 +152,9 @@ internal sealed class DaemonAdminApi(
         ["delegationEnabled"] = runtime.ConfigStore.Config.Agent.DelegationEnabled,
         ["visionModel"] = runtime.ConfigStore.Config.Agent.VisionModel ?? "",
         ["autoVerify"] = runtime.ConfigStore.Config.Agent.AutoVerify,
+        ["turnTokenBudget"] = runtime.ConfigStore.Config.Agent.TurnTokenBudget,
+        ["turnCostBudget"] = runtime.ConfigStore.Config.Agent.TurnCostBudget,
+        ["turnWallClockSeconds"] = runtime.ConfigStore.Config.Agent.TurnWallClockSeconds,
     }.ToJsonString();
 
     /// <summary>
@@ -171,6 +174,12 @@ internal sealed class DaemonAdminApi(
 
         if (parameters["autoVerify"] is JsonValue autoVerifyValue && autoVerifyValue.TryGetValue<bool>(out var autoVerify))
             agent.AutoVerify = autoVerify;
+
+        // 回合预算闸门：0 = 不限。上限与 ConfigSchema 登记一致，越界钳制而非报错——
+        // 界面把数字填大是「想更宽松」，不该因此拒绝整次保存。
+        agent.TurnTokenBudget = OptionalInt(parameters, "turnTokenBudget", agent.TurnTokenBudget, 0, 100_000_000);
+        agent.TurnWallClockSeconds = OptionalInt(parameters, "turnWallClockSeconds", agent.TurnWallClockSeconds, 0, 86_400);
+        agent.TurnCostBudget = OptionalDouble(parameters, "turnCostBudget", agent.TurnCostBudget, 0, 100_000);
 
         if (parameters["visionModel"] is JsonValue visionValue)
         {
@@ -193,6 +202,22 @@ internal sealed class DaemonAdminApi(
 
         runtime.ConfigStore.Save();
         return GetAgentConfig();
+    }
+
+    private static int OptionalInt(JsonObject parameters, string key, int current, int min, int max)
+    {
+        if (parameters[key] is not JsonValue value) return current;
+        if (!value.TryGetValue<int>(out var number))
+            throw new DaemonRequestException($"params.{key} must be an integer");
+        return Math.Clamp(number, min, max);
+    }
+
+    private static double OptionalDouble(JsonObject parameters, string key, double current, double min, double max)
+    {
+        if (parameters[key] is not JsonValue value) return current;
+        if (!value.TryGetValue<double>(out var number))
+            throw new DaemonRequestException($"params.{key} must be a number");
+        return Math.Clamp(number, min, max);
     }
 
     public string GetAdvancedConfig() => new JsonObject

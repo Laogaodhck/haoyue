@@ -23,6 +23,7 @@ import {
   extractModelError,
   fileBadgeText,
   fileExtClass,
+  finishReasonLabel,
   formatMessageTime,
   stripModelErrorBlock
 } from '../app-helpers'
@@ -53,6 +54,12 @@ const emit = defineEmits<{
 }>()
 
 const thinkingOpen = ref(false)
+// 模型没答完时给出明确文案（截断/拒答/空回答/超步数…）。error 卡片与「已手动停止」
+// 已有各自文案，这里不重复标注。
+const incompleteNote = computed(() =>
+  props.message.state === 'error' || props.message.interrupted
+    ? undefined
+    : finishReasonLabel(props.message.finishReason))
 const systemOpen = ref(false)
 const errorOpen = ref(false)
 const preview = ref<{ src: string; name: string } | null>(null)
@@ -326,6 +333,10 @@ function openFileLocation(path?: string): void {
           <span>{{ warning }}</span>
         </li>
       </ul>
+      <div v-if="incompleteNote" class="interrupted-note incomplete-note" role="status">
+        <CircleAlert :size="13" />
+        <span>{{ incompleteNote }}</span>
+      </div>
       <div v-if="streaming && (message.state === 'thinking' || message.state === 'streaming')"
         class="response-placeholder" aria-label="AI 正在思考">
         <span /><span /><span />
@@ -580,6 +591,11 @@ function openFileLocation(path?: string): void {
   background: color-mix(in srgb, var(--text-muted) 12%, transparent);
   font-size: 11.5px;
   user-select: none;
+}
+
+.incomplete-note {
+  color: var(--warning, #b36a20);
+  background: color-mix(in srgb, var(--warning, #b36a20) 12%, transparent);
 }
 
 .warning-notes {

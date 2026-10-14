@@ -2389,8 +2389,19 @@ public sealed class DaemonServer : IAsyncDisposable
                 // 回合失败的终态 error 也必须携带契约错误码（details 已有 undoableFiles 时合并）。
                 terminalDetails ??= new JsonObject();
                 terminalDetails["code"] = DaemonErrorCode.InternalError.ToWire();
-                await WriteAsync(writer, writerGate, id, "error", failure.Message, connectionCt, session.Header.Id, terminalDetails).ConfigureAwait(false);
             }
+
+            // 回合终态随帧下发：done/cancelled/error 三态之外，「模型没答完」（截断、拒答、
+            // 连续空回答、步数或预算烧光）过去一律报 done，界面把半截回答当完整回答显示。
+            terminalDetails ??= new JsonObject();
+            terminalDetails["finishReason"] = failure is not null
+                ? TurnFinishReason.Error
+                : result?.Cancelled == true
+                    ? TurnFinishReason.Cancelled
+                    : result?.FinishReason is { Length: > 0 } outcome ? outcome : TurnFinishReason.Stop;
+
+            if (failure is not null)
+                await WriteAsync(writer, writerGate, id, "error", failure.Message, connectionCt, session.Header.Id, terminalDetails).ConfigureAwait(false);
             else if (result!.Cancelled)
                 await WriteAsync(writer, writerGate, id, "cancelled", result.Text, connectionCt, session.Header.Id, terminalDetails).ConfigureAwait(false);
             else

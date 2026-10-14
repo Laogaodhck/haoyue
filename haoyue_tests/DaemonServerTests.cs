@@ -51,6 +51,20 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Chat_TerminalFrameCarriesTurnFinishReason()
+    {
+        // 半截回答（连接中断/截断/超步数）过去一律以 done 收尾，界面把不完整回答显示成
+        // 完整回答。终态帧必须自带 finishReason。
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("半截回答", false, null, TurnFinishReason.Interrupted)));
+
+        await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "hello" });
+        var done = await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "done");
+        Assert.Equal("interrupted", done["details"]!["finishReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Chat_ForwardsWarningEventAsNamedStreamFrame()
     {
         // 执行策略拒绝、模型中断保留部分输出等告警过去只进事件日志，桌面与 CLI 的

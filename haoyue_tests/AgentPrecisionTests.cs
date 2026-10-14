@@ -30,6 +30,79 @@ public sealed class AgentPrecisionTests
     }
 
     [Fact]
+    public async Task SecondEmptyAnswer_EndsTurnWithEmptyFinishReason()
+    {
+        // 连续两次空回答＝没答上。过去它和正常收尾一样报 done，界面留下一个空白气泡，
+        // 用户不知道发生了什么、该不该重试。
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(new LlmCompletion(), new LlmCompletion()));
+        var result = await harness.RunAsync("做个总结");
+
+        Assert.Equal("", result.Text);
+        Assert.NotNull(result.Error);
+        Assert.Equal(TurnFinishReason.Empty, result.FinishReason);
+        Assert.False(result.Cancelled);
+    }
+
+    [Fact]
+    public async Task Refusal_TerminatesWithRefusalReason_AndStaysOnTheMessage()
+    {
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            new LlmCompletion { Text = "我无法协助这个请求。", FinishReason = "content_filter" }));
+        var result = await harness.RunAsync("越界请求");
+
+        Assert.Equal(TurnFinishReason.Refusal, result.FinishReason);
+        Assert.Null(result.Error);
+        Assert.Equal("我无法协助这个请求。", result.Text);
+        var assistant = harness.Session.Messages.Last(m => m.Role == ChatRole.Assistant);
+        Assert.Equal(TurnFinishReason.Refusal, assistant.FinishReason);
+    }
+
+    [Fact]
+    public async Task InterruptedStream_WithoutContinuationBudget_ReportsInterrupted()
+    {
+        // 连接在半途断掉：文本仍要保留（用户能看到已生成的部分），但终态必须写清
+        // 「这是中断前的部分输出」，不能显示成完整回答。
+        using var harness = await AgentHarness.CreateAsync(
+            ScriptedSteps(new LlmCompletion { Text = "最终回答" }),
+            throwLlmAtRequest: 1, throwWithPartialText: true);
+        harness.Store.Config.Agent.MaxOutputContinuations = 0;
+
+        var result = await harness.RunAsync("讲个长故事");
+
+        Assert.Equal("部分输出", result.Text);
+        Assert.Equal(TurnFinishReason.Interrupted, result.FinishReason);
+        Assert.Null(result.Error);
+    }
+
+    [Fact]
+    public async Task InterruptedStream_ContinuesWhenBudgetAllows()
+    {
+        using var harness = await AgentHarness.CreateAsync(
+            ScriptedSteps(new LlmCompletion { Text = "部分输出" }, new LlmCompletion { Text = "最终回答", FinishReason = "stop" }),
+            throwLlmAtRequest: 1, throwWithPartialText: true);
+
+        var result = await harness.RunAsync("讲个长故事");
+
+        Assert.Equal("最终回答", result.Text);
+        Assert.Equal(TurnFinishReason.Stop, result.FinishReason);
+    }
+
+    [Fact]
+    public void TurnFinishReason_NormalizesProviderVariants_AndFlagsIncomplete()
+    {
+        Assert.Equal(TurnFinishReason.Stop, TurnFinishReason.Normalize(null));
+        Assert.Equal(TurnFinishReason.Stop, TurnFinishReason.Normalize("end_turn"));
+        Assert.Equal(TurnFinishReason.Length, TurnFinishReason.Normalize("max_tokens"));
+        Assert.Equal(TurnFinishReason.Refusal, TurnFinishReason.Normalize("safety"));
+        Assert.Equal(TurnFinishReason.ToolCalls, TurnFinishReason.Normalize("tool_calls"));
+        // 未知原值原样保留，仍能被识别为「没答完」。
+        Assert.Equal("audio_len", TurnFinishReason.Normalize("audio_len"));
+        Assert.True(TurnFinishReason.IsIncomplete("audio_len"));
+        Assert.False(TurnFinishReason.IsIncomplete(TurnFinishReason.Stop));
+        Assert.False(TurnFinishReason.IsIncomplete(TurnFinishReason.ToolCalls));
+    }
+
+    [Fact]
     public async Task RepeatedIdenticalFailures_InjectStrategyGuidanceOnce()
     {
         var missing = Path.Combine(Path.GetTempPath(), $"haoyue-missing-{Guid.NewGuid():N}.txt");
@@ -76,6 +149,76 @@ public sealed class AgentPrecisionTests
             m.Role == ChatRole.User && m.Text.Contains("[step budget]"));
         Assert.Contains("执行台账", budget.Text);
         Assert.Contains("1 个步骤", budget.Text);
+    }
+
+    [Fact]
+    public async Task TurnTokenBudget_WrapsUpThenMarksTurnBudgetTerminated()
+    {
+        var existing = Path.Combine(Path.GetTempPath(), $"haoyue-budget-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(existing, "content");
+        var args = $$"""{"path":"{{existing.Replace("\\", "\\\\")}}"}""";
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            new LlmCompletion
+            {
+                Usage = new TokenUsage(80, 40),
+                ToolCalls = [new ToolCallRequest("c1", "read_file", args)],
+            },
+            new LlmCompletion { Text = "预算收尾总结" },
+            new LlmCompletion { Text = "不应到达" }));
+        harness.Store.Config.Agent.TurnTokenBudget = 100;
+
+        var result = await harness.RunAsync("读取文件后总结");
+
+        // 越界后必须真的给一步收尾（拿到总结），而不是把提示注入完就散场。
+        Assert.Equal("预算收尾总结", result.Text);
+        Assert.Null(result.Error);
+        Assert.Equal(TurnFinishReason.Budget, result.FinishReason);
+        var notice = Assert.Single(harness.Session.Messages,
+            m => m.Role == ChatRole.User && m.Text.Contains("[turn budget]"));
+        Assert.Contains("token 用量 120", notice.Text);
+        Assert.Equal(2, harness.Session.Messages.Count(m => m.Role == ChatRole.Assistant));
+    }
+
+    [Fact]
+    public async Task TurnCostBudget_UsesModelPrices_BeforeEndingTheTurn()
+    {
+        var existing = Path.Combine(Path.GetTempPath(), $"haoyue-cost-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(existing, "content");
+        var args = $$"""{"path":"{{existing.Replace("\\", "\\\\")}}"}""";
+        using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
+            new LlmCompletion
+            {
+                Usage = new TokenUsage(80, 40),
+                ToolCalls = [new ToolCallRequest("c1", "read_file", args)],
+            },
+            new LlmCompletion { Text = "费用到顶的总结" },
+            new LlmCompletion { Text = "不应到达" }));
+        var model = harness.Store.Config.Providers[0].Models[0];
+        model.InputPricePerMTok = 1_000m;
+        model.OutputPricePerMTok = 1_000m;
+        // 120 token × 1000/1M = 0.12，超过 0.1 的上限；token 闸门保持关闭。
+        harness.Store.Config.Agent.TurnCostBudget = 0.1;
+
+        var result = await harness.RunAsync("读取文件后总结");
+
+        Assert.Equal("费用到顶的总结", result.Text);
+        Assert.Equal(TurnFinishReason.Budget, result.FinishReason);
+        var notice = Assert.Single(harness.Session.Messages,
+            m => m.Role == ChatRole.User && m.Text.Contains("[turn budget]"));
+        Assert.Contains("费用", notice.Text);
+    }
+
+    [Fact]
+    public void TurnBudgetBreach_ChecksTokenCostAndWallClock_AndTreatsZeroAsUnlimited()
+    {
+        var config = new AgentConfig { TurnTokenBudget = 1000, TurnCostBudget = 1, TurnWallClockSeconds = 60 };
+        Assert.Null(Agent.TurnBudgetBreach(config, 999, 0.9m, TimeSpan.FromSeconds(1)));
+        Assert.Contains("token", Agent.TurnBudgetBreach(config, 1_000, 0m, TimeSpan.FromSeconds(1)));
+        Assert.Contains("费用", Agent.TurnBudgetBreach(config, 100, 1m, TimeSpan.FromSeconds(1)));
+        Assert.Contains("耗时", Agent.TurnBudgetBreach(config, 100, 0m, TimeSpan.FromSeconds(60)));
+
+        var unlimited = new AgentConfig();
+        Assert.Null(Agent.TurnBudgetBreach(unlimited, long.MaxValue, 999_999m, TimeSpan.FromDays(1)));
     }
 
     [Fact]
@@ -438,6 +581,8 @@ public sealed class AgentPrecisionTests
         public List<LlmRequest> Requests { get; } = [];
         /// <summary>1-based request index that fails with an LlmException; 0 = never throw.</summary>
         public int ThrowAtRequest { get; set; }
+        /// <summary>当 ThrowAtRequest 命中时先吐出一段文本再断开，复现「流到一半连接中断」。</summary>
+        public bool ThrowWithPartialText { get; set; }
         public ILlmClient GetClient(string kind) => new ScriptedClient(this);
 
         private sealed class ScriptedClient(ScriptedClientFactory owner) : ILlmClient
@@ -453,7 +598,14 @@ public sealed class AgentPrecisionTests
             {
                 owner.Requests.Add(request);
                 if (owner.ThrowAtRequest > 0 && owner.Requests.Count == owner.ThrowAtRequest)
+                {
+                    if (owner.ThrowWithPartialText)
+                    {
+                        yield return new LlmTextDelta("部分输出");
+                        throw new LlmException("connection dropped mid-stream", retryable: false);
+                    }
                     throw new LlmException("scripted failure", retryable: false);
+                }
                 await Task.Yield();
                 var index = Math.Min(owner.Requests.Count - 1, owner._steps.Count - 1);
                 yield return new LlmCompleted(owner._steps[index]);
@@ -480,7 +632,8 @@ public sealed class AgentPrecisionTests
         }
 
         public static async Task<AgentHarness> CreateAsync(
-            List<LlmCompletion> steps, int throwLlmAtRequest = 0, string? dir = null, bool globalWorkspace = true)
+            List<LlmCompletion> steps, int throwLlmAtRequest = 0, string? dir = null,
+            bool globalWorkspace = true, bool throwWithPartialText = false)
         {
             dir ??= Path.Combine(Path.GetTempPath(), "haoyue-precision-test", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
@@ -493,7 +646,7 @@ public sealed class AgentPrecisionTests
                 BaseUrl = "https://test.local/v1",
                 Models = [new ModelConfig { Id = "gpt-test", ContextWindow = 128_000 }],
             });
-            var capture = new ScriptedClientFactory(steps) { ThrowAtRequest = throwLlmAtRequest };
+            var capture = new ScriptedClientFactory(steps) { ThrowAtRequest = throwLlmAtRequest, ThrowWithPartialText = throwWithPartialText };
             var workspace = globalWorkspace
                 ? new WorkspaceManager().CreateGlobal(Path.Combine(dir, "global"))
                 : new WorkspaceInfo { Root = Path.Combine(dir, "ws"), ProjectKinds = [] };

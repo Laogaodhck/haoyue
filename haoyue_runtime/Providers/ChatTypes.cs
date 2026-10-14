@@ -26,6 +26,12 @@ public sealed class ChatMessage
     /// <summary>"provider/model" that produced this assistant message (shown by clients).</summary>
     public string? ModelRef { get; set; }
     public IReadOnlyList<ChatImageReference>? ViewedImages { get; init; }
+    /// <summary>
+    /// Provider 给出的停止原因（已收敛到 <see cref="Haoyue.Runtime.Agents.TurnFinishReason"/>）。
+    /// 落进会话历史是为了诚实：半截回答、被截断、拒答在后续回合与界面里都能看出来，
+    /// 不再和「答完了」长得一样。仅 assistant 消息有值。
+    /// </summary>
+    public string? FinishReason { get; set; }
     public IReadOnlyList<ToolCallRequest>? ToolCalls { get; set; }
     /// <summary>Set when Role == Tool.</summary>
     public string? ToolCallId { get; init; }

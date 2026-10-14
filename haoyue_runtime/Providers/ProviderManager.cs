@@ -500,7 +500,9 @@ public sealed class ProviderManager(
             CachedInputTokens = usage.CachedInputTokens,
             CacheCreationInputTokens = usage.CacheCreationInputTokens,
             OutputTokens = usage.OutputTokens,
-            Cost = 0,
+            // 按模型定价折算真实成本入库：此前恒为 0，用量账本的费用列只能由下游另算，
+            // 回合预算闸门（agent.turnCostBudget）也无处取数。
+            Cost = ComputeCost(model.Model, usage),
             ElapsedMs = stopwatch.Elapsed.TotalMilliseconds,
             Success = success,
         });

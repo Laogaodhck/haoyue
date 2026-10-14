@@ -47,6 +47,11 @@ public static class ConfigSchema
         New("agent.personality", "enum", "pragmatic", allowed: ["pragmatic", "friendly"]),
         New("agent.enableContextCompaction", "bool", true),
         New("agent.maxOutputContinuations", "int", 6, min: 0, max: 20),
+        // 回合预算闸门：0 = 不限。此前任何回合都能无限烧 token/费用/时间（只有步数上限），
+        // 模型卡在一个长任务上时用户只能手动停止。
+        New("agent.turnTokenBudget", "int", 0, min: 0, max: 100_000_000),
+        New("agent.turnCostBudget", "double", 0.0, min: 0, max: 100_000),
+        New("agent.turnWallClockSeconds", "int", 0, min: 0, max: 86_400),
         New("agent.mode", "enum", "edit", allowed: ["edit", "plan", "readonly", "auto"], view: ViewBoth),
         New("agent.systemPrompt", "string", "system/default"),
         New("agent.thinkingBudgetTokens", "int", 16_384, min: 0, max: 200_000),
@@ -58,6 +63,10 @@ public static class ConfigSchema
         New("agent.networkEnabled", "bool", true),
         New("agent.visionModel", "string", null),
         New("agent.delegationEnabled", "bool", true),
+        New("agent.delegationMaxDepth", "int", 1, min: 1, max: 4),
+        // 用户数据型（数组，无默认值）：登记是为了进入文档与漂移治理，
+        // 路径解析仍由 PathGuard 逐项容错。
+        New("agent.extraReadableRoots", "array", null, view: ViewBoth),
 
         // routing
         New("routing.failoverEnabled", "bool", true),
@@ -190,6 +199,7 @@ public static class ConfigSchema
         "double" => value is not JsonValue dv || !dv.TryGetValue<double>(out _),
         "bool" => value is not JsonValue bv || !bv.TryGetValue<bool>(out _),
         "string" or "enum" => value is not JsonValue sv || !sv.TryGetValue<string>(out _),
+        "array" => value is not JsonArray,
         _ => false,
     };
 

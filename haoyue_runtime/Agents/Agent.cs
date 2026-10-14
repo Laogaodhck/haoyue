@@ -16,7 +16,9 @@ using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Runtime.Agents;
 
-public sealed record AgentTurnResult(string Text, bool Cancelled, string? Error);
+/// <param name="FinishReason">回合终态（<see cref="TurnFinishReason"/> 词汇表）。
+/// 为 null 时调用方按「stop」处理——旧调用点与测试桩保持兼容。</param>
+public sealed record AgentTurnResult(string Text, bool Cancelled, string? Error, string? FinishReason = null);
 
 /// <summary>
 /// The agent loop: compose prompt → stream model → execute tools → repeat,
@@ -107,7 +109,7 @@ public sealed partial class Agent(
         {
             const string message = "输入为空：请提供有效的问题或指令后再发送。";
             events.Publish(new ErrorEvent("Empty input", message));
-            return new AgentTurnResult("", false, message);
+            return new AgentTurnResult("", false, message, TurnFinishReason.Error);
         }
 
         var agentConfig = configStore.Config.Agent;
@@ -132,6 +134,17 @@ public sealed partial class Agent(
         var finalText = "";
         string? error = null;
         var cancelled = false;
+        // 回合终态：默认「模型答完了」，每个非正常出口（截断、拒答、空回答、超步数、
+        // 预算、取消、异常）都显式改写它。finally 里算出的对外值见 turnOutcome。
+        var turnFinishReason = TurnFinishReason.Stop;
+        string turnOutcome = TurnFinishReason.Stop;
+        // 回合预算计量：token/费用取自每步 completion.Usage（provider 不回传用量则恒为 0），
+        // 墙钟从回合开始计时，是唯一不依赖 usage 的兜底刹车。
+        var turnClock = Stopwatch.StartNew();
+        long turnInputTokens = 0, turnOutputTokens = 0;
+        decimal turnCost = 0m;
+        var budgetWrapUpRequested = false;
+        var budgetWrapUpStep = 0;
         // Vision relevance is tracked incrementally (see turnHasImagesFlag) instead of
         // rescanning history: after a compaction the scan range becomes ambiguous, and
         // images from earlier turns must not drag a text-only turn onto a vision model.
@@ -299,6 +312,36 @@ public sealed partial class Agent(
                         break;
                     }
                 }
+
+                // 回合预算闸门：与步数闸门一样先给一步收尾，让用户拿到进展总结而不是半截话。
+                // 收尾步已发出的工具调用仍会执行完（历史里不能留悬空 tool_use），所以最坏多花
+                // 一批工具的成本，随后立即刹车。
+                var budgetBreach = TurnBudgetBreach(
+                    agentConfig, turnInputTokens + turnOutputTokens, turnCost, turnClock.Elapsed);
+                if (budgetBreach is not null)
+                {
+                    if (!budgetWrapUpRequested)
+                    {
+                        budgetWrapUpRequested = true;
+                        budgetWrapUpStep = step;
+                        sessionStore.Append(session, ChatMessage.User(
+                            $">>> [turn budget] {budgetBreach}。请立即停止调用工具，直接总结当前进展、已完成的改动与未完成事项，给出最终回答。"
+                            + AgentNotices.RenderLedgerSummary(turnScope.Steps)));
+                        events.Publish(new WarningEvent(
+                            $"{budgetBreach}，本回合进入收尾。可在 ~/.haoyue/config.json 调大 agent.turnTokenBudget / turnCostBudget / turnWallClockSeconds，或把任务拆成多回合。"));
+                        events.Publish(new StatusEvent("Turn budget reached; wrapping up"));
+                        continue;
+                    }
+                    // 收尾提示注入后只再给两步：仍不肯收尾就说明模型已经跑偏，继续等只会把预算烧得更深。
+                    if (step > budgetWrapUpStep + 2)
+                    {
+                        turnFinishReason = TurnFinishReason.Budget;
+                        events.Publish(new WarningEvent(
+                            $"{budgetBreach}，收尾步仍未给出结论，本回合已强制停止。上方内容为此前的中间输出。"));
+                        break;
+                    }
+                }
+
                 ct.ThrowIfCancellationRequested();
                 var preSteering = AppendSteering(session, steering);
                 turnHasImagesFlag |= preSteering.Any(message => message.Images is { Count: > 0 });
@@ -408,12 +451,19 @@ public sealed partial class Agent(
                     Text = completion.Text,
                     Thinking = completion.Thinking.Length > 0 ? completion.Thinking : null,
                     ModelRef = $"{model.Provider.Id}/{model.Model.Id}",
+                    FinishReason = TurnFinishReason.Normalize(completion.FinishReason),
                     ToolCalls = completion.ToolCalls.Count > 0 ? completion.ToolCalls : null,
                     ViewedImages = step == 1
                         ? userMessage.Images?.Select(image => new ChatImageReference(image.Id, image.Name)).ToList()
                         : null,
                 };
                 sessionStore.Append(session, assistant);
+                // 逐步累计本回合开销：token 取 TotalInputTokens（含缓存命中的完整 prompt 规模），
+                // 费用与 usage 账本同口径（ProviderManager.ComputeCost）。
+                var stepUsage = completion.Usage;
+                turnInputTokens += stepUsage.TotalInputTokens;
+                turnOutputTokens += stepUsage.OutputTokens;
+                turnCost += ProviderManager.ComputeCost(model.Model, stepUsage);
                 if (completion.Text.Length > 0)
                 {
                     finalText = completion.Text;
@@ -517,6 +567,8 @@ public sealed partial class Agent(
                     truncatedSteps++;
                     if (truncatedSteps > agentConfig.MaxOutputContinuations)
                     {
+                        // 续写次数用尽仍被长度上限打断：这就是半截回答，不能报「任务完成」。
+                        turnFinishReason = TurnFinishReason.Normalize(completion.FinishReason);
                         events.Publish(new WarningEvent(
                             $"输出连续 {agentConfig.MaxOutputContinuations} 次达到长度上限，回合已停止。可在模型配置中调大 maxOutput 或拆分任务。"));
                         break;
@@ -534,6 +586,16 @@ public sealed partial class Agent(
                 }
                 truncatedSteps = 0;
 
+                // 模型明确拒答或被内容过滤拦截：文本通常是拒绝理由而不是答案。过去这一路
+                // 也报「任务完成」，用户看不出请求根本没被执行。
+                if (TurnFinishReason.Normalize(completion.FinishReason) == TurnFinishReason.Refusal)
+                {
+                    turnFinishReason = TurnFinishReason.Refusal;
+                    events.Publish(new WarningEvent(
+                        "模型拒绝了本次请求（finish_reason=refusal）。上方文本若存在，是模型给出的拒绝理由，不代表任务已完成。"));
+                    break;
+                }
+
                 // A completion with no text, no tool calls and no truncation is an empty
                 // answer — often a decoding hiccup. Nudge once instead of ending the turn
                 // with nothing; the second empty answer ends the turn as before.
@@ -550,7 +612,10 @@ public sealed partial class Agent(
                 {
                     // Second empty answer: end explicitly. Returning the previous step's
                     // text as the "final answer" misleads users into reading stale middle
-                    // output as a conclusion.
+                    // output as a conclusion. 这也是「没答上」而不是「答完了」：走 error 终态，
+                    // 界面给出可重试的失败卡片，而不是一个空白气泡。
+                    turnFinishReason = TurnFinishReason.Empty;
+                    error = "模型连续两次返回空回答，本回合没有产出任何结论，请直接重试。";
                     events.Publish(new WarningEvent(
                         "模型连续两次返回空回答，回合已结束；上方内容为此前的中间输出，不代表最终结论。可直接重试本任务。"));
                     finalText = "";
@@ -595,10 +660,16 @@ public sealed partial class Agent(
                     continue;
                 }
                 if (steering is not null && !steering.TryCompleteIfEmpty()) continue;
+                // 预算收尾已接管：这一步给出的是「烧完配额后的进展总结」，不能报「任务完成」。
+                turnFinishReason = budgetWrapUpRequested
+                    ? TurnFinishReason.Budget
+                    : TurnFinishReason.Normalize(completion.FinishReason);
                 break;
             }
             if (reachedMaxSteps)
             {
+                // 收尾回合也没能给出结论：这是「步数烧光」，不是完成。
+                turnFinishReason = TurnFinishReason.MaxSteps;
                 events.Publish(new WarningEvent(
                     $"已达到最大步数 {maxSteps}，任务可能尚未完成。可在 ~/.haoyue/config.json 中调大 agent.maxSteps。"));
             }
@@ -631,10 +702,26 @@ public sealed partial class Agent(
             // the real outcome instead of always reporting "任务完成". The try/catch block
             // above became try/catch/finally when the turn scope arrived — same ordering,
             // one fewer place to duplicate cleanup.
+            // 终态优先级：取消 > 具体未完成原因 > 异常 > 正常完成。error 存在但循环里没给出
+            // 更具体的原因时才记为 error——空回答、截断、拒答自带的原因更有解释力。
+            turnOutcome = cancelled
+                ? TurnFinishReason.Cancelled
+                : error is not null && turnFinishReason == TurnFinishReason.Stop
+                    ? TurnFinishReason.Error
+                    : turnFinishReason;
             events.Publish(new WorkflowEvent(
                 step,
-                error is null && !cancelled ? "done" : "error",
-                error is null && !cancelled ? "任务完成" : "任务失败"));
+                turnOutcome is TurnFinishReason.Cancelled or TurnFinishReason.Error
+                    ? "error"
+                    : TurnFinishReason.IsIncomplete(turnOutcome) ? "incomplete" : "done",
+                turnOutcome switch
+                {
+                    TurnFinishReason.Cancelled => "任务已取消",
+                    TurnFinishReason.Error => "任务失败",
+                    var reason when TurnFinishReason.IsIncomplete(reason) => "任务未完成",
+                    _ => "任务完成",
+                },
+                TurnFinishReason.ChineseLabel(turnOutcome)));
 
             PublishSteering(AppendSteering(session, steering));
             steering?.Complete();
@@ -664,7 +751,8 @@ public sealed partial class Agent(
 
             events.Publish(new TurnCompletedEvent(
                 session.Header.Id, cancelled, error,
-                ledger is null ? null : ledger.Changes.Select(c => ToRelativePath(c.AbsolutePath, workspace.Root)).ToList()));
+                ledger is null ? null : ledger.Changes.Select(c => ToRelativePath(c.AbsolutePath, workspace.Root)).ToList(),
+                turnOutcome));
 
             // H-C 回合结束触发式沉淀提示：有实际执行步骤的成功回合给一条客户端可见的
             // 轻提示（不进模型上下文、零 token 成本）——回合内自觉写入优先，后台
@@ -675,7 +763,7 @@ public sealed partial class Agent(
                     "本回合有实际改动。如有值得长期记住的约定或决定，告诉我即可沉淀；后台记忆固化也会定期扫描近期会话。"));
             }
         }
-        return new AgentTurnResult(finalText, cancelled, error);
+        return new AgentTurnResult(finalText, cancelled, error, turnOutcome);
     }
 
     private static string ToRelativePath(string absolutePath, string root) =>
@@ -711,9 +799,29 @@ public sealed partial class Agent(
         }, (_tokenStats, model.Provider.Id, model.Model.Id));
     }
 
-    /// <summary>True when the provider stopped because the output-token cap was hit, not because it finished.</summary>
+    /// <summary>
+    /// True when the model did not actually finish: the provider hit its output-token cap,
+    /// the stream never reported a terminal event, or the connection dropped after the first
+    /// token. "interrupted" belongs here — a half answer left by a dropped stream must be
+    /// continued (or honestly reported as truncated), never presented as a completed reply.
+    /// </summary>
+    /// <summary>
+    /// 回合预算越界判定：token / 费用 / 墙钟任一超限返回可读的越界说明，否则 null。
+    /// 前两项依赖 provider 回传 usage——本地通道不回传时恒为 0，只有墙钟能触发。
+    /// </summary>
+    internal static string? TurnBudgetBreach(AgentConfig config, long totalTokens, decimal cost, TimeSpan elapsed)
+    {
+        if (config.TurnTokenBudget > 0 && totalTokens >= config.TurnTokenBudget)
+            return $"token 用量 {totalTokens} 已达本回合上限 {config.TurnTokenBudget}";
+        if (config.TurnCostBudget > 0 && cost >= (decimal)config.TurnCostBudget)
+            return $"费用 {cost:0.####} 已达本回合上限 {config.TurnCostBudget:0.####}";
+        if (config.TurnWallClockSeconds > 0 && elapsed.TotalSeconds >= config.TurnWallClockSeconds)
+            return $"耗时 {elapsed.TotalSeconds:0.#}s 已达本回合上限 {config.TurnWallClockSeconds}s";
+        return null;
+    }
+
     private static bool IsOutputTruncated(string? finishReason) =>
-        finishReason is "length" or "max_tokens" or "incomplete";
+        finishReason is "length" or "max_tokens" or "incomplete" or "interrupted";
 
     private IReadOnlyList<ChatMessage> AppendSteering(AgentSession session, AgentSteeringQueue? steering)
     {

@@ -171,6 +171,9 @@ public static class DaemonContract
     private static JsonObject SInteger(string description) =>
         new() { ["type"] = "integer", ["description"] = description };
 
+    private static JsonObject SNumber(string description) =>
+        new() { ["type"] = "number", ["description"] = description };
+
     private static JsonObject SBoolean(string description) =>
         new() { ["type"] = "boolean", ["description"] = description };
 
@@ -369,7 +372,10 @@ public static class DaemonContract
             ("networkEnabled", SBoolean("网页搜索（联网工具）开关"), false),
             ("delegationEnabled", SBoolean("探索者智能体（delegate_task 委派）开关"), false),
             ("autoVerify", SBoolean("自动验证与修复开关"), false),
-            ("visionModel", SString("图像回合优先使用的模型 ref；空串恢复自动选择"), false))),
+            ("visionModel", SString("图像回合优先使用的模型 ref；空串恢复自动选择"), false),
+            ("turnTokenBudget", SInteger("单回合 token 上限（输入+输出）；0 为不限"), false),
+            ("turnCostBudget", SNumber("单回合费用上限（按模型定价折算）；0 为不限"), false),
+            ("turnWallClockSeconds", SInteger("单回合墙钟上限（秒）；0 为不限"), false))),
         M("prompt.optimize", "config", "提示词优化（无状态改写）", parameters: SObject(
             ("text", SString("待优化提示词"), true),
             ("model", SString("改写用模型 ref，缺省活跃模型"), false))),

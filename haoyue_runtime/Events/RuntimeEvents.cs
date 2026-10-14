@@ -17,8 +17,14 @@ public sealed record UserSteerEvent(string Instruction) : RuntimeEvent;
 
 /// <param name="UndoableFiles">Workspace-relative paths changed by builtin file tools this
 /// turn; a later agent.undo RPC can revert them. Null when nothing was changed.</param>
+/// <param name="FinishReason">回合终态（Haoyue.Runtime.Agents.TurnFinishReason 词汇表）。
+/// 「模型答完了」与「连接断了留半截」「步数烧光」过去在事件里无法区分。</param>
 public sealed record TurnCompletedEvent(
-    string SessionId, bool Cancelled, string? Error, IReadOnlyList<string>? UndoableFiles = null) : RuntimeEvent;
+    string SessionId,
+    bool Cancelled,
+    string? Error,
+    IReadOnlyList<string>? UndoableFiles = null,
+    string? FinishReason = null) : RuntimeEvent;
 
 /// <summary>High-level agent status: Thinking, Reading files, Searching, Editing, Building, Verifying…</summary>
 public sealed record StatusEvent(string Status, string? Detail = null) : RuntimeEvent;

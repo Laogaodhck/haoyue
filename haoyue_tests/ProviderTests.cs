@@ -1011,6 +1011,37 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task StreamAsync_RecordsPricedCostInTheUsageLedger()
+    {
+        var store = _store;
+        store.Config.Provider = "alpha";
+        store.Config.Model = "big";
+        var priced = store.Config.Providers[0].Models[0];
+        priced.InputPricePerMTok = 3m;
+        priced.OutputPricePerMTok = 15m;
+        var usageFile = Path.Combine(_dir, "usage-cost.jsonl");
+        var manager = NewManagerWithClients(store, _registry, usageFile,
+            new StubLlmClient("openai", null, 0, new LlmCompleted(new LlmCompletion
+            {
+                Text = "ok",
+                Usage = new TokenUsage(1_000, 500),
+            })));
+
+        var request = new LlmRequest
+        {
+            Provider = store.Config.Providers[0],
+            Model = priced,
+            Messages = [ChatMessage.User("hi")],
+        };
+        await foreach (var _ in manager.StreamAsync(_ => request, null, CancellationToken.None)) { }
+
+        // 费用必须真实入库：此前恒为 0，用量面板的费用列与回合费用闸门都无处取数。
+        var entry = Assert.Single(new UsageTracker(new EventBus(), usageFile).ReadAll());
+        Assert.Equal(0.0105m, entry.Cost);
+        Assert.True(entry.Success);
+    }
+
+    [Fact]
     public void UsageTracker_Records_AndAggregates()
     {
         var tracker = new UsageTracker(new EventBus(), Path.Combine(_dir, "usage.jsonl"));

@@ -879,7 +879,8 @@ async function branchFromMessage(message: ChatMessage): Promise<void> {
     tools: m.tools?.map((t) => ({ ...t })),
     images: m.images ? [...m.images] : undefined,
     files: m.files ? [...m.files] : undefined,
-    viewedImages: m.viewedImages ? [...m.viewedImages] : undefined
+    viewedImages: m.viewedImages ? [...m.viewedImages] : undefined,
+    warnings: m.warnings ? [...m.warnings] : undefined
   }))
 
   const newThreadId = newSessionId

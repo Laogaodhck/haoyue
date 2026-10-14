@@ -265,6 +265,11 @@ public sealed class TerminalRenderer : IDisposable
                 _streamDirty = false;
                 if (completed.Cancelled)
                     scrollback.Add("— cancelled —".Style(Ansi.Yellow));
+                else if (Haoyue.Runtime.Agents.TurnFinishReason.IsIncomplete(completed.FinishReason))
+                    // 半截回答、超步数、连续空回答都必须写出来：否则终端把「没答完」
+                    // 显示成正常收尾，用户完全看不出来。
+                    scrollback.Add(("⚠ " + (Haoyue.Runtime.Agents.TurnFinishReason.ChineseLabel(completed.FinishReason)
+                        ?? $"回合未正常结束（{completed.FinishReason}）")).Style(Ansi.Yellow));
                 if (_showTurnDividers)
                     scrollback.Add(TurnDivider());
                 _turnActive = false;

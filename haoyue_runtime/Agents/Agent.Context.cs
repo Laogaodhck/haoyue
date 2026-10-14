@@ -118,6 +118,7 @@ public sealed partial class Agent
         ToolFilePath = message.ToolFilePath,
         Timestamp = message.Timestamp,
         ModelRef = message.ModelRef,
+        FinishReason = message.FinishReason,
         Images = images is { Count: > 0 } ? images : null,
     };
 

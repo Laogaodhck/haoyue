@@ -65,6 +65,9 @@ export interface ChatMessage {
   interrupted?: boolean
   /** Runtime warnings forwarded during this turn (policy denials, interrupted streams). */
   warnings?: string[]
+  /** 回合终态 token（stop/length/interrupted/refusal/empty/max_steps/budget/cancelled/error）。
+   *  非 stop 表示模型并没有答完，界面必须按「不完整回答」显示。 */
+  finishReason?: string
   /** Raw technical detail of the model error that failed this turn (error card). */
   errorDetail?: string
   tools?: ToolActivity[]

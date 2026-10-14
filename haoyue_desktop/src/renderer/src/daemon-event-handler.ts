@@ -401,6 +401,8 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         if (message) {
           flushStream(message)
           message.state = 'done'
+          const finishReason = typeof event.details?.finishReason === 'string' ? event.details.finishReason : undefined
+          if (finishReason) message.finishReason = finishReason
           // Distinguish "model finished" from "user cut it off": a half answer with a
           // plain done state read like a complete reply.
           if (event.event === 'cancelled' && message.content) message.interrupted = true

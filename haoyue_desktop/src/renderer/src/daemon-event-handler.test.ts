@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import type { Ref } from 'vue'
 import type { DaemonEventContext } from './daemon-event-handler'
 import { createDaemonEventHandler } from './daemon-event-handler'
-import { extractModelError, stripModelErrorBlock } from './app-helpers'
+import { extractModelError, finishReasonLabel, stripModelErrorBlock } from './app-helpers'
 import type { DaemonMessage } from '../../shared/ipc'
 import type { ProjectItem, ThreadItem } from './types'
 
@@ -203,6 +203,25 @@ describe('daemon event handler — stream batching', () => {
     expect(assistant.warnings?.length).toBe(2)
     // 告警是补充信息，绝不能把回合状态从思考/生成中改掉。
     expect(assistant.state).toBe('thinking')
+  })
+
+  it('carries the turn finish reason onto the terminal bubble', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+    const assistant = thread.messages[0]!
+
+    handler(chatEvent('delta', '半截回答'))
+    handler({ ...chatEvent('done', '半截回答'), details: { finishReason: 'length' } })
+    expect(assistant.finishReason).toBe('length')
+    expect(finishReasonLabel(assistant.finishReason)).toContain('截断')
+    // 预算闸门将回合刹车时同样必须可见，不能显示成正常收尾。
+    expect(finishReasonLabel('budget')).toContain('预算')
+    // 正常完成与工具调用步骤都不该被标注成「没答完」。
+    expect(finishReasonLabel('stop')).toBeUndefined()
+    expect(finishReasonLabel('tool_calls')).toBeUndefined()
+    expect(finishReasonLabel(undefined)).toBeUndefined()
   })
 
   it('stores structured error detail for the error card', () => {

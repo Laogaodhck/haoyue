@@ -210,6 +210,15 @@ public sealed class AgentConfig
     public bool EnableContextCompaction { get; set; } = true;
     /// <summary>Consecutive output-cap truncations allowed before a turn gives up instead of ending silently.</summary>
     public int MaxOutputContinuations { get; set; } = 6;
+    /// <summary>
+    /// 回合 token 闸门（输入+输出总量，0 = 不限）。越界先给一步收尾，仍不收尾则强制结束回合。
+    /// 仅对回传 usage 的 provider 生效：本地模型等不回传用量的通道无法计量，此时靠墙钟兜底。
+    /// </summary>
+    public int TurnTokenBudget { get; set; }
+    /// <summary>回合费用闸门（按模型 input/output 定价折算，与 usage 账本同口径；0 = 不限）。</summary>
+    public double TurnCostBudget { get; set; }
+    /// <summary>回合墙钟闸门（秒，0 = 不限）。工具等待与模型延迟都计入，是不依赖 usage 的兜底刹车。</summary>
+    public int TurnWallClockSeconds { get; set; }
     /// <summary>Agent mode: edit | plan | readonly | auto.</summary>
     public string Mode { get; set; } = "edit";
     /// <summary>Prompt key of the main system prompt (relative to prompts/, no extension).</summary>

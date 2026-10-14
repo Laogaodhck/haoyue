@@ -243,7 +243,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "agent.config.set",
     category: "config",
     description: "\u90e8\u5206\u66f4\u65b0\u667a\u80fd\u4f53\u8bbe\u7f6e\uff08\u672a\u4f20\u5b57\u6bb5\u4fdd\u6301\u539f\u503c\uff09",
-    paramsSchema: {"properties": {"autoVerify": {"description": "自动验证与修复开关", "type": "boolean"}, "delegationEnabled": {"description": "探索者智能体（delegate_task 委派）开关", "type": "boolean"}, "networkEnabled": {"description": "网页搜索（联网工具）开关", "type": "boolean"}, "visionModel": {"description": "图像回合优先使用的模型 ref；空串恢复自动选择", "type": "string"}}, "type": "object"},
+    paramsSchema: {"properties": {"autoVerify": {"description": "自动验证与修复开关", "type": "boolean"}, "delegationEnabled": {"description": "探索者智能体（delegate_task 委派）开关", "type": "boolean"}, "networkEnabled": {"description": "网页搜索（联网工具）开关", "type": "boolean"}, "turnCostBudget": {"description": "单回合费用上限（按模型定价折算）；0 为不限", "type": "number"}, "turnTokenBudget": {"description": "单回合 token 上限（输入+输出）；0 为不限", "type": "integer"}, "turnWallClockSeconds": {"description": "单回合墙钟上限（秒）；0 为不限", "type": "integer"}, "visionModel": {"description": "图像回合优先使用的模型 ref；空串恢复自动选择", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

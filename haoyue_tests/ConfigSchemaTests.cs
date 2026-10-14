@@ -46,6 +46,31 @@ public sealed class ConfigSchemaTests : IDisposable
     }
 
     [Fact]
+    public void Normalize_ClampsTurnBudgetFields_AndLeavesUserDataArraysAlone()
+    {
+        var root = JsonNode.Parse("""
+        {
+            "agent": {
+                "turnTokenBudget": 999999999,
+                "turnCostBudget": -5,
+                "turnWallClockSeconds": "fast",
+                "extraReadableRoots": ["E:\\docs"]
+            }
+        }
+        """)!.AsObject();
+
+        var (warnings, normalized) = ConfigSchema.Normalize(root);
+
+        Assert.True(normalized);
+        Assert.Equal(100_000_000, (int?)root["agent"]?["turnTokenBudget"]);
+        Assert.Equal(0, (double?)root["agent"]?["turnCostBudget"]);
+        Assert.Equal(0, (int?)root["agent"]?["turnWallClockSeconds"]); // 类型错误回退默认（0 = 不限）
+        Assert.Equal(3, warnings.Count);
+        // 用户数据型（无默认值）：类型正确时绝不改写，用户授权的目录必须原样保留。
+        Assert.Equal("E:\\docs", (string?)root["agent"]?["extraReadableRoots"]?.AsArray()[0]);
+    }
+
+    [Fact]
     public void Normalize_ClampsOutOfRange_AndResetsInvalidEnum()
     {
         var root = JsonNode.Parse("""

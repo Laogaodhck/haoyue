@@ -268,11 +268,14 @@ const visionModelOptions = computed(() => [
 
 const showModelCatalog = ref(false)
 
-/** 智能体设置：视觉子智能体模型、探索者委派与自动验证。visionModel 为空表示自动选择。 */
+/** 智能体设置：视觉子智能体模型、探索者委派、自动验证与回合预算。visionModel 为空表示自动选择。 */
 const agentConfig = reactive({
   visionModel: '',
   delegationEnabled: true,
-  autoVerify: false
+  autoVerify: false,
+  turnTokenBudget: 0,
+  turnCostBudget: 0,
+  turnWallClockSeconds: 0
 })
 
 const CAPABILITY_LABELS: Record<string, string> = {
@@ -942,6 +945,9 @@ async function loadAgent(): Promise<void> {
       delegationEnabled: boolean
       visionModel: string
       autoVerify: boolean
+      turnTokenBudget: number
+      turnCostBudget: number
+      turnWallClockSeconds: number
     }>('agent.config.get'),
     loadModels()
   ])
@@ -949,6 +955,9 @@ async function loadAgent(): Promise<void> {
   agentConfig.delegationEnabled = config.delegationEnabled
   agentConfig.visionModel = config.visionModel
   agentConfig.autoVerify = config.autoVerify
+  agentConfig.turnTokenBudget = config.turnTokenBudget ?? 0
+  agentConfig.turnCostBudget = config.turnCostBudget ?? 0
+  agentConfig.turnWallClockSeconds = config.turnWallClockSeconds ?? 0
 }
 
 async function saveAgentConfig(params: Record<string, unknown>): Promise<{
@@ -956,6 +965,9 @@ async function saveAgentConfig(params: Record<string, unknown>): Promise<{
   delegationEnabled: boolean
   visionModel: string
   autoVerify: boolean
+  turnTokenBudget: number
+  turnCostBudget: number
+  turnWallClockSeconds: number
 }> {
   return requestJson('agent.config.set', params)
 }
@@ -1011,6 +1023,35 @@ async function toggleAgentAutoVerify(): Promise<void> {
     try {
       const config = await requestJson<{ autoVerify: boolean }>('agent.config.get')
       agentConfig.autoVerify = config.autoVerify
+    } catch { /* keep last known state */ }
+  } finally {
+    endAction()
+  }
+}
+
+async function saveTurnBudgets(): Promise<void> {
+  beginAction('agent.config.set:budget')
+  try {
+    const config = await saveAgentConfig({
+      turnTokenBudget: Math.max(0, Math.trunc(agentConfig.turnTokenBudget || 0)),
+      turnCostBudget: Math.max(0, Math.round((agentConfig.turnCostBudget || 0) * 10000) / 10000),
+      turnWallClockSeconds: Math.max(0, Math.trunc(agentConfig.turnWallClockSeconds || 0))
+    })
+    agentConfig.turnTokenBudget = config.turnTokenBudget
+    agentConfig.turnCostBudget = config.turnCostBudget
+    agentConfig.turnWallClockSeconds = config.turnWallClockSeconds
+    notice.value = '已保存回合预算（0 = 不限）。超限的回合会先用一步给出进展总结再结束，并标记为「预算耗尽」而非「任务完成」。'
+  } catch (reason) {
+    fail(reason)
+    try {
+      const config = await requestJson<{
+        turnTokenBudget: number
+        turnCostBudget: number
+        turnWallClockSeconds: number
+      }>('agent.config.get')
+      agentConfig.turnTokenBudget = config.turnTokenBudget
+      agentConfig.turnCostBudget = config.turnCostBudget
+      agentConfig.turnWallClockSeconds = config.turnWallClockSeconds
     } catch { /* keep last known state */ }
   } finally {
     endAction()
@@ -2292,6 +2333,30 @@ onBeforeUnmount(() => {
                 :disabled="action === 'agent.config.set:autoVerify'" @change="toggleAgentAutoVerify" />
               <span class="toggle-switch" aria-hidden="true"><span /></span>
             </label>
+          </section>
+
+          <section class="settings-group" aria-label="回合预算">
+            <div class="local-inference-grid">
+              <label>
+                <FieldLabel en="Turn Token Budget" zh="单回合 token 上限"
+                  help="本回合输入+输出 token 总量上限（0 = 不限）。只对回传用量的模型有效；达到上限后先用一步给出进展总结，仍不收尾则强制结束。" />
+                <input v-model.number="agentConfig.turnTokenBudget" type="number" min="0" max="100000000" step="10000" />
+              </label>
+              <label>
+                <FieldLabel en="Turn Cost Budget" zh="单回合费用上限"
+                  help="按模型 input/output 定价折算的本回合费用上限（0 = 不限），与用量统计同口径。" />
+                <input v-model.number="agentConfig.turnCostBudget" type="number" min="0" max="100000" step="0.01" />
+              </label>
+              <label>
+                <FieldLabel en="Turn Time Limit" zh="单回合时长上限（秒）"
+                  help="从发起到结束的墙钟时间上限（0 = 不限）。不依赖模型回传用量，本地模型也能靠它刹车。" />
+                <input v-model.number="agentConfig.turnWallClockSeconds" type="number" min="0" max="86400" step="30" />
+              </label>
+            </div>
+            <button class="secondary-button primary-action" :disabled="action === 'agent.config.set:budget'"
+              @click="saveTurnBudgets">
+              {{ action === 'agent.config.set:budget' ? '保存中…' : '保存回合预算' }}
+            </button>
           </section>
         </template>
 

@@ -56,6 +56,7 @@ export interface RuntimeSession extends RuntimeSessionHeader {
     thinking?: string
     modelRef?: string
     viewedImages?: Array<{ id: string; name: string }>
+    finishReason?: string
     toolCalls?: Array<{ id: string; name: string }>
     toolCallId?: string
     toolName?: string
@@ -212,6 +213,7 @@ export function hydrateMessages(saved: RuntimeSession): ChatMessage[] {
       thinking: item.thinking,
       modelRef: item.modelRef,
       viewedImages: item.viewedImages,
+      finishReason: item.finishReason,
       tools: item.toolCalls?.map((call) => ({
         id: call.id,
         callId: call.id,
@@ -225,6 +227,40 @@ export function hydrateMessages(saved: RuntimeSession): ChatMessage[] {
     })
   })
   return messages
+}
+
+/**
+ * 回合终态文案。'stop'/'tool_calls' 表示模型确实答完了（或只是发起工具调用），
+ * 返回 undefined 让气泡保持正常样式；其余取值都是「没答完」，必须显式呈现，
+ * 否则半截回答看起来和完整回答一模一样。
+ */
+export function finishReasonLabel(reason?: string): string | undefined {
+  if (!reason || reason === 'stop' || reason === 'tool_calls') return undefined
+  switch (reason) {
+    case 'length':
+    case 'max_tokens':
+      return '输出达到长度上限，回答可能被截断'
+    case 'interrupted':
+      return '模型连接中断，以上为中断前生成的部分输出'
+    case 'incomplete':
+      return '未取得模型终态，回答可能不完整'
+    case 'refusal':
+    case 'content_filter':
+    case 'safety':
+      return '模型拒绝回答该请求'
+    case 'empty':
+      return '模型连续两次返回空回答，请重试'
+    case 'max_steps':
+      return '已达到本回合步数上限，任务可能未完成'
+    case 'budget':
+      return '已达到本回合预算上限，任务可能未完成'
+    case 'cancelled':
+      return '回合被中断，回答可能不完整'
+    case 'error':
+      return '回合因错误终止'
+    default:
+      return `模型未完成回答（finish_reason=${reason}）`
+  }
 }
 
 export function sessionStats(saved: RuntimeSession): ThreadStats {

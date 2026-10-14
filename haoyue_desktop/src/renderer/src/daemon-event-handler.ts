@@ -58,8 +58,11 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
   // ---------------------------------------------------------------- stream throttle
   // Every delta used to mutate the reactive message immediately, forcing the active
   // bubble to re-run full markdown/highlight/katex parsing dozens of times per second
-  // (O(n²) over the reply length). Deltas are now batched into a ~50 ms window per
-  // message; terminal events flush pending buffers so nothing is lost.
+  // (O(n²) over the reply length). Deltas are now batched into a window per message;
+  // terminal events flush pending buffers so nothing is lost. The window widens as
+  // the message grows: a long reply re-parses its whole accumulated markdown on every
+  // flush, so a fixed 50 ms window still saturates the renderer main thread on large
+  // outputs (the "output stutters then freezes" report).
   interface PendingStream {
     content: string
     thinking: string
@@ -67,6 +70,16 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
   }
 
   const STREAM_FLUSH_MS = 50
+  const STREAM_FLUSH_MS_LARGE = 120 // accumulated stream > 12k chars
+  const STREAM_FLUSH_MS_HUGE = 250 // accumulated stream > 30k chars
+
+  function flushDelayFor(pending: PendingStream): number {
+    const size = pending.content.length + pending.thinking.length
+    if (size > 30000) return STREAM_FLUSH_MS_HUGE
+    if (size > 12000) return STREAM_FLUSH_MS_LARGE
+    return STREAM_FLUSH_MS
+  }
+
   const pendingStreams = new Map<ChatMessage, PendingStream>()
 
   function flushStream(message: ChatMessage | undefined): void {
@@ -87,8 +100,26 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
     }
     apply(pending)
     if (pending.timer === undefined) {
-      pending.timer = setTimeout(() => flushStream(message), STREAM_FLUSH_MS)
+      pending.timer = setTimeout(() => flushStream(message), flushDelayFor(pending))
     }
+  }
+
+  // ---------------------------------------------------------------- scroll throttle
+  // handleDaemonEvent runs once per daemon frame (one frame per streamed token on
+  // local models). scrollToBottom awaits nextTick and reads scrollHeight, i.e. a
+  // forced layout per token — 50–100 reflows per second, on top of the markdown
+  // re-renders above, is enough to freeze the UI. Coalesce into one trailing scroll
+  // per window; explicit forced scrolls (smooth jump on new bubbles) stay immediate.
+  const SCROLL_THROTTLE_MS = 120
+  let scrollScheduled = false
+
+  function scheduleAutoScroll(): void {
+    if (scrollScheduled) return
+    scrollScheduled = true
+    setTimeout(() => {
+      scrollScheduled = false
+      void scrollToBottom()
+    }, SCROLL_THROTTLE_MS)
   }
 
   return function handleDaemonEvent(event: DaemonMessage): void {
@@ -391,6 +422,6 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         if (!message || isBackgroundThread) reloadBackgroundThreadIfIdle(thread)
         break
     }
-    if (thread.id === activeThreadId.value) void scrollToBottom()
+    if (thread.id === activeThreadId.value) scheduleAutoScroll()
   }
 }

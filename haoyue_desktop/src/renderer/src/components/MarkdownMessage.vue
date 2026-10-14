@@ -52,7 +52,7 @@ md.renderer.rules.link_open = (tokens, index, options, _env, self) => {
   return self.renderToken(tokens, index, options)
 }
 
-md.renderer.rules.fence = (tokens, index) => {
+md.renderer.rules.fence = (tokens, index, _options, env) => {
   const token = tokens[index]!
   const language = token.info.trim().split(/\s+/)[0] ?? ''
 
@@ -61,7 +61,11 @@ md.renderer.rules.fence = (tokens, index) => {
     return `<div class="mermaid-render" data-src="${encoded}"><span class="mermaid-placeholder">加载图表…</span></div>`
   }
 
-  const highlighted = language && hljs.getLanguage(language)
+  // While streaming, skip hljs: the whole accumulated message is re-parsed on every
+  // flush window, and highlighting every fence each time is a main-thread sink for
+  // long replies. The final pass (streaming=false) renders the colors once.
+  const streaming = Boolean((env as { streaming?: boolean } | undefined)?.streaming)
+  const highlighted = !streaming && language && hljs.getLanguage(language)
     ? hljs.highlight(token.content, { language, ignoreIllegals: true }).value
     : md.utils.escapeHtml(token.content)
   const encoded = encodeURIComponent(token.content)
@@ -108,7 +112,7 @@ const rendered = computed(() => {
   fences.forEach((fence, index) => {
     processed = processed.replace(`@@FENCE${index}@@`, fence)
   })
-  const html = md.render(processed)
+  const html = md.render(processed, { streaming: props.streaming })
   return html.replace(/@@MATH(\d+)@@/g, (_all, index: string) => mathHtml[Number(index)] ?? '')
 })
 
@@ -118,7 +122,11 @@ const body = ref<HTMLElement | null>(null)
 let mermaidPromise: Promise<typeof import('mermaid')> | null = null
 let mermaidSequence = 0
 
+// Mermaid renders are expensive (full diagram layout per diagram). During streaming
+// the markdown is re-parsed every flush window, so each window would re-run
+// mermaid.render on the incomplete diagram — defer to the final full pass.
 async function renderMermaid(): Promise<void> {
+  if (props.streaming) return
   const container = body.value
   if (!container) return
   const nodes = Array.from(container.querySelectorAll<HTMLElement>('.mermaid-render[data-src]'))

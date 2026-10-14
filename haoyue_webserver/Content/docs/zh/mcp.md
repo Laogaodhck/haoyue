@@ -4,7 +4,7 @@ Haoyue 作为 MCP Client 连接外部 Server，并把发现的工具和 Prompt �
 
 ## 支持范围
 
-- **stdio**：启动本地子进程，通过 stdin / stdout 交换 JSON-RPC 2.0 消息；
+- **stdio**：启动本地子进程，通过 stdin / stdout 交换 JSON-RPC 2.0 消息；子进程默认在工作区根目录下启动，`--repository .` 之类的相对参数因此指向当前项目而非程序安装目录；
 - **HTTP SSE**：以 Server-Sent Events 长连接接收消息，并按 Server 声明的 POST 端点发送请求；
 - **Streamable HTTP**：直接向 `POST /mcp` 发送请求，响应可以是 JSON，也可以是流式 SSE；
 - 自动调用 `tools/list` 并把工具注册到 `IToolRegistry`；
@@ -40,6 +40,7 @@ Server 编辑器的“高级”折叠区提供以下调优项，默认全部留�
 | 选项 | 说明 |
 | --- | --- |
 | 传输方式 | 显式覆盖 stdio / HTTP SSE / Streamable HTTP（通常由连接内容自动判定） |
+| 工作目录 | stdio 子进程的启动目录；留空默认当前工作区根目录，可填绝对路径或相对工作区的路径 |
 | 连接超时 | 远程连接超时秒数，1~120，默认 10 秒 |
 | 始终视为写入的工具 | 名称不含写入关键词但会真实改动的工具（如 `send_email`、`deploy`），逐行填写 |
 | 始终视为只读的工具 | 强制按只读处理的工具名，优先级高于上一项 |
@@ -73,7 +74,7 @@ Server 编辑器的“高级”折叠区提供以下调优项，默认全部留�
 
 远程 Server 支持自定义 HTTP `headers`（如 `Authorization`）；值以 `secret:` 前缀加密存储（Windows DPAPI；Linux 优先 Secret Service，无密钥环时退回 `~/.haoyue/secrets.json` AES-GCM 加密文件，密钥派生自机器标识，安全性弱于 DPAPI），不回显、不进日志。携带 headers 的连接必须使用 https://（127.0.0.1 调试除外）。
 
-JSON 配置同样接受专家字段：`connectTimeoutSeconds`、`mutatingTools`、`readOnlyTools`、`trustReadOnly` 与 `oauthDisabled`，含义与上表一致。
+JSON 配置同样接受专家字段：stdio 可选 `cwd` 指定子进程工作目录，以及 `connectTimeoutSeconds`、`mutatingTools`、`readOnlyTools`、`trustReadOnly` 与 `oauthDisabled`，含义与上表一致。
 
 ## 连接与重载
 

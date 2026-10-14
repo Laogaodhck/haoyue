@@ -4,7 +4,7 @@ Haoyue acts as an MCP Client, connects to external servers, and registers discov
 
 ## Supported surface
 
-- **stdio** starts a local process and exchanges JSON-RPC 2.0 over stdin and stdout.
+- **stdio** starts a local process and exchanges JSON-RPC 2.0 over stdin and stdout. The process starts in the workspace root by default, so relative arguments such as `--repository .` point at the current project rather than the app install directory.
 - **HTTP SSE** receives messages over a Server-Sent Events stream and sends requests to the POST endpoint announced by the server.
 - **Streamable HTTP** posts directly to `/mcp`; the response may be a JSON body or a streaming SSE body.
 - The manager calls `tools/list` and registers tools with `IToolRegistry`.
@@ -40,6 +40,7 @@ The “Advanced” section of the server editor offers the following tuning knob
 | Option | Description |
 | --- | --- |
 | Transport | Explicitly override stdio / HTTP SSE / Streamable HTTP (usually inferred from the connection string) |
+| Working directory | Startup directory for the stdio child process; empty defaults to the workspace root — accepts an absolute path or a path relative to the workspace |
 | Connect timeout | Remote connect timeout in seconds, 1–120, default 10 |
 | Always-mutating tools | Tool names (one per line) that mutate the world despite carrying no mutating keyword (e.g. `send_email`, `deploy`) |
 | Always read-only tools | Tool names forced to read-only; takes precedence over the previous option |
@@ -71,7 +72,7 @@ Global servers can be stored under `mcp.servers` in `~/.haoyue/config.json`. A w
 
 Remote servers support custom HTTP `headers` (e.g. `Authorization`); values are stored encrypted with a `secret:` prefix (Windows DPAPI; Linux prefers the Secret Service and falls back to an AES-GCM-encrypted `~/.haoyue/secrets.json` keyed by the machine identifier — weaker than DPAPI), never echoed back or logged. Connections carrying headers must use https:// (127.0.0.1 debugging exempt).
 
-JSON configuration accepts the expert fields too: `connectTimeoutSeconds`, `mutatingTools`, `readOnlyTools`, `trustReadOnly`, and `oauthDisabled`, with the same meaning as the table above.
+JSON configuration accepts the expert fields too: an optional `cwd` for the stdio child's working directory, plus `connectTimeoutSeconds`, `mutatingTools`, `readOnlyTools`, `trustReadOnly`, and `oauthDisabled`, with the same meaning as the table above.
 
 ## Connection and reload behavior
 

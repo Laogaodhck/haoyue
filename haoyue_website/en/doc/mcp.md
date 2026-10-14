@@ -4,7 +4,7 @@ Haoyue acts as an MCP Client, connects to external servers, and registers discov
 
 ## Supported surface
 
-- **stdio** starts a local process and exchanges JSON-RPC 2.0 over stdin and stdout.
+- **stdio** starts a local process and exchanges JSON-RPC 2.0 over stdin and stdout. The process starts in the workspace root by default, so relative arguments such as `--repository .` point at the current project rather than the app install directory.
 - **HTTP SSE** receives messages over a Server-Sent Events stream and sends requests to the POST endpoint announced by the server.
 - **Streamable HTTP** posts directly to `/mcp`; the response may be a JSON body or a streaming SSE body.
 - The manager calls `tools/list` and registers tools with `IToolRegistry`.
@@ -43,7 +43,7 @@ Global servers can be stored under `mcp.servers` in `~/.haoyue/config.json`. A w
 }
 ```
 
-The current `McpServerConfig` has no `autoConnect` or custom HTTP `headers` field: remote authentication must live in the URL or be allowed by the server.
+An optional `cwd` sets the stdio child's working directory (absolute, or relative to the workspace root); when omitted the child starts in the workspace root. The current `McpServerConfig` has no `autoConnect` or custom HTTP `headers` field: remote authentication must live in the URL or be allowed by the server.
 
 ## Connection and reload behavior
 

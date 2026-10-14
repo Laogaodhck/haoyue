@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Data;
+using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Prompts;
 
 namespace Haoyue.Runtime.Tools.Builtin;
@@ -33,14 +34,19 @@ public sealed class KnowledgeSearchTool(
 
         var limit = Math.Clamp(GetInt(arguments, "limit") ?? 8, 1, 20);
         var scope = HaoyueDatabase.ScopeKey(context.Workspace);
-        var (matches, outcome) = await SearchAsync(scope, query, limit, ct).ConfigureAwait(false);
+        var (matches, outcome, corpusSize) = await SearchAsync(scope, query, limit, ct).ConfigureAwait(false);
         // 语义层失效或索引没建全都会显式写进 summary：用户和进化引擎都需要知道
         // 「这次是纯词法结果」，而不是看到一个看起来一样的答案。
         var caveat = SemanticCaveat(outcome);
         if (matches.Count == 0)
+        {
+            // 空结果是 Success == true，缺陷聚合器看不见——单独发一条 miss 事件，
+            // 让「知识库覆盖不足」成为可被反思回合处理的信号。
+            context.Events.Publish(new RetrievalMissEvent(Name, query.Trim(), corpusSize, caveat));
             return ToolResult.Ok(
                 "No knowledge entries matched. Use knowledge_save to record useful findings for future sessions.",
                 caveat is null ? "No knowledge matches" : $"No knowledge matches（{caveat}）");
+        }
 
         var sb = new StringBuilder();
         foreach (var entry in matches)
@@ -72,7 +78,7 @@ public sealed class KnowledgeSearchTool(
         return null;
     }
 
-    private async Task<(IReadOnlyList<KnowledgeEntry> Matches, HybridSearchOutcome Outcome)> SearchAsync(
+    private async Task<(IReadOnlyList<KnowledgeEntry> Matches, HybridSearchOutcome Outcome, int CorpusSize)> SearchAsync(
         string scope, string query, int limit, CancellationToken ct)
     {
         var entries = knowledge.LoadScope(scope);
@@ -80,13 +86,14 @@ public sealed class KnowledgeSearchTool(
         if (route is null)
             // 「没配模型」和「配了但这次坏了」要分开说：前者是配置问题，用户能自己修。
             return (KnowledgeSearchRanker.Rank(entries, query, limit),
-                new HybridSearchOutcome([], DisabledReason: semantic.Status(scope, entries, configStore.Config).Reason));
+                new HybridSearchOutcome([], DisabledReason: semantic.Status(scope, entries, configStore.Config).Reason),
+                entries.Count);
 
         try
         {
             var outcome = await semantic.SearchHybridAsync(
                 scope, entries, query, limit, route.Client, route.CacheKey, ct).ConfigureAwait(false);
-            return (outcome.Entries, outcome);
+            return (outcome.Entries, outcome, entries.Count);
         }
         catch (OperationCanceledException)
         {
@@ -95,7 +102,7 @@ public sealed class KnowledgeSearchTool(
         catch (Exception ex)
         {
             return (KnowledgeSearchRanker.Rank(entries, query, limit),
-                new HybridSearchOutcome([], EmbeddingError: ex.Message));
+                new HybridSearchOutcome([], EmbeddingError: ex.Message), entries.Count);
         }
     }
 }

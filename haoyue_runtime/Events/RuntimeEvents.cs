@@ -58,6 +58,21 @@ public sealed record ToolCallCompletedEvent(
 /// <summary>A unified diff produced by a file-mutating tool, for rich rendering.</summary>
 public sealed record FileDiffEvent(string CallId, string FilePath, string UnifiedDiff) : RuntimeEvent;
 
+/// <summary>
+/// A retrieval that came back empty. Successful-but-empty tool calls are invisible to
+/// <see cref="Haoyue.Runtime.Evolution.DefectAggregator"/>'s failure clustering (it only reads
+/// Success == false), so a knowledge layer that simply lacks the answer never reaches the
+/// evolution engine. This event closes that gap: repeated misses on the same query become a
+/// coverage defect the reflection turn can turn into a knowledge_save draft.
+/// CorpusSize distinguishes 「库里就没有内容」 from 「有内容但检索不到」 and is null when the
+/// producer cannot know it cheaply.
+/// </summary>
+public sealed record RetrievalMissEvent(
+    string ToolName,
+    string Query,
+    int? CorpusSize = null,
+    string? Reason = null) : RuntimeEvent;
+
 // ---------------------------------------------------------------- provider layer
 
 public sealed record ModelInvocationStartedEvent(string ProviderId, string ModelId, int Step) : RuntimeEvent;

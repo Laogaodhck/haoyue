@@ -124,7 +124,8 @@ export const DEFECT_KIND_LABELS: Record<string, string> = {
   UserNegativeFeedback: '用户负反馈',
   ProviderInstability: '提供商不稳',
   UserCorrection: '用户纠偏',
-  TurnCancelled: '回合中断'
+  TurnCancelled: '回合中断',
+  RetrievalMiss: '检索零命中'
 }
 
 export function defectKindLabel(kind: string): string {
@@ -132,7 +133,7 @@ export function defectKindLabel(kind: string): string {
 }
 
 /** 缺陷严重度（runtime EvolutionAnalytics.SeverityOf）的中文展示名。 */
-export const SEVERITY_LABELS: Record<string, string> = { high: '高', medium: '中' }
+export const SEVERITY_LABELS: Record<string, string> = { high: '高', medium: '中', low: '低' }
 
 export function severityLabel(severity?: string | null): string {
   return SEVERITY_LABELS[severity ?? ''] ?? '中'

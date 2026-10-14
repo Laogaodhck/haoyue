@@ -22,6 +22,7 @@ public static class EventJournal
     [
         nameof(TurnStartedEvent), nameof(TurnCompletedEvent), nameof(UserSteerEvent),
         nameof(ToolCallStartedEvent), nameof(ToolCallCompletedEvent), nameof(FileDiffEvent),
+        nameof(RetrievalMissEvent),
         nameof(ModelInvocationStartedEvent), nameof(ProviderRetryEvent), nameof(ProviderSwitchedEvent),
         nameof(UsageRecordedEvent),
         nameof(VerificationStartedEvent), nameof(VerificationCompletedEvent),

@@ -593,6 +593,35 @@ public sealed class CoreTests : IDisposable
         Assert.False(forgetAgain.Success);
     }
 
+    [Fact]
+    public async Task KnowledgeSearch_ZeroHits_PublishesRetrievalMissEvent()
+    {
+        // 空命中是 Success，缺陷聚合器只能靠这条 miss 事件看见「知识库覆盖不足」。
+        var db = new HaoyueDatabase(Path.Combine(_dir, "kb-miss.db"));
+        var store = new KnowledgeStore(db);
+        var prompts = new FilePromptProvider();
+        var events = new EventBus();
+        var context = new ToolContext
+        {
+            Workspace = NewWorkspace("kb-miss-ws"),
+            Events = events,
+            Agent = new AgentConfig(),
+        };
+        using var subscription = events.Subscribe();
+
+        var result = await new KnowledgeSearchTool(
+            store, new KnowledgeSemanticIndex(db, new LlmHttpFactory()),
+            (IConfigStore)new ConfigStore(Path.Combine(_dir, "kb-miss-cfg.json"), Path.Combine(_dir, "kb-miss-state.json")),
+            prompts).ExecuteAsync(new JsonObject { ["query"] = "从未记录过的主题" }, context, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("No knowledge", result.Summary);
+        var miss = Assert.IsType<RetrievalMissEvent>(await subscription.Reader.ReadAsync());
+        Assert.Equal("knowledge_search", miss.ToolName);
+        Assert.Equal("从未记录过的主题", miss.Query);
+        Assert.Equal(0, miss.CorpusSize);
+    }
+
     private WorkspaceInfo NewWorkspace(string name = "ws")
     {
         var root = Path.Combine(_dir, name);

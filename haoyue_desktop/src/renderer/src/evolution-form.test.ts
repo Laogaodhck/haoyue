@@ -30,7 +30,8 @@ describe('defectKindLabel', () => {
     expect(defectKindLabel('ProviderInstability')).toBe('提供商不稳')
     expect(defectKindLabel('UserCorrection')).toBe('用户纠偏')
     expect(defectKindLabel('TurnCancelled')).toBe('回合中断')
-    expect(Object.keys(DEFECT_KIND_LABELS)).toHaveLength(7)
+    expect(defectKindLabel('RetrievalMiss')).toBe('检索零命中')
+    expect(Object.keys(DEFECT_KIND_LABELS)).toHaveLength(8)
   })
 
   it('falls back to the raw kind for unknown values', () => {
@@ -42,6 +43,7 @@ describe('severityLabel', () => {
   it('maps severity values and treats missing as medium', () => {
     expect(severityLabel('high')).toBe('高')
     expect(severityLabel('medium')).toBe('中')
+    expect(severityLabel('low')).toBe('低')
     expect(severityLabel(null)).toBe('中')
     expect(severityLabel(undefined)).toBe('中')
     expect(severityClass('high')).toBe('severity-high')

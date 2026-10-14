@@ -363,6 +363,8 @@ public sealed class ReflectionRunner
         sb.AppendLine("     - `rationale.md`：缺陷来源、改进假说与验证方式说明。");
         sb.AppendLine($"   - 只允许在 `{_labsRoot.Replace("\\", "/")}` 目录内写文件；严禁修改其他任何文件、严禁改动运行时代码。");
         sb.AppendLine("3. 若缺陷不需要技能层行动，选择 no-action 并在 summary 中归类（一次性失误 / 环境问题 / 超出能力边界）。");
+        sb.AppendLine("   例外：类型 RetrievalMiss 表示知识库或事实层对该问题零命中，属覆盖缺口而非技能问题——"
+            + "不要为它写技能草稿，选 no-action 并在 summary 里写清缺的是哪条知识/事实。");
         sb.AppendLine();
         sb.AppendLine("## 输出契约（必须遵守）");
         sb.AppendLine("回复必须以一个 ```json 围栏代码块结尾，且只包含以下三种形态之一：");

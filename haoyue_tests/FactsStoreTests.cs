@@ -286,4 +286,45 @@ public sealed class FactsStoreTests : IDisposable
         var result = await tool.ExecuteAsync(new JsonObject(), context, CancellationToken.None);
         Assert.False(result.Success);
     }
+
+    [Fact]
+    public async Task FactSearchTool_ZeroHits_PublishesMissEvent_AndSaysWhetherLayerIsEmpty()
+    {
+        // 空命中必须可被进化引擎看见，并同时区分「库是空的」与「有内容但检索不到」。
+        var emptyEvents = new EventBus();
+        var emptyContext = new ToolContext
+        {
+            Workspace = new WorkspaceManager().CreateGlobal(_dir),
+            Events = emptyEvents,
+            Agent = new AgentConfig(),
+        };
+        using (var subscription = emptyEvents.Subscribe())
+        {
+            var empty = await new FactSearchTool(new FilePromptProvider()).ExecuteAsync(
+                new JsonObject { ["query"] = "灰度比例" }, emptyContext, CancellationToken.None);
+            Assert.True(empty.Success);
+            Assert.Contains("事实层还是空的", empty.Output);
+            var miss = Assert.IsType<RetrievalMissEvent>(await subscription.Reader.ReadAsync());
+            Assert.Equal(0, miss.CorpusSize);
+            Assert.Equal("fact_search", miss.ToolName);
+        }
+
+        _store.Add(_dir, "构建命令是 dotnet build", "build", confidence: 1.0);
+        var stockedEvents = new EventBus();
+        var stockedContext = new ToolContext
+        {
+            Workspace = new WorkspaceManager().CreateGlobal(_dir),
+            Events = stockedEvents,
+            Agent = new AgentConfig(),
+        };
+        using (var subscription = stockedEvents.Subscribe())
+        {
+            var missResult = await new FactSearchTool(new FilePromptProvider()).ExecuteAsync(
+                new JsonObject { ["query"] = "灰度比例" }, stockedContext, CancellationToken.None);
+            Assert.Contains("1 条活跃事实", missResult.Output);
+            var miss = Assert.IsType<RetrievalMissEvent>(await subscription.Reader.ReadAsync());
+            Assert.Equal(1, miss.CorpusSize);
+            Assert.Contains("零命中", miss.Reason);
+        }
+    }
 }

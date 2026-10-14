@@ -138,6 +138,59 @@ public sealed class DefectAggregatorTests : IDisposable
         Assert.Empty(new DefectAggregator(_database).Aggregate());
     }
 
+    [Fact]
+    public void RetrievalMiss_RepeatedSameQuery_BecomesCoverageDefect()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-6);
+        Append(new TurnStartedEvent("s7", "查部署手册"), start);
+        Append(new RetrievalMissEvent("knowledge_search", "Docker  部署", 42, "语义索引未建全"), start);
+        Append(new RetrievalMissEvent("knowledge_search", "docker 部署", 42), start.AddMinutes(2));
+
+        var report = Assert.Single(new DefectAggregator(_database).Aggregate());
+
+        Assert.Equal(DefectKind.RetrievalMiss, report.Kind);
+        Assert.Equal("knowledge_search", report.ToolName);
+        Assert.Equal(2, report.Occurrences);
+        Assert.Equal("s7", report.SessionId);
+        Assert.Equal("low", report.Severity);
+        // 同一问题的不同大小写/空白必须落进同一簇，否则永远凑不到阈值。
+        Assert.Contains("docker 部署", report.ErrorSummary);
+        Assert.Contains("语料共 42 条仍未命中", report.ErrorSummary);
+    }
+
+    [Fact]
+    public void RetrievalMiss_SingleOccurrence_DoesNotReport()
+    {
+        Append(new RetrievalMissEvent("fact_search", "灰度比例", 0), DateTimeOffset.UtcNow);
+
+        Assert.Empty(new DefectAggregator(_database).Aggregate());
+    }
+
+    [Fact]
+    public void RetrievalMiss_EmptyCorpus_IsDescribedAsEmptyLayer()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-4);
+        Append(new RetrievalMissEvent("fact_search", "灰度比例", 0, "该工作区事实层为空"), start);
+        Append(new RetrievalMissEvent("fact_search", "灰度比例", 0, "该工作区事实层为空"), start.AddMinutes(1));
+
+        var report = Assert.Single(new DefectAggregator(_database).Aggregate());
+        Assert.Contains("该工作区对应语料为空", report.ErrorSummary);
+    }
+
+    [Fact]
+    public void RetrievalMiss_OtherQueries_DoNotMerge()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-4);
+        Append(new RetrievalMissEvent("knowledge_search", "docker 部署", 10), start);
+        Append(new RetrievalMissEvent("knowledge_search", "nginx 日志", 10), start.AddMinutes(1));
+
+        Assert.Empty(new DefectAggregator(_database).Aggregate());
+    }
+
+    [Fact]
+    public void RetrievalMissEvent_IsJournaled() =>
+        Assert.True(EventJournal.IsPersistent(new RetrievalMissEvent("knowledge_search", "q")));
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

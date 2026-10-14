@@ -34,9 +34,17 @@ public sealed class FactSearchTool(IPromptProvider prompts) : BuiltinTool(prompt
             var store = new FactsStore();
             var hits = store.SearchForRoot(context.Workspace.Root, query, top);
             if (hits.Count == 0)
+            {
+                // 与 knowledge_search 同理：空命中是 Success，缺陷聚合器只能靠 miss 事件看见它。
+                var active = store.ListActiveForRoot(context.Workspace.Root).Count;
+                context.Events.Publish(new RetrievalMissEvent(
+                    Name, query, active,
+                    active == 0 ? "该工作区事实层为空，尚无内容可检索" : "有活跃事实但按关键词零命中"));
                 return Task.FromResult(ToolResult.Ok(
-                    $"没有命中任何事实（query: {query}）。可用 fact_save 沉淀新事实。",
+                    $"没有命中任何事实（query: {query}）。可用 fact_save 沉淀新事实。"
+                    + (active == 0 ? "（当前工作区事实层还是空的）" : $"（事实层共 {active} 条活跃事实）"),
                     "No facts matched"));
+            }
 
             var lines = hits.Select(f =>
                 $"- #{f.Id} [{f.Topic ?? "general"}] ({f.Source}, 置信度 {f.Confidence:0.0}"

@@ -58,6 +58,8 @@ public static class EvolutionAnalytics
         (DefectKind.ProviderInstability, 5, 15),
         (DefectKind.UserCorrection, 4, 12),
         (DefectKind.TurnCancelled, 3, 9),
+        // 覆盖缺口不直接损坏当回合执行，扣分最轻；但它是知识层长期不增长的唯一可见信号。
+        (DefectKind.RetrievalMiss, 2, 8),
     ];
 
     public static HealthScore ComputeHealth(IReadOnlyList<DefectReport> reports)
@@ -82,6 +84,8 @@ public static class EvolutionAnalytics
         DefectKind.ToolFailureCluster => occurrences >= 6 ? "high" : "medium",
         DefectKind.VerificationStruggle => occurrences >= 6 ? "high" : "medium",
         DefectKind.ProviderInstability => occurrences >= 5 ? "high" : "medium",
+        // 覆盖缺口是背景知识缺失，不是当回合故障：重复到 4 次以上才值得优先补。
+        DefectKind.RetrievalMiss => occurrences >= 4 ? "medium" : "low",
         _ => "medium",
     };
 

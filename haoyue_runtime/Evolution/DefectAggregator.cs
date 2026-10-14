@@ -29,6 +29,10 @@ public enum DefectKind
     UserCorrection,
     /// <summary>The user cancelled several turns in the same session.</summary>
     TurnCancelled,
+    /// <summary>A retrieval (knowledge_search / fact_search) returned nothing for the same
+    /// query repeatedly. Successful-but-empty results are invisible to the failure clusters,
+    /// so this is the signal that the memory/knowledge layer simply lacks the answer.</summary>
+    RetrievalMiss,
 }
 
 /// <summary>
@@ -67,6 +71,11 @@ public sealed class DefectAggregator(HaoyueDatabase database)
     /// <summary>Window inside which repeated same-error failures form a cluster.</summary>
     public static readonly TimeSpan ClusterWindow = TimeSpan.FromMinutes(30);
 
+    /// <summary>Misses on the same query needed to count as a coverage defect. Lower than
+    /// <see cref="ClusterThreshold"/>: two empty retrievals of one question already mean the
+    /// layer has nothing to answer it, and waiting for a third only wastes the user's turns.</summary>
+    public const int RetrievalMissThreshold = 2;
+
     /// <summary>Cap for normalized error text so fingerprints stay stable across noise.</summary>
     public const int ErrorSummaryChars = 160;
 
@@ -92,6 +101,8 @@ public sealed class DefectAggregator(HaoyueDatabase database)
         var providerRetries = new Dictionary<ClusterKey, List<DateTimeOffset>>();
         var corrections = new Dictionary<string, List<(DateTimeOffset Ts, string Instruction)>>();
         var cancels = new Dictionary<string, List<DateTimeOffset>>();
+        var retrievalMisses = new Dictionary<ClusterKey,
+            List<(DateTimeOffset Ts, string? Session, int? Corpus, string? Reason)>>();
         var feedbackReports = new List<DefectReport>();
 
         foreach (var persisted in journal)
@@ -157,6 +168,15 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     bucket.Add((ts, currentSession));
                     break;
 
+                case nameof(RetrievalMissEvent):
+                    if (sessionExcluded) break;
+                    var miss = TryDeserialize<RetrievalMissEvent>(persisted.Payload);
+                    if (miss is null || string.IsNullOrWhiteSpace(miss.Query)) break;
+                    var missKey = new ClusterKey(miss.ToolName, NormalizeQuery(miss.Query));
+                    retrievalMisses.TryAdd(missKey, []);
+                    retrievalMisses[missKey].Add((ts, currentSession, miss.CorpusSize, miss.Reason));
+                    break;
+
                 case nameof(VerificationCompletedEvent):
                     if (sessionExcluded) break;
                     var verification = TryDeserialize<VerificationCompletedEvent>(persisted.Payload);
@@ -212,14 +232,15 @@ public sealed class DefectAggregator(HaoyueDatabase database)
         reports.AddRange(BuildProviderClusters(providerRetries));
         reports.AddRange(BuildCorrections(corrections));
         reports.AddRange(BuildCancels(cancels));
+        reports.AddRange(BuildRetrievalMisses(retrievalMisses));
         reports.AddRange(feedbackReports);
         return reports.OrderBy(r => r.FirstSeen).ToList();
     }
 
     private record struct ClusterKey(string ToolName, string Error);
 
-    /// <summary>Best (largest) sliding-window span containing ≥<see cref="ClusterThreshold"/> points; null if none.</summary>
-    private static (int Start, int End)? BestWindow(List<DateTimeOffset> ordered)
+    /// <summary>Best (largest) sliding-window containing ≥<paramref name="threshold"/> points; null if none.</summary>
+    private static (int Start, int End)? BestWindow(List<DateTimeOffset> ordered, int threshold = ClusterThreshold)
     {
         var bestStart = 0;
         var bestEnd = -1;
@@ -227,7 +248,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
         {
             var j = i;
             while (j + 1 < ordered.Count && ordered[j + 1] - ordered[i] <= ClusterWindow) j++;
-            if (j - i + 1 >= ClusterThreshold && j > bestEnd)
+            if (j - i + 1 >= threshold && j > bestEnd)
             {
                 bestStart = i;
                 bestEnd = j;
@@ -301,6 +322,52 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                 ordered[^1].Session,
                 EvolutionAnalytics.SeverityOf(DefectKind.CapabilityGap, ordered.Count));
         }
+    }
+
+    /// <summary>Repeated empty retrievals of the same query → one coverage defect per
+    /// (tool, query). The report says whether the layer is empty or just misses this
+    /// question, because the fix differs (灌库 vs 改写检索/补一条知识).</summary>
+    private IEnumerable<DefectReport> BuildRetrievalMisses(
+        Dictionary<ClusterKey, List<(DateTimeOffset Ts, string? Session, int? Corpus, string? Reason)>> misses)
+    {
+        foreach (var (key, hits) in misses)
+        {
+            if (hits.Count == 0) continue;
+            var ordered = hits.OrderBy(h => h.Ts).ToList();
+            var window = BestWindow(
+                ordered.Select(h => h.Ts).ToList(), RetrievalMissThreshold);
+            if (window is null) continue;
+            var (bestStart, bestEnd) = window.Value;
+            var count = bestEnd - bestStart + 1;
+            var last = ordered[bestEnd];
+            var coverage = last.Corpus switch
+            {
+                0 => "该工作区对应语料为空",
+                > 0 => $"语料共 {last.Corpus} 条仍未命中",
+                null => "语料规模未知",
+            };
+            var summary = $"{key.ToolName} 检索零命中 {count} 次（{coverage}）：{key.Error}"
+                + (string.IsNullOrWhiteSpace(last.Reason) ? "" : $"；{last.Reason}");
+            yield return new DefectReport(
+                Fingerprint(DefectKind.RetrievalMiss, key.ToolName, key.Error),
+                DefectKind.RetrievalMiss,
+                ordered[bestStart].Ts,
+                ordered[bestEnd].Ts,
+                count,
+                key.ToolName,
+                summary,
+                ordered[bestEnd].Session,
+                EvolutionAnalytics.SeverityOf(DefectKind.RetrievalMiss, count));
+        }
+    }
+
+    /// <summary>Query normalization for clustering: case-folded, whitespace-collapsed, capped
+    /// so one paraphrase-free repeat lands in the same bucket.</summary>
+    private static string NormalizeQuery(string query)
+    {
+        var collapsed = string.Join(' ', query.Trim().ToLowerInvariant()
+            .Split([' ', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries));
+        return collapsed.Length > ErrorSummaryChars ? collapsed[..ErrorSummaryChars] + "…" : collapsed;
     }
 
     private IEnumerable<DefectReport> BuildProviderClusters(Dictionary<ClusterKey, List<DateTimeOffset>> retries)

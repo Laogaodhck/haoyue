@@ -33,6 +33,7 @@ export const DAEMON_STREAM_EVENTS = [
   'workflow',
   'plan_update',
   'warning',
+  'approval_request',
 ] as const
 
 export const DAEMON_TERMINAL_EVENTS = [
@@ -69,6 +70,7 @@ export const DAEMON_EVENT_NAMES = [
   'workflow',
   'plan_update',
   'warning',
+  'approval_request',
   'pong',
   'result',
   'done',
@@ -96,6 +98,7 @@ export const DAEMON_METHODS = [
   'chat',
   'agent.runTurn',
   'agent.steer',
+  'agent.respondApproval',
   'agent.cancel',
   'agent.undo',
   'agent.interrupted',

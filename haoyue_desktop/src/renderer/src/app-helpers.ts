@@ -86,6 +86,8 @@ export interface RuntimeProject {
 export interface RuntimeModelCatalogItem {
   ref: string
   active: boolean
+  /** 模型声明的上下文窗口（tokens）；model.list 线上一直携带，此前渲染层未使用。 */
+  contextWindow?: number
   capabilities?: { vision?: boolean }
 }
 

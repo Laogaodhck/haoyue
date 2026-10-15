@@ -139,6 +139,19 @@ public sealed record WarningEvent(string Message) : RuntimeEvent;
 
 public sealed record ErrorEvent(string Message, string? Detail = null) : RuntimeEvent;
 
+// ---------------------------------------------------------------- approval
+
+/// <summary>
+/// 内置高危守卫拦截了执行类工具（bash / computer_exec）时请求用户「本次允许」（P1-2.3）。
+/// 桌面弹出审批卡片，用户选择经 agent.respondApproval 回传；超时/拒绝按拒绝处理。
+/// 用户自定义 toolPolicy 规则不触发本事件——那类拒绝必须改配置。
+/// </summary>
+public sealed record ApprovalRequiredEvent(
+    string CallId,
+    string ToolName,
+    string Summary,
+    string Reason) : RuntimeEvent;
+
 // ---------------------------------------------------------------- evolution
 
 /// <summary>Emitted after an evolution reflection turn finishes (engine stage E2).</summary>

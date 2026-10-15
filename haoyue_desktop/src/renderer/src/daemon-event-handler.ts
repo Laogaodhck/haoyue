@@ -257,6 +257,21 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         streamInto(message, (pending) => { pending.content += event.data })
         message.state = 'streaming'
         break
+      case 'approval_request': {
+        // 「本次允许」审批（P1-2.3）：内置高危守卫挂起了执行类工具调用。
+        // 挂起期间回合阻塞等待，用户选择经 agent.respondApproval 回传。
+        if (!message) break
+        const callId = typeof event.details?.callId === 'string' ? event.details.callId : ''
+        if (!callId) break
+        thread.pendingApproval = {
+          callId,
+          tool: typeof event.details?.tool === 'string' ? event.details.tool : '',
+          summary: event.data || '',
+          reason: typeof event.details?.reason === 'string' ? event.details.reason : '',
+          requestedAt: Date.now()
+        }
+        break
+      }
       case 'status': {
         if (message && event.data.toLocaleLowerCase().includes('thinking')) message.state = 'thinking'
         thread.phase = phaseLabel(event.data)
@@ -290,6 +305,10 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         if (running) {
           running.state = event.details?.success === false ? 'error' : 'done'
           running.detail = event.data || running.detail
+          // daemon 一直下发 durationMs，此前 ToolActivity 无字段、handler 不读——
+          // 工具行展开后展示耗时（P1-2.3）。
+          const durationMs = Number(event.details?.durationMs)
+          if (Number.isFinite(durationMs) && durationMs > 0) running.durationMs = durationMs
         }
         break
       }
@@ -411,6 +430,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         finalizeAssistantBubbles(thread.messages, 'done')
         if (isChatRequest) rememberFinishedRequest(thread, event.id)
         thread.activeTurnToken = undefined
+        thread.pendingApproval = undefined
         thread.pendingGuidance = 0
         thread.running = false
         thread.requestId = undefined
@@ -434,6 +454,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         finalizeAssistantBubbles(thread.messages, 'error')
         if (isChatRequest) rememberFinishedRequest(thread, event.id)
         thread.activeTurnToken = undefined
+        thread.pendingApproval = undefined
         thread.pendingGuidance = 0
         thread.running = false
         thread.requestId = undefined

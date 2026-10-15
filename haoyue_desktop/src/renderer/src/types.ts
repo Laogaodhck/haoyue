@@ -26,6 +26,8 @@ export interface ToolActivity {
   addedLines?: number
   removedLines?: number
   state: 'running' | 'done' | 'error'
+  /** 执行耗时（毫秒，来自 daemon tool_done 事件）；展开行显示。 */
+  durationMs?: number
 }
 
 export interface ImageAttachment {
@@ -153,6 +155,24 @@ export interface ThreadItem {
   turnStepHighWater?: number
   /** Workspace-relative files the latest finished turn changed; agent.undo can revert them. */
   undoableFiles?: string[]
+  /** 「本次允许」审批请求（内置高危守卫挂起的工具调用，P1-2.3）。 */
+  pendingApproval?: {
+    callId: string
+    tool: string
+    summary: string
+    reason: string
+    requestedAt: number
+  }
+}
+
+/** 跨会话全文检索的一条命中（session.search）：命中会话的头信息 + 匹配条数。 */
+export interface SessionSearchHit {
+  id: string
+  title: string
+  workspace?: string
+  archived?: boolean
+  updatedAt?: string
+  matchCount?: number
 }
 
 /** One evolution-engine skill candidate awaiting human review (P3). */

@@ -2665,12 +2665,14 @@ internal sealed class DaemonAdminApi(
 
     public string SearchSessions(JsonObject parameters)
     {
-        var workspace = SessionWorkspace(parameters);
         var query = RequiredString(parameters, "query");
         var includeArchived = parameters["includeArchived"]?.GetValue<bool?>() ?? false;
         var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 20, 1, 50);
 
-        var hits = runtime.Sessions.Search(workspace, query, includeArchived, limit);
+        // all=true 跨全部工作区检索（桌面「全部会话」搜索）；否则按 workspace/global 限定。
+        var hits = parameters["all"]?.GetValue<bool?>() == true
+            ? runtime.Sessions.SearchAll(query, includeArchived, limit)
+            : runtime.Sessions.Search(SessionWorkspace(parameters), query, includeArchived, limit);
         var array = new JsonArray();
         foreach (var hit in hits)
         {

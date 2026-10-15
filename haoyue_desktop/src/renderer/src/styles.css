@@ -615,6 +615,19 @@ select:focus-visible {
   animation: spin 1s linear infinite;
 }
 
+.search-results-section .section-heading {
+  justify-content: space-between;
+}
+
+.search-hit-meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-right: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .project-heading-row .project-row {
   gap: 10px;
   font-size: 14px;
@@ -1500,6 +1513,15 @@ select:focus-visible {
   color: var(--text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 工具耗时（P1-2.3）：右对齐、等宽、不参与省略，与 detail 同排显示。 */
+.tool-row small.tool-duration {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .change-card {
@@ -2801,6 +2823,72 @@ select:focus-visible {
   padding: 22px;
   place-items: center;
   background: rgb(0 0 0 / 35%);
+}
+
+/* 「本次允许」审批弹窗（P1-2.3）：警示性配色，两个明确动作。 */
+.approval-dialog {
+  width: min(460px, 100%);
+  overflow: hidden;
+  background: var(--surface-raised, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 35%);
+}
+
+.approval-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.approval-header h2 {
+  margin: 0;
+  color: var(--warning, #d97706);
+  font-size: 15px;
+}
+
+.approval-body {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.approval-body p {
+  margin: 0;
+}
+
+.approval-tool code,
+.approval-note code {
+  padding: 1px 5px;
+  background: var(--surface-sunken, rgb(127 127 127 / 12%));
+  border-radius: 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.approval-summary {
+  padding: 8px 10px;
+  background: var(--surface-sunken, rgb(127 127 127 / 12%));
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.approval-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.approval-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
 }
 
 .modal-fade-enter-active,

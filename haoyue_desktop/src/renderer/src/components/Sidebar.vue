@@ -20,7 +20,8 @@ import {
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logoUrl from '../../../../resources/logo.png?url'
-import type { ProjectItem, ThreadItem } from '../types'
+import type { ProjectItem, SessionSearchHit, ThreadItem } from '../types'
+import { filterUnloadedHits, shouldSearchRemotely } from '../sidebar-search'
 
 const props = defineProps<{
   projects: ProjectItem[]
@@ -34,6 +35,7 @@ const emit = defineEmits<{
   newTask: [projectId?: string]
   openWorkspace: []
   selectThread: [id: string]
+  openSession: [hit: SessionSearchHit]
   taskSettings: [thread: ThreadItem]
   renameTask: [thread: ThreadItem, title: string]
   archiveTask: [thread: ThreadItem]
@@ -116,6 +118,56 @@ watch(() => props.threads.map((thread) => thread.id), (ids) => {
 
 const normalizedQuery = computed(() => query.value.trim().toLocaleLowerCase())
 
+// 跨会话全文检索：本地列表只覆盖已加载的项目/全局任务，键入 >=2 字且本地无匹配时
+// 调 session.search 补搜全部会话（含未加载项目与归档），命中已加载的本地过滤掉。
+const remoteHits = ref<SessionSearchHit[]>([])
+const remoteSearching = ref(false)
+const remoteError = ref('')
+let remoteSearchSeq = 0
+let remoteSearchTimer: ReturnType<typeof setTimeout> | undefined
+
+function clearRemoteSearch(): void {
+  remoteSearchSeq += 1
+  remoteHits.value = []
+  remoteSearching.value = false
+  remoteError.value = ''
+}
+
+async function runRemoteSearch(term: string): Promise<void> {
+  const seq = ++remoteSearchSeq
+  remoteSearching.value = true
+  remoteError.value = ''
+  try {
+    const response = await window.haoyue.daemon.request('session.search', {
+      query: term,
+      limit: 20,
+      includeArchived: true,
+      all: true
+    })
+    if (seq !== remoteSearchSeq) return
+    const hits = JSON.parse(response.data) as SessionSearchHit[]
+    const knownSessionIds = new Set(
+      props.threads.map((thread) => thread.sessionId).filter((id): id is string => Boolean(id))
+    )
+    remoteHits.value = filterUnloadedHits(hits, knownSessionIds)
+  } catch (error) {
+    if (seq !== remoteSearchSeq) return
+    remoteHits.value = []
+    remoteError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (seq === remoteSearchSeq) remoteSearching.value = false
+  }
+}
+
+watch(normalizedQuery, (value) => {
+  if (remoteSearchTimer) clearTimeout(remoteSearchTimer)
+  if (!shouldSearchRemotely(value)) {
+    clearRemoteSearch()
+    return
+  }
+  remoteSearchTimer = setTimeout(() => void runRemoteSearch(value), 300)
+})
+
 function visibleThreads(projectId: string): ThreadItem[] {
   return props.threads
     .filter((thread) => thread.projectId === projectId && !thread.archived)
@@ -192,6 +244,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (remoteSearchTimer) clearTimeout(remoteSearchTimer)
   document.removeEventListener('pointerdown', closeMenuWhenFocusLeaves)
   document.removeEventListener('focusin', closeMenuWhenFocusLeaves)
   document.removeEventListener('keydown', closeMenuOnEscape)
@@ -314,6 +367,24 @@ onBeforeUnmount(() => {
           </div>
           <p v-if="visibleGlobalThreads.length === 0" class="project-empty">无任务</p>
         </div>
+      </section>
+
+      <section v-if="shouldSearchRemotely(normalizedQuery)" class="sidebar-section search-results-section">
+        <div class="section-heading">
+          <span>全部会话</span>
+          <LoaderCircle v-if="remoteSearching" class="thread-running-spinner" :size="14" aria-label="搜索中" />
+        </div>
+        <div v-if="remoteHits.length" class="task-list">
+          <div v-for="hit in remoteHits" :key="hit.id" class="thread-heading-row">
+            <button class="thread-row" @click="emit('openSession', hit)">
+              <span>{{ hit.title || '未命名会话' }}</span>
+            </button>
+            <small v-if="hit.matchCount" class="search-hit-meta">命中 {{ hit.matchCount }} 条</small>
+          </div>
+        </div>
+        <p v-else-if="remoteSearching" class="project-empty">正在搜索全部会话…</p>
+        <p v-else-if="remoteError" class="project-empty">搜索失败：{{ remoteError }}</p>
+        <p v-else class="project-empty">无更多会话</p>
       </section>
 
       <section class="sidebar-section project-section">

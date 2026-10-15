@@ -128,6 +128,10 @@ public sealed class DaemonServer : IAsyncDisposable
     // (and its in-scope compensation stack) is gone.
     private readonly TurnUndoRegistry _undoRegistry = new();
 
+    // 「本次允许」审批登记簿（P1-2.3）：进程级共享，让 agent.respondApproval RPC
+    // 能响应任意隔离回合运行时里挂起的审批请求。
+    private readonly ApprovalRegistry _approvals = new();
+
     // Turn ids recovered by startup crash recovery (this daemon process lifetime).
     // Clients query these via agent.interrupted on reconnect, because the startup
     // broadcast fires before any client has connected.
@@ -1068,6 +1072,32 @@ public sealed class DaemonServer : IAsyncDisposable
                             break;
                         }
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", "guidance queued", context.ConnectionCt, target.Session.Header.Id).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case "agent.respondApproval":
+                    {
+                        // 「本次允许」审批响应（P1-2.3）：桌面审批卡片的选择经此回传。
+                        // 仅响应内置高危守卫挂起的审批；未知/已超时的 callId 按拒绝收场。
+                        var parameters = Params(request);
+                        var callId = parameters["callId"]?.GetValue<string>();
+                        var approve = parameters["approve"]?.GetValue<bool?>() ?? false;
+                        if (string.IsNullOrWhiteSpace(callId))
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", "params.callId is required", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
+                            break;
+                        }
+                        var matched = _approvals.Respond(callId, approve);
+                        if (!matched)
+                        {
+                            // 审批已超时被清理（或 callId 从未登记）：按拒绝语义告知客户端。
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error",
+                                "No pending approval for this callId (expired or unknown)",
+                                context.ConnectionCt, code: DaemonErrorCode.NotFound).ConfigureAwait(false);
+                            break;
+                        }
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            approve ? "approved" : "denied", context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }
 
@@ -2302,6 +2332,7 @@ public sealed class DaemonServer : IAsyncDisposable
                   services.AddSingleton(_sharedBreaker);
                   services.AddSingleton(_sharedLocalModels);
                   services.AddSingleton(_undoRegistry);
+                  services.AddSingleton(_approvals);
               })
             : null;
         var runtime = turnRuntime ?? _runtime;
@@ -2444,6 +2475,15 @@ public sealed class DaemonServer : IAsyncDisposable
             {
                 AssistantTextDeltaEvent delta => (Name: (string?)"delta", Data: delta.Delta, Details: (JsonObject?)null),
                 ThinkingDeltaEvent thinking => (Name: (string?)"thinking", Data: thinking.Delta, Details: (JsonObject?)null),
+                ApprovalRequiredEvent approval => (
+                    Name: (string?)"approval_request",
+                    Data: approval.Summary,
+                    Details: (JsonObject?)new JsonObject
+                    {
+                        ["callId"] = approval.CallId,
+                        ["tool"] = approval.ToolName,
+                        ["reason"] = approval.Reason,
+                    }),
                 UserSteerEvent steer => (Name: (string?)"steer", Data: steer.Instruction, Details: (JsonObject?)null),
                 ImageViewedEvent image => (
                     Name: (string?)"image_view",

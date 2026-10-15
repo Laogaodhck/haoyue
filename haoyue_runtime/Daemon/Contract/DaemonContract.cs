@@ -116,6 +116,9 @@ public static class DaemonContract
         // 只在运行时内部发布，既不在契约也不在 daemon 转发分支里，用户在桌面看不到
         // 「为什么被拦」。
         "warning",
+        // 「本次允许」审批请求（P1-2.3）：内置高危守卫拦截执行类工具时挂起调用，
+        // 用户选择经 agent.respondApproval 回传。
+        "approval_request",
     ];
 
     /// <summary>请求的终态事件（错误终态 error 对所有方法隐式可用）。</summary>
@@ -335,6 +338,9 @@ public static class DaemonContract
         M("chat", "chat", "发起一次 Agent 回合（流式事件 + done 终态）", ["done", "cancelled"], ChatParams(false)),
         M("agent.runTurn", "chat", "chat 的显式命名别名", ["done", "cancelled"], ChatParams(false)),
         M("agent.steer", "chat", "向活动回合注入引导消息", parameters: ChatParams(true)),
+        M("agent.respondApproval", "chat", "响应「本次允许」审批请求（内置高危守卫挂起的工具调用）", parameters: SObject(
+            ("callId", SString("审批请求对应的工具调用 id"), true),
+            ("approve", SBoolean("true=本次允许；false/缺省=拒绝"), false))),
         M("agent.cancel", "chat", "取消活动回合；缺省取消本连接全部", parameters: SObject(
             ("requestId", SInteger("目标回合请求 id"), false),
             ("sessionId", SString("按会话过滤"), false))),
@@ -557,6 +563,7 @@ public static class DaemonContract
         M("session.search", "session", "全文检索会话", parameters: SessionExt(
             ("query", SString("检索词"), true),
             ("includeArchived", SBoolean("是否包含归档会话"), false),
+            ("all", SBoolean("跨全部工作区检索（忽略 workspace/global）"), false),
             ("limit", SInteger("1..50，缺省 20"), false))),
         M("session.get", "session", "读取完整会话（含消息）", parameters: SessionExt(
             ("id", SString("会话 id"), true))),

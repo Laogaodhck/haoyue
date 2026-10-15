@@ -75,6 +75,28 @@ public sealed partial class Agent
             tool, arguments, configStore.Config.Agent.ToolPolicy);
         if (policyDecision.Verdict == ToolPolicyVerdict.Denied)
         {
+            // 内置高危守卫的拒绝走「本次允许」审批（P1-2.3）：用户自定义 allow/deny
+            // 是显式配置，维持硬拒绝；只有 builtin-bash-guard 这类启发式拦截才提供
+            // 一次性放行，避免用户为了跑一条命令去改配置文件。无审批登记簿（CLI /
+            // 测试上下文）时行为与从前一致。
+            if (_approvals is not null
+                && policyDecision.Rule.Equals("builtin-bash-guard", StringComparison.OrdinalIgnoreCase))
+            {
+                events.Publish(new ApprovalRequiredEvent(
+                    call.Id, tool.Name, argsSummary, policyDecision.Reason));
+                var approved = await _approvals.RequestAsync(
+                    call.Id, ApprovalRegistry.DefaultTimeoutSeconds, ct).ConfigureAwait(false);
+                if (approved)
+                {
+                    events.Publish(new StatusEvent($"用户已批准执行 {tool.Name}", argsSummary));
+                    goto Execute; // 一次性放行：仅本次调用生效
+                }
+                var rejected = $"工具 {tool.Name} 被内置高危守卫拦截，用户未批准执行（{policyDecision.Reason}）。"
+                    + "可调整命令重试，或在配置 agent.toolPolicy.allow 中显式放行。";
+                events.Publish(new ToolCallCompletedEvent(call.Id, tool.Name, false, rejected, TimeSpan.Zero));
+                return new ToolExecution(ChatMessage.ToolResult(call.Id, tool.Name, rejected, false), false);
+            }
+
             var message = $"Tool execution blocked by policy ({policyDecision.Rule}): {policyDecision.Reason} "
                 + "如确需执行，请提示用户在配置 agent.toolPolicy.allow 中显式放行，或调整命令后重试。";
             events.Publish(new WarningEvent($"工具 {call.Name} 被执行策略拒绝（{policyDecision.Rule}）"));
@@ -82,6 +104,7 @@ public sealed partial class Agent
             return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
         }
 
+        Execute:
         var context = new ToolContext
         {
             Workspace = workspace,

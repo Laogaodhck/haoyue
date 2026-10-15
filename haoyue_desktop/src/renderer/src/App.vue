@@ -55,7 +55,7 @@ import { journalCursor, openTurnsOf, recoverTurns, type JournalRow, type Recover
 import { isForbiddenProjectPath } from './project-paths'
 import { retryRuntimeConnection, RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
 import { ReasoningLevel } from './types'
-import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, ThreadItem, ThreadStats, ToolActivity } from './types'
+import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, ThreadStats, ToolActivity } from './types'
 import {
   formatPromptWithFiles,
   formatTurnFailure,
@@ -167,6 +167,34 @@ const conversationViewportHeight = ref(600)
 /** Per-task composer drafts (text + attachments), kept across task switches (H5). */
 interface ComposerDraft { text: string; images: ImageAttachment[]; files: FileAttachment[] }
 const composerDrafts = new Map<string, ComposerDraft>()
+/** 草稿落盘 key（P1-2.3）：未发送草稿此前仅存内存 Map，刷新/崩溃即丢。 */
+const DRAFT_STORAGE_KEY = 'haoyue-composer-drafts'
+
+function loadPersistedDrafts(): void {
+  try {
+    const raw = localStorage.getItem(DRAFT_STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw) as Record<string, ComposerDraft>
+    for (const [threadId, draft] of Object.entries(parsed))
+      if (draft && typeof draft.text === 'string') composerDrafts.set(threadId, draft)
+  } catch {
+    // 损坏的草稿存储不影响启动：按无草稿处理。
+  }
+}
+
+function persistDrafts(): void {
+  try {
+    const entries: Record<string, ComposerDraft> = {}
+    for (const [threadId, draft] of composerDrafts) {
+      // 只持久化有内容的草稿：空文本不占存储，也不该在恢复时抢焦点。
+      if (draft.text.trim() || draft.images.length > 0 || draft.files.length > 0)
+        entries[threadId] = draft
+    }
+    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(entries))
+  } catch {
+    // 存储配额满等故障静默降级：内存 Map 仍是权威来源。
+  }
+}
 
 // ---------------------------------------------------------------- H9/H10/H11/H19/H25
 const conversationSearchInput = ref<HTMLInputElement | null>(null)
@@ -214,6 +242,12 @@ watch(() => activeThread.value?.phase, (phase) => {
 
 /** H11: global keyboard flow — Ctrl+K task search, Ctrl+F conversation search, Ctrl+. stop. */
 function handleGlobalShortcuts(event: KeyboardEvent): void {
+  // Esc 停止活动回合（P1-2.3）：Composer 停止按钮长期标称 Esc 但只有 Ctrl+. 生效。
+  if (event.key === 'Escape' && activeThread.value?.running) {
+    event.preventDefault()
+    stopTurn()
+    return
+  }
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return
   const key = event.key.toLowerCase()
   if (key === 'k') {
@@ -236,6 +270,7 @@ function saveComposerDraft(threadId?: string): void {
     const state = composer.value.getState()
     composerDrafts.set(threadId, { text: state.value, images: state.images, files: state.files })
   }
+  persistDrafts()
 }
 const conversationSelectionToken = { value: 0 }
 
@@ -278,7 +313,13 @@ const composerCaption = computed(() => {
   const speed = outputTokens > 0 && outputElapsedMs > 0
     ? (outputTokens / (outputElapsedMs / 1000)).toFixed(1)
     : '—'
-  return `${number(stats?.llmRounds)} 轮 · ${number(stats?.executionSteps)} 步 | 缓存命中 ${cacheRate} | ${speed} tok/s | 输入 ${number(stats?.inputTokens)} tok · 输出 ${number(stats?.outputTokens)} tok`
+  // 上下文占用比例（P1-2.3）：绝对 token 数对用户没有意义，除以模型窗口才有。
+  const contextWindow = modelCatalog.value.find((model) => model.ref === activeModel.value)?.contextWindow ?? 0
+  const contextUsed = totalInputTokens + outputTokens
+  const contextRatio = contextWindow > 0 && contextUsed > 0
+    ? ` | 上下文 ${Math.min(999, Math.round(contextUsed / contextWindow * 100))}%`
+    : ''
+  return `${number(stats?.llmRounds)} 轮 · ${number(stats?.executionSteps)} 步 | 缓存命中 ${cacheRate} | ${speed} tok/s | 输入 ${number(stats?.inputTokens)} tok · 输出 ${number(stats?.outputTokens)} tok${contextRatio}`
 })
 const settingsThread = computed(() => threads.value.find((thread) => thread.id === taskSettingsThreadId.value))
 const settingsProject = computed(() => projects.value.find((project) => project.id === settingsThread.value?.projectId))
@@ -1166,6 +1207,37 @@ async function selectThread(id: string): Promise<void> {
   await scrollToBottom(false, true)
 }
 
+// 跨会话检索命中：本地列表没有该会话（未加载项目或已归档）时，按检索结果重建一个
+// 懒加载 ThreadItem（sessionLoaded=false，selectThread 会走 session.get 拉取）。
+async function openSearchSession(hit: SessionSearchHit): Promise<void> {
+  const existing = threads.value.find((thread) => thread.sessionId === hit.id)
+  if (existing) {
+    await selectThread(existing.id)
+    return
+  }
+  const project = hit.workspace
+    ? projects.value.find((item) => item.path === hit.workspace)
+    : undefined
+  if (hit.workspace && !project) {
+    void window.haoyue?.notify?.('无法打开会话', `会话所属项目尚未添加：${hit.workspace}`)
+    return
+  }
+  const thread: ThreadItem = {
+    id: project ? `${project.id}:session:${hit.id}` : `global:session:${hit.id}`,
+    title: hit.title || '未命名会话',
+    projectId: project?.id,
+    updatedAt: hit.updatedAt ? new Date(hit.updatedAt).getTime() : Date.now(),
+    messages: [],
+    sessionId: hit.id,
+    sessionLoaded: false,
+    reasoningLevel: ReasoningLevel.High,
+    networkEnabled: true,
+    archived: Boolean(hit.archived)
+  }
+  threads.value.unshift(thread)
+  await selectThread(thread.id)
+}
+
 interface ConversationItem {
   message: ChatMessage
   showFooter: boolean
@@ -1365,7 +1437,28 @@ async function sendMessage(content: string, images: ImageAttachment[], files?: F
     return
   }
   composerDrafts.delete(thread.id)
+  persistDrafts()
   await runMessageTurn(thread, content, images, files)
+}
+
+/** 「本次允许」审批响应（P1-2.3）：回传后 daemon 放行/维持拒绝，事件流继续。 */
+const approvalBusy = ref(false)
+async function respondApproval(approve: boolean): Promise<void> {
+  const thread = activeThread.value
+  const approval = thread?.pendingApproval
+  if (!approval || approvalBusy.value) return
+  approvalBusy.value = true
+  try {
+    await window.haoyue.daemon.request('agent.respondApproval', {
+      callId: approval.callId,
+      approve
+    })
+    thread!.pendingApproval = undefined
+  } catch {
+    // 回传失败保留弹窗：daemon 侧超时自会按拒绝收场，用户也可重试。
+  } finally {
+    approvalBusy.value = false
+  }
 }
 
 function rememberFinishedRequest(thread: ThreadItem, requestId: number): void {
@@ -1834,6 +1927,7 @@ function useStarterPrompt(prompt: string): void {
 
 onMounted(async () => {
   applyTheme(theme.value)
+  loadPersistedDrafts()
   appInfo.value = await window.haoyue.getAppInfo()
   document.documentElement.dataset.platform = appInfo.value.platform
   document.documentElement.dataset.material = appInfo.value.supportsMica ? 'mica' : 'solid'
@@ -1874,7 +1968,7 @@ watch(theme, applyTheme)
       <Transition name="sidebar-slide">
         <Sidebar v-if="sidebarOpen" ref="sidebarPanel" :projects="projects" :threads="threads" :active-thread-id="activeThreadId"
           :active-project-id="selectedProjectId" :version="appInfo.version" @new-task="newTask"
-          @open-workspace="openWorkspace" @select-thread="selectThread" @task-settings="openTaskSettings"
+          @open-workspace="openWorkspace" @select-thread="selectThread" @open-session="openSearchSession" @task-settings="openTaskSettings"
           @rename-task="renameTaskInline"
           @archive-task="archiveTask" @delete-task="deleteTask"
           @delete-project="deleteProject" @archive-project-tasks="archiveProjectTasks"
@@ -2178,6 +2272,37 @@ watch(theme, applyTheme)
       @delete-all="deleteArchivedTasks" />
 
     <AboutDialog :open="aboutOpen" :app-info="appInfo" @close="aboutOpen = false" />
+
+    <!-- 「本次允许」审批（P1-2.3）：内置高危守卫挂起执行类工具调用时弹出；
+         用户选择经 agent.respondApproval 回传，超时（120s）按拒绝处理。 -->
+    <Teleport to="body">
+      <Transition name="modal-fade">
+        <div v-if="activeThread?.pendingApproval" class="modal-backdrop" @mousedown.self>
+          <section class="approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="approval-title">
+            <header class="approval-header">
+              <h2 id="approval-title">高危操作需要你的确认</h2>
+            </header>
+            <div class="approval-body">
+              <p class="approval-tool">
+                工具 <code>{{ activeThread.pendingApproval.tool || '未知工具' }}</code> 被内置高危守卫拦截
+              </p>
+              <p v-if="activeThread.pendingApproval.summary" class="approval-summary">
+                {{ activeThread.pendingApproval.summary }}
+              </p>
+              <p class="approval-reason">拦截原因：{{ activeThread.pendingApproval.reason }}</p>
+              <p class="approval-note">
+                「本次允许」只放行当前这一次调用；拒绝或 120 秒无响应按拒绝处理。
+                如需长期放行，请在配置 <code>agent.toolPolicy.allow</code> 中添加规则。
+              </p>
+            </div>
+            <footer class="approval-footer">
+              <button class="ghost-button" :disabled="approvalBusy" @click="respondApproval(false)">拒绝</button>
+              <button class="primary-button" :disabled="approvalBusy" @click="respondApproval(true)">本次允许</button>
+            </footer>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
 
 
     <TaskSettingsDialog :open="Boolean(taskSettingsThreadId)" :thread="settingsThread" :project="settingsProject"

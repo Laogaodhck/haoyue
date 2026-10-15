@@ -42,6 +42,14 @@ public interface ISessionStore
     /// </summary>
     IReadOnlyList<SessionSearchHit> Search(
         WorkspaceInfo workspace, string query, bool includeArchived = false, int limit = 20);
+    /// <summary>
+    /// Same ranking and FTS/LIKE fallback semantics as <see cref="Search"/>, but across
+    /// every workspace scope in the database (global + all projects) — used by the
+    /// desktop "search all sessions" box, which must reach sessions of projects that
+    /// are not currently loaded.
+    /// </summary>
+    IReadOnlyList<SessionSearchHit> SearchAll(
+        string query, bool includeArchived = false, int limit = 20);
     void Append(AgentSession session, ChatMessage message);
     /// <summary>Rewrites a session's persisted history (used by context compaction).</summary>
     void ReplaceHistory(AgentSession session, IReadOnlyList<ChatMessage> messages);
@@ -273,12 +281,20 @@ public sealed class SessionStore : ISessionStore
 
     public IReadOnlyList<SessionSearchHit> Search(
         WorkspaceInfo workspace, string query, bool includeArchived = false, int limit = 20)
+        => SearchInternal(HaoyueDatabase.ScopeKey(workspace), workspace, query, includeArchived, limit);
+
+    /// <summary>跨全部工作区（global + 各项目 scope）的全文检索，供桌面「全部会话」搜索使用。</summary>
+    public IReadOnlyList<SessionSearchHit> SearchAll(
+        string query, bool includeArchived = false, int limit = 20)
+        => SearchInternal(null, null, query, includeArchived, limit);
+
+    private IReadOnlyList<SessionSearchHit> SearchInternal(
+        string? scope, WorkspaceInfo? workspace, string query, bool includeArchived, int limit)
     {
         query = query.Trim();
         if (query.Length == 0) return [];
-        EnsureLegacyImported(workspace);
+        if (workspace is not null) EnsureLegacyImported(workspace);
 
-        var scope = HaoyueDatabase.ScopeKey(workspace);
         using var connection = _database.OpenConnection();
 
         // L2：FTS5 trigram 路径（≥3 字符才能命中 trigram token），虚表不可用或
@@ -289,7 +305,7 @@ public sealed class SessionStore : ISessionStore
     }
 
     private IReadOnlyList<SessionSearchHit> SearchViaFts(
-        SqliteConnection connection, string scope, string query,
+        SqliteConnection connection, string? scope, string query,
         bool includeArchived, int limit)
     {
         // trigram 短语匹配即子串匹配；引号转义后整体作为一个短语。
@@ -306,14 +322,14 @@ public sealed class SessionStore : ISessionStore
                    (SELECT COUNT(*) FROM messages_fts
                     WHERE messages_fts.scope = s.scope AND messages_fts.session_id = s.id AND messages_fts MATCH $ftsQuery) AS match_count
             FROM sessions s
-            WHERE s.scope = $scope {(includeArchived ? "" : "AND s.archived = 0")}
+            WHERE {ScopeFilter(scope)} {(includeArchived ? "" : "AND s.archived = 0")}
               AND (s.title LIKE $rawPattern ESCAPE '\'
                    OR EXISTS (SELECT 1 FROM messages_fts
                               WHERE messages_fts.scope = s.scope AND messages_fts.session_id = s.id AND messages_fts MATCH $ftsQuery))
             ORDER BY match_count DESC, s.updated_at DESC
             LIMIT $limit;
             """;
-        command.Parameters.AddWithValue("$scope", scope);
+        AddScopeParameter(command, scope);
         command.Parameters.AddWithValue("$rawPattern", rawPattern);
         command.Parameters.AddWithValue("$ftsQuery", ftsQuery);
         command.Parameters.AddWithValue("$limit", limit);
@@ -321,7 +337,7 @@ public sealed class SessionStore : ISessionStore
     }
 
     private IReadOnlyList<SessionSearchHit> SearchViaLike(
-        SqliteConnection connection, string scope, string query,
+        SqliteConnection connection, string? scope, string query,
         bool includeArchived, int limit)
     {
         var rawPattern = "%" + EscapeLike(query) + "%";
@@ -335,10 +351,10 @@ public sealed class SessionStore : ISessionStore
                    s.created_at, s.updated_at, s.expert_id,
                    (CASE WHEN s.title LIKE $rawPattern ESCAPE '\' THEN 1 ELSE 0 END) +
                    (SELECT COUNT(*) FROM messages m
-                    WHERE m.scope = s.scope AND m.session_id = s.id
-                      AND m.payload_json LIKE $jsonPattern ESCAPE '\') AS match_count
+                   WHERE m.scope = s.scope AND m.session_id = s.id
+                     AND m.payload_json LIKE $jsonPattern ESCAPE '\') AS match_count
             FROM sessions s
-            WHERE s.scope = $scope {(includeArchived ? "" : "AND s.archived = 0")}
+            WHERE {ScopeFilter(scope)} {(includeArchived ? "" : "AND s.archived = 0")}
               AND (s.title LIKE $rawPattern ESCAPE '\'
                    OR EXISTS (SELECT 1 FROM messages m
                               WHERE m.scope = s.scope AND m.session_id = s.id
@@ -346,11 +362,19 @@ public sealed class SessionStore : ISessionStore
             ORDER BY match_count DESC, s.updated_at DESC
             LIMIT $limit;
             """;
-        command.Parameters.AddWithValue("$scope", scope);
+        AddScopeParameter(command, scope);
         command.Parameters.AddWithValue("$rawPattern", rawPattern);
         command.Parameters.AddWithValue("$jsonPattern", jsonPattern);
         command.Parameters.AddWithValue("$limit", limit);
         return ReadSearchHits(command);
+    }
+
+    /// <summary>scope 为空时不过滤（跨工作区检索），否则限定单一 scope；archived 条件自带 AND 前缀。</summary>
+    private static string ScopeFilter(string? scope) => scope is null ? "1 = 1" : "s.scope = $scope";
+
+    private static void AddScopeParameter(SqliteCommand command, string? scope)
+    {
+        if (scope is not null) command.Parameters.AddWithValue("$scope", scope);
     }
 
     private static List<SessionSearchHit> ReadSearchHits(SqliteCommand command)

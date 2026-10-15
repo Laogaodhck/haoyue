@@ -71,7 +71,15 @@ function platformLabel(): string {
           <a href="https://github.com/Laogaodhck/haoyue" target="_blank" rel="noreferrer">
             GitHub <ExternalLink :size="13" />
           </a>
+          <a href="https://github.com/Laogaodhck/haoyue/releases" target="_blank" rel="noreferrer">
+            检查更新 <ExternalLink :size="13" />
+          </a>
         </nav>
+
+        <p class="about-description">
+          当前版本 v{{ appInfo?.version ?? '—' }}。检查更新会在浏览器打开 GitHub Releases 页面
+          （应用内自动更新尚在接入中，以发布页说明为准）。
+        </p>
 
         <footer class="about-footer">MIT License · © 2026 Haoyue</footer>
       </section>

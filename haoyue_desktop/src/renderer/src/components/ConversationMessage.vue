@@ -121,6 +121,15 @@ const thinkingLabel = computed(() => {
   return '已完成思考'
 })
 
+/** 工具耗时的人类可读格式（P1-2.3）：<1s 用毫秒，<60s 用秒，更长用分秒。 */
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`
+  const minutes = Math.floor(durationMs / 60_000)
+  const seconds = Math.round((durationMs % 60_000) / 1000)
+  return `${minutes}m${seconds}s`
+}
+
 /** Structured error card (H18): icon + summary + collapsible detail + one-click retry. */
 const errorMeta = computed(() => {
   const detail = props.message.errorDetail || extractModelError(props.message.content)
@@ -275,6 +284,7 @@ function openFileLocation(path?: string): void {
             <Wrench v-else :size="14" class="tool-done" />
             <span>{{ tool.name }}</span>
             <small v-if="tool.detail">{{ tool.detail }}</small>
+            <small v-if="tool.durationMs" class="tool-duration">{{ formatDuration(tool.durationMs) }}</small>
           </div>
         </div>
 
@@ -340,6 +350,12 @@ function openFileLocation(path?: string): void {
       <div v-if="streaming && (message.state === 'thinking' || message.state === 'streaming')"
         class="response-placeholder" aria-label="AI 正在思考">
         <span /><span /><span />
+      </div>
+
+      <!-- 流式回复对辅助技术可见（P1-2.3）：aria-live 让读屏用户能听到增量输出。 -->
+      <div v-if="streaming && (message.state === 'thinking' || message.state === 'streaming')"
+        class="sr-only" role="status" aria-live="polite">
+        AI 正在回复：{{ displayContent.slice(-200) }}
       </div>
 
       <footer

@@ -136,6 +136,40 @@ public class SessionStoreTests : IDisposable
         }
     }
 
+    [Fact]
+    public void SearchAll_FindsHitsAcrossWorkspaces_AndStillRespectsArchived()
+    {
+        var otherRoot = Path.Combine(Path.GetTempPath(), "haoyue-ss-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(otherRoot);
+        try
+        {
+            var otherWorkspace = new WorkspaceInfo { Root = otherRoot, ProjectKinds = [] };
+            var otherStore = new SessionStore(_dbPath); // same database, different scope
+            var otherSession = otherStore.Create(otherWorkspace);
+            otherStore.Append(otherStore.Load(otherWorkspace, otherSession.Header.Id)!, ChatMessage.User("跨工作区全局检索词"));
+
+            var local = NewSessionWithTitle();
+            _store.Append(_store.Load(_workspace, local)!, ChatMessage.User("跨工作区全局检索词 本区"));
+
+            var hits = _store.SearchAll("跨工作区全局检索词");
+            Assert.Equal(2, hits.Count);
+            Assert.Contains(hits, hit => hit.Header.Id == otherSession.Header.Id);
+            Assert.Contains(hits, hit => hit.Header.Id == local);
+            // 命中的 workspace 字段必须可映射回项目路径（桌面据此定位项目）。
+            Assert.Contains(hits, hit => hit.Header.Workspace == otherRoot);
+
+            _store.UpdateMetadata(_workspace, local, archived: true);
+            Assert.Single(_store.SearchAll("跨工作区全局检索词"));
+            Assert.Equal(2, _store.SearchAll("跨工作区全局检索词", includeArchived: true).Count);
+            Assert.Empty(_store.SearchAll(""));
+        }
+        finally
+        {
+            try { Directory.Delete(otherRoot, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
     // ------------------------------------------------- L2: FTS5 index synchronization
 
     [Fact]

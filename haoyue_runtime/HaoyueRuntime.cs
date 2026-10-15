@@ -53,6 +53,9 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     /// <summary>Per-runtime undo ledger registry; the daemon overrides this with a
     /// process-wide instance shared across isolated turn runtimes.</summary>
     public TurnUndoRegistry UndoRegistry => _services.GetRequiredService<TurnUndoRegistry>();
+    /// <summary>「本次允许」审批登记簿；daemon 同样以进程级共享实例覆盖，
+    /// 让 agent.respondApproval RPC 能响应任意隔离回合运行时里的挂起审批。</summary>
+    public ApprovalRegistry Approvals => _services.GetRequiredService<ApprovalRegistry>();
 
     private HaoyueRuntime(ServiceProvider services, WorkspaceInfo workspace)
     {
@@ -418,6 +421,7 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<Haoyue.Runtime.Tools.IToolExecutionPolicy, Haoyue.Runtime.Tools.ToolExecutionPolicy>();
         services.AddSingleton<IAgentDelegator, AgentDelegator>();
         services.AddSingleton<TurnUndoRegistry>();
+        services.AddSingleton<ApprovalRegistry>();
         services.AddSingleton<Agent>();
         return services;
     }

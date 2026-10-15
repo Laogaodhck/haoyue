@@ -40,12 +40,14 @@ public sealed partial class Agent(
     ISkillManager? skills = null,
     TurnUndoRegistry? undoRegistry = null,
     IToolExecutionPolicy? toolPolicy = null,
-    Data.ModelTokenStats? tokenStats = null)
+    Data.ModelTokenStats? tokenStats = null,
+    ApprovalRegistry? approvals = null)
 {
     private readonly ISkillManager? _skills = skills;
     private readonly TurnUndoRegistry? _undoRegistry = undoRegistry;
     private readonly IToolExecutionPolicy _toolPolicy = toolPolicy ?? new Tools.ToolExecutionPolicy();
     private readonly Data.ModelTokenStats? _tokenStats = tokenStats;
+    private readonly ApprovalRegistry? _approvals = approvals;
     // H-E: per-model 校准系数的进程内缓存（DB 行极小，一次读取后本进程复用；
     // 与 ContextWindowCalibrator 一致，配置变更本就要重启运行时）。
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> _ratioCache = new(StringComparer.Ordinal);

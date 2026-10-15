@@ -23,16 +23,23 @@ public class DocsFactsTests
         return dir?.FullName ?? throw new InvalidOperationException("未找到仓库根目录（Haoyue.slnx）");
     }
 
-    /// <summary>xunit 实际枚举用例数：[Fact] + [InlineData]（+ 无数据的 [MemberData]）。排除本文件（自引用）。</summary>
+    /// <summary>
+    /// xunit 实际枚举用例数：[Fact] + [InlineData]，计数前剥离注释。
+    /// 全量口径（含本文件自身）——与 dotnet test 实际执行总数一致；
+    /// 排除自身会让 README 数字系统性偏小（护栏用例也是真实执行的用例）。
+    /// </summary>
     private static int CountXunitCases(string testDir) =>
         Directory.EnumerateFiles(testDir, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.EndsWith("DocsFactsTests.cs", StringComparison.Ordinal))
             .Sum(f => CountXunitCasesIn(File.ReadAllText(f)));
 
-    private static int CountXunitCasesIn(string src) =>
-        Regex.Matches(src, @"\[Fact\]").Count
-        + Regex.Matches(src, @"\[InlineData\(").Count
-        + Regex.Matches(src, @"\[MemberData\(").Count;
+    private static int CountXunitCasesIn(string src)
+    {
+        // 先剥离注释，避免文档里出现的「[Fact]」字样混入统计（本文件注释即自匹配实例）。
+        var code = Regex.Replace(src, @"/\*.*?\*/", "", RegexOptions.Singleline);
+        code = Regex.Replace(code, @"(?<!:)//.*", "");
+        return Regex.Matches(code, @"\[Fact\]").Count
+            + Regex.Matches(code, @"\[InlineData\(").Count;
+    }
 
     /// <summary>vitest 实际执行用例数与测试文件数：it(/test( 行 + it.each 的 case 数。</summary>
     private static (int Files, int Cases) CountVitestTests(string desktopSrc)

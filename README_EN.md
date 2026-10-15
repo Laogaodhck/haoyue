@@ -288,7 +288,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (981 cases, ≥70% line coverage gate)
+├── haoyue_tests/         # Runtime unit tests (990 cases, coverage gates: line ≥70% / branch ≥55%)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -301,7 +301,7 @@ Haoyue/
 ├── packaging/            # Packaging scripts and configuration
 ├── haoyue logo/          # App icon and logo source files
 ├── haoyue_screenshot/    # Documentation screenshot assets
-├── .github/workflows/    # CI (build + test + coverage gate), Release (release artifacts), website (docs deploy)
+├── .github/workflows/    # CI (build + test + coverage gates + supply-chain scans), scheduled agent-eval (weekly), Release (release artifacts), website (docs deploy)
 ├── Haoyue.slnx           # .NET solution (build and test entry point; CI runs `dotnet build/test Haoyue.slnx -c Release`)
 ├── build.py / build.cmd  # One-shot desktop packaging: bump patch version → run full tests → electron-builder, restoring the version sources on any failure
 ├── version.py            # Unified version management (CLI banner / desktop package.json / npm snapshots, plus `check` validation)
@@ -479,13 +479,13 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 981 / haoyue_cli_tests 13 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 990 / haoyue_cli_tests 13 cases)
 
 # Desktop (requires pnpm install first)
 cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 186 cases across 18 files
 ```
 
-The gate applies to the `haoyue_runtime` assembly (`coverage.runsettings` only `Include`s runtime — CLI and desktop are unchecked, and branch coverage sits around 57% with no gate). Contract-snapshot drift and Runbook section completeness are also guarded by dedicated tests; the desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job, but the two `benchmarks/*` eval projects are not in `Haoyue.slnx`, so CI neither compiles nor runs them.
+The gates apply to the `haoyue_runtime` assembly (`coverage.runsettings` only `Include`s runtime — CLI and desktop are unchecked): line coverage ≥70%, branch coverage ≥55% (measured baseline 56.9%). Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), and giant-class line budgets are all enforced by guard tests. The desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job; the two `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning, `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph).
 
 ## 📊 Local Model Benchmarks
 
@@ -503,7 +503,7 @@ The measured gemma-4-E4B report is available at [`本地模型评测报告-gemma
 
 ## 📈 Agent-Level Evaluation
 
-[`benchmarks/agent-eval/`](benchmarks/agent-eval/) is an end-to-end regression harness for agent task success rates: 7 fixed tasks (file write, code repair, multi-step orchestration, restraint negative-scoring, policy-gate regression, read-and-summarize, document-authoring chain) run through the real isolated runtime path with deterministic file-assertion scoring, producing Markdown + JSON reports and a non-zero exit code for CI — regress tuning of nudge thresholds or prompts no longer relies on gut feeling.
+[`benchmarks/agent-eval/`](benchmarks/agent-eval/) is an end-to-end regression harness for agent task success rates: 9 fixed tasks (file write, code repair, multi-step orchestration, restraint negative-scoring, policy-gate regression, read-and-summarize, document-authoring chain, cross-session memory recall, knowledge-base retrieval) run through the real isolated runtime path with deterministic file-assertion scoring, producing Markdown + JSON reports and a non-zero exit code for CI — regress tuning of nudge thresholds or prompts no longer relies on gut feeling.
 
 ```bash
 dotnet run --project benchmarks/agent-eval          # run all tasks
@@ -542,7 +542,7 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Model loading enhancement implementation plan (per-model load settings, auto-retry with CPU fallback, post-load inference self-check)
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 981+13+186, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 990+13+186, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review
 

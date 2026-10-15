@@ -45,7 +45,7 @@ git push origin main --tags
 | `Haoyue-portable-<版本>-win-x64.zip` | Windows 免安装便携版 |
 | `Haoyue-portable-<版本>-linux-x64.tar.gz` | Linux 免安装便携版 |
 | `Haoyue-<版本>_amd64.deb` / `Haoyue-<版本>.x86_64.rpm` | Debian/Ubuntu 与 RHEL/Fedora 安装包 |
-| `SHA256SUMS.txt` | 全部产物的 SHA-256 校验和 |
+| `SHA256SUMS` | 全部产物的 SHA-256 校验和（GNU coreutils 格式，`sha256sum -c SHA256SUMS` 核对） |
 | npm `haoyue-cli` 及平台子包 | 需配置 `NPM_TOKEN`，见下文 |
 
 ## 启用 npm 自动发布（一次性）
@@ -77,7 +77,7 @@ python publish_npm.py --rids win-x64 --publish   # 打包并发布到 npm
 python publish_npm.py --rids win-x64 --pack --release-assets dist/cli
 ```
 
-Linux 产物可追加 `--sign` 生成 SHA256SUMS 与 GPG 分离签名（内置默认签名密钥指纹，可用环境变量 `HAOYUE_GPG_KEY_ID` 覆盖）。
+SHA256SUMS 校验和默认随全部平台的产物统一生成，无需额外参数。Linux 产物可追加 `--sign` 生成 GPG 分离签名（内置默认签名密钥指纹，可用环境变量 `HAOYUE_GPG_KEY_ID` 覆盖）。
 
 ### 输出目录重定向（IDE / 监视器环境下必需）
 
@@ -93,7 +93,7 @@ printf '1\n1\n' | HAOYUE_BUILDER_OUTPUT=C:/Temp/haoyue-out HAOYUE_PUBLISH_DIR=C:
 | `HAOYUE_BUILDER_OUTPUT` | electron-builder 输出目录（默认 `haoyue_desktop/release`） |
 | `HAOYUE_PUBLISH_DIR` | 最终产物目录（默认仓库根 `publish/`），`build-manifest.json` 一并落此处 |
 
-产物完整性可在重定向后核对：目标目录应出现 `Haoyue-win-x64/`、`Haoyue-portable-*.zip`（安装包构建另有 `Haoyue-Setup-*.exe`）与本次产物清单 `build-manifest.json`。
+产物完整性可在重定向后核对：目标目录应出现 `Haoyue-win-x64/`、`Haoyue-portable-*.zip`（安装包构建另有 `Haoyue-Setup-*.exe`）、本次产物清单 `build-manifest.json` 与全平台校验和 `SHA256SUMS`（`sha256sum -c SHA256SUMS` 逐个核对）。
 
 > Windows 下 Git Bash 无 `python` 别名，本手册所有 `python …` 命令在 Git Bash 中用 `py …` 执行（CI 用 `python`，无需改动）。
 

@@ -7,12 +7,14 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Haoyue.Benchmarks.LocalModelEval</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- 同 agent-eval：参与 solution 级 build，dotnet test 跳过。 -->
+    <IsTestProject>false</IsTestProject>
   </PropertyGroup>
 
   <!-- 本地推理原生后端二选一，与 haoyue_runtime 保持一致：默认 CPU；-p:LlamaBackend=Cuda12 切换。 -->
   <ItemGroup>
-    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" Condition="'$(LlamaBackend)' != 'Cuda12'" />
-    <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" Condition="'$(LlamaBackend)' == 'Cuda12'" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Condition="'$(LlamaBackend)' != 'Cuda12'" />
+    <PackageReference Include="LLamaSharp.Backend.Cuda12" Condition="'$(LlamaBackend)' == 'Cuda12'" />
   </ItemGroup>
 
   <ItemGroup>

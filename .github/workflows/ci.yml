@@ -26,12 +26,17 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
       - name: Check version consistency
         run: python version.py check
+      - name: Restore (locked mode)
+        # 供应链（P2）：packages.lock.json 随源码提交，locked-mode 下依赖图漂移即失败。
+        run: dotnet restore Haoyue.slnx --locked-mode
       - name: Build
-        run: dotnet build Haoyue.slnx -c Release
-      - name: Build agent-eval benchmark
-        # 评测工程不在 Haoyue.slnx 里（dotnet test 会把无测试适配器的可执行工程当失败），
-        # 不单独编译就等于它的改动永远进不了 CI —— 多回合判分逻辑改坏了也没人知道。
-        run: dotnet build benchmarks/agent-eval/agent-eval.csproj -c Release
+        run: dotnet build Haoyue.slnx -c Release --no-restore
+      - name: Check TS SDK is in sync with contract
+        # 契约治理：contracts/daemon-contract.json 与 sdks/typescript 生成物必须与
+        # DaemonContract.cs 一致（Haoyue_UpdateContract=1 重新生成快照后跑 tools/generate_ts_sdk.py）。
+        run: python tools/generate_ts_sdk.py --check
+      - name: Scan NuGet packages for known vulnerabilities
+        run: dotnet list Haoyue.slnx package --vulnerable --include-transitive
       - name: Test
         run: dotnet test Haoyue.slnx -c Release --no-build --collect:"XPlat Code Coverage;Format=cobertura" --settings haoyue_tests/coverage.runsettings --results-directory ./coverage
       - name: Upload coverage
@@ -59,6 +64,9 @@ jobs:
           cache-dependency-path: haoyue_desktop/pnpm-lock.yaml
       - name: Install
         run: pnpm install --frozen-lockfile
+      - name: Audit production dependencies
+        # 只对生产依赖设 high 门槛（dev 链的告警不阻塞），发现高危即 CI 失败。
+        run: pnpm audit --prod --audit-level high
       - name: Test
         run: pnpm test
       - name: Typecheck & build

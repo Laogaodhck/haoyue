@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    Solution-wide shared properties. Lock files (P2 supply chain): restore emits
+    packages.lock.json which is committed to source control; CI and release
+    builds use locked-mode restore so the dependency graph cannot drift silently.
+    When changing package references locally, a normal restore updates the lock
+    file; commit both together. Keep XML comments free of double hyphens.
+  -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>

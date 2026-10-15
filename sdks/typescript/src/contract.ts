@@ -11,35 +11,35 @@ export const PROTOCOL_VERSION = "2.2";
 export type MethodName =
   "ping" | "protocol.info" | "contract.export" | "events.recent"
   | "shutdown" | "chat" | "agent.runTurn" | "agent.steer"
-  | "agent.cancel" | "agent.undo" | "agent.interrupted" | "feedback.turn"
-  | "workspace.get" | "workspace.open" | "workspace.init" | "agent.mode.get"
-  | "agent.mode.switch" | "config.save" | "config.status" | "config.rebuild"
-  | "routing.get" | "routing.set" | "advanced.get" | "advanced.set"
-  | "web.allowedGet" | "web.allowedSet" | "agent.config.get" | "agent.config.set"
-  | "prompt.optimize" | "provider.list" | "provider.upsert" | "provider.use"
-  | "provider.remove" | "provider.test" | "provider.models.fetch" | "local.models"
-  | "model.list" | "model.catalog" | "model.switch" | "model.test"
-  | "model.status" | "model.preload" | "model.unload" | "model.config.get"
-  | "model.update" | "model.benchmark" | "schedule.list" | "schedule.create"
-  | "schedule.update" | "schedule.toggle" | "schedule.delete" | "schedule.run"
-  | "task.start" | "task.get" | "task.list" | "task.cancel"
-  | "mcp.list" | "mcp.upsert" | "mcp.remove" | "mcp.reload"
-  | "connectors.list" | "connectors.install" | "connectors.uninstall" | "skill.list"
-  | "skill.import" | "skill.toggle" | "skill.official.list" | "skill.official.install"
-  | "expert.list" | "knowledge.list" | "knowledge.search" | "knowledge.save"
-  | "knowledge.delete" | "knowledge.import" | "knowledge.tags" | "knowledge.export"
-  | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list" | "knowledge.notebook.save"
-  | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list" | "knowledge.source.read"
-  | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve" | "knowledge.semantic.status"
-  | "knowledge.semantic.build" | "memory.get" | "memory.save" | "rules.list"
-  | "rules.save" | "rules.delete" | "usage.get" | "usage.timeline"
-  | "session.list" | "session.search" | "session.get" | "session.truncate"
-  | "session.fork" | "session.update" | "session.archive" | "session.delete"
-  | "session.resume" | "session.new" | "project.list" | "project.upsert"
-  | "project.remove" | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list"
-  | "evolution.decide" | "evolution.history" | "evolution.stats" | "evolution.config.get"
-  | "evolution.config.set" | "doctor" | "doctor.run" | "lock.list"
-  | "factory.reset"
+  | "agent.respondApproval" | "agent.cancel" | "agent.undo" | "agent.interrupted"
+  | "feedback.turn" | "workspace.get" | "workspace.open" | "workspace.init"
+  | "agent.mode.get" | "agent.mode.switch" | "config.save" | "config.status"
+  | "config.rebuild" | "routing.get" | "routing.set" | "advanced.get"
+  | "advanced.set" | "web.allowedGet" | "web.allowedSet" | "agent.config.get"
+  | "agent.config.set" | "prompt.optimize" | "provider.list" | "provider.upsert"
+  | "provider.use" | "provider.remove" | "provider.test" | "provider.models.fetch"
+  | "local.models" | "model.list" | "model.catalog" | "model.switch"
+  | "model.test" | "model.status" | "model.preload" | "model.unload"
+  | "model.config.get" | "model.update" | "model.benchmark" | "schedule.list"
+  | "schedule.create" | "schedule.update" | "schedule.toggle" | "schedule.delete"
+  | "schedule.run" | "task.start" | "task.get" | "task.list"
+  | "task.cancel" | "mcp.list" | "mcp.upsert" | "mcp.remove"
+  | "mcp.reload" | "connectors.list" | "connectors.install" | "connectors.uninstall"
+  | "skill.list" | "skill.import" | "skill.toggle" | "skill.official.list"
+  | "skill.official.install" | "expert.list" | "knowledge.list" | "knowledge.search"
+  | "knowledge.save" | "knowledge.delete" | "knowledge.import" | "knowledge.tags"
+  | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list"
+  | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list"
+  | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve"
+  | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get" | "memory.save"
+  | "rules.list" | "rules.save" | "rules.delete" | "usage.get"
+  | "usage.timeline" | "session.list" | "session.search" | "session.get"
+  | "session.truncate" | "session.fork" | "session.update" | "session.archive"
+  | "session.delete" | "session.resume" | "session.new" | "project.list"
+  | "project.upsert" | "project.remove" | "evolution.inspect" | "evolution.reflect"
+  | "evolution.pending-list" | "evolution.decide" | "evolution.history" | "evolution.stats"
+  | "evolution.config.get" | "evolution.config.set" | "doctor" | "doctor.run"
+  | "lock.list" | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -105,6 +105,13 @@ export const METHODS: readonly MethodInfo[] = [
     category: "chat",
     description: "\u5411\u6d3b\u52a8\u56de\u5408\u6ce8\u5165\u5f15\u5bfc\u6d88\u606f",
     paramsSchema: {"properties": {"expertId": {"description": "绑定专家 persona id（expert.list 可查；空串解除绑定）", "type": "string"}, "global": {"description": "使用全局工作区", "type": "boolean"}, "images": {"description": "图片附件（base64 data）", "items": {"properties": {"data": {"description": "base64 内容", "type": "string"}, "mediaType": {"description": "MIME 类型", "type": "string"}, "name": {"description": "文件名", "type": "string"}, "sizeBytes": {"description": "字节数", "type": "integer"}}, "required": ["data"], "type": "object"}, "type": "array"}, "message": {"description": "用户消息文本（message 或 prompt 二选一）", "type": "string"}, "prompt": {"description": "message 的别名", "type": "string"}, "reasoningLevel": {"description": "推理深度", "enum": ["none", "low", "medium", "high", "max", "xhigh", "ultra"], "type": "string"}, "requestId": {"description": "目标回合请求 id", "type": "integer"}, "sessionId": {"description": "续聊的会话 id", "type": "string"}, "workspace": {"description": "工作区路径", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "agent.respondApproval",
+    category: "chat",
+    description: "\u54cd\u5e94\u300c\u672c\u6b21\u5141\u8bb8\u300d\u5ba1\u6279\u8bf7\u6c42\uff08\u5185\u7f6e\u9ad8\u5371\u5b88\u536b\u6302\u8d77\u7684\u5de5\u5177\u8c03\u7528\uff09",
+    paramsSchema: {"properties": {"approve": {"description": "true=本次允许；false/缺省=拒绝", "type": "boolean"}, "callId": {"description": "审批请求对应的工具调用 id", "type": "string"}}, "required": ["callId"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -734,7 +741,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "session.search",
     category: "session",
     description: "\u5168\u6587\u68c0\u7d22\u4f1a\u8bdd",
-    paramsSchema: {"properties": {"global": {"description": "true 时使用全局工作区", "type": "boolean"}, "includeArchived": {"description": "是否包含归档会话", "type": "boolean"}, "limit": {"description": "1..50，缺省 20", "type": "integer"}, "query": {"description": "检索词", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["query"], "type": "object"},
+    paramsSchema: {"properties": {"all": {"description": "跨全部工作区检索（忽略 workspace/global）", "type": "boolean"}, "global": {"description": "true 时使用全局工作区", "type": "boolean"}, "includeArchived": {"description": "是否包含归档会话", "type": "boolean"}, "limit": {"description": "1..50，缺省 20", "type": "integer"}, "query": {"description": "检索词", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["query"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

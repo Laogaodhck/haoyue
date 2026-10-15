@@ -135,23 +135,34 @@ public sealed class ReadFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
         ("offset", ToolSchema.Integer("1-based line number to start reading from"), false),
         ("limit", ToolSchema.Integer("Maximum number of lines to read"), false));
 
-    public override Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
+    public override async Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
         if (!context.TryResolveReadablePath(GetString(arguments, "path") ?? "", out var path, out var pathError))
-            return Task.FromResult(ToolResult.Fail(pathError!));
+            return ToolResult.Fail(pathError!);
         if (!File.Exists(path))
-            return Task.FromResult(ToolResult.Fail($"File not found: {path}"));
+            return ToolResult.Fail($"File not found: {path}");
 
         // Binary guard (same sniff grep uses): dumping a binary file into the context
         // wastes the window budget on mojibake the model cannot use.
         if (FileWalker.IsProbablyBinary(path))
-            return Task.FromResult(ToolResult.Fail(
-                $"{path} appears to be a binary file and is not shown as text. Use the bash tool (e.g. strings, xxd) or a format-specific approach instead."));
+            return ToolResult.Fail(
+                $"{path} appears to be a binary file and is not shown as text. Use the bash tool (e.g. strings, xxd) or a format-specific approach instead.");
 
         var offset = Math.Max(1, GetInt(arguments, "offset") ?? 1);
         var limit = Math.Max(1, GetInt(arguments, "limit") ?? 2000);
 
-        var lines = File.ReadLines(path).Skip(offset - 1).Take(limit).ToList();
+        // 取消响应（P2）：大文件逐行枚举与分块组装都周期性检查 ct，
+        // steering 中止/回合取消时不再白读几十万行。
+        var lines = new List<string>(Math.Min(limit, 4096));
+        var skipped = 0;
+        foreach (var line in File.ReadLines(path))
+        {
+            if (skipped < offset - 1) { skipped++; continue; }
+            if (lines.Count >= limit) break;
+            lines.Add(line);
+            if ((lines.Count & 0xFFF) == 0) ct.ThrowIfCancellationRequested();
+        }
+        ct.ThrowIfCancellationRequested();
         var sb = new StringBuilder();
 
         // Send file content in chunks with progress events
@@ -160,6 +171,7 @@ public sealed class ReadFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
 
         for (var chunk = 0; chunk < chunks; chunk++)
         {
+            ct.ThrowIfCancellationRequested();
             var start = chunk * chunkSize;
             var end = Math.Min(start + chunkSize, lines.Count);
 
@@ -185,7 +197,7 @@ public sealed class ReadFileTool(IPromptProvider prompts) : BuiltinTool(prompts)
         // 中段更有诊断价值，头截断会把尾部整段丢掉。
         var output = sb.Length == 0 ? "(empty file)" : context.TruncateTailPrioritized(sb.ToString(), "file");
         var relative = Path.GetRelativePath(context.Workspace.Root, path);
-        return Task.FromResult(ToolResult.Ok(output, $"Read {lines.Count} lines from {relative}") with { FilePath = path });
+        return ToolResult.Ok(output, $"Read {lines.Count} lines from {relative}") with { FilePath = path };
     }
 }
 

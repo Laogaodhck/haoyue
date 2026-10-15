@@ -7,12 +7,15 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Haoyue.Benchmarks.AgentEval</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- 评测可执行工程，不是测试工程：在 Haoyue.slnx 里参与 solution 级 build 编译校验，
+         但 dotnet test 遍历解决方案时必须跳过它（无测试适配器）。 -->
+    <IsTestProject>false</IsTestProject>
   </PropertyGroup>
 
   <!-- 与 haoyue_runtime 保持一致的原生后端（评测本地模型时需要）。 -->
   <ItemGroup>
-    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" Condition="'$(LlamaBackend)' != 'Cuda12'" />
-    <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" Condition="'$(LlamaBackend)' == 'Cuda12'" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Condition="'$(LlamaBackend)' != 'Cuda12'" />
+    <PackageReference Include="LLamaSharp.Backend.Cuda12" Condition="'$(LlamaBackend)' == 'Cuda12'" />
   </ItemGroup>
 
   <ItemGroup>

@@ -117,6 +117,13 @@ public static class ConnectorInstaller
 {
     public static void Install(IConfigStore configStore, ConnectorPackage package, IReadOnlyDictionary<string, string>? values = null)
     {
+        // 供应链完整性（P2）：安装前校验清单与内置本地服务器未被篡改。
+        var manifest = ConnectorCatalog.ResolveRoot() is { } root
+            ? Path.Combine(root, package.Id, "connector.json")
+            : null;
+        if (manifest is not null && File.Exists(manifest))
+            ConnectorIntegrity.Verify(manifest);
+
         var server = Instantiate(package, values ?? new Dictionary<string, string>());
 
         var servers = configStore.Config.Mcp.Servers;

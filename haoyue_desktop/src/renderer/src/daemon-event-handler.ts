@@ -414,6 +414,30 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         if (message.warnings.length > 5) message.warnings.splice(0, message.warnings.length - 5)
         break
       }
+      // 以下分支是「显式不处理」的契约事件：编译期穷举护栏（见 switch 末尾 default 的
+      // never 赋值）要求 DaemonEventName 每新增一个事件都必须在这里给出归宿，
+      // 不允许再出现新事件被静默丢弃（WarningEvent 事故的根因就是没有这道护栏）。
+      case 'pong':
+        // 协议层探活回显，与回合状态无关。
+        break
+      case 'result':
+        // 非 chat 请求的终态由 daemon-client 的请求 Promise 消费；回合 handler
+        // 只关心 chat 流的 done/cancelled/error。
+        break
+      case 'bye':
+        // daemon 优雅退出通知，连接层处理重连。
+        break
+      case 'task.updated':
+        // 后台任务状态广播。当前桌面没有常驻任务中心（task.list 无 UI 消费方），
+        // Sidebar 的后台任务徽标在打开页面时按 task.list 拉取；此处显式留空，
+        // 待任务中心落地后在此刷新，不要改成「什么都不写」的隐式丢弃。
+        break
+      case 'mcp.updated':
+        // MCP 服务器状态变更由 McpPanel 自行订阅处理（面板打开时才关心）。
+        break
+      case 'memory.consolidated':
+        // 记忆固化完成广播；RulesMemoryDialog 打开时按 memory.get 拉取最新内容。
+        break
       case 'done':
 
       case 'cancelled':
@@ -467,6 +491,13 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         }
         if (!message || isBackgroundThread) reloadBackgroundThreadIfIdle(thread)
         break
+      default: {
+        // 编译期穷举护栏：DaemonEventName 是契约生成类型（daemon-contract.gen.ts），
+        // 上面每个事件都有显式归宿（处理或显式忽略）。新增事件若未加分支，下面向
+        // never 赋值会编译失败——杜绝「新事件静默丢弃」类回归。
+        const unhandledEvent: never = event.event
+        throw new Error(`Unhandled daemon event: ${String(unhandledEvent)}`)
+      }
     }
     if (thread.id === activeThreadId.value) scheduleAutoScroll()
   }

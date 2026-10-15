@@ -1,0 +1,45 @@
+<Project>
+  <!--
+    Central Package Management (CPM, P2 supply chain): all NuGet package versions
+    are declared here as the single source; csproj PackageReference entries carry
+    no Version attribute. Lock files (packages.lock.json) are enabled via
+    RestorePackagesWithLockFile in Directory.Build.props; CI verifies dependency
+    drift with locked-mode restore. Add new packages here first.
+    NOTE 1: Markdig is versioned per project via Condition: haoyue_cli pins
+    1.3.2 while haoyue_webserver uses 0.41.0. Verify API compatibility before
+    unifying.
+    NOTE 2: keep XML comments free of double hyphens (illegal in XML); a
+    malformed copy of this file is silently skipped by MSBuild.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="CliWrap" Version="3.10.3" />
+    <PackageVersion Include="Cronos" Version="0.8.4" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="DiffPlex" Version="1.9.0" />
+    <PackageVersion Include="LLamaSharp" Version="0.27.0" />
+    <PackageVersion Include="LLamaSharp.Backend.Cpu" Version="0.27.0" />
+    <PackageVersion Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" />
+    <PackageVersion Include="Markdig" Version="0.41.0" Condition="'$(MSBuildProjectName)' == 'haoyue_webserver'" />
+    <PackageVersion Include="Markdig" Version="1.3.2" Condition="'$(MSBuildProjectName)' != 'haoyue_webserver'" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="Polly" Version="8.7.0" />
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="Spectre.Console" Version="0.57.2" />
+    <PackageVersion Include="System.CommandLine" Version="2.0.10" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageVersion Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+</Project>

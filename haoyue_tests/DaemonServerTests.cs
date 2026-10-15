@@ -2132,13 +2132,51 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public void Contract_AllMethods_HaveResultSchemaAndErrorCodes()
+    {
+        // 契约治理：所有方法必须显式声明 result schema 与错误码。
+        // result schema 让 TS SDK 直接类型化响应；逐方法错误码让客户端按失败模式分支，
+        // 而不是对 data 文本做字符串匹配。空声明 E() 表示「无特殊失败模式」，
+        // 导出时仍会并入 internalError 兜底——漏声明（null）才是护栏要拦的。
+        var noResult = DaemonContract.Methods.Where(m => m.ResultSchemaStatus != "specified").ToList();
+        Assert.True(noResult.Count == 0,
+            "以下方法缺少 result schema: " + string.Join(", ", noResult.Select(m => m.Name)));
+
+        var noErrors = DaemonContract.Methods.Where(m => !m.ErrorCodesDeclared).ToList();
+        Assert.True(noErrors.Count == 0,
+            "以下方法未声明错误码（无特殊失败模式用 errors: E() 显式空声明）: "
+            + string.Join(", ", noErrors.Select(m => m.Name)));
+
+        // internalError 兜底必须出现在每个方法的导出错误码里（daemon 对未预期异常统一回它）。
+        var fallback = DaemonErrorCode.InternalError.ToWire();
+        var missingFallback = DaemonContract.Methods
+            .Where(m => !m.ExportedErrorCodes.Contains(fallback, StringComparer.Ordinal))
+            .Select(m => m.Name)
+            .ToList();
+        Assert.True(missingFallback.Count == 0,
+            "以下方法导出错误码缺少 internalError 兜底: " + string.Join(", ", missingFallback));
+
+        // 声明的错误码必须是契约枚举成员（防手写 wire 值漂移）。
+        var known = Enum.GetValues<DaemonErrorCode>().Select(c => c.ToWire()).ToHashSet(StringComparer.Ordinal);
+        var unknown = DaemonContract.Methods
+            .SelectMany(m => m.ErrorCodes ?? [])
+            .Where(code => !known.Contains(code))
+            .Distinct()
+            .ToList();
+        Assert.True(unknown.Count == 0,
+            "以下错误码不在 DaemonErrorCode 枚举中: " + string.Join(", ", unknown));
+    }
+
+    [Fact]
     public void Contract_DispatchCases_AllRegistered()
     {
         // 契约治理：DaemonServer 分发 switch 的每个 case 都必须登记进 DaemonContract，
         // 否则方法会绕过契约（无 TS 类型、无文档导出、快照测试也检测不到）。
+        // 字符类含 `-`：漏掉它时 evolution.pending-list 这类连字符方法名匹配不到，
+        // 护栏形同虚设（2026-10-15 修）。
         var serverPath = Path.Combine(FindRepoRoot(), "haoyue_runtime", "Daemon", "DaemonServer.cs");
         var source = File.ReadAllText(serverPath);
-        var cases = System.Text.RegularExpressions.Regex.Matches(source, @"case\s+""([a-z][A-Za-z0-9.]*)""\s*:")
+        var cases = System.Text.RegularExpressions.Regex.Matches(source, @"case\s+""([a-z][A-Za-z0-9.-]*)""\s*:")
             .Select(m => m.Groups[1].Value)
             .Distinct()
             .ToList();
@@ -2148,6 +2186,25 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var unregistered = cases.Where(name => !registered.Contains(name)).ToList();
         Assert.True(unregistered.Count == 0,
             "以下分发 case 未登记进 DaemonContract（契约漂移）：\n" + string.Join("\n", unregistered));
+    }
+
+    [Fact]
+    public void Contract_StreamEvents_HandledByRenderer()
+    {
+        // 契约治理（P1-3 事件穷举护栏的 .NET 侧兜底）：桌面 daemon-event-handler.ts
+        // 必须对每个流式事件有显式归宿——要么是 `case 'x':` 分支，要么在提前 return
+        // 的名单里显式处理。TS 侧还有编译期 never 赋值护栏双保险；本测试防止有人
+        // 整段删掉 handler 分支而只跑 .NET 测试时无人发现。
+        var handlerPath = Path.Combine(
+            FindRepoRoot(), "haoyue_desktop", "src", "renderer", "src", "daemon-event-handler.ts");
+        var source = File.ReadAllText(handlerPath);
+        var missing = DaemonContract.StreamEvents
+            .Where(name => !source.Contains($"case '{name}':")
+                           && !source.Contains($"event.event === '{name}'"))
+            .ToList();
+        Assert.True(missing.Count == 0,
+            "以下流式事件在桌面 handler 中没有显式分支（新增事件必须显式处理或显式忽略）：\n"
+            + string.Join("\n", missing));
     }
 
     [Fact]

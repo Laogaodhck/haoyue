@@ -1816,6 +1816,14 @@ def main() -> int:
 
             console.print(f"[bold green]✓[/bold green] {cur_platform.upper()} 应用打包与产物组装完成")
 
+        # 供应链（P2）：所有平台的产物统一落 SHA256SUMS（GNU coreutils 格式，
+        # sha256sum -c SHA256SUMS 可直接校验）。--sign 的 GPG 签名仍仅限 Linux。
+        release_files = [p for p in release_outputs if p.is_file()]
+        if release_files:
+            checksums_path = write_sha256sums(release_files, PUBLISH_DIR / SHA256SUMS_NAME)
+            release_outputs.append(checksums_path)
+            console.print(f"[dim]校验和已写入: {checksums_path}[/dim]")
+
         # 产物清单落盘：下游按清单取产物，替代脆弱的文件名模式反查。
         manifest_path = write_build_manifest(
             release_version,

@@ -14,6 +14,38 @@ public sealed partial class Agent
 {
     private readonly record struct ToolExecution(ChatMessage Message, bool ToolMutated);
 
+    /// <summary>
+    /// 只读工具并行批的执行闸门（P2）：并发上限 + 批内去重。
+    /// 同批内 (Name, ArgumentsJson) 完全相同的重复调用只执行一次、结果共享——
+    /// 只读结果确定，重复执行是纯浪费；并发上限 4，防止批量 read/directory_tree
+    /// 把磁盘 IO 与 embedding 请求瞬间打满（真实并行收益在 2-4 就饱和）。
+    /// </summary>
+    private static async Task<ToolExecution[]> ExecuteReadOnlyBatchAsync(
+        IReadOnlyList<ToolCallRequest> batch,
+        Func<ToolCallRequest, Task<ToolExecution>> execute)
+    {
+        const int maxConcurrentReads = 4;
+        var results = new ToolExecution[batch.Count];
+        var groups = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (var i = 0; i < batch.Count; i++)
+        {
+            var key = batch[i].Name + "\u0000" + batch[i].ArgumentsJson;
+            if (!groups.TryGetValue(key, out var indices)) groups[key] = indices = [];
+            indices.Add(i);
+        }
+        using var gate = new SemaphoreSlim(maxConcurrentReads);
+        var executed = await Task.WhenAll(groups.Values.Select(async group =>
+        {
+            await gate.WaitAsync().ConfigureAwait(false);
+            try { return (Indices: group, Result: await execute(batch[group[0]]).ConfigureAwait(false)); }
+            finally { gate.Release(); }
+        })).ConfigureAwait(false);
+        foreach (var (indices, result) in executed)
+            foreach (var i in indices)
+                results[i] = result;
+        return results;
+    }
+
     private async Task<ToolExecution> ExecuteToolAsync(
         ToolCallRequest call, WorkspaceInfo workspace, ModelInfo model,
         TurnExecutionScope turnScope, TurnPlan turnPlan, CancellationToken ct,

@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
+    <!--
+      CSP：本地资源 only。style 允许 unsafe-inline（KaTeX/Mermaid 运行时注入样式）；
+      img/worker 允许 data:/blob:（Mermaid 图渲染）；connect 允许 vite dev 热更新。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; worker-src 'self' blob:; object-src 'none'; base-uri 'self'"
+    />
     <title>Haoyue（浩玥）</title>
   </head>
   <body>

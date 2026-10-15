@@ -207,6 +207,12 @@ export class DaemonClient {
     agentSteer: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("agent.steer", params),
     /**
+     * 响应「本次允许」审批请求（内置高危守卫挂起的工具调用）
+     * 终态事件：result, error
+     */
+    agentRespondapproval: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("agent.respondApproval", params),
+    /**
      * 取消活动回合；缺省取消本连接全部
      * 终态事件：result, error
      */

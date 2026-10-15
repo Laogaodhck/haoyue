@@ -99,7 +99,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 ### 📋 Background Task Queue
 
 - **Long tasks in the background**: the daemon RPC `task.start` submits a full agent turn for background execution (concurrency cap 4, hard timeout protection); `task.get` / `task.list` / `task.cancel` manage tasks; terminal states broadcast via `task.updated`, sessions persist, and progress replays through `events.recent` — frontend disconnects never lose progress
-- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 122 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (available locally and in CI, though not yet wired into a workflow) — see [SDK README](sdks/typescript/README.md)
+- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 122 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (wired into the CI dotnet job) — see [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use
 
@@ -288,7 +288,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (881 cases, ≥70% line coverage gate)
+├── haoyue_tests/         # Runtime unit tests (981 cases, ≥70% line coverage gate)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -479,10 +479,10 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 881 / haoyue_cli_tests 13 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 981 / haoyue_cli_tests 13 cases)
 
 # Desktop (requires pnpm install first)
-cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 160 cases across 15 files
+cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 186 cases across 18 files
 ```
 
 The gate applies to the `haoyue_runtime` assembly (`coverage.runsettings` only `Include`s runtime — CLI and desktop are unchecked, and branch coverage sits around 57% with no gate). Contract-snapshot drift and Runbook section completeness are also guarded by dedicated tests; the desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job, but the two `benchmarks/*` eval projects are not in `Haoyue.slnx`, so CI neither compiles nor runs them.
@@ -542,7 +542,7 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Model loading enhancement implementation plan (per-model load settings, auto-retry with CPU fallback, post-load inference self-check)
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 881+13+160, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 981+13+186, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review
 

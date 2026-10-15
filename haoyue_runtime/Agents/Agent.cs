@@ -538,7 +538,8 @@ public sealed partial class Agent(
                             if (readOnlyBatch.Count > 0)
                             {
                                 foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
-                                var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedTools))).ConfigureAwait(false);
+                                var batchResults = await ExecuteReadOnlyBatchAsync(readOnlyBatch,
+                                    c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedTools)).ConfigureAwait(false);
                                 for (var i = 0; i < batchResults.Length; i++)
                                     HandleToolResult(readOnlyBatch[i], batchResults[i]);
                                 readOnlyBatch.Clear();
@@ -554,7 +555,8 @@ public sealed partial class Agent(
                     if (readOnlyBatch.Count > 0)
                     {
                         foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
-                        var batchResults = await Task.WhenAll(readOnlyBatch.Select(c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedTools))).ConfigureAwait(false);
+                        var batchResults = await ExecuteReadOnlyBatchAsync(readOnlyBatch,
+                            c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedTools)).ConfigureAwait(false);
                         for (var i = 0; i < batchResults.Length; i++)
                             HandleToolResult(readOnlyBatch[i], batchResults[i]);
                     }

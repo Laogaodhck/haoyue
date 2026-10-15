@@ -175,6 +175,106 @@ public sealed class ConnectorCatalogTests : IDisposable
 }
 
 /// <summary>
+/// 连接器供应链完整性护栏（P2）：仓库 SHA256SUMS 清单与目录内容自洽、
+/// Verify 对未篡改包放行、对篡改清单/内置服务器抛可读异常、无清单目录跳过。
+/// </summary>
+public sealed class ConnectorIntegrityTests : IDisposable
+{
+    private readonly string _dir =
+        Path.Combine(Path.GetTempPath(), $"haoyue-conn-int-{Guid.NewGuid():N}");
+
+    public ConnectorIntegrityTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); }
+        catch (IOException) { }
+    }
+
+    /// <summary>仓库 SHA256SUMS 的每一行都与目录实际内容一致（清单自洽，CI 同时有 python --check）。</summary>
+    [Fact]
+    public void RepoSums_MatchDirectoryContents()
+    {
+        var root = Path.Combine(FindRepoRoot(), "connectors");
+        var sums = File.ReadAllLines(Path.Combine(root, "SHA256SUMS"));
+        Assert.True(sums.Length >= 12, $"SHA256SUMS 覆盖不足：{sums.Length} 行");
+        foreach (var line in sums)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var hash = line[..64];
+            var relative = line[66..];
+            var file = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(file), $"SHA256SUMS 引用了不存在的文件：{relative}");
+            using var stream = File.OpenRead(file);
+            Assert.Equal(hash, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream)));
+        }
+    }
+
+    /// <summary>未篡改的官方包应通过校验（清单 + 内置服务器一并比对）。</summary>
+    [Fact]
+    public void Verify_PassesForUntamperedBundledPackage()
+    {
+        var root = Path.Combine(FindRepoRoot(), "connectors");
+        ConnectorIntegrity.Verify(Path.Combine(root, "email", "connector.json"));
+    }
+
+    /// <summary>清单哈希不匹配（被篡改）时抛可读异常。</summary>
+    [Fact]
+    public void Verify_TamperedManifest_Throws()
+    {
+        var root = Path.Combine(_dir, "connectors");
+        Directory.CreateDirectory(Path.Combine(root, "evil"));
+        var manifest = Path.Combine(root, "evil", "connector.json");
+        File.WriteAllText(manifest, """{"schemaVersion":1,"id":"evil","name":"x","description":"x","category":"x"}""");
+        File.WriteAllLines(Path.Combine(root, "SHA256SUMS"),
+            [new string('0', 64) + "  evil/connector.json"]);
+
+        var ex = Assert.Throws<ConnectorException>(() => ConnectorIntegrity.Verify(manifest));
+        Assert.Contains("完整性校验失败", ex.Message);
+    }
+
+    /// <summary>内置本地服务器被改动且在清单覆盖范围内时拒绝（它是直接执行的代码面）。</summary>
+    [Fact]
+    public void Verify_TamperedBundledServer_Throws()
+    {
+        var root = Path.Combine(_dir, "connectors");
+        Directory.CreateDirectory(Path.Combine(root, "servers"));
+        Directory.CreateDirectory(Path.Combine(root, "someconn"));
+        var manifest = Path.Combine(root, "someconn", "connector.json");
+        File.WriteAllText(manifest, """{"schemaVersion":1,"id":"someconn","name":"x","description":"x","category":"x"}""");
+        var server = Path.Combine(root, "servers", "haoyue_local_server.py");
+        File.WriteAllText(server, "print('tampered')");
+        // 清单只覆盖 server：manifest 未纳入则放行，server 哈希故意写错 → 必须拦截。
+        using (var stream = File.OpenRead(server))
+            File.WriteAllLines(Path.Combine(root, "SHA256SUMS"),
+                [$"{new string('a', 64)}  servers/haoyue_local_server.py"]);
+
+        var ex = Assert.Throws<ConnectorException>(() => ConnectorIntegrity.Verify(manifest));
+        Assert.Contains("内置本地 MCP 服务器", ex.Message);
+    }
+
+    /// <summary>目录无 SHA256SUMS（第三方/自定义目录）时跳过，不阻断安装。</summary>
+    [Fact]
+    public void Verify_SkipsWithoutSumsFile()
+    {
+        var root = Path.Combine(_dir, "custom-connectors");
+        Directory.CreateDirectory(Path.Combine(root, "third"));
+        var manifest = Path.Combine(root, "third", "connector.json");
+        File.WriteAllText(manifest, """{"schemaVersion":1,"id":"third","name":"x","description":"x","category":"x"}""");
+        ConnectorIntegrity.Verify(manifest); // 不抛即通过
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Haoyue.slnx")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        return dir!.FullName;
+    }
+}
+
+/// <summary>
 /// 连接器 daemon RPC 护栏：ListConnectors 的目录/安装状态合成、Install 的
 /// 占位符与加密落盘、卸载闭环与未知 id 拒绝。走真实 DaemonAdminApi。
 /// </summary>

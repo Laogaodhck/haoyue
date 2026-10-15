@@ -1,3 +1,4 @@
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Text;
 using Haoyue.Runtime.Configuration;
@@ -9,8 +10,7 @@ namespace Haoyue.Runtime.Daemon;
 /// pipe / unix socket only guards the endpoint by user session, so any process
 /// of the same user could otherwise drive the agent. The token is persisted to
 /// <see cref="HaoyuePaths.DaemonTokenFile"/>: on Unix the file mode is restricted
-/// to the owner, on Windows the profile directory's default ACL already keeps
-/// the file private to the current user and administrators.
+/// to the owner, on Windows the ACL is explicitly narrowed to the current user.
 /// </summary>
 public static class DaemonAuth
 {
@@ -46,6 +46,28 @@ public static class DaemonAuth
             {
                 // Some unix flavours may not support the syscall; the profile
                 // directory permissions remain the effective boundary.
+            }
+        }
+        else
+        {
+            // Windows：显式把 ACL 收紧到当前用户（切断继承、仅保留本用户读写）。
+            // profile 目录默认 ACL 已私有，但显式设规则保证目录 ACL 被放宽
+            // （组策略/共享设置变更）时 token 文件仍不外泄给同机其他账户。
+            try
+            {
+                var fi = new FileInfo(HaoyuePaths.DaemonTokenFile);
+                var security = fi.GetAccessControl();
+                security.SetAccessRuleProtection(true, false);
+                var identity = System.Security.Principal.WindowsIdentity.GetCurrent().User!;
+                security.ResetAccessRule(new FileSystemAccessRule(
+                    identity,
+                    FileSystemRights.Read | FileSystemRights.Write,
+                    AccessControlType.Allow));
+                fi.SetAccessControl(security);
+            }
+            catch (Exception ex) when (ex is SystemException or IOException)
+            {
+                // FAT/exFAT 等无 ACL 文件系统或安全策略限制：退回 profile 目录默认边界。
             }
         }
         return token;

@@ -1,0 +1,66 @@
+name: Agent eval (scheduled)
+
+# Agent 级评测的定时回归：固定任务集 × 真实 runtime 链路（见 benchmarks/agent-eval/README.md）。
+# 评测需要一个真实 LLM 提供商；凭据经仓库 secrets 播种，未配置时整个 job 跳过（不误报失败）。
+#
+# 需要配置的 secrets：
+#   HAOYUE_EVAL_API_KEY  — OpenAI 兼容服务的 API key
+#   HAOYUE_EVAL_BASE_URL — 服务 BaseUrl（如 https://openrouter.ai/api/v1）
+#   HAOYUE_EVAL_MODEL    — 模型 id（会同时登记到 provider 的模型清单）
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # 每周一 03:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: agent-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    name: Run agent-eval benchmark
+    runs-on: windows-latest
+    if: ${{ secrets.HAOYUE_EVAL_API_KEY != '' }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Seed provider config from secrets
+        shell: bash
+        env:
+          HAOYUE_EVAL_API_KEY: ${{ secrets.HAOYUE_EVAL_API_KEY }}
+          HAOYUE_EVAL_BASE_URL: ${{ secrets.HAOYUE_EVAL_BASE_URL }}
+          HAOYUE_EVAL_MODEL: ${{ secrets.HAOYUE_EVAL_MODEL }}
+        run: |
+          mkdir -p ~/.haoyue
+          cat > ~/.haoyue/config.json <<EOF
+          {
+            "schemaVersion": 1,
+            "provider": "haoyue-eval",
+            "model": "${HAOYUE_EVAL_MODEL}",
+            "providers": [
+              {
+                "id": "haoyue-eval",
+                "kind": "openai",
+                "baseUrl": "${HAOYUE_EVAL_BASE_URL}",
+                "apiKey": "${HAOYUE_EVAL_API_KEY}",
+                "models": [ { "id": "${HAOYUE_EVAL_MODEL}" } ]
+              }
+            ]
+          }
+          EOF
+      - name: Run agent eval
+        # 退出码 0=全部通过 1=存在失败：直接作为 job 失败信号，报告仍会作为 artifact 留档。
+        run: >
+          dotnet run --project benchmarks/agent-eval -c Release --
+          --provider haoyue-eval --model ${{ secrets.HAOYUE_EVAL_MODEL }}
+      - name: Upload eval report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-eval-results
+          path: benchmarks/agent-eval/results/
+          if-no-files-found: warn

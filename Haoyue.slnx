@@ -4,5 +4,11 @@
   <Project Path="haoyue_cli_tests/haoyue_cli_tests.csproj" />
   <Project Path="haoyue_tests/haoyue_tests.csproj" />
   <Project Path="haoyue_webserver/haoyue_webserver.csproj" />
+  <!-- 评测工程：进解决方案让 CI 的 solution 级 build 校验编译（此前只有 agent-eval
+       被单独 build，local-model-eval 的改动连编译都没人验）。
+       注意：dotnet test 对解决方案会遍历所有工程，无测试适配器的 Exe 会让 test 失败，
+       因此这两个工程在 csproj 里标注了 IsTestProject=false，CI 的 test 步骤据此跳过。 -->
+  <Project Path="benchmarks/agent-eval/agent-eval.csproj" />
+  <Project Path="benchmarks/local-model-eval/local-model-eval.csproj" />
 </Solution>
 

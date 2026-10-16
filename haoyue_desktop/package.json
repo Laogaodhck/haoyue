@@ -67,6 +67,7 @@
       ]
     },
     "mac": {
+      "icon": "resources/logo.png",
       "target": "dmg",
       "category": "public.app-category.developer-tools"
     },

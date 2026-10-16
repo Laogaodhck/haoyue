@@ -105,6 +105,7 @@ export const DAEMON_METHODS = [
   'feedback.turn',
   'workspace.get',
   'workspace.open',
+  'workspace.files',
   'workspace.init',
   'agent.mode.get',
   'agent.mode.switch',

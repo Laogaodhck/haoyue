@@ -1078,6 +1078,12 @@ public static class DaemonContract
             ("path", SString("工作区根目录"), true)),
             result: WorkspaceResult,
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("workspace.files", "workspace", "列举工作区内文件，供输入框 @ 引用挑选（已跳过构建产物与凭证文件，只给相对路径）",
+            parameters: Scope(
+                ("query", SString("模糊匹配词；留空则返回最近修改的文件"), false),
+                ("limit", SInteger("返回条数上限，默认 30，最大 100"), false)),
+            result: RArray(SString("工作区相对路径")),
+            errors: E(DaemonErrorCode.InvalidParams)),
         M("workspace.init", "workspace", "初始化工作区（AGENTS.md 与配置结构）", parameters: EmptyParams,
             result: RObject(
                 ("path", SString("工作区根目录")),

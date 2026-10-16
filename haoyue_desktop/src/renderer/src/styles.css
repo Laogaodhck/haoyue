@@ -2358,6 +2358,7 @@ select:focus-visible {
 }
 
 .composer-shell {
+  position: relative;
   min-width: 0;
   width: min(100%, 940px);
   margin: 0 auto;
@@ -2386,6 +2387,85 @@ select:focus-visible {
   flex-wrap: wrap;
   gap: 6px;
   padding: 2px 2px 8px;
+}
+
+/* `@` 文件引用候选：贴在输入框上方，不撑开 composer 高度。 */
+.composer-mention-menu {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: calc(100% + 6px);
+  z-index: 240;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  box-sizing: border-box;
+  max-height: 232px;
+  padding: 5px;
+  overflow-y: auto;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-raised) 96%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(20px) saturate(130%);
+}
+
+.composer-mention-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 9px;
+  color: var(--text-secondary, #a0aec0);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.composer-mention-row:hover,
+.composer-mention-row.highlighted {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.composer-mention-row .mention-name {
+  flex: none;
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+}
+
+.composer-mention-row .mention-dir {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+.composer-mention-empty,
+.composer-mention-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.composer-mention-hint {
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
 }
 
 .composer-file-chip {

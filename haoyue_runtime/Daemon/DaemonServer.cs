@@ -1202,6 +1202,11 @@ public sealed class DaemonServer : IAsyncDisposable
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", WorkspaceJson(_runtime.Workspace), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "workspace.files":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListWorkspaceFiles(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "workspace.open":
                     {
                         var path = request["params"]?["path"]?.GetValue<string>();

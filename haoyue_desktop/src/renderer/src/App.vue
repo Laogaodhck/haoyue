@@ -50,6 +50,7 @@ import TaskSettingsDialog from './components/TaskSettingsDialog.vue'
 import TaskStepList from './components/TaskStepList.vue'
 import { computeTurnTaskSteps, type TaskStep } from './task-planner'
 import { confirmAction } from './confirmation'
+import { createWorkspaceFileSuggester } from './workspace-files'
 import { finalizeAssistantBubbles, markThreadInterrupted } from './conversation-state'
 import { journalCursor, openTurnsOf, recoverTurns, type JournalRow, type RecoveredTurn } from './turn-recovery'
 import { isForbiddenProjectPath } from './project-paths'
@@ -1969,6 +1970,15 @@ async function optimizePrompt(text: string): Promise<string> {
   return response.data
 }
 
+/**
+ * Composer 的 `@` 候选：未绑定项目或 runtime 未连接时给空数组，选择器自己显示无候选。
+ * root/daemon 都用惰性取值，避免在 setup 阶段固化到某一次 computed 结果。
+ */
+const suggestWorkspaceFiles = createWorkspaceFileSuggester({
+  daemon: () => (daemonState.value.connected ? window.haoyue.daemon : null),
+  root: () => activeProject.value?.path ?? null
+})
+
 function useStarterPrompt(prompt: string): void {
   composer.value?.setValue(prompt)
 }
@@ -2289,7 +2299,7 @@ watch(theme, applyTheme)
               :disabled="conversationLoading" :model="activeModel"
               :models="models" :mode="mode" :task-id="activeThread?.id" :supports-images="activeModelSupportsImages"
               :reasoning-level="activeReasoningLevel" :network-enabled="activeThread?.networkEnabled ?? true"
-              :optimize-prompt="optimizePrompt" @send="sendMessage" @stop="stopTurn" @change-model="changeModel"
+              :optimize-prompt="optimizePrompt" :suggest-files="suggestWorkspaceFiles" @send="sendMessage" @stop="stopTurn" @change-model="changeModel"
               @change-mode="changeMode" @change-reasoning-level="changeReasoningLevel"
               @change-network="changeNetwork" />
             <p class="composer-caption">{{ composerCaption }}</p>

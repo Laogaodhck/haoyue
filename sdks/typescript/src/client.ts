@@ -981,6 +981,12 @@ export class DaemonClient {
     workspaceOpen: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("workspace.open", params),
     /**
+     * 列举工作区内文件，供输入框 @ 引用挑选（已跳过构建产物与凭证文件，只给相对路径）
+     * 终态事件：result, error
+     */
+    workspaceFiles: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("workspace.files", params),
+    /**
      * 初始化工作区（AGENTS.md 与配置结构）
      * 终态事件：result, error
      */

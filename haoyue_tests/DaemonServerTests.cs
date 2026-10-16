@@ -2012,6 +2012,54 @@ public sealed class DaemonServerTests : IAsyncDisposable
         Assert.False(File.Exists(journalFile));
     }
 
+    [Fact]
+    public async Task WorkspaceFiles_RanksMatchesAndHidesIgnoredAndCredentialPaths()
+    {
+        var workspace = CreateWorkspace("workspace-files");
+        Directory.CreateDirectory(Path.Combine(workspace, "src"));
+        Directory.CreateDirectory(Path.Combine(workspace, "tools", "mapping"));
+        Directory.CreateDirectory(Path.Combine(workspace, "node_modules", "dep"));
+        File.WriteAllText(Path.Combine(workspace, "src", "App.cs"), "class App { }\n");
+        File.WriteAllText(Path.Combine(workspace, "src", "Reapply.cs"), "class Reapply { }\n");
+        File.WriteAllText(Path.Combine(workspace, "tools", "mapping", "help.md"), "# help\n");
+        File.WriteAllText(Path.Combine(workspace, "node_modules", "dep", "index.js"), "// dep\n");
+        File.WriteAllText(Path.Combine(workspace, ".env"), "TOKEN=never-echoed\n");
+
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)), workspace);
+
+        await connection.SendAsync(1, "workspace.files", new JsonObject
+        {
+            ["workspace"] = workspace,
+            ["query"] = "app",
+        });
+        var hits = JsonNode.Parse((await connection.ReadUntilAsync(item =>
+            item["id"]?.GetValue<long>() == 1))["data"]!.GetValue<string>())!.AsArray();
+        // 文件名前缀 > 文件名包含 > 路径包含：三档得分互不相同，断言与写盘时间无关。
+        Assert.Equal(
+            new[] { "src/App.cs", "src/Reapply.cs", "tools/mapping/help.md" },
+            hits.Select(node => node!.GetValue<string>()));
+
+        await connection.SendAsync(2, "workspace.files", new JsonObject
+        {
+            ["workspace"] = workspace,
+            ["limit"] = 2,
+        });
+        var browsed = JsonNode.Parse((await connection.ReadUntilAsync(item =>
+            item["id"]?.GetValue<long>() == 2))["data"]!.GetValue<string>())!.AsArray();
+        Assert.Equal(2, browsed.Count);
+        Assert.DoesNotContain(browsed, node => node!.GetValue<string>().Contains(".env", StringComparison.Ordinal));
+
+        // 凭证目录整体拒绝：选中的相对路径会进 prompt，等于给模型指路去读密钥。
+        var sshDir = Path.Combine(_tempDir, "outside-case", ".ssh");
+        Directory.CreateDirectory(sshDir);
+        File.WriteAllText(Path.Combine(sshDir, "id_ed25519"), "private\n");
+        await connection.SendAsync(3, "workspace.files", new JsonObject { ["workspace"] = sshDir });
+        var refused = await connection.ReadUntilAsync(item => item["id"]?.GetValue<long>() == 3);
+        Assert.Equal("error", refused["event"]!.GetValue<string>());
+        Assert.Contains("not listable", refused["data"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
     private async Task<TestConnection> StartServerAsync(
         Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>> runTurn,
         string? workspace = null,

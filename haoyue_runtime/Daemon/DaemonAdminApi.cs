@@ -25,7 +25,7 @@ internal sealed class DaemonRequestException(string message, DaemonErrorCode cod
 }
 
 /// <summary>Structured administrative operations shared by desktop and editor clients.</summary>
-internal sealed class DaemonAdminApi(
+internal sealed partial class DaemonAdminApi(
     HaoyueRuntime runtime,
     WorkspaceInfo globalWorkspace,
     IFileLockCoordinator fileLocks,

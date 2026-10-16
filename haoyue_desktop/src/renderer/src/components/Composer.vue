@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ArrowUp, Globe, GlobeOff, LoaderCircle, Paperclip, Sparkles, Square, X } from '@lucide/vue'
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { FileAttachment, ImageAttachment, ReasoningLevel } from '../types'
 import { confirmAction } from '../confirmation'
 import { fileBadgeText, fileExtClass, getFileExtension } from '../app-helpers'
+import { applyMention, mentionToken } from '../composer-mentions'
+import type { MentionToken } from '../composer-mentions'
 import ImagePreviewDialog from './ImagePreviewDialog.vue'
 import ReasoningDepthMenu from './ReasoningDepthMenu.vue'
 import SelectMenu from './SelectMenu.vue'
@@ -19,6 +21,7 @@ const props = defineProps<{
   supportsImages: boolean
   networkEnabled?: boolean
   optimizePrompt?: (text: string) => Promise<string>
+  suggestFiles?: (query: string) => Promise<string[]>
 }>()
 
 const emit = defineEmits<{
@@ -43,6 +46,16 @@ const imageNotice = ref('')
 const optimizing = ref(false)
 const previewImage = ref<ImageAttachment | null>(null)
 const textarea = ref<HTMLTextAreaElement | null>(null)
+const mention = ref<MentionToken | null>(null)
+const mentionFiles = ref<string[]>([])
+const mentionIndex = ref(0)
+const mentionLoading = ref(false)
+const mentionMenu = ref<HTMLElement | null>(null)
+// 请求序号：只接受最后一次查询的结果，避免慢响应把旧候选盖回新输入。
+let mentionTimer: number | undefined
+let mentionSeq = 0
+let mentionQuery = ''
+let mentionSuppress = false
 const modeOptions = [
   { value: 'edit', label: '编辑', description: '可读取并修改文件' },
   { value: 'plan', label: '计划', description: '先分析并制定计划' },
@@ -52,6 +65,12 @@ const modeOptions = [
 
 function imageUrl(image: ImageAttachment): string {
   return `data:${image.mediaType};base64,${image.data}`
+}
+
+/** 候选行的次级文案：只留目录部分，文件名已经单独展示了。 */
+function mentionDir(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash < 0 ? '' : path.slice(0, slash)
 }
 
 function resize(): void {
@@ -360,6 +379,78 @@ function removeImage(id: string): void {
   imageNotice.value = ''
 }
 
+function closeMention(): void {
+  if (mentionTimer !== undefined) {
+    window.clearTimeout(mentionTimer)
+    mentionTimer = undefined
+  }
+  mentionSeq += 1
+  mentionQuery = ''
+  mention.value = null
+  mentionFiles.value = []
+  mentionIndex.value = 0
+  mentionLoading.value = false
+}
+
+async function loadMentionFiles(query: string): Promise<void> {
+  const suggest = props.suggestFiles
+  if (!suggest || mention.value?.query !== query) return
+  const seq = ++mentionSeq
+  mentionLoading.value = true
+  try {
+    const files = await suggest(query)
+    if (seq !== mentionSeq) return
+    mentionFiles.value = files
+    mentionIndex.value = 0
+  } catch {
+    if (seq === mentionSeq) mentionFiles.value = []
+  } finally {
+    if (seq === mentionSeq) mentionLoading.value = false
+  }
+}
+
+/** caret 移动或输入后重算引用态；query 变了才重新查（150ms 防抖，避免逐字符打 RPC）。 */
+function refreshMention(event?: Event): void {
+  if (mentionSuppress || (event instanceof KeyboardEvent && event.isComposing)) return
+  const el = textarea.value
+  const token = el && !props.disabled && props.suggestFiles
+    ? mentionToken(el.value, el.selectionStart ?? el.value.length)
+    : null
+  if (!token) {
+    closeMention()
+    return
+  }
+  mention.value = token
+  mentionIndex.value = 0
+  if (token.query === mentionQuery) return
+  mentionQuery = token.query
+  mentionFiles.value = []
+  if (mentionTimer !== undefined) window.clearTimeout(mentionTimer)
+  mentionTimer = window.setTimeout(() => {
+    mentionTimer = undefined
+    void loadMentionFiles(token.query)
+  }, 150)
+}
+
+function pickMention(path?: string): void {
+  const el = textarea.value
+  const token = mention.value
+  const file = path ?? mentionFiles.value[mentionIndex.value]
+  if (!el || !token || !file) return
+  const next = applyMention(el.value, el.selectionStart ?? el.value.length, token.start, file)
+  value.value = next.text
+  closeMention()
+  // 光标要等 DOM 更新才能落位；这之前忽略 keyup 刷新，否则会拿旧 caret 在新文本里
+  // 重新解析出半个路径，选择器选完自己又弹回来。
+  mentionSuppress = true
+  void nextTick(() => {
+    el.focus()
+    el.setSelectionRange(next.caret, next.caret)
+    resize()
+    mentionSuppress = false
+  })
+}
+
 function submit(): void {
   const message = value.value.trim()
   if ((!message && images.value.length === 0 && attachedFiles.value.length === 0) || props.disabled) return
@@ -378,13 +469,49 @@ function submit(): void {
   const outgoingFiles = attachedFiles.value.map((file) => ({ ...file }))
   emit('send', message, outgoingImages, outgoingFiles)
   value.value = ''
+  closeMention()
   images.value = []
   attachedFiles.value = []
   imageNotice.value = ''
   void nextTick(resize)
 }
 
+function moveMention(delta: number): void {
+  const count = mentionFiles.value.length
+  if (count === 0) return
+  mentionIndex.value = (mentionIndex.value + delta + count) % count
+  void nextTick(() => {
+    mentionMenu.value?.querySelector<HTMLElement>(`[data-index="${mentionIndex.value}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
 function handleKeydown(event: KeyboardEvent): void {
+  if (mention.value && mentionFiles.value.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveMention(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveMention(-1)
+      return
+    }
+    if ((event.key === 'Enter' || event.key === 'Tab') && !event.isComposing) {
+      event.preventDefault()
+      pickMention()
+      return
+    }
+  }
+  if (event.key === 'Escape') {
+    if (!mention.value) return
+    // 引用面板打开时 Esc 只用于关面板：不拦下这次按键，App.vue 会把它当成「停止回合」。
+    event.preventDefault()
+    event.stopPropagation()
+    closeMention()
+    return
+  }
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
   event.preventDefault()
   submit()
@@ -396,6 +523,7 @@ function focus(): void {
 
 function setValue(nextValue: string): void {
   value.value = nextValue
+  closeMention()
   void nextTick(() => {
     resize()
     focus()
@@ -413,6 +541,7 @@ function getState(): { value: string; images: ImageAttachment[]; files: FileAtta
 
 function populate(nextValue: string, nextImages?: ImageAttachment[], nextFiles?: FileAttachment[]): void {
   value.value = nextValue
+  closeMention()
   images.value = nextImages ? [...nextImages] : []
   attachedFiles.value = nextFiles ? [...nextFiles] : []
   void nextTick(() => {
@@ -423,7 +552,11 @@ function populate(nextValue: string, nextImages?: ImageAttachment[], nextFiles?:
 
 defineExpose({ focus, setValue, getValue, getState, populate })
 watch(value, resize)
+onBeforeUnmount(() => {
+  if (mentionTimer !== undefined) window.clearTimeout(mentionTimer)
+})
 watch(() => props.taskId, () => {
+  closeMention()
   images.value = []
   attachedFiles.value = []
   imageNotice.value = ''
@@ -504,9 +637,25 @@ watch(() => props.supportsImages, async (supported) => {
       </div>
     </div>
     <p v-if="imageNotice" class="composer-image-notice">{{ imageNotice }}</p>
+    <div v-if="mention" ref="mentionMenu" class="composer-mention-menu" role="listbox" aria-label="工作区文件">
+      <button v-for="(file, idx) in mentionFiles" :key="file" type="button" class="composer-mention-row"
+        :class="{ highlighted: idx === mentionIndex }" :data-index="idx" role="option"
+        :aria-selected="idx === mentionIndex" :title="file" @mousedown.prevent="pickMention(file)"
+        @mouseenter="mentionIndex = idx">
+        <span class="mention-name">{{ file.split('/').pop() }}</span>
+        <span class="mention-dir">{{ mentionDir(file) }}</span>
+      </button>
+      <p v-if="mentionLoading" class="composer-mention-empty">
+        <LoaderCircle class="spin" :size="13" aria-hidden="true" /> 正在查找工作区文件…
+      </p>
+      <p v-else-if="mentionFiles.length === 0" class="composer-mention-empty">
+        没有匹配的工作区文件；未绑定项目的任务无法引用文件。
+      </p>
+      <p v-else class="composer-mention-hint">↑↓ 选择 · Enter/Tab 插入 · Esc 关闭</p>
+    </div>
     <textarea ref="textarea" v-model="value" :disabled="disabled" rows="1"
-      :placeholder="disabled ? '正在加载会话…' : '交给 Haoyue'" aria-label="消息" @keydown="handleKeydown"
-      @paste="handlePaste" />
+      :placeholder="disabled ? '正在加载会话…' : '交给 Haoyue（@ 引用工作区文件）'" aria-label="消息" @keydown="handleKeydown"
+      @keyup="refreshMention" @click="refreshMention" @paste="handlePaste" @blur="closeMention" />
     <div class="composer-toolbar">
       <button class="icon-button composer-icon" type="button" title="添加文件附件（可直接拖拽任意文件或文件夹）"
         :disabled="disabled || selectingFiles" @click="selectFiles">

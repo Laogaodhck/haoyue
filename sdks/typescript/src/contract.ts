@@ -12,34 +12,34 @@ export type MethodName =
   "ping" | "protocol.info" | "contract.export" | "events.recent"
   | "shutdown" | "chat" | "agent.runTurn" | "agent.steer"
   | "agent.respondApproval" | "agent.cancel" | "agent.undo" | "agent.interrupted"
-  | "feedback.turn" | "workspace.get" | "workspace.open" | "workspace.init"
-  | "agent.mode.get" | "agent.mode.switch" | "config.save" | "config.status"
-  | "config.rebuild" | "routing.get" | "routing.set" | "advanced.get"
-  | "advanced.set" | "web.allowedGet" | "web.allowedSet" | "agent.config.get"
-  | "agent.config.set" | "prompt.optimize" | "provider.list" | "provider.upsert"
-  | "provider.use" | "provider.remove" | "provider.test" | "provider.models.fetch"
-  | "local.models" | "model.list" | "model.catalog" | "model.switch"
-  | "model.test" | "model.status" | "model.preload" | "model.unload"
-  | "model.config.get" | "model.update" | "model.benchmark" | "schedule.list"
-  | "schedule.create" | "schedule.update" | "schedule.toggle" | "schedule.delete"
-  | "schedule.run" | "task.start" | "task.get" | "task.list"
-  | "task.cancel" | "mcp.list" | "mcp.upsert" | "mcp.remove"
-  | "mcp.reload" | "connectors.list" | "connectors.install" | "connectors.uninstall"
-  | "skill.list" | "skill.import" | "skill.toggle" | "skill.official.list"
-  | "skill.official.install" | "expert.list" | "knowledge.list" | "knowledge.search"
-  | "knowledge.save" | "knowledge.delete" | "knowledge.import" | "knowledge.tags"
-  | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list"
-  | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list"
-  | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve"
-  | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get" | "memory.save"
-  | "rules.list" | "rules.save" | "rules.delete" | "usage.get"
-  | "usage.timeline" | "session.list" | "session.search" | "session.get"
-  | "session.image" | "session.truncate" | "session.fork" | "session.update"
-  | "session.archive" | "session.delete" | "session.resume" | "session.new"
-  | "project.list" | "project.upsert" | "project.remove" | "evolution.inspect"
-  | "evolution.reflect" | "evolution.pending-list" | "evolution.decide" | "evolution.history"
-  | "evolution.stats" | "evolution.config.get" | "evolution.config.set" | "doctor"
-  | "doctor.run" | "lock.list" | "factory.reset"
+  | "feedback.turn" | "workspace.get" | "workspace.open" | "workspace.files"
+  | "workspace.init" | "agent.mode.get" | "agent.mode.switch" | "config.save"
+  | "config.status" | "config.rebuild" | "routing.get" | "routing.set"
+  | "advanced.get" | "advanced.set" | "web.allowedGet" | "web.allowedSet"
+  | "agent.config.get" | "agent.config.set" | "prompt.optimize" | "provider.list"
+  | "provider.upsert" | "provider.use" | "provider.remove" | "provider.test"
+  | "provider.models.fetch" | "local.models" | "model.list" | "model.catalog"
+  | "model.switch" | "model.test" | "model.status" | "model.preload"
+  | "model.unload" | "model.config.get" | "model.update" | "model.benchmark"
+  | "schedule.list" | "schedule.create" | "schedule.update" | "schedule.toggle"
+  | "schedule.delete" | "schedule.run" | "task.start" | "task.get"
+  | "task.list" | "task.cancel" | "mcp.list" | "mcp.upsert"
+  | "mcp.remove" | "mcp.reload" | "connectors.list" | "connectors.install"
+  | "connectors.uninstall" | "skill.list" | "skill.import" | "skill.toggle"
+  | "skill.official.list" | "skill.official.install" | "expert.list" | "knowledge.list"
+  | "knowledge.search" | "knowledge.save" | "knowledge.delete" | "knowledge.import"
+  | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save"
+  | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add"
+  | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh"
+  | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get"
+  | "memory.save" | "rules.list" | "rules.save" | "rules.delete"
+  | "usage.get" | "usage.timeline" | "session.list" | "session.search"
+  | "session.get" | "session.image" | "session.truncate" | "session.fork"
+  | "session.update" | "session.archive" | "session.delete" | "session.resume"
+  | "session.new" | "project.list" | "project.upsert" | "project.remove"
+  | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list" | "evolution.decide"
+  | "evolution.history" | "evolution.stats" | "evolution.config.get" | "evolution.config.set"
+  | "doctor" | "doctor.run" | "lock.list" | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -154,6 +154,13 @@ export const METHODS: readonly MethodInfo[] = [
     category: "workspace",
     description: "\u5207\u6362\u5de5\u4f5c\u533a",
     paramsSchema: {"properties": {"path": {"description": "工作区根目录", "type": "string"}}, "required": ["path"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "workspace.files",
+    category: "workspace",
+    description: "\u5217\u4e3e\u5de5\u4f5c\u533a\u5185\u6587\u4ef6\uff0c\u4f9b\u8f93\u5165\u6846 @ \u5f15\u7528\u6311\u9009\uff08\u5df2\u8df3\u8fc7\u6784\u5efa\u4ea7\u7269\u4e0e\u51ed\u8bc1\u6587\u4ef6\uff0c\u53ea\u7ed9\u76f8\u5bf9\u8def\u5f84\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "limit": {"description": "返回条数上限，默认 30，最大 100", "type": "integer"}, "query": {"description": "模糊匹配词；留空则返回最近修改的文件", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

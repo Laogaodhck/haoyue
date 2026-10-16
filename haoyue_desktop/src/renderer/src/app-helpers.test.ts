@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { classifyModelError, classifyTurnFailure, extractModelError, formatTokenCount, formatTurnFailure, messageMatches, normalizePath, pathName, samePath, stripModelErrorBlock } from './app-helpers'
+import type { ThreadItem } from './types'
+import { cancelParams, classifyModelError, classifyTurnFailure, extractModelError, formatTokenCount, formatTurnFailure, messageMatches, normalizePath, pathName, samePath, stripModelErrorBlock } from './app-helpers'
 
 describe('formatTokenCount', () => {
   it('formats millions with M suffix correctly without unnecessary trailing zeros', () => {
@@ -227,5 +228,23 @@ describe('messageMatches', () => {
       ...base,
       tools: [{ id: 't1', name: 'bash', args: 'pnpm typecheck', detail: 'exit 0', state: 'done' }]
     }, 'typecheck')).toBe(true)
+  })
+})
+
+describe('cancelParams', () => {
+  const thread = (extra: Partial<ThreadItem>): ThreadItem => ({
+    id: 't1', title: '任务', updatedAt: 0, messages: [], ...extra
+  })
+
+  it('prefers the request id so only the stopped turn is affected', () => {
+    expect(cancelParams(thread({ requestId: 7, sessionId: 's1' }))).toEqual({ requestId: 7 })
+  })
+
+  it('falls back to the session before the first event assigns a request id', () => {
+    expect(cancelParams(thread({ sessionId: 's1' }))).toEqual({ sessionId: 's1' })
+  })
+
+  it('refuses an empty cancel, which would kill every turn on the connection', () => {
+    expect(cancelParams(thread({}))).toBeNull()
   })
 })

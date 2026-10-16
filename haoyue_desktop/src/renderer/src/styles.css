@@ -753,6 +753,24 @@ select:focus-visible {
   font-size: 13px;
 }
 
+/* 侧栏任务超出渲染上限时的展开入口（P1-2.3）：与任务行同宽同字，看起来就是列表的一项。 */
+.thread-more-row {
+  width: calc(100% - 18px);
+  margin: 2px 9px;
+  padding: 6px 9px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.thread-more-row:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
 .recent-section {
   min-height: 0;
   flex: 1;

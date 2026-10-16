@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Plus, Trash2, X } from '@lucide/vue'
 import { ref, watch } from 'vue'
+import { useEscapeClose } from '../use-escape-close'
 
 const props = defineProps<{
   open: boolean
@@ -9,6 +10,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
 }>()
+
+useEscapeClose(() => props.open, () => emit('close'))
 
 interface WebAccessPayload {
   allowedSites: string[]

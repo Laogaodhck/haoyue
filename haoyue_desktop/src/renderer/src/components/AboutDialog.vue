@@ -2,6 +2,7 @@
 import { ExternalLink, X } from '@lucide/vue'
 import type { AppInfo } from '../../../shared/ipc'
 import logoUrl from '../../../../resources/logo.png?url'
+import { useEscapeClose } from '../use-escape-close'
 
 const props = defineProps<{
   open: boolean
@@ -10,6 +11,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
 }>()
+
+useEscapeClose(() => props.open, () => emit('close'))
 
 const platformNames: Record<string, string> = {
   win32: 'Windows',

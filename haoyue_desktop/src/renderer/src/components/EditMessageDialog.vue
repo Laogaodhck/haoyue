@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { FileText, RotateCcw, X } from '@lucide/vue'
 import type { ChatMessage } from '../types'
+import { useEscapeClose } from '../use-escape-close'
 
 const props = defineProps<{
   open: boolean
@@ -12,6 +13,8 @@ const emit = defineEmits<{
   close: []
   confirm: [revertFiles: boolean]
 }>()
+
+useEscapeClose(() => props.open, () => emit('close'))
 
 function fileShortName(path: string): string {
   const parts = path.split(/[/\\]/)

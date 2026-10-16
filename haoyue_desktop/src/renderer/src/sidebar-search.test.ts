@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import {
   REMOTE_SEARCH_MIN_CHARS,
+  TASK_ROW_LIMIT,
+  capTaskList,
   filterUnloadedHits,
   shouldSearchRemotely
 } from './sidebar-search'
-import type { SessionSearchHit } from './types'
+import type { SessionSearchHit, ThreadItem } from './types'
 
 function hit(id: string, title: string, matchCount = 1): SessionSearchHit {
   return { id, title, matchCount }
+}
+
+function thread(id: string, updatedAt: number, extra: Partial<ThreadItem> = {}): ThreadItem {
+  return { id, title: `任务 ${id}`, updatedAt, messages: [], ...extra }
 }
 
 describe('sidebar remote session search', () => {
@@ -38,5 +44,57 @@ describe('sidebar remote session search', () => {
   it('keeps every hit when nothing is loaded locally', () => {
     const hits = [hit('a', '甲'), hit('b', '乙')]
     expect(filterUnloadedHits(hits, new Set())).toEqual(hits)
+  })
+})
+
+describe('sidebar task list windowing', () => {
+  // 45 个任务，更新时间依次递增：t45 最新。
+  const many = Array.from({ length: TASK_ROW_LIMIT + 5 }, (_, index) => thread(`t${index + 1}`, index + 1))
+
+  it('renders only the most recent rows and reports the rest as hidden', () => {
+    const list = capTaskList(many, { query: '', expanded: false })
+
+    expect(list.rows).toHaveLength(TASK_ROW_LIMIT)
+    expect(list.hidden).toBe(5)
+    expect(list.rows[0]?.id).toBe(`t${many.length}`)
+    expect(list.rows.at(-1)?.id).toBe('t6')
+  })
+
+  it('keeps the active task even when it falls below the cut line', () => {
+    const list = capTaskList(many, { query: '', expanded: false, activeThreadId: 't2' })
+
+    expect(list.rows.map((item) => item.id)).toContain('t2')
+    // 补进来的当前任务算作已渲染：多一行，hidden 相应少一个。
+    expect(list.rows).toHaveLength(TASK_ROW_LIMIT + 1)
+    expect(list.hidden).toBe(4)
+  })
+
+  it('returns everything once the list has been expanded', () => {
+    const list = capTaskList(many, { query: '', expanded: true })
+
+    expect(list.rows).toHaveLength(many.length)
+    expect(list.hidden).toBe(0)
+  })
+
+  it('drops archived tasks and applies the sidebar filter before counting', () => {
+    const mixed = [
+      ...many,
+      thread('archived', 999, { archived: true }),
+      thread('match', 998, { title: '麒麟 方案' })
+    ]
+
+    expect(capTaskList(mixed, { query: '', expanded: false }).rows.map((item) => item.id)).not.toContain('archived')
+
+    const searched = capTaskList(mixed, { query: '麒麟', expanded: false })
+    expect(searched.rows.map((item) => item.id)).toEqual(['match'])
+    expect(searched.hidden).toBe(0)
+  })
+
+  it('leaves short lists untouched so ordinary workspaces see no change', () => {
+    const few = many.slice(0, 3)
+    const list = capTaskList(few, { query: '', expanded: false })
+
+    expect(list.rows).toHaveLength(3)
+    expect(list.hidden).toBe(0)
   })
 })

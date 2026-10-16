@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { AlertTriangle, Database, FileText, LoaderCircle, RefreshCw, X } from '@lucide/vue'
+import { useEscapeClose } from '../use-escape-close'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   detail?: string
   configFile?: string
@@ -13,6 +14,9 @@ const emit = defineEmits<{
   close: []
   rebuild: []
 }>()
+
+// 重建进行中不响应 Esc：与遮罩点击同样被禁用，避免半程退出留下半个配置文件。
+useEscapeClose(() => props.open && !props.rebuilding, () => emit('close'))
 </script>
 
 <template>

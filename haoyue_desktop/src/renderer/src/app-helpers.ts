@@ -291,6 +291,17 @@ export function sessionScope(thread: ThreadItem, project?: ProjectItem): Record<
   return thread.projectId && project ? { workspace: project.path } : { global: true }
 }
 
+/**
+ * agent.cancel 的定位参数（P1-2.3）：优先按请求 id 精确取消，首个事件还没到达、
+ * 请求 id 尚未就绪时按会话取消。返回 null 表示两者都没有——绝不能发空参取消，
+ * 那会取消该连接上的全部活动回合，误伤其他后台任务。
+ */
+export function cancelParams(thread: ThreadItem): { requestId: number } | { sessionId: string } | null {
+  if (thread.requestId !== undefined) return { requestId: thread.requestId }
+  if (thread.sessionId) return { sessionId: thread.sessionId }
+  return null
+}
+
 export function messageMatches(message: ChatMessage, query: string): boolean {
   const normalized = query.trim().toLocaleLowerCase()
   if (!normalized) return true

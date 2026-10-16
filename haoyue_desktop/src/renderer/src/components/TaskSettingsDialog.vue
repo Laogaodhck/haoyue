@@ -2,6 +2,7 @@
 import { Archive, FolderOpen, RotateCcw, Save, Trash2, X } from '@lucide/vue'
 import { ref, watch } from 'vue'
 import type { ProjectItem, ThreadItem } from '../types'
+import { useEscapeClose } from '../use-escape-close'
 
 const props = defineProps<{
   open: boolean
@@ -18,6 +19,8 @@ const emit = defineEmits<{
 }>()
 
 const title = ref('')
+
+useEscapeClose(() => props.open, () => emit('close'))
 
 watch(() => [props.open, props.thread?.id, props.thread?.title] as const, () => {
   if (props.open) title.value = props.thread?.title ?? ''

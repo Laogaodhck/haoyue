@@ -153,6 +153,25 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
       void handleEvolutionReflected()
       return
     }
+    if (event.event === 'memory.consolidated') {
+      // 固化是后台按水位自发跑的：MEMORY.md 被改掉却没有任何动静，用户只会觉得
+      // 「记忆被偷偷改了」。有实际产出或失败时给一条系统通知，正文用 runtime 的 memoryNote。
+      const error = typeof event.details?.error === 'string' ? event.details.error.trim() : ''
+      if (error) {
+        void window.haoyue?.notify?.('记忆固化失败', error)
+        return
+      }
+      const factsAdded = Number(event.details?.factsAdded) || 0
+      const promoted = Number(event.details?.memoryPromoted) || 0
+      if (factsAdded === 0 && promoted === 0) return
+      const note = typeof event.details?.memoryNote === 'string' ? event.details.memoryNote.trim() : ''
+      void window.haoyue?.notify?.('记忆固化完成', [
+        `新增 ${factsAdded} 条事实`,
+        promoted > 0 ? `提升 ${promoted} 条到长期记忆` : '',
+        note
+      ].filter(Boolean).join(' · '))
+      return
+    }
     if (event.event === 'schedule.updated') {
       void handleScheduleUpdated()
       // Outcomes reach the desktop as events, but nobody watches the schedule page
@@ -435,9 +454,6 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         break
       case 'mcp.updated':
         // MCP 服务器状态变更由 McpPanel 自行订阅处理（面板打开时才关心）。
-        break
-      case 'memory.consolidated':
-        // 记忆固化完成广播；RulesMemoryDialog 打开时按 memory.get 拉取最新内容。
         break
       case 'done':
 

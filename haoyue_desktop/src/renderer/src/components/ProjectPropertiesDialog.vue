@@ -15,6 +15,7 @@ import {
 import { computed, ref, watch } from 'vue'
 import type { GitOverview } from '../../../shared/ipc'
 import type { ProjectItem, ThreadItem } from '../types'
+import { useEscapeClose } from '../use-escape-close'
 
 interface McpServerInfo {
   name: string
@@ -50,6 +51,8 @@ const emit = defineEmits<{
   initializeWorkspace: [project: ProjectItem]
   openExtensions: [tab: 'mcp' | 'skills' | 'experts']
 }>()
+
+useEscapeClose(() => props.open, () => emit('close'))
 
 const activeTab = ref<'general' | 'mcp' | 'skills'>('general')
 const gitOverview = ref<GitOverview | null>(null)

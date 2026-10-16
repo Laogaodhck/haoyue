@@ -48,6 +48,7 @@ import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
 import { buildDiagnosticsBundle, diagnosticsFileName } from '../diagnostics-bundle'
+import { useEscapeClose } from '../use-escape-close'
 import {
   EVOLUTION_INTERVAL_OPTIONS,
   TREND_KEY_LABELS,
@@ -1498,6 +1499,10 @@ watch(section, (next) => {
 })
 
 let unsubscribeDaemonEvents: (() => void) | null = null
+
+// Esc 返回应用页，与规则/知识/计划/归档四个整页页签一致。整页设置用的是 role="region"
+// 而非 aria-modal，所以按键归属由栈管：嵌套模态打开时这一次 Esc 归模态，设置页不动。
+useEscapeClose(() => props.open, () => emit('close'))
 
 onMounted(() => {
   unsubscribeDaemonEvents = window.haoyue.daemon.onEvent((message) => {

@@ -21,7 +21,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logoUrl from '../../../../resources/logo.png?url'
 import type { ProjectItem, SessionSearchHit, ThreadItem } from '../types'
-import { filterUnloadedHits, shouldSearchRemotely } from '../sidebar-search'
+import { capTaskList, filterUnloadedHits, shouldSearchRemotely } from '../sidebar-search'
 
 const props = defineProps<{
   projects: ProjectItem[]
@@ -168,11 +168,38 @@ watch(normalizedQuery, (value) => {
   remoteSearchTimer = setTimeout(() => void runRemoteSearch(value), 300)
 })
 
+interface TaskList {
+  rows: ThreadItem[]
+  hidden: number
+}
+
+const openTaskLists = ref<Set<string>>(new Set())
+
+function buildTaskList(key: string, source: ThreadItem[]): TaskList {
+  return capTaskList(source, {
+    query: normalizedQuery.value,
+    expanded: openTaskLists.value.has(key),
+    activeThreadId: props.activeThreadId
+  })
+}
+
+function expandTaskList(key: string): void {
+  const next = new Set(openTaskLists.value)
+  next.add(key)
+  openTaskLists.value = next
+}
+
+const globalTaskList = computed(() => buildTaskList('global', props.threads.filter((thread) => !thread.projectId)))
+const projectTaskLists = computed(() => {
+  const lists = new Map<string, TaskList>()
+  for (const project of props.projects) {
+    lists.set(project.id, buildTaskList(`project:${project.id}`, props.threads.filter((thread) => thread.projectId === project.id)))
+  }
+  return lists
+})
+
 function visibleThreads(projectId: string): ThreadItem[] {
-  return props.threads
-    .filter((thread) => thread.projectId === projectId && !thread.archived)
-    .filter((thread) => !normalizedQuery.value || thread.title.toLocaleLowerCase().includes(normalizedQuery.value))
-    .sort((left, right) => right.updatedAt - left.updatedAt)
+  return projectTaskLists.value.get(projectId)?.rows ?? []
 }
 
 function projectHasRunningTask(projectId: string): boolean {
@@ -189,11 +216,6 @@ function createTask(projectId?: string): void {
   }
   emit('newTask', projectId)
 }
-
-const visibleGlobalThreads = computed(() => props.threads
-  .filter((thread) => !thread.projectId && !thread.archived)
-  .filter((thread) => !normalizedQuery.value || thread.title.toLocaleLowerCase().includes(normalizedQuery.value))
-  .sort((left, right) => right.updatedAt - left.updatedAt))
 
 function toggleProject(project: ProjectItem): void {
   const next = new Set(expandedProjects.value)
@@ -330,7 +352,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-if="taskSectionExpanded" class="task-list">
-          <div v-for="thread in visibleGlobalThreads" :key="thread.id" class="thread-heading-row"
+          <div v-for="thread in globalTaskList.rows" :key="thread.id" class="thread-heading-row"
             :class="{ active: thread.id === activeThreadId }">
             <button v-if="renamingThreadId !== thread.id" class="thread-row"
               @click="emit('selectThread', thread.id)" @dblclick.prevent="startRename(thread)"
@@ -365,7 +387,9 @@ onBeforeUnmount(() => {
               </div>
             </Transition>
           </div>
-          <p v-if="visibleGlobalThreads.length === 0" class="project-empty">无任务</p>
+          <button v-if="globalTaskList.hidden" class="thread-more-row" type="button"
+            @click="expandTaskList('global')">显示全部（还有 {{ globalTaskList.hidden }} 个）</button>
+          <p v-if="globalTaskList.rows.length === 0" class="project-empty">无任务</p>
         </div>
       </section>
 
@@ -472,6 +496,9 @@ onBeforeUnmount(() => {
                   </div>
                 </Transition>
               </div>
+              <button v-if="projectTaskLists.get(project.id)?.hidden" class="thread-more-row" type="button"
+                @click="expandTaskList(`project:${project.id}`)">显示全部（还有
+                {{ projectTaskLists.get(project.id)?.hidden }} 个）</button>
               <p v-if="visibleThreads(project.id).length === 0" class="project-empty">
                 {{ project.loaded === false ? '正在读取任务…' : '无任务' }}
               </p>

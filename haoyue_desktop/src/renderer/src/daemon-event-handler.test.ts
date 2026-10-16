@@ -102,6 +102,32 @@ describe('daemon event handler — schedule notifications', () => {
     expect(notify).not.toHaveBeenCalled()
   })
 
+  it('surfaces consolidation output so background MEMORY.md edits are not silent', () => {
+    const context = createContext()
+    const handler = createDaemonEventHandler(context)
+
+    handler({
+      id: 0,
+      event: 'memory.consolidated',
+      data: '记忆固化完成',
+      details: { sessionId: 's1', factsAdded: 3, memoryPromoted: 1, memoryNote: '已合并三条重复偏好' }
+    })
+
+    expect(notify).toHaveBeenCalledWith('记忆固化完成', '新增 3 条事实 · 提升 1 条到长期记忆 · 已合并三条重复偏好')
+  })
+
+  it('reports a failed consolidation and stays silent when nothing changed', () => {
+    const context = createContext()
+    const handler = createDaemonEventHandler(context)
+
+    handler({ id: 0, event: 'memory.consolidated', data: '', details: { factsAdded: 0, error: 'provider offline' } })
+    expect(notify).toHaveBeenCalledWith('记忆固化失败', 'provider offline')
+
+    notify.mockClear()
+    handler({ id: 0, event: 'memory.consolidated', data: '', details: { factsAdded: 0, memoryPromoted: 0 } })
+    expect(notify).not.toHaveBeenCalled()
+  })
+
   it('ignores upcoming notices entirely', () => {
     const context = createContext()
     const handler = createDaemonEventHandler(context)

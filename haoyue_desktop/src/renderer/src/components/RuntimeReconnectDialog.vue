@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { CircleAlert, RefreshCw } from '@lucide/vue'
+import { useEscapeClose } from '../use-escape-close'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   startup: boolean
   endpoint: string
@@ -12,6 +13,9 @@ const emit = defineEmits<{
   retry: []
   cancel: []
 }>()
+
+// Esc 等价于「取消」按钮：这台弹窗没有遮罩点击关闭，键盘用户此前只能靠鼠标。
+useEscapeClose(() => props.open, () => emit('cancel'))
 </script>
 
 <template>

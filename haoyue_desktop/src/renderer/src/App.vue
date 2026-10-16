@@ -57,6 +57,7 @@ import { retryRuntimeConnection, RUNTIME_RECONNECT_ATTEMPTS } from './runtime-re
 import { ReasoningLevel } from './types'
 import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, ThreadStats, ToolActivity } from './types'
 import {
+  cancelParams,
   formatPromptWithFiles,
   formatTurnFailure,
   hydrateMessages,
@@ -245,8 +246,18 @@ watch(() => activeThread.value?.phase, (phase) => {
   }, 1000)
 })
 
-/** H11: global keyboard flow — Ctrl+K task search, Ctrl+F conversation search, Ctrl+. stop. */
+/** H11: global keyboard flow — Ctrl+K task search, Ctrl+F conversation search, Ctrl+./Esc stop. */
 function handleGlobalShortcuts(event: KeyboardEvent): void {
+  // 审批弹窗没人接 Esc：键盘用户只能拿鼠标点「拒绝」。这里补上同一路径——
+  // 与 daemon 侧超时完全一致（按拒绝收场），Esc 绝不会被读成允许。
+  if (event.key === 'Escape' && activeThread.value?.pendingApproval) {
+    event.preventDefault()
+    void respondApproval(false)
+    return
+  }
+  // 模态弹窗打开时，按键归弹窗所有（与 AppTitleBar 同一约定）：否则设置里的 Esc
+  // 会一边关弹窗一边把后台正在跑的回合掐掉。
+  if (document.querySelector('[aria-modal="true"]')) return
   // Esc 停止活动回合（P1-2.3）：Composer 停止按钮长期标称 Esc 但只有 Ctrl+. 生效。
   if (event.key === 'Escape' && activeThread.value?.running) {
     event.preventDefault()
@@ -1894,13 +1905,7 @@ async function feedbackNegative(): Promise<void> {
 async function stopTurn(): Promise<void> {
   const thread = activeThread.value
   if (!thread?.running) return
-  // 优先按请求 id 精确取消；首个事件尚未到达（requestId 未就绪）时按会话取消。
-  // 绝不发送空参取消——那会取消该连接上的全部活动回合，误伤后台任务。
-  const params = thread.requestId !== undefined
-    ? { requestId: thread.requestId }
-    : thread.sessionId
-      ? { sessionId: thread.sessionId }
-      : null
+  const params = cancelParams(thread)
   if (!params) return
   try {
     await window.haoyue.daemon.request('agent.cancel', params)

@@ -21,6 +21,8 @@ Desktop connects and reconnects automatically; users do not start the Runtime ma
 
 Start with `<userData>\logs\daemon.log` (`%APPDATA%\haoyue-desktop\logs\daemon.log` for the packaged app). Desktop writes everything the Runtime it spawns prints into that file and records the exit code and signal when the child process dies. "No reply" is almost always a Runtime that already exited and was restarted, and the tail of this log holds the reason.
 
+That file has an in-app entry: the **Daemon logs and diagnostics bundle** block under “Settings → Diagnostics & Usage” reveals the log, copies its path, shows the last 200 lines in place, and exports a bundle combining environment, health checks, usage, and the redacted log tail into a single file you can hand to a collaborator.
+
 Three common causes are now handled by the Runtime itself:
 
 1. The first message can take one to two minutes because the weights load cold. The phase and percentage now reach the client through the `model.load.progress` event and are shown as "loading local model N%", so a moving number means the load is progressing rather than stuck.

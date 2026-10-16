@@ -27,6 +27,7 @@ Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放
 | `workspace.get` | 无 | 返回当前工作区路径、项目类型和模式 |
 | `workspace.open` | `{ "path": "..." }` | 验证并切换 Runtime 工作区 |
 | `workspace.init` | 无 | 初始化当前工作区的 Haoyue 目录 |
+| `workspace.files` | `{ "workspace": "...", "query": "app", "limit": 30 }` | 列举工作区内文件，供输入框 `@` 引用挑选；只返回相对路径（正斜杠），跳过 `.git`/`node_modules`/`bin`/`obj`/`dist`/`.haoyue` 与 `.gitignore`、`.haoyueignore` 命中的内容，并拒绝 `.ssh`、`.aws`、`.env*` 等凭证目录与文件；`limit` 默认 30、上限 100 |
 | `agent.mode.get` | 无 | 返回 `plan`、`readonly`、`edit` 或 `auto` |
 | `agent.mode.switch` | `{ "mode": "edit" }` | 切换并持久化 Agent 模式 |
 | `agent.steer` | `{ "sessionId": "...", "message": "..." }` | 向正在运行的 turn 添加指导，不取消当前请求 |
@@ -62,9 +63,17 @@ Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放
 {"id":10,"event":"cancelled","data":"取消前已生成的部分文本"}
 ```
 
+内置高危守卫拦下一次工具调用时，turn 不会直接失败，而是挂起该调用并推送 `approval_request` 事件：`details` 含 `callId`、`tool`、拦截原因 `reason` 与参数摘要 `summary`。客户端用 `agent.respondApproval` 回传决定：
+
+```json
+{"id":13,"method":"agent.respondApproval","params":{"callId":"call-8f2c","approve":true}}
+```
+
+`approve: true` 只放行当前这一次调用（不是长期白名单）；`approve: false` 或在 120 秒内没有任何响应都按拒绝处理，被拦下的调用不会执行。批准与拒绝都会落到 `.haoyue/audit/tools.jsonl`，与其余工具执行记录同表可查。
+
 `session.get` 返回的消息中，assistant 消息带 `modelRef`（`provider/model`），用于界面标注每条回答来自哪个模型。
 
-流式事件包括 `thinking`、`delta`、`steer`、`status`、`image_view`、`tool_start`、`tool_done` 和 `workflow`。`workflow` 的 `details` 含 `step`、`kind`（start/think/tool/verify/repair/compact/done/error）、`label` 与 `detail`，用于客户端统计当前 turn 的执行步数。`steer` 表示附加指导已经进入当前 turn 的上下文；`image_view` 的 `details.imageId` 指明模型正在查看哪张上传图片。终止事件包括 `done`、`cancelled` 和 `error`。
+流式事件包括 `thinking`、`delta`、`steer`、`status`、`image_view`、`tool_start`、`tool_done`、`workflow`、`warning` 和 `approval_request`。`workflow` 的 `details` 含 `step`、`kind`（start/think/tool/verify/repair/compact/done/error）、`label` 与 `detail`，用于客户端统计当前 turn 的执行步数。`steer` 表示附加指导已经进入当前 turn 的上下文；`image_view` 的 `details.imageId` 指明模型正在查看哪张上传图片。终止事件包括 `done`、`cancelled` 和 `error`。
 
 Daemon 还会主动广播与任何请求无关的事件（`id` 为 0）：`schedule.updated`、`schedule.upcoming`、`task.updated`、`evolution.reflected`、`mcp.updated`、`turn.interrupted`、`memory.consolidated` 和 `model.load.progress`。`model.load.progress` 的 `details` 含 `model`、`phase`（Queued / Probing / Loading / Verifying / Projector / Ready / Failed）、`percent`（0..1）、`elapsedMs` 与 `estimatedRemainingMs`。本地 GGUF 权重的冷加载需要一到两分钟，客户端据此在首条消息上显示"加载本地模型 N%"，而不是让界面看起来毫无反应；进度通道覆盖对话回合里的懒加载，不只在 `model.preload` 时上报。广播会写给每一个已握手的连接，`details` 为每个连接各复制一份；某个客户端写入失败只会在 stderr 记一行，不会结束事件泵。
 
@@ -73,13 +82,16 @@ Daemon 还会主动广播与任何请求无关的事件（`id` 为 0）：`sched
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
 | `session.list` | `{ "workspace": "...", "global": false, "includeArchived": true }` | 按工作区或全局范围列出 Session |
-| `session.get` | `{ "id": "...", "workspace": "..." }` | 读取 Session 及其消息 |
+| `session.get` | `{ "id": "...", "workspace": "...", "limit": 80, "before": 120 }` | 读取 Session 及其消息；`limit` 取 1..500，`before` 是向更早翻页的游标，响应另带 `total` / `firstIndex` / `hasMore` |
 | `session.update` | `{ "id": "...", "title": "...", "reasoningLevel": "high" }` | 更新标题、思考深度等 Session 元数据 |
 | `session.archive` | `{ "id": "...", "archived": true }` | 归档或恢复 Session |
 | `session.delete` | `{ "id": "..." }` | 永久删除 Session |
 | `session.truncate` | `{ "id": "...", "keepCount": 5 }` | 保留前 N 条消息（"重新生成"用），返回剩余消息数 |
 | `session.resume` | `{ "id": "...", "global": false }` | 恢复 Session |
 | `session.new` | `{ "workspace": "...", "reasoningLevel": "high" }` 或 `{ "global": true }` | 创建并绑定一个新 Session |
+| `session.image` | `{ "id": "...", "imageId": "..." }` | 按需读取会话中单张图片的 base64 字节；`session.get` 返回的消息里图片 `data` 恒为 null，只在真正要显示时按 id 取字节 |
+| `session.search` | `{ "query": "...", "all": true, "includeArchived": true, "limit": 20 }` | 全文检索会话，返回标题、命中消息数与首个命中处的上下文片段；`all` 表示跨全部工作区检索，`limit` 取 1..50 |
+| `events.recent` | `{ "limit": 100, "after": 12345 }` | 读取事件溯源台账，客户端重连后用 `after`（自己见过的最后一条台账 id）补播断线期间的终态事件 |
 | `model.list` | 无 | 列出可用的 `provider/model` 引用 |
 | `model.catalog` | 无 | 返回模型详情、能力和活动状态 |
 | `model.switch` | `{ "model": "provider/model" }` | 切换并持久化模型 |

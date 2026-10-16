@@ -27,6 +27,7 @@ Responses use a stable event envelope: `id` identifies the request, `event` iden
 | `workspace.get` | none | Returns the active path, project kinds, and mode |
 | `workspace.open` | `{ "path": "..." }` | Validates and switches the Runtime workspace |
 | `workspace.init` | none | Initializes Haoyue directories in the active workspace |
+| `workspace.files` | `{ "workspace": "...", "query": "app", "limit": 30 }` | Lists workspace files for the composer's `@` picker; returns relative paths only, skips `.git`/`node_modules`/`bin`/`obj`/`dist`/`.haoyue` plus anything covered by `.gitignore`/`.haoyueignore`, and refuses credential paths such as `.ssh`, `.aws` and `.env*`; `limit` defaults to 30, capped at 100 |
 | `agent.mode.get` | none | Returns `plan`, `readonly`, `edit`, or `auto` |
 | `agent.mode.switch` | `{ "mode": "edit" }` | Switches and persists the Agent mode |
 | `agent.steer` | `{ "sessionId": "...", "message": "..." }` | Adds guidance to a running turn without cancelling the current request |
@@ -62,7 +63,15 @@ The `requestId` parameter is optional; omitting it cancels all active turns on t
 {"id":10,"event":"cancelled","data":"partial text produced before cancellation"}
 ```
 
-Assistant messages returned by `session.get` carry `modelRef` (`provider/model`) so clients can label which model produced each answer. Streaming events are `thinking`, `delta`, `steer`, `status`, `image_view`, `tool_start`, `tool_done`, and `workflow`. The `workflow` event carries `details` with `step`, `kind` (`start`/`think`/`tool`/`verify`/`repair`/`compact`/`done`/`error`), `label`, and `detail` so clients can count the execution steps of the turn. `steer` indicates that additional guidance has entered the active turn's context; `details.imageId` on `image_view` identifies the uploaded image entering the model request. Terminal events are `done`, `cancelled`, and `error`.
+When the built-in guard blocks a tool call, the turn does not fail outright: the call is parked and an `approval_request` event is pushed, whose `details` carry `callId`, `tool`, the blocking `reason` and a `summary` of the arguments. The client answers with `agent.respondApproval`:
+
+```json
+{"id":13,"method":"agent.respondApproval","params":{"callId":"call-8f2c","approve":true}}
+```
+
+`approve: true` allows exactly that one call — it is not a standing whitelist. `approve: false`, or no answer within 120 seconds, is treated as a refusal and the call never runs. Both decisions land in `.haoyue/audit/tools.jsonl` next to every other tool execution.
+
+Assistant messages returned by `session.get` carry `modelRef` (`provider/model`) so clients can label which model produced each answer. Streaming events are `thinking`, `delta`, `steer`, `status`, `image_view`, `tool_start`, `tool_done`, `workflow`, `warning`, and `approval_request`. The `workflow` event carries `details` with `step`, `kind` (`start`/`think`/`tool`/`verify`/`repair`/`compact`/`done`/`error`), `label`, and `detail` so clients can count the execution steps of the turn. `steer` indicates that additional guidance has entered the active turn's context; `details.imageId` on `image_view` identifies the uploaded image entering the model request. Terminal events are `done`, `cancelled`, and `error`.
 
 The Daemon also broadcasts events that belong to no request (`id` is 0): `schedule.updated`, `schedule.upcoming`, `task.updated`, `evolution.reflected`, `mcp.updated`, `turn.interrupted`, `memory.consolidated`, and `model.load.progress`. `model.load.progress` carries `details` with `model`, `phase` (Queued / Probing / Loading / Verifying / Projector / Ready / Failed), `percent` (0..1), `elapsedMs`, and `estimatedRemainingMs`. Cold-loading local GGUF weights takes one to two minutes, so clients show "loading local model N%" on the first message instead of looking dead; the progress channel covers lazy loads inside a chat turn, not only `model.preload`. A broadcast is written to every authenticated connection with its own copy of `details`; a client that cannot be written to costs one stderr line instead of ending the event pump.
 
@@ -71,13 +80,16 @@ The Daemon also broadcasts events that belong to no request (`id` is 0): `schedu
 | Method | Parameters | Description |
 | --- | --- | --- |
 | `session.list` | `{ "workspace": "...", "global": false, "includeArchived": true }` | Lists sessions in a project or global scope |
-| `session.get` | `{ "id": "...", "workspace": "..." }` | Reads a session and its messages |
+| `session.get` | `{ "id": "...", "workspace": "...", "limit": 80, "before": 120 }` | Reads a session and its messages; `limit` is 1..500, `before` is the cursor for paging backwards, and the response also carries `total` / `firstIndex` / `hasMore` |
 | `session.update` | `{ "id": "...", "title": "...", "reasoningLevel": "high" }` | Updates title, reasoning depth, and other Session metadata |
 | `session.archive` | `{ "id": "...", "archived": true }` | Archives or restores a session |
 | `session.delete` | `{ "id": "..." }` | Permanently deletes a session |
 | `session.truncate` | `{ "id": "...", "keepCount": 5 }` | Keeps only the first N messages (used by "regenerate"); returns the remaining count |
 | `session.resume` | `{ "id": "...", "global": false }` | Resumes a session |
 | `session.new` | `{ "workspace": "...", "reasoningLevel": "high" }` or `{ "global": true }` | Creates and binds a new Session |
+| `session.image` | `{ "id": "...", "imageId": "..." }` | Reads one image's base64 bytes on demand; `session.get` always returns `data: null` for images so loading a long history does not drag every byte through the wire |
+| `session.search` | `{ "query": "...", "all": true, "includeArchived": true, "limit": 20 }` | Full-text search across sessions; returns title, match count and a snippet around the first hit. `all` searches every workspace, `limit` is 1..50 |
+| `events.recent` | `{ "limit": 100, "after": 12345 }` | Reads the event-sourcing ledger so a reconnecting client can replay the terminal events it missed, using `after` (the last ledger id it saw) |
 | `model.list` | none | Lists available `provider/model` references |
 | `model.catalog` | none | Returns model details, capabilities, and active state |
 | `model.switch` | `{ "model": "provider/model" }` | Switches and persists the model |

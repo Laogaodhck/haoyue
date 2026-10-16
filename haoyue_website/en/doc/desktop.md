@@ -67,9 +67,31 @@ Titles are derived from the first prompt. Tasks can be archived, restored, or de
 
 Vision-capable models expose an image button in the composer for selecting multiple PNG, JPEG, WebP, or GIF files. After taking a Windows screenshot, press `Ctrl+V` in the composer to attach the clipboard image directly. Images can be previewed or removed before sending and are persisted with the Session. As each image enters the model request, the assistant message shows a “Viewed” row with its file name and thumbnail; click it to preview the image again. The button is disabled when the selected model does not declare the `vision` capability.
 
+Typing `@` references a file in the current project. Candidates come from the `workspace.files` RPC, ranked by file-name prefix, then name containment, then path containment, capped at 30. They are workspace-relative paths only — no file content is read — with `.git`, `node_modules`, `bin`, `obj`, `dist`, and `.haoyue` skipped and credential paths such as `.ssh`, `.aws`, and `.env*` never listed. `↑`/`↓` selects, `Enter` or `Tab` inserts, `Esc` dismisses. The result reads `@src/App.cs`, which the Agent resolves against the project root; directory-free tasks produce no candidates.
+
+`Enter` sends and `Shift+Enter` breaks a line. `Esc` does one thing at a time: close the topmost dialog, decline a high-risk action awaiting confirmation, or stop the running turn (same as `Ctrl+.`). `Ctrl+K` focuses the sidebar search, `Ctrl+F` searches within the current Session.
+
+Each task keeps its own draft — text, unsent images, and file attachments are restored when you return to it and discarded once the message is sent or the composer is cleared.
+
 You can keep typing while the Agent is streaming. Pressing “Send” adds the message to a queue; queued messages are sent in order after the current turn finishes, and can be stacked or removed. Pressing “Steer” sends a queued message as additional guidance to the active turn without cancelling its in-flight request.
 
 Project tasks show the complete workspace path and shortcuts for opening the directory, terminal, Git changes, Git history, and task settings. Global tasks omit the path and project-only tools.
+
+## Follow the execution
+
+The status line under the composer keeps the books for the turn: `N rounds · N steps | cache hits X% | N tok/s | input … tok · output … tok | context Y%`. Context occupancy is normalized to the model window, and the Agent compacts the history as it fills.
+
+Each tool call is a collapsed row (tool, summary, duration); expand it for arguments and result, with failures marked “Error”. Write-side calls carry a diff, grouped under an “N files edited” card.
+
+When a built-in guard intercepts a high-risk call, Desktop asks for confirmation and names the tool, an argument summary, and the reason. “Allow once” permits that call only; “Deny” or no answer within 120 seconds skips it. Both decisions land in `.haoyue/audit/tools.jsonl`.
+
+A stopped turn reads “Stopped by you; the reply may be incomplete” and writes a `>>> [turn interrupted]` marker into the Session. After a reconnect Desktop replays turns that finished while it was offline, and a turn left incomplete by an abnormal Daemon exit is classified as interrupted rather than staying “Running”.
+
+## History and search
+
+A Session opens with its most recent 80 messages; “Load N earlier messages” pages back, and image bytes are fetched by id only when you open a thumbnail.
+
+The sidebar search runs a cross-Session full-text query from two characters, including archived tasks, and shows title, match count, and a snippet. Each task group lists up to 40 tasks by last activity with the active one always kept; the rest hide behind “Show all (N more)”.
 
 ## Models, Providers, and API keys
 
@@ -104,11 +126,21 @@ The settings workbench also provides:
 - **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
 - **Evolution**: defect signals at a glance, manual or scheduled reflection, adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
 - **Knowledge Center**: browse and revise what the agent saves as notebooks → sources → entries — attribution badges, cross-notebook search, tag filtering, Markdown export and the synonym editor — see the [Knowledge Center](/en/doc/knowledge);
-- **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost.
+- **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry.
 
 ![Configure an MCP Server in Desktop](/screenshots/desktop/mcp-servers.png)
 
 ![Desktop Runtime diagnostics and usage](/screenshots/desktop/diagnostics-and-usage.png)
+
+## Daemon logs and diagnostics bundle
+
+Desktop writes the Runtime's standard output and error line by line to `logs\daemon.log` under its user data directory (`%APPDATA%\haoyue-desktop\logs\daemon.log` for a release build), rolling to `daemon.prev.log` once the file passes 8 MB. Crashes, GPU out-of-memory, and “the first token never arrives” leave their traces here.
+
+“Settings → Diagnostics & Usage” exposes four actions: **Open logs** reveals the log file (or the directory when none exists yet), **Copy path** copies the full `daemon.log` path, **Refresh tail** shows the last 200 lines and the file size, and **Export bundle** writes `haoyue-诊断包-<timestamp>.txt` through a save dialog. The bundle holds app and Daemon state, each health check result, the usage totals for the selected window, and the last 400 log lines. Values of keys such as `api_key`, `authorization`, and `secret`, plus `Bearer`/`Basic` headers and `sk-`-prefixed secrets, are rewritten as `<已脱敏>` while reading; the configuration body and plaintext API keys are never included, so the file is safe to forward.
+
+::: tip Turn failures name their source
+The Daemon is not running or the connection dropped (nothing was sent — press reconnect), the Daemon accepted the request but produced no first token (a local model loading weights or a short GPU can take minutes — read the log), or any other failure (retry and expand “Technical details” for the full response, which stays available after a reload).
+:::
 
 ## Runtime connection behavior
 

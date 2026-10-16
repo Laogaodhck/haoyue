@@ -67,9 +67,33 @@ Titles are derived from the first prompt. Tasks can be archived, restored, or de
 
 Vision-capable models expose an image button in the composer for selecting multiple PNG, JPEG, WebP, or GIF files. After taking a Windows screenshot, press `Ctrl+V` in the composer to attach the clipboard image directly. Images can be previewed or removed before sending and are persisted with the Session. As each image enters the model request, the assistant message shows a “Viewed” row with its file name and thumbnail; click it to preview the image again. The button is disabled when the selected model does not declare the `vision` capability.
 
+Typing `@` references a file in the current project. The candidate list opens as soon as you type it and ranks matches by file-name prefix, then file-name containment, then path containment, capped at 30 entries. Candidates come from the `workspace.files` RPC and are workspace-relative paths only — no file content is read — with `.git`, `node_modules`, `bin`, `obj`, `dist`, and `.haoyue` skipped along with anything ignored by `.gitignore` or `.haoyueignore`; credential locations such as `.ssh`, `.aws`, and `.env*` never appear. Use `↑`/`↓` to select, `Enter` or `Tab` to insert, `Esc` to dismiss. The result is a path like `@src/App.cs` that the Agent resolves against the project root, so you never have to paste absolute paths. Directory-free tasks produce no candidates.
+
+`Enter` sends and `Shift+Enter` inserts a newline. `Esc` does exactly one thing depending on context: it closes the topmost dialog (stacked dialogs close one at a time), declines a high-risk action awaiting confirmation, or stops the running turn, the same as `Ctrl+.`. `Ctrl+K` focuses the sidebar search and `Ctrl+F` searches within the current Session.
+
+Each task keeps its own draft. Text you have typed plus images and file attachments that were never sent are stored per task and restored when you return to it; the draft is discarded once a message is sent successfully or the composer is cleared.
+
 You can keep typing while the Agent is streaming. Pressing “Send” adds the message to a queue; queued messages are sent in order after the current turn finishes, and can be stacked or removed. Pressing “Steer” sends a queued message as additional guidance to the active turn without cancelling its in-flight request.
 
 Project tasks show the complete workspace path and shortcuts for opening the directory, terminal, Git changes, Git history, and task settings. Global tasks omit the path and project-only tools.
+
+## Follow the execution
+
+The status line under the composer reports the accounting for the current turn: `N rounds · N steps | cache hits X% | N tok/s | input … tok · output … tok | context Y%`. Context occupancy is normalized to the selected model's window because raw token counts mean little there; as the window fills, the Agent compacts the history before continuing.
+
+Each tool call collapses into one row showing the tool, a summary, and its duration. Expand it for the arguments and the result, with failed results marked “Error”. Write-side calls carry a diff, collected under an “N files edited” card where each file name opens the added and removed lines.
+
+When a built-in guard intercepts a high-risk call, Desktop shows “High-risk action needs your approval” with the tool, an argument summary, and the reason it was blocked. “Allow once” permits that single call only — it is not a standing whitelist; “Deny”, or no answer within 120 seconds, skips execution. Both decisions are appended to `.haoyue/audit/tools.jsonl` alongside the other tool records.
+
+A manually stopped turn labels the assistant message “Stopped by you; the reply may be incomplete” and writes a `>>> [turn interrupted]` marker into the Session. After Desktop reconnects, it replays finished activity from the event ledger for the period it was offline; a turn left incomplete by an abnormal Daemon exit is classified as interrupted instead of staying “Running” forever.
+
+## History and search
+
+A Session loads its most recent 80 messages, with “Load N earlier messages” above the transcript to page further back. Image bytes are not delivered with the messages — each thumbnail is fetched by image id only when you actually open it.
+
+Typing two or more characters in the sidebar search starts a cross-Session full-text search that includes archived tasks. Results show the title, the match count, and a snippet around the first match, and open that Session when clicked.
+
+Each task group lists at most 40 tasks ordered by last activity, and the active task always stays in the list; the rest sit behind “Show all (N more)”.
 
 ## Models, Providers, and API keys
 
@@ -103,11 +127,30 @@ The settings workbench also provides:
 - **Rules & Memory**: toggle rule injection and the memory management mode; the editor maintains hierarchical AGENTS.md rule files and MEMORY.md — create rule files (Ctrl+N), delete them, reveal their folder, and save quickly with Ctrl+S;
 - **Evolution**: browse defect signals, run reflection turns manually or on an interval, and review the skill drafts it produces (see the [Evolution Engine](/en/doc/evolution));
 - **Knowledge Center**: manage what the agent saves automatically as notebooks → sources → entries — notebook grouping, text/URL/file sources, attribution badges, cross-notebook search, exact tag filtering, Markdown export and a synonym-table editor (see the [Knowledge Center](/en/doc/knowledge));
-- **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost.
+- **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry described below.
 
 ![Configure an MCP Server in Desktop](/screenshots/desktop/mcp-servers.png)
 
 ![Desktop Runtime diagnostics and usage](/screenshots/desktop/diagnostics-and-usage.png)
+
+## Daemon logs and diagnostics bundle
+
+Desktop appends the Runtime's standard output and standard error to `logs\daemon.log` under its user data directory. For a release build that directory is `%APPDATA%\haoyue-desktop`, so the file lives at `C:\Users\<username>\AppData\Roaming\haoyue-desktop\logs\daemon.log`. Once it exceeds 8 MB the file rolls to `daemon.prev.log` before the next start and one generation is kept. Crashes, GPU out-of-memory, and “the first token never arrives” all leave their evidence here.
+
+The **Daemon logs and diagnostics bundle** block in “Settings → Diagnostics & Usage” offers four actions:
+
+- **Open logs** reveals the log file in the system file manager, or the log directory when no log exists yet;
+- **Copy path** copies the full `daemon.log` path so it can be pasted to a collaborator;
+- **Refresh tail** reads and displays the last 200 lines in place, together with the file size;
+- **Export bundle** writes `haoyue-诊断包-<timestamp>.txt` to a location you choose in the save dialog.
+
+The bundle collects what triage needs: app version and platform, Daemon endpoint and connection state, log directory and file size, every health check result, the call and token totals for the selected usage window, and the last 400 log lines. While reading them the main process rewrites values of keys such as `api_key`, `authorization`, `access_token`, `refresh_token`, `client_secret`, `password`, and `secret` as `<已脱敏>`, and does the same for `Bearer`/`Basic` headers and `sk-`-prefixed secrets. No configuration body and no plaintext API key are included, so the file is safe to forward.
+
+::: tip Turn failures name their source
+- **Daemon not running or connection lost**: the message was never sent. Press reconnect, and if it keeps failing read the Daemon log in “Diagnostics & Usage.”
+- **The Daemon took the request but produced no first token**: a local model loading weights, or a GPU that cannot hold it, can take several minutes. This is not a broken connection — check the Daemon log for progress instead.
+- **Everything else**: retry, and expand “Technical details” for the full server response. Details are stored with the message and remain readable after a reload.
+:::
 
 ## Runtime connection behavior
 

@@ -205,6 +205,29 @@ describe('daemon event handler — stream batching', () => {
     expect(assistant.state).toBe('thinking')
   })
 
+  it('keeps the argument summary next to the result for the expandable tool row', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+    const assistant = thread.messages[0]!
+
+    handler({ ...chatEvent('tool_start', 'read_file'), details: { callId: 'call-1', summary: 'src/main.ts' } })
+    expect(assistant.tools![0]!.args).toBe('src/main.ts')
+    expect(assistant.tools![0]!.detail).toBeUndefined()
+    expect(assistant.tools![0]!.state).toBe('running')
+
+    handler({
+      ...chatEvent('tool_done', '已读取 120 行'),
+      details: { callId: 'call-1', success: true, durationMs: 1500 }
+    })
+    expect(assistant.tools![0]!.detail).toBe('已读取 120 行')
+    // 结果到达后入参必须还在：展开行要同时回答「按什么调的」和「调到了什么」。
+    expect(assistant.tools![0]!.args).toBe('src/main.ts')
+    expect(assistant.tools![0]!.durationMs).toBe(1500)
+    expect(assistant.tools![0]!.state).toBe('done')
+  })
+
   it('carries the turn finish reason onto the terminal bubble', () => {
     const context = createContext()
     const thread = threadFixture()

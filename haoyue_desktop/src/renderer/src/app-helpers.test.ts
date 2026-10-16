@@ -220,4 +220,12 @@ describe('messageMatches', () => {
       tools: [{ id: 't1', name: 'bash', detail: 'dotnet test', state: 'done' }]
     }, 'read_file')).toBe(false)
   })
+
+  it('also searches the tool argument summary (P1-2.3)', () => {
+    // 入参现在单独存 args，会话内搜索漏掉它就搜不到「到底跑的是哪条命令」。
+    expect(messageMatches({
+      ...base,
+      tools: [{ id: 't1', name: 'bash', args: 'pnpm typecheck', detail: 'exit 0', state: 'done' }]
+    }, 'typecheck')).toBe(true)
+  })
 })

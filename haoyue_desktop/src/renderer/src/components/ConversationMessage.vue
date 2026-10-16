@@ -17,7 +17,7 @@ import {
   Wrench
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref } from 'vue'
-import type { ChatMessage } from '../types'
+import type { ChatMessage, ToolActivity } from '../types'
 import {
   classifyModelError,
   extractModelError,
@@ -128,6 +128,27 @@ function formatDuration(durationMs: number): string {
   const minutes = Math.floor(durationMs / 60_000)
   const seconds = Math.round((durationMs % 60_000) / 1000)
   return `${minutes}m${seconds}s`
+}
+
+/**
+ * 工具行可展开（P1-2.3）：折叠行只有一行宽度，入参摘要和结果全文都会被省略号截掉，
+ * 展开后按「入参 / 结果 / 耗时」分列显示。
+ */
+const openToolIds = ref<string[]>([])
+
+function toolSummary(tool: ToolActivity): string {
+  return tool.detail ?? tool.args ?? ''
+}
+
+function isToolOpen(id: string): boolean {
+  return openToolIds.value.includes(id)
+}
+
+function toggleTool(tool: ToolActivity): void {
+  if (!tool.detail && !tool.args) return
+  openToolIds.value = isToolOpen(tool.id)
+    ? openToolIds.value.filter((id) => id !== tool.id)
+    : [...openToolIds.value, tool.id]
 }
 
 /** Structured error card (H18): icon + summary + collapsible detail + one-click retry. */
@@ -279,13 +300,33 @@ function openFileLocation(path?: string): void {
         <div v-if="thinkingOpen && message.thinking" class="thinking-content">{{ message.thinking }}</div>
 
         <div v-if="regularTools.length" class="tool-list">
-          <div v-for="tool in regularTools" :key="tool.id" class="tool-row" :title="tool.detail || tool.name">
-            <LoaderCircle v-if="tool.state === 'running'" :size="14" class="spin" />
-            <CircleAlert v-else-if="tool.state === 'error'" :size="14" class="tool-error" />
-            <Wrench v-else :size="14" class="tool-done" />
-            <span>{{ tool.name }}</span>
-            <small v-if="tool.detail">{{ tool.detail }}</small>
-            <small v-if="tool.durationMs" class="tool-duration">{{ formatDuration(tool.durationMs) }}</small>
+          <div v-for="tool in regularTools" :key="tool.id" class="tool-item">
+            <button type="button" class="tool-row" :disabled="!tool.detail && !tool.args"
+              :aria-expanded="isToolOpen(tool.id)" :title="toolSummary(tool) || tool.name"
+              @click="toggleTool(tool)">
+              <LoaderCircle v-if="tool.state === 'running'" :size="14" class="spin" />
+              <CircleAlert v-else-if="tool.state === 'error'" :size="14" class="tool-error" />
+              <Wrench v-else :size="14" class="tool-done" />
+              <span>{{ tool.name }}</span>
+              <small v-if="toolSummary(tool) && !isToolOpen(tool.id)">{{ toolSummary(tool) }}</small>
+              <small v-if="tool.durationMs" class="tool-duration">{{ formatDuration(tool.durationMs) }}</small>
+              <ChevronDown v-if="tool.detail || tool.args" :size="13" class="tool-chevron"
+                :class="{ rotated: isToolOpen(tool.id) }" />
+            </button>
+            <dl v-if="isToolOpen(tool.id)" class="tool-detail">
+              <template v-if="tool.args">
+                <dt>入参</dt>
+                <dd>{{ tool.args }}</dd>
+              </template>
+              <template v-if="tool.detail">
+                <dt>{{ tool.state === 'error' ? '错误' : '结果' }}</dt>
+                <dd>{{ tool.detail }}</dd>
+              </template>
+              <template v-if="tool.durationMs">
+                <dt>耗时</dt>
+                <dd>{{ formatDuration(tool.durationMs) }}</dd>
+              </template>
+            </dl>
           </div>
         </div>
 

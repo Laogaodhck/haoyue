@@ -294,7 +294,8 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
           id: eventCallId ?? `${event.id}-${message.tools.length}`,
           callId: eventCallId,
           name: event.data,
-          detail: typeof event.details?.summary === 'string' ? event.details.summary : undefined,
+          // 入参摘要单独存 args：结果一到会覆盖 detail，两个信息才能同时留在展开行里。
+          args: typeof event.details?.summary === 'string' ? event.details.summary : undefined,
           state: 'running'
         })
         break

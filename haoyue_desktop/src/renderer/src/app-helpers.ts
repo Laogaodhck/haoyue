@@ -300,7 +300,8 @@ export function messageMatches(message: ChatMessage, query: string): boolean {
   if (message.thinking?.toLocaleLowerCase().includes(normalized)) return true
   return (message.tools ?? []).some((tool) =>
     tool.name.toLocaleLowerCase().includes(normalized)
-    || (tool.detail ?? '').toLocaleLowerCase().includes(normalized))
+    || (tool.detail ?? '').toLocaleLowerCase().includes(normalized)
+    || (tool.args ?? '').toLocaleLowerCase().includes(normalized))
 }
 
 export function phaseLabel(status: string): string {

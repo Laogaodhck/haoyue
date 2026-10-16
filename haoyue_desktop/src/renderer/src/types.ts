@@ -20,7 +20,10 @@ export interface ToolActivity {
   id: string
   callId?: string
   name: string
+  /** 结果摘要（tool_done.data）；历史会话重载后即为持久化的工具输出全文。 */
   detail?: string
+  /** 入参摘要（tool_start.summary）。此前结果一到就被覆盖，用户永远看不到工具是按什么参数调的。 */
+  args?: string
   filePath?: string
   diff?: string
   addedLines?: number

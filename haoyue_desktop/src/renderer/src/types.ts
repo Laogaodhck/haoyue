@@ -34,7 +34,9 @@ export interface ImageAttachment {
   id: string
   name: string
   mediaType: string
-  data: string
+  /** base64 字节。session.get 只回元数据（体积不再随视觉历史膨胀），历史图片的字节
+   * 由 session.image 按需补取，取到前为 undefined。 */
+  data?: string | null
   sizeBytes: number
   path?: string
 }
@@ -119,6 +121,13 @@ export interface ThreadItem {
   messages: ChatMessage[]
   sessionId?: string
   sessionLoaded?: boolean
+  /** 会话消息总条数与已加载窗口的起点序号（session.get 分页，P1-2.3）。 */
+  sessionTotal?: number
+  sessionFirstIndex?: number
+  /** 还有更早的消息没拉下来（「加载更早」按钮的显示条件）。 */
+  sessionHasMore?: boolean
+  /** 「加载更早」请求在途，避免连点重复拉同一页。 */
+  loadingEarlier?: boolean
   archived?: boolean
   /** True while this task has an agent turn running, independent of the selected task. */
   running?: boolean
@@ -165,7 +174,7 @@ export interface ThreadItem {
   }
 }
 
-/** 跨会话全文检索的一条命中（session.search）：命中会话的头信息 + 匹配条数。 */
+/** 跨会话全文检索的一条命中（session.search）：命中会话的头信息 + 匹配条数 + 片段。 */
 export interface SessionSearchHit {
   id: string
   title: string
@@ -173,6 +182,8 @@ export interface SessionSearchHit {
   archived?: boolean
   updatedAt?: string
   matchCount?: number
+  /** 首条命中消息正文的窗口片段；仅标题命中时为空。 */
+  snippet?: string | null
 }
 
 /** One evolution-engine skill candidate awaiting human review (P3). */

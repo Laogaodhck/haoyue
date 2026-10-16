@@ -628,6 +628,23 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+/* 跨会话检索命中：标题下面补一行匹配片段，先看内容再决定点进哪个会话。 */
+.search-hit-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 2px;
+}
+
+.search-hit-row > span:first-child {
+  flex: 1 1 auto;
+}
+
+.search-hit-row .search-hit-snippet {
+  width: 100%;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
 .project-heading-row .project-row {
   gap: 10px;
   font-size: 14px;
@@ -1247,6 +1264,30 @@ select:focus-visible {
   padding: 42px 34px 90px;
 }
 
+/* 首屏只渲染最近一页历史，更早的消息由这个按钮按页向前补齐。 */
+.load-earlier-button {
+  display: block;
+  width: auto;
+  margin: 0 auto 22px;
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.load-earlier-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.load-earlier-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .message {
   display: flex;
   width: 100%;
@@ -1359,6 +1400,21 @@ select:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   background: linear-gradient(transparent, rgb(0 0 0 / 62%));
+}
+
+/* 历史图片的字节走 session.image 按需读取，取回前只显示占位图标。 */
+.user-image-button .user-image-placeholder {
+  position: static;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: normal;
+  background: var(--surface-hover);
 }
 
 .assistant-message {

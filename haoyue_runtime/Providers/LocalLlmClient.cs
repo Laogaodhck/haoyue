@@ -403,10 +403,12 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// <summary>
     /// Collects image attachments across the conversation in message order (user turns and
     /// tool results both carry Images). Order matters: mtmd consumes queued media bitmaps
-    /// at the markers in the same sequence.
+    /// at the markers in the same sequence. Attachments without resolved bytes are dropped
+    /// here and in <see cref="WithImageMarkers"/> so bitmaps and markers can never diverge.
     /// </summary>
     internal static IReadOnlyList<ChatImageAttachment> CollectImages(LlmRequest request) => request.Messages
         .SelectMany(message => message.Images ?? (IReadOnlyList<ChatImageAttachment>)[])
+        .Where(image => image.Data is not null)
         .ToList();
 
     /// <summary>
@@ -434,7 +436,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         {
             foreach (var image in images)
             {
-                var bytes = Convert.FromBase64String(image.Data);
+                var bytes = Convert.FromBase64String(image.Data!);
                 mtmd.LoadMedia(bytes);
             }
 
@@ -1017,7 +1019,8 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     {
         if (imageMarker is null || message.Images is not { Count: > 0 })
             return message.Text;
-        return message.Text + string.Concat(Enumerable.Repeat(imageMarker, message.Images.Count));
+        var count = message.Images.Count(image => image.Data is not null);
+        return message.Text + string.Concat(Enumerable.Repeat(imageMarker, count));
     }
 
     /// <summary>

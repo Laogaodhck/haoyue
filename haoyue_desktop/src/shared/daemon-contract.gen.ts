@@ -190,6 +190,7 @@ export const DAEMON_METHODS = [
   'session.list',
   'session.search',
   'session.get',
+  'session.image',
   'session.truncate',
   'session.fork',
   'session.update',

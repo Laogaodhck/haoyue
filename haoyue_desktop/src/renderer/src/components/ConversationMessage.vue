@@ -211,8 +211,9 @@ function openFileLocation(path?: string): void {
         </div>
         <div v-if="message.images?.length" class="user-image-grid" :class="{ single: message.images.length === 1 }">
           <button v-for="image in message.images" :key="image.id" type="button" class="user-image-button"
-            :title="`预览 ${image.name}`" @click="previewImage(image.id, image.name)">
-            <img :src="imageUrl(image.id)" :alt="image.name">
+            :title="imageUrl(image.id) ? `预览 ${image.name}` : image.name" @click="previewImage(image.id, image.name)">
+            <img v-if="imageUrl(image.id)" :src="imageUrl(image.id)" :alt="image.name">
+            <span v-else class="user-image-placeholder"><ImageIcon :size="18" /></span>
             <span>{{ image.name }}</span>
           </button>
         </div>

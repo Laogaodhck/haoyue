@@ -65,6 +65,10 @@ export interface RuntimeSession extends RuntimeSessionHeader {
     toolFilePath?: string
     timestamp?: number
   }>
+  /** session.get 分页游标（P1-2.3）：总条数、本页首条序号、是否还有更早。 */
+  total?: number
+  firstIndex?: number
+  hasMore?: boolean
 }
 
 export interface RuntimeWorkspace {
@@ -174,9 +178,14 @@ export function fileExtClass(ext?: string): string {
   return 'badge-default'
 }
 
-export function hydrateMessages(saved: RuntimeSession): ChatMessage[] {
+/**
+ * 把 session.get 的消息行转成界面气泡。`offset` 是本页首条在整个会话里的序号：
+ * 用它拼出绝对序号 id，向前翻页时既有气泡的 key 不会漂移，虚拟滚动不整屏重建。
+ */
+export function hydrateMessages(saved: RuntimeSession, offset = 0): ChatMessage[] {
   const messages: ChatMessage[] = []
   saved.messages.forEach((item, index) => {
+    const ordinal = offset + index
     if (item.role === 'tool') {
       const assistant = messages.findLast((message) => message.role === 'assistant')
       if (assistant && item.toolName) {
@@ -184,7 +193,7 @@ export function hydrateMessages(saved: RuntimeSession): ChatMessage[] {
         const tool = assistant.tools.find((activity) =>
           Boolean(item.toolCallId) && (activity.callId === item.toolCallId || activity.id === item.toolCallId))
         const hydrated: ToolActivity = tool ?? {
-          id: item.toolCallId ?? `${saved.id}:tool:${index}`,
+          id: item.toolCallId ?? `${saved.id}:tool:${ordinal}`,
           callId: item.toolCallId,
           name: item.toolName,
           state: 'done'
@@ -207,7 +216,7 @@ export function hydrateMessages(saved: RuntimeSession): ChatMessage[] {
     }
 
     messages.push({
-      id: `${saved.id}:${index}`,
+      id: `${saved.id}:${ordinal}`,
       role: item.role,
       content: messageContent,
       images: item.images,

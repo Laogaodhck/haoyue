@@ -31,6 +31,13 @@ public interface ISessionStore
         int keepMessageCount = 0,
         string? title = null);
     AgentSession? Load(WorkspaceInfo workspace, string sessionId);
+    /// <summary>
+    /// Paged, image-byte-free read used by the session.get RPC. See
+    /// <see cref="SessionStore.LoadPage"/> for the window semantics.
+    /// </summary>
+    SessionPage? LoadPage(WorkspaceInfo workspace, string sessionId, int before, int limit);
+    /// <summary>Resolves one image's bytes on demand (session.image RPC); null when absent.</summary>
+    ChatImageAttachment? LoadImage(WorkspaceInfo workspace, string sessionId, string imageId);
     AgentSession? LoadLatest(WorkspaceInfo workspace);
     IReadOnlyList<SessionHeader> List(WorkspaceInfo workspace, bool includeArchived = false);
     /// <summary>
@@ -81,8 +88,22 @@ public sealed record SessionMaintenanceResult(int ArchivedSessions, int PurgedIm
 /// <summary>
 /// One <see cref="SessionStore.Search"/> result. MatchCount = number of matching
 /// messages (1 if only the title matched), driving the hit-count-first ranking.
+/// Snippet is a window of the first matching message body (null when only the title
+/// matched) so clients can show where the hit is instead of a bare session title.
 /// </summary>
-public sealed record SessionSearchHit(SessionHeader Header, int MatchCount);
+public sealed record SessionSearchHit(SessionHeader Header, int MatchCount, string? Snippet = null);
+
+/// <summary>
+/// One <see cref="SessionStore.LoadPage"/> result. Messages are ascending (oldest first),
+/// Total is the session's whole message count and FirstIndex the ordinal of Messages[0] —
+/// together they let a client page backwards with "load earlier" without refetching.
+/// Image bytes are intentionally not resolved here; see <see cref="SessionStore.LoadImage"/>.
+/// </summary>
+public sealed record SessionPage(
+    SessionHeader Header,
+    IReadOnlyList<ChatMessage> Messages,
+    int Total,
+    int FirstIndex);
 
 public sealed class SessionStore : ISessionStore
 {
@@ -257,6 +278,103 @@ public sealed class SessionStore : ISessionStore
         return latest is null ? null : Load(workspace, latest.Id);
     }
 
+    /// <summary>
+    /// 分页读取会话消息（正序）。<paramref name="before"/> 是「不含」的序号上界，
+    /// 缺省/非正数表示从最新一条往回取；<paramref name="limit"/> ≤ 0 表示取到最早。
+    /// 图片字节一律不解析：一次会话可能带几十张图，全部 base64 内联会让响应体积
+    /// 随视觉历史线性膨胀，桌面首屏因此卡在管道读取上——改由 <see cref="LoadImage"/> 按需取。
+    /// </summary>
+    public SessionPage? LoadPage(WorkspaceInfo workspace, string sessionId, int before, int limit)
+    {
+        ValidateSessionId(sessionId);
+        EnsureLegacyImported(workspace);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        using var connection = _database.OpenConnection();
+        var header = ReadHeader(connection, scope, sessionId);
+        if (header is null) return null;
+
+        int total;
+        using (var count = connection.CreateCommand())
+        {
+            count.CommandText = """
+                SELECT COUNT(*) FROM messages WHERE scope = $scope AND session_id = $sessionId;
+                """;
+            count.Parameters.AddWithValue("$scope", scope);
+            count.Parameters.AddWithValue("$sessionId", sessionId);
+            total = Convert.ToInt32(count.ExecuteScalar());
+        }
+        var upper = before <= 0 || before > total ? total : before;
+        var take = limit <= 0 ? upper : Math.Min(limit, upper);
+        var firstIndex = upper - take;
+
+        var messages = new List<ChatMessage>(take);
+        if (take > 0)
+        {
+            using var command = connection.CreateCommand();
+            // 倒序 + OFFSET 让窗口贴着「最新一侧」切，取完再翻回正序。
+            command.CommandText = """
+                SELECT payload_json FROM messages
+                WHERE scope = $scope AND session_id = $sessionId
+                ORDER BY id DESC
+                LIMIT $take OFFSET $offset;
+                """;
+            command.Parameters.AddWithValue("$scope", scope);
+            command.Parameters.AddWithValue("$sessionId", sessionId);
+            command.Parameters.AddWithValue("$take", take);
+            command.Parameters.AddWithValue("$offset", total - upper);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                try
+                {
+                    var record = JsonSerializer.Deserialize(
+                        reader.GetString(0), HaoyueJsonContext.Compact.SessionMessage);
+                    if (record is not null) messages.Add(ToMessage(record, resolveImages: false));
+                }
+                catch (JsonException) { }
+            }
+            messages.Reverse();
+        }
+        return new SessionPage(header, messages, total, firstIndex);
+    }
+
+    /// <summary>
+    /// 按需解析会话里的单张图片：<see cref="LoadPage"/> 只给元数据，字节走这里。
+    /// 内容寻址缓存命中则读文件，旧版内联 base64 直接回传，两者都拿不到返回 null。
+    /// </summary>
+    public ChatImageAttachment? LoadImage(WorkspaceInfo workspace, string sessionId, string imageId)
+    {
+        ValidateSessionId(sessionId);
+        if (string.IsNullOrEmpty(imageId)) return null;
+        EnsureLegacyImported(workspace);
+        var scope = HaoyueDatabase.ScopeKey(workspace);
+        using var connection = _database.OpenConnection();
+        if (ReadHeader(connection, scope, sessionId) is null) return null;
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT payload_json FROM messages
+            WHERE scope = $scope AND session_id = $sessionId
+            ORDER BY id DESC;
+            """;
+        command.Parameters.AddWithValue("$scope", scope);
+        command.Parameters.AddWithValue("$sessionId", sessionId);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            SessionMessage? record;
+            try
+            {
+                record = JsonSerializer.Deserialize(
+                    reader.GetString(0), HaoyueJsonContext.Compact.SessionMessage);
+            }
+            catch (JsonException) { continue; }
+            var image = record?.Images?.FirstOrDefault(item => item.Id == imageId);
+            if (image is not null) return ResolveImage(image);
+        }
+        return null;
+    }
+
     public IReadOnlyList<SessionHeader> List(WorkspaceInfo workspace, bool includeArchived = false)
     {
         EnsureLegacyImported(workspace);
@@ -304,6 +422,22 @@ public sealed class SessionStore : ISessionStore
         return SearchViaLike(connection, scope, query, includeArchived, limit);
     }
 
+    /// <summary>
+    /// 命中片段：取该会话第一条正文含检索词的消息，围绕命中位置截 160 字符窗口。
+    /// 两条检索路径共用，避免 FTS 的 snippet() 在 trigram 分词下按 token 计数、
+    /// 中文只能拿到几个字。$needle 走 SQLite 的 ASCII lower()，与 LIKE 的大小写
+    /// 语义一致；只命中标题时子表无行，片段自然为 null。
+    /// </summary>
+    private const string SnippetSql = """
+        (SELECT substr(coalesce(json_extract(m2.payload_json, '$.text'), ''),
+                       max(1, instr(lower(coalesce(json_extract(m2.payload_json, '$.text'), '')), $needle) - 40),
+                       160)
+         FROM messages m2
+         WHERE m2.scope = s.scope AND m2.session_id = s.id
+           AND lower(coalesce(json_extract(m2.payload_json, '$.text'), '')) LIKE $rawPattern ESCAPE '\'
+         ORDER BY m2.id LIMIT 1) AS snippet
+        """;
+
     private IReadOnlyList<SessionSearchHit> SearchViaFts(
         SqliteConnection connection, string? scope, string query,
         bool includeArchived, int limit)
@@ -320,7 +454,8 @@ public sealed class SessionStore : ISessionStore
                    s.created_at, s.updated_at, s.expert_id,
                    (CASE WHEN s.title LIKE $rawPattern ESCAPE '\' THEN 1 ELSE 0 END) +
                    (SELECT COUNT(*) FROM messages_fts
-                    WHERE messages_fts.scope = s.scope AND messages_fts.session_id = s.id AND messages_fts MATCH $ftsQuery) AS match_count
+                    WHERE messages_fts.scope = s.scope AND messages_fts.session_id = s.id AND messages_fts MATCH $ftsQuery) AS match_count,
+                   {SnippetSql}
             FROM sessions s
             WHERE {ScopeFilter(scope)} {(includeArchived ? "" : "AND s.archived = 0")}
               AND (s.title LIKE $rawPattern ESCAPE '\'
@@ -331,6 +466,7 @@ public sealed class SessionStore : ISessionStore
             """;
         AddScopeParameter(command, scope);
         command.Parameters.AddWithValue("$rawPattern", rawPattern);
+        command.Parameters.AddWithValue("$needle", query.ToLowerInvariant());
         command.Parameters.AddWithValue("$ftsQuery", ftsQuery);
         command.Parameters.AddWithValue("$limit", limit);
         return ReadSearchHits(command);
@@ -352,7 +488,8 @@ public sealed class SessionStore : ISessionStore
                    (CASE WHEN s.title LIKE $rawPattern ESCAPE '\' THEN 1 ELSE 0 END) +
                    (SELECT COUNT(*) FROM messages m
                    WHERE m.scope = s.scope AND m.session_id = s.id
-                     AND m.payload_json LIKE $jsonPattern ESCAPE '\') AS match_count
+                     AND m.payload_json LIKE $jsonPattern ESCAPE '\') AS match_count,
+                   {SnippetSql}
             FROM sessions s
             WHERE {ScopeFilter(scope)} {(includeArchived ? "" : "AND s.archived = 0")}
               AND (s.title LIKE $rawPattern ESCAPE '\'
@@ -364,6 +501,7 @@ public sealed class SessionStore : ISessionStore
             """;
         AddScopeParameter(command, scope);
         command.Parameters.AddWithValue("$rawPattern", rawPattern);
+        command.Parameters.AddWithValue("$needle", query.ToLowerInvariant());
         command.Parameters.AddWithValue("$jsonPattern", jsonPattern);
         command.Parameters.AddWithValue("$limit", limit);
         return ReadSearchHits(command);
@@ -384,7 +522,8 @@ public sealed class SessionStore : ISessionStore
         while (reader.Read())
         {
             var header = ReadHeader(reader);
-            hits.Add(new SessionSearchHit(header, reader.GetInt32(16)));
+            var snippet = reader.IsDBNull(17) ? null : reader.GetString(17);
+            hits.Add(new SessionSearchHit(header, reader.GetInt32(16), snippet));
         }
         return hits;
     }
@@ -1033,7 +1172,7 @@ public sealed class SessionStore : ISessionStore
         Timestamp = message.Timestamp ?? DateTimeOffset.UtcNow,
     };
 
-    private ChatMessage ToMessage(SessionMessage record)
+    private ChatMessage ToMessage(SessionMessage record, bool resolveImages = true)
     {
         var role = record.Role switch
         {
@@ -1048,7 +1187,12 @@ public sealed class SessionStore : ISessionStore
             Timestamp = record.Timestamp,
             // L-D: 旧记录内联 base64 直接用；新记录按引用读缓存；缓存文件缺失时
             // 该图降级剔除（文本与其余消息完好），绝不让半截数据进上下文。
-            Images = record.Images?.Select(ResolveImage).OfType<ChatImageAttachment>().ToList(),
+            // resolveImages=false（分页读取）只留元数据，字节交给 LoadImage。
+            Images = record.Images?.Select(image => resolveImages
+                    ? ResolveImage(image)
+                    : new ChatImageAttachment(
+                        image.Id, image.Name, image.MediaType, null, image.SizeBytes))
+                .OfType<ChatImageAttachment>().ToList(),
             Thinking = record.Thinking,
             ModelRef = record.ModelRef,
             ViewedImages = record.ViewedImages?.Select(image => new ChatImageReference(

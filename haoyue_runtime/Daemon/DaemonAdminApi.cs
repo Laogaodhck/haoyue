@@ -2679,6 +2679,7 @@ internal sealed class DaemonAdminApi(
             var node = JsonSerializer.SerializeToNode(hit.Header, HaoyueJsonContext.Default.SessionHeader)
                        ?? throw new DaemonRequestException("failed to serialize session header");
             node["matchCount"] = hit.MatchCount;
+            node["snippet"] = hit.Snippet;
             array.Add(node);
         }
         return array.ToJsonString();
@@ -2688,10 +2689,15 @@ internal sealed class DaemonAdminApi(
     {
         var id = RequiredString(parameters, "id");
         var workspace = SessionWorkspace(parameters);
-        var session = runtime.Sessions.Load(workspace, id)
-                      ?? throw new DaemonRequestException($"Session not found: {id}");
+        // 分页读取：limit 只回最后 N 条（1..500），before 再往更早翻一页；两者缺省
+        // 时等价于旧的全量读取。图片字节一律不内联（见 session.image）。
+        var limit = Math.Clamp(parameters["limit"]?.GetValue<int?>() ?? 0, 0, 500);
+        var before = Math.Max(0, parameters["before"]?.GetValue<int?>() ?? 0);
+        var page = runtime.Sessions.LoadPage(workspace, id, before, limit)
+                   ?? throw new DaemonRequestException($"Session not found: {id}");
+        var header = page.Header;
         var messages = new JsonArray();
-        foreach (var message in session.Messages)
+        foreach (var message in page.Messages)
         {
             var images = new JsonArray();
             foreach (var image in message.Images ?? [])
@@ -2723,7 +2729,7 @@ internal sealed class DaemonAdminApi(
             {
                 ["role"] = message.Role.ToString().ToLowerInvariant(),
                 ["text"] = message.Text,
-                ["timestamp"] = (message.Timestamp ?? session.Header.CreatedAt).ToUnixTimeMilliseconds(),
+                ["timestamp"] = (message.Timestamp ?? header.CreatedAt).ToUnixTimeMilliseconds(),
                 ["images"] = images,
                 ["thinking"] = message.Thinking,
                 ["viewedImages"] = viewedImages,
@@ -2737,23 +2743,50 @@ internal sealed class DaemonAdminApi(
         }
         return new JsonObject
         {
-            ["id"] = session.Header.Id,
-            ["title"] = session.Header.Title,
-            ["workspace"] = workspace.IsGlobal ? null : session.Header.Workspace ?? workspace.Root,
-            ["archived"] = session.Header.Archived,
-            ["reasoningLevel"] = session.Header.ReasoningLevel.ToWireValue(),
-            ["networkEnabled"] = session.Header.NetworkEnabled,
-            ["expertId"] = session.Header.ExpertId,
-            ["llmRounds"] = session.Header.LlmRounds,
-            ["executionSteps"] = session.Header.ExecutionSteps,
-            ["inputTokens"] = session.Header.InputTokens,
-            ["totalInputTokens"] = session.Header.TotalInputTokens,
-            ["cachedInputTokens"] = session.Header.CachedInputTokens,
-            ["outputTokens"] = session.Header.OutputTokens,
-            ["outputElapsedMs"] = session.Header.OutputElapsedMs,
-            ["createdAt"] = session.Header.CreatedAt,
-            ["updatedAt"] = session.Header.UpdatedAt,
+            ["id"] = header.Id,
+            ["title"] = header.Title,
+            ["workspace"] = workspace.IsGlobal ? null : header.Workspace ?? workspace.Root,
+            ["archived"] = header.Archived,
+            ["reasoningLevel"] = header.ReasoningLevel.ToWireValue(),
+            ["networkEnabled"] = header.NetworkEnabled,
+            ["expertId"] = header.ExpertId,
+            ["llmRounds"] = header.LlmRounds,
+            ["executionSteps"] = header.ExecutionSteps,
+            ["inputTokens"] = header.InputTokens,
+            ["totalInputTokens"] = header.TotalInputTokens,
+            ["cachedInputTokens"] = header.CachedInputTokens,
+            ["outputTokens"] = header.OutputTokens,
+            ["outputElapsedMs"] = header.OutputElapsedMs,
+            ["createdAt"] = header.CreatedAt,
+            ["updatedAt"] = header.UpdatedAt,
             ["messages"] = messages,
+            // 分页游标：firstIndex 是本页首条在整个会话里的序号，hasMore 告诉客户端
+            // 还能不能继续往前翻（「加载更早」）。
+            ["total"] = page.Total,
+            ["firstIndex"] = page.FirstIndex,
+            ["hasMore"] = page.FirstIndex > 0,
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// 按需取回会话里的单张图片字节。session.get 只给图片元数据（体积考虑），
+    /// 客户端渲染缩略图/大图时逐张调用本方法。
+    /// </summary>
+    public string GetSessionImage(JsonObject parameters)
+    {
+        var workspace = SessionWorkspace(parameters);
+        var id = RequiredString(parameters, "id");
+        var imageId = RequiredString(parameters, "imageId");
+        var image = runtime.Sessions.LoadImage(workspace, id, imageId)
+                    ?? throw new DaemonRequestException(
+                        $"Image not found: {id}/{imageId}", DaemonErrorCode.NotFound);
+        return new JsonObject
+        {
+            ["id"] = image.Id,
+            ["name"] = image.Name,
+            ["mediaType"] = image.MediaType,
+            ["data"] = image.Data,
+            ["sizeBytes"] = image.SizeBytes,
         }.ToJsonString();
     }
 

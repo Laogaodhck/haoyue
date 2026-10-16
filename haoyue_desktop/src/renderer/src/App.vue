@@ -26,7 +26,7 @@ import {
   Undo2,
   X
 } from '@lucide/vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import type { AppearanceTheme, AppInfo, DaemonMessage, DaemonState } from '../../shared/ipc'
 import AppTitleBar from './components/AppTitleBar.vue'
 import AboutDialog from './components/AboutDialog.vue'
@@ -76,10 +76,15 @@ import {
 } from './app-helpers'
 import type { RuntimeModelCatalogItem, RuntimeProject, RuntimeSession, RuntimeWorkspace } from './app-helpers'
 import {
+  imageSourceKey,
+  loadEarlierMessages as loadEarlierMessagesFromStore,
   refreshAllProjectSessions as refreshAllProjectSessionsFromStore,
   refreshGlobalSessions as refreshGlobalSessionsFromStore,
   refreshProjectSessions as refreshProjectSessionsFromStore,
-  reloadThreadSession as reloadThreadSessionFromStore
+  reloadThreadSession as reloadThreadSessionFromStore,
+  requestSessionImageBytes,
+  SESSION_PAGE_SIZE,
+  sessionImageSources
 } from './session-sync'
 import { createThreadActions } from './thread-actions'
 import { createDaemonEventHandler } from './daemon-event-handler'
@@ -280,15 +285,25 @@ const activeModelSupportsImages = computed(() =>
   modelCatalog.value.find((model) => model.ref === activeModel.value)?.capabilities?.vision === true)
 const activeImageSources = computed<Record<string, string>>(() => {
   const sources: Record<string, string> = {}
-  for (const message of activeThread.value?.messages ?? [])
-    for (const image of message.images ?? [])
-      sources[image.id] = `data:${image.mediaType};base64,${image.data}`
+  const thread = activeThread.value
+  if (!thread) return sources
+  for (const message of thread.messages)
+    for (const image of message.images ?? []) {
+      // 本回合刚附上的图带字节；历史页里的图只有元数据，字节由 session.image 按需填缓存。
+      if (image.data) sources[image.id] = `data:${image.mediaType};base64,${image.data}`
+      else if (thread.sessionId) {
+        const cached = sessionImageSources[imageSourceKey(thread.sessionId, image.id)]
+        if (cached) sources[image.id] = cached
+      }
+    }
   return sources
 })
 const activeProject = computed(() => {
   const projectId = activeThread.value ? activeThread.value.projectId : selectedProjectId.value
   return projects.value.find((project) => project.id === projectId)
 })
+/** 首屏窗口之前还有多少条历史消息（决定「加载更早」按钮的文案与可见性）。 */
+const earlierMessageCount = computed(() => activeThread.value?.sessionFirstIndex ?? 0)
 const globalTaskActive = computed(() => activeThread.value ? !activeThread.value.projectId : !selectedProjectId.value)
 
 const composerCaption = computed(() => {
@@ -331,6 +346,16 @@ const runtimeConnectionLabel = computed(() => {
 })
 
 const sessionSyncContext = { daemonState, threads }
+
+// 历史消息的图片只有元数据进入渲染端（session.get 不内联 base64）：这里按当前任务
+// 可见的图片排队按需取回，同一张图并发只会发一次 RPC。
+watchEffect(() => {
+  const thread = activeThread.value
+  if (!thread?.sessionId) return
+  for (const message of thread.messages)
+    for (const image of message.images ?? [])
+      requestSessionImageBytes(sessionSyncContext, thread, activeProject.value, image)
+})
 
 let unsubscribeEvent: (() => void) | undefined
 let unsubscribeState: (() => void) | undefined
@@ -1142,6 +1167,19 @@ async function reloadThreadSession(thread: ThreadItem, project?: ProjectItem): P
   await reloadThreadSessionFromStore(sessionSyncContext, thread, project)
 }
 
+/** 向前翻页并把视口锚回原来那条消息：前插会让旧内容整体下移。 */
+async function loadEarlier(): Promise<void> {
+  const thread = activeThread.value
+  if (!thread) return
+  const element = scrollArea.value
+  const heightBefore = element?.scrollHeight ?? 0
+  const topBefore = element?.scrollTop ?? 0
+  await loadEarlierMessagesFromStore(sessionSyncContext, thread, activeProject.value)
+  await nextTick()
+  const delta = (element?.scrollHeight ?? 0) - heightBefore
+  if (element && delta > 0) element.scrollTop = topBefore + delta
+}
+
 async function selectThread(id: string): Promise<void> {
   const thread = threads.value.find((item) => item.id === id)
   if (!thread) return
@@ -1167,6 +1205,7 @@ async function selectThread(id: string): Promise<void> {
     if (thread.sessionId && (!thread.sessionLoaded || !thread.running)) {
       const response = await window.haoyue.daemon.request('session.get', {
         id: thread.sessionId,
+        limit: SESSION_PAGE_SIZE,
         ...scope
       })
       if (selectionToken !== conversationSelectionToken.value) return
@@ -1175,8 +1214,12 @@ async function selectThread(id: string): Promise<void> {
       if (selectionToken !== conversationSelectionToken.value) return
 
       const saved = JSON.parse(response.data) as RuntimeSession
-      thread.messages = hydrateMessages(saved)
+      const offset = saved.firstIndex ?? 0
+      thread.messages = hydrateMessages(saved, offset)
       thread.sessionLoaded = true
+      thread.sessionTotal = saved.total ?? thread.messages.length
+      thread.sessionFirstIndex = offset
+      thread.sessionHasMore = Boolean(saved.hasMore)
       thread.title = saved.title || thread.title
       thread.archived = Boolean(saved.archived)
       thread.reasoningLevel = normalizeReasoningLevel(saved.reasoningLevel)
@@ -2062,6 +2105,10 @@ watch(theme, applyTheme)
               </div>
             </div>
             <div v-else-if="activeThread && activeThread.messages.length > 0" class="conversation-content">
+              <button v-if="activeThread.sessionHasMore" class="load-earlier-button" type="button"
+                :disabled="activeThread.loadingEarlier" @click="loadEarlier">
+                {{ activeThread.loadingEarlier ? '正在加载更早的消息…' : `加载更早的 ${earlierMessageCount} 条消息` }}
+              </button>
               <template v-if="virtualWindow.active">
                 <div class="virtual-pad" :style="{ height: `${virtualWindow.topPad}px` }" />
                 <template v-for="item in virtualWindow.items" :key="item.message.id">

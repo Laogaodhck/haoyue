@@ -219,4 +219,88 @@ public class SessionStoreTests : IDisposable
         _store.Delete(_workspace, id);
         Assert.Empty(_store.Search(_workspace, "保留段"));
     }
+
+    // ------------------------------------------- P1-2.3: 检索片段 / 分页读取 / 图片按需取
+
+    [Fact]
+    public void Search_SnippetIsAWindowAroundTheBodyMatch()
+    {
+        var id = NewSessionWithTitle("片段演练");
+        var session = _store.Load(_workspace, id)!;
+        _store.Append(session, ChatMessage.User(
+            new string('前', 200) + "麒麟目标词" + new string('后', 200)));
+
+        var hit = Assert.Single(_store.Search(_workspace, "麒麟目标词"));
+
+        Assert.NotNull(hit.Snippet);
+        // 命中位置前 40 字符起、共 160 字符的窗口：两侧冗长正文都被裁掉。
+        Assert.StartsWith(new string('前', 40) + "麒麟目标词", hit.Snippet);
+        Assert.DoesNotContain(new string('后', 160), hit.Snippet);
+    }
+
+    [Fact]
+    public void Search_SnippetIsNullWhenOnlyTheTitleMatches()
+    {
+        var id = NewSessionWithTitle("只在标题里的雪麒麟");
+        _store.Append(_store.Load(_workspace, id)!, ChatMessage.User("正文没有这个词"));
+
+        var hit = Assert.Single(_store.Search(_workspace, "雪麒麟"));
+
+        Assert.Null(hit.Snippet);
+        Assert.Equal(1, hit.MatchCount);
+    }
+
+    [Fact]
+    public void LoadPage_ReturnsTailWindow_ThenPagesBackwards_AndClamps()
+    {
+        var id = NewSessionWithTitle("分页演练");
+        var session = _store.Load(_workspace, id)!;
+        for (var i = 0; i < 10; i++) _store.Append(session, ChatMessage.User($"第{i}条"));
+
+        var tail = _store.LoadPage(_workspace, id, before: 0, limit: 4)!;
+        Assert.Equal(10, tail.Total);
+        Assert.Equal(6, tail.FirstIndex);
+        Assert.Equal(
+            new[] { "第6条", "第7条", "第8条", "第9条" },
+            tail.Messages.Select(message => message.Text));
+
+        var older = _store.LoadPage(_workspace, id, before: tail.FirstIndex, limit: 4)!;
+        Assert.Equal(2, older.FirstIndex);
+        Assert.Equal(
+            new[] { "第2条", "第3条", "第4条", "第5条" },
+            older.Messages.Select(message => message.Text));
+
+        // limit ≤ 0 保持旧的全量语义；before 落在开头时只回一条而不是空页。
+        var all = _store.LoadPage(_workspace, id, before: 0, limit: 0)!;
+        Assert.Equal(10, all.Messages.Count);
+        Assert.Equal(0, all.FirstIndex);
+        var edge = _store.LoadPage(_workspace, id, before: 1, limit: 4)!;
+        Assert.Equal("第0条", Assert.Single(edge.Messages).Text);
+        Assert.Null(_store.LoadPage(_workspace, "missing-session", 0, 4));
+    }
+
+    [Fact]
+    public void LoadPage_LeavesImageBytesUnresolved_AndLoadImageResolvesThem()
+    {
+        var png = Convert.ToBase64String([0x89, 0x50, 0x4E, 0x47]);
+        var id = NewSessionWithTitle("图片分页演练");
+        var session = _store.Load(_workspace, id)!;
+        _store.Append(session, ChatMessage.User("带图提问",
+            [new ChatImageAttachment("img-1", "shot.png", "image/png", png, 4)]));
+
+        var image = Assert.Single(Assert.Single(_store.LoadPage(_workspace, id, 0, 10)!.Messages).Images!);
+        Assert.Equal("img-1", image.Id);
+        Assert.Equal("shot.png", image.Name);
+        Assert.Equal(4L, image.SizeBytes);
+        Assert.Null(image.Data);
+
+        // Agent 上下文走全量读取，字节照旧解析——分页只是 RPC 侧的瘦身。
+        var loaded = Assert.Single(
+            Assert.Single(_store.Load(_workspace, id)!.Messages).Images!);
+        Assert.Equal(png, loaded.Data);
+
+        Assert.Equal(png, _store.LoadImage(_workspace, id, "img-1")!.Data);
+        Assert.Null(_store.LoadImage(_workspace, id, "absent"));
+        Assert.Null(_store.LoadImage(_workspace, "missing-session", "img-1"));
+    }
 }

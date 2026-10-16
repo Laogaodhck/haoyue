@@ -376,8 +376,9 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="remoteHits.length" class="task-list">
           <div v-for="hit in remoteHits" :key="hit.id" class="thread-heading-row">
-            <button class="thread-row" @click="emit('openSession', hit)">
+            <button class="thread-row search-hit-row" :title="hit.snippet || undefined" @click="emit('openSession', hit)">
               <span>{{ hit.title || '未命名会话' }}</span>
+              <span v-if="hit.snippet" class="search-hit-snippet">{{ hit.snippet }}</span>
             </button>
             <small v-if="hit.matchCount" class="search-hit-meta">命中 {{ hit.matchCount }} 条</small>
           </div>

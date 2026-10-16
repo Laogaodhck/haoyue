@@ -34,12 +34,12 @@ export type MethodName =
   | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get" | "memory.save"
   | "rules.list" | "rules.save" | "rules.delete" | "usage.get"
   | "usage.timeline" | "session.list" | "session.search" | "session.get"
-  | "session.truncate" | "session.fork" | "session.update" | "session.archive"
-  | "session.delete" | "session.resume" | "session.new" | "project.list"
-  | "project.upsert" | "project.remove" | "evolution.inspect" | "evolution.reflect"
-  | "evolution.pending-list" | "evolution.decide" | "evolution.history" | "evolution.stats"
-  | "evolution.config.get" | "evolution.config.set" | "doctor" | "doctor.run"
-  | "lock.list" | "factory.reset"
+  | "session.image" | "session.truncate" | "session.fork" | "session.update"
+  | "session.archive" | "session.delete" | "session.resume" | "session.new"
+  | "project.list" | "project.upsert" | "project.remove" | "evolution.inspect"
+  | "evolution.reflect" | "evolution.pending-list" | "evolution.decide" | "evolution.history"
+  | "evolution.stats" | "evolution.config.get" | "evolution.config.set" | "doctor"
+  | "doctor.run" | "lock.list" | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -747,8 +747,15 @@ export const METHODS: readonly MethodInfo[] = [
   {
     name: "session.get",
     category: "session",
-    description: "\u8bfb\u53d6\u5b8c\u6574\u4f1a\u8bdd\uff08\u542b\u6d88\u606f\uff09",
-    paramsSchema: {"properties": {"global": {"description": "true 时使用全局工作区", "type": "boolean"}, "id": {"description": "会话 id", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    description: "\u5206\u9875\u8bfb\u53d6\u4f1a\u8bdd\uff08\u5934\u5b57\u6bb5 + \u6d88\u606f\u6570\u7ec4\uff1b\u56fe\u7247\u5b57\u8282\u4e0d\u5185\u8054\uff09",
+    paramsSchema: {"properties": {"before": {"description": "只返回该序号之前的消息，供「加载更早」向前翻页；缺省 0=不限制", "type": "integer"}, "global": {"description": "true 时使用全局工作区", "type": "boolean"}, "id": {"description": "会话 id", "type": "string"}, "limit": {"description": "最多返回的消息条数（1..500），缺省 0=全部", "type": "integer"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "session.image",
+    category: "session",
+    description: "\u6309\u9700\u8bfb\u53d6\u4f1a\u8bdd\u4e2d\u5355\u5f20\u56fe\u7247\u7684 base64 \u5b57\u8282",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局工作区", "type": "boolean"}, "id": {"description": "会话 id", "type": "string"}, "imageId": {"description": "图片 id", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id", "imageId"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

@@ -1004,10 +1004,8 @@ public static class DaemonContract
                 ("id", SString("图片 id")),
                 ("name", SString("文件名")),
                 ("mediaType", SString("MIME 类型")),
-                ("data", SString("base64 数据（新记录为 null，走内容寻址缓存）")),
-                ("sizeBytes", SInteger("字节数")),
-                ("path", SString("缓存内文件名")),
-                ("sha256", SString("内容 SHA-256"))))),
+                ("data", SString("恒为 null：字节改用 session.image 按需读取")),
+                ("sizeBytes", SInteger("字节数"))))),
             ("thinking", SString("思考段文本")),
             ("modelRef", SString("模型 ref")),
             ("viewedImages", RArray(RObject(
@@ -1020,7 +1018,10 @@ public static class DaemonContract
             ("toolName", SString("工具名（role=tool）")),
             ("toolSuccess", SBoolean("工具是否成功（role=tool）")),
             ("toolDiff", SString("文件 diff（role=tool）")),
-            ("toolFilePath", SString("变更文件路径（role=tool）"))))));
+            ("toolFilePath", SString("变更文件路径（role=tool）"))))),
+        ("total", SInteger("会话消息总条数")),
+        ("firstIndex", SInteger("本页首条消息在整个会话中的序号（从 0 起）")),
+        ("hasMore", SBoolean("是否还有更早的消息未返回（供「加载更早」判断）")));
 
     private static List<DaemonMethodDoc> BuildCatalog() =>
     [
@@ -1446,11 +1447,24 @@ public static class DaemonContract
                 ("title", SString("会话标题")),
                 ("workspace", SString("归属工作区路径")),
                 ("archived", SBoolean("是否已归档")),
-                ("matchCount", SInteger("命中消息数（标题命中计 1）")))),
+                ("matchCount", SInteger("命中消息数（标题命中计 1）")),
+                ("snippet", SString("首条命中消息正文的窗口片段；仅标题命中时为 null")))),
             errors: E(DaemonErrorCode.InvalidParams)),
-        M("session.get", "session", "读取完整会话（含消息）", parameters: SessionExt(
-            ("id", SString("会话 id"), true)),
+        M("session.get", "session", "分页读取会话（头字段 + 消息数组；图片字节不内联）", parameters: SessionExt(
+            ("id", SString("会话 id"), true),
+            ("limit", SInteger("最多返回的消息条数（1..500），缺省 0=全部"), false),
+            ("before", SInteger("只返回该序号之前的消息，供「加载更早」向前翻页；缺省 0=不限制"), false)),
             result: SessionGetResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("session.image", "session", "按需读取会话中单张图片的 base64 字节", parameters: SessionExt(
+            ("id", SString("会话 id"), true),
+            ("imageId", SString("图片 id"), true)),
+            result: RObject(
+                ("id", SString("图片 id")),
+                ("name", SString("文件名")),
+                ("mediaType", SString("MIME 类型")),
+                ("data", SString("base64 数据")),
+                ("sizeBytes", SInteger("字节数"))),
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
         M("session.truncate", "session", "截断会话消息", parameters: SessionExt(
             ("id", SString("会话 id"), true),

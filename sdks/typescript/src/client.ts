@@ -817,11 +817,17 @@ export class DaemonClient {
     sessionSearch: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("session.search", params),
     /**
-     * 读取完整会话（含消息）
+     * 分页读取会话（头字段 + 消息数组；图片字节不内联）
      * 终态事件：result, error
      */
     sessionGet: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("session.get", params),
+    /**
+     * 按需读取会话中单张图片的 base64 字节
+     * 终态事件：result, error
+     */
+    sessionImage: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("session.image", params),
     /**
      * 截断会话消息
      * 终态事件：result, error

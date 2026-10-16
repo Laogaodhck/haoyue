@@ -109,6 +109,28 @@ describe('hydrateMessages', () => {
     expect(hydrated[0]!.createdAt).toBe(ts1)
     expect(hydrated[1]!.createdAt).toBe(ts2)
   })
+
+  it('keys messages by session-global ordinal so paged windows cannot collide', async () => {
+    const { hydrateMessages } = await import('./app-helpers')
+    const saved = {
+      id: 'session-1',
+      createdAt: '2026-09-15T02:11:00Z',
+      updatedAt: '2026-09-15T02:12:00Z',
+      messages: [
+        { role: 'assistant' as const, text: '调用工具', toolCalls: [{ id: 'call-1', name: 'read_file' }] },
+        { role: 'tool' as const, text: '内容', toolName: 'read_file', toolCallId: 'call-1' }
+      ]
+    }
+    // 第一页（窗口起点 4）与更早一页（起点 2）分别 hydrate 后拼接：
+    // 序号必须按全局位置生成，否则两页会出现同名 key。
+    const recent = hydrateMessages(saved, 4)
+    const earlier = hydrateMessages(saved, 2)
+    expect(recent.map((message) => message.id)).toEqual(['session-1:4'])
+    expect(earlier.map((message) => message.id)).toEqual(['session-1:2'])
+    expect(recent[0]!.tools![0]!.id).toBe('call-1')
+    expect(recent[0]!.tools![0]!.detail).toBe('内容')
+    expect(earlier[0]!.tools![0]!.detail).toBe('内容')
+  })
 })
 
 describe('classifyModelError', () => {

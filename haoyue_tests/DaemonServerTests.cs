@@ -733,8 +733,77 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var restored = ParseData(await connection.ReadAsync());
         var messages = restored["messages"]!.AsArray();
         Assert.Equal("screen.png", messages[0]!["images"]![0]!["name"]!.GetValue<string>());
-        Assert.Equal("AQID", messages[0]!["images"]![0]!["data"]!.GetValue<string>());
+        // session.get 只回元数据：字节改走 session.image，响应体积不再随视觉历史膨胀。
+        Assert.True(messages[0]!["images"]![0]!.AsObject()["data"] is null);
         Assert.Equal("screen-1", messages[1]!["viewedImages"]![0]!["id"]!.GetValue<string>());
+
+        await connection.SendAsync(43, "session.image", new JsonObject
+        {
+            ["id"] = session.Header.Id,
+            ["workspace"] = workspace,
+            ["imageId"] = "screen-1",
+        });
+        var image = ParseData(await connection.ReadAsync());
+        Assert.Equal("AQID", image["data"]!.GetValue<string>());
+        Assert.Equal("screen.png", image["name"]!.GetValue<string>());
+
+        await connection.SendAsync(44, "session.image", new JsonObject
+        {
+            ["id"] = session.Header.Id,
+            ["workspace"] = workspace,
+            ["imageId"] = "absent",
+        });
+        var miss = await connection.ReadAsync();
+        Assert.Equal("error", miss["event"]!.GetValue<string>());
+        Assert.Contains("not found", miss["data"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SessionGet_PagesWithLimitBefore_AndReportsCursor()
+    {
+        var workspace = CreateWorkspace("paged-session");
+        var connection = await StartServerAsync((_, _, _, _) =>
+            Task.FromResult(new AgentTurnResult("ok", false, null)), workspace);
+        var session = _runtime!.Sessions.Create(_runtime.Workspace);
+        for (var i = 0; i < 10; i++)
+            _runtime.Sessions.Append(session, Haoyue.Runtime.Providers.ChatMessage.User($"第{i}条"));
+
+        await connection.SendAsync(1, "session.get", new JsonObject
+        {
+            ["id"] = session.Header.Id,
+            ["workspace"] = workspace,
+            ["limit"] = 4,
+        });
+        var tail = ParseData(await connection.ReadAsync());
+        Assert.Equal(10, tail["total"]!.GetValue<int>());
+        Assert.Equal(6, tail["firstIndex"]!.GetValue<int>());
+        Assert.True(tail["hasMore"]!.GetValue<bool>());
+        Assert.Equal(
+            new[] { "第6条", "第7条", "第8条", "第9条" },
+            tail["messages"]!.AsArray().Select(node => node!["text"]!.GetValue<string>()));
+
+        await connection.SendAsync(2, "session.get", new JsonObject
+        {
+            ["id"] = session.Header.Id,
+            ["workspace"] = workspace,
+            ["limit"] = 4,
+            ["before"] = 6,
+        });
+        var older = ParseData(await connection.ReadAsync());
+        Assert.Equal(2, older["firstIndex"]!.GetValue<int>());
+        Assert.Equal(
+            new[] { "第2条", "第3条", "第4条", "第5条" },
+            older["messages"]!.AsArray().Select(node => node!["text"]!.GetValue<string>()));
+
+        // 不带分页参数时保持旧的全量语义：一页到底、没有更早。
+        await connection.SendAsync(3, "session.get", new JsonObject
+        {
+            ["id"] = session.Header.Id,
+            ["workspace"] = workspace,
+        });
+        var whole = ParseData(await connection.ReadAsync());
+        Assert.Equal(10, whole["messages"]!.AsArray().Count);
+        Assert.False(whole["hasMore"]!.GetValue<bool>());
     }
 
     [Fact]

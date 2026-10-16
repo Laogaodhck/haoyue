@@ -5,12 +5,16 @@ namespace Haoyue.Runtime.Providers;
 
 public enum ChatRole { System, User, Assistant, Tool }
 
-/// <summary>Provider-neutral inline image attached to a user message.</summary>
+/// <summary>
+/// Provider-neutral inline image attached to a user message. <see cref="Data"/> is
+/// null when the bytes were deliberately not resolved (paged session reads) — the
+/// client then fetches them on demand via the session.image RPC.
+/// </summary>
 public sealed record ChatImageAttachment(
     string Id,
     string Name,
     string MediaType,
-    string Data,
+    string? Data,
     long SizeBytes);
 
 /// <summary>Reference recorded on the assistant message that consumed an uploaded image.</summary>

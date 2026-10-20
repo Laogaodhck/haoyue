@@ -92,6 +92,53 @@ public sealed class AdaptiveInferenceTests
         Assert.Equal(0, completed.Completion.Performance.DecodeTokensPerSecond);
     }
 
+    [Fact]
+    public void InferenceMeter_SeparatesLoadWaitFromPrefillRate()
+    {
+        var meter = new InferenceMeter(prefixReuse: true);
+        // 权重就绪前睡一会模拟冷加载：这段等待必须单独计量，不得摊进 prefill 速率
+        // （修正前 TTFT 口径把加载等待算进去，冷启动的 prefill tok/s 被系统性压低，
+        // 误导 ubatch 调档与基准判断）。
+        Thread.Sleep(30);
+        meter.MarkWeightsReady();
+        for (var i = 0; i < 5; i++)
+            meter.Observe(new LlmTextDelta("字"));
+        var completed = meter.Finalize(new LlmCompleted(new LlmCompletion
+        {
+            Text = "测试输出",
+            Usage = new TokenUsage(1000, 5) { CachedInputTokens = 0 },
+        }));
+
+        var perf = completed.Completion.Performance!;
+        Assert.True(perf.LoadWaitMs >= 20, $"load wait should be measured, got {perf.LoadWaitMs}");
+        // TTFT 是用户感知的首字延迟（含加载等待）；净 prefill 时间 = TTFT - LoadWait。
+        Assert.True(perf.TtftMs >= perf.LoadWaitMs);
+        Assert.True(perf.TotalMs >= perf.TtftMs);
+        // 250 个未命中 token 在毫秒级净时间内 prefill：速率应远高于把 30ms 加载
+        // 等待摊进去的口径（250 / 0.03s ≈ 8.3k，摊入后不足 1k 即暴露污染）。
+        Assert.True(perf.PrefillTokensPerSecond > 1000,
+            $"prefill rate must exclude load wait, got {perf.PrefillTokensPerSecond}");
+        // 路径标记仍可按 ConfigurePath 回填（构造时不知道走哪条路径）。
+        Assert.True(perf.PrefixReuse);
+        meter.ConfigurePath(false, true);
+        Assert.False(meter.PrefixReuse);
+        Assert.True(meter.Multimodal);
+    }
+
+    [Fact]
+    public void InferenceMeter_NoWeightsWait_KeepsLegacyDenominator()
+    {
+        // 稳态命中（权重已驻留）：没有加载等待，prefill 速率口径与修正前一致。
+        var meter = new InferenceMeter(prefixReuse: false);
+        meter.Observe(new LlmTextDelta("字"));
+        var completed = meter.Finalize(new LlmCompleted(new LlmCompletion
+        {
+            Usage = new TokenUsage(1000, 1) { CachedInputTokens = 0 },
+        }));
+        Assert.Equal(0, completed.Completion.Performance!.LoadWaitMs);
+        Assert.True(completed.Completion.Performance!.PrefillTokensPerSecond > 0);
+    }
+
     // ------------------------------------------------ GgufProbe 张量结构字段
 
     [Fact]

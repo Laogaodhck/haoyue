@@ -242,4 +242,22 @@ public class KnowledgeStoreTests : IDisposable
         Assert.Single(_store.RetrieveInfo("w", "docker", null, null, 10, "部署"));
         Assert.Empty(_store.RetrieveInfo("w", "docker", [frontend.Id], null, 10));
     }
+
+    [Fact]
+    public void AttributionMap_CitesImportedChunks_AndOmitsManualEntries()
+    {
+        var defaultId = _store.EnsureDefaultNotebook("w");
+        // knowledge_save 直接写的条目：无来源，不出现在归因表里（不得伪造出处）。
+        _store.Save("w", "手动记录", "用户偏好 pnpm", null);
+        var (source, _) = _store.SaveSource("w", defaultId, "text", "部署手册", null, "第一段 第二段");
+        _store.ReplaceSourceChunks("w", source.Id, ["第一段", "第二段"], "部署");
+
+        var map = _store.AttributionMap("w");
+        Assert.Equal(2, map.Count);
+        Assert.All(map.Values, cited => Assert.Equal("部署手册", cited.SourceTitle));
+        Assert.Equal([1, 2], map.Values.Select(cited => cited.ChunkOrdinal).Order());
+
+        // 归因按 scope 隔离，换工作区不串味。
+        Assert.Empty(_store.AttributionMap("other"));
+    }
 }

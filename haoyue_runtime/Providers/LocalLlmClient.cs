@@ -42,6 +42,39 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 
     private static int _gpuBackendWarned;
 
+    /// <summary>GPU 后端缺失的统一修复指引（stderr 警告与 doctor 体检共用一句口径）。</summary>
+    internal const string GpuBackendFixGuidance =
+        "On NVIDIA machines rebuild with -p:LlamaBackend=Cuda12; on other setups configure GpuLayers=0 for CPU inference.";
+
+    /// <summary>
+    /// GPU 后端能力诊断（doctor 体检与一次性 stderr 共用同一判断源）：请求把权重卸载到
+    /// 显存（GpuLayerCount > 0），但当前加载的 llama 原生后端不支持 GPU offload（典型：
+    /// 用 LLamaSharp.Backend.Cpu 构建）时，推理实际全程走 CPU——大提示 prefill 会慢两个
+    /// 数量级（同机实测 CUDA 25s vs CPU 3m45s），用户侧表现为长时间停在「正在准备」。
+    /// 返回 null 表示无需警告。查询侧（doctor）与一次性 stderr 由此保证口径一致。
+    /// </summary>
+    internal static string? GpuBackendDiagnostic(int requestedGpuLayers)
+    {
+        if (requestedGpuLayers <= 0) return null;
+        if (NativeApi.llama_supports_gpu_offload()) return null;
+        return $"The loaded llama native backend does not support GPU offload (CPU build of"
+            + $" LLamaSharp.Backend) but GpuLayers={requestedGpuLayers} was requested. Inference runs"
+            + $" fully on CPU and large prompts prefill extremely slowly. {GpuBackendFixGuidance}";
+    }
+
+    /// <summary>
+    /// 配置口径的 GPU offload 请求层数（不含自适应档位）：供 daemon 启动体检使用，
+    /// 与 <see cref="BuildLoadParams"/> 的手动语义一致（load.AutoOptimize=false 时
+    /// 模型级显式值优先，否则回落提供商级 GpuLayers）。
+    /// </summary>
+    internal static int ConfiguredGpuLayers(Configuration.ProviderConfig provider, Configuration.ModelConfig? model)
+    {
+        var load = model?.Load;
+        return load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
+            ? explicitGpu
+            : provider.GpuLayers ?? 0;
+    }
+
     /// <summary>
     /// GPU 后端能力诊断：配置要求把权重卸载到显存（GpuLayerCount > 0），但当前加载的
     /// llama 原生后端不支持 GPU offload（典型：用 LLamaSharp.Backend.Cpu 构建）时，
@@ -50,14 +83,10 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// </summary>
     private static void WarnGpuBackendMissingOnce(string providerId, string modelId, int requestedGpuLayers)
     {
-        if (requestedGpuLayers <= 0) return;
-        if (NativeApi.llama_supports_gpu_offload()) return;
+        var detail = GpuBackendDiagnostic(requestedGpuLayers);
+        if (detail is null) return;
         if (Interlocked.Exchange(ref _gpuBackendWarned, 1) == 1) return;
-        Console.Error.WriteLine(
-            $"[haoyue] WARNING: provider '{providerId}' requests GpuLayers={requestedGpuLayers} for '{modelId}',"
-            + " but the loaded llama native backend does not support GPU offload"
-            + " (CPU build of LLamaSharp.Backend). Inference will run fully on CPU and large prompts"
-            + " will prefill extremely slowly. Rebuild with -p:LlamaBackend=Cuda12 on NVIDIA machines.");
+        Console.Error.WriteLine($"[haoyue] WARNING: provider '{providerId}' / model '{modelId}': {detail}");
     }
 
     /// <summary>
@@ -281,12 +310,19 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         // 自适应档位（P3）：自动语义下按显存预算选档；签名携带档位身份，调档即走既有重载通道。
         var tier = TierFor(request.Provider, request.Model, path);
 
+        // 遥测起点前移到 lease 获取之前：TTFT 从此是「用户感知的首字延迟」（含权重
+        // 加载/排队等待），加载等待经 MarkWeightsReady 单独切出，prefill 速率按净
+        // prefill 时间计算——冷启动不再污染调优与基准口径（复用/多模态标记在路径
+        // 调度确定后由 ConfigurePath 回填）。
+        var meter = new InferenceMeter();
+
         using var lease = await cache.AcquireAsync(
             path,
             BuildLoadParams(path, request.Provider, request.Model, tier),
             LoadSignature(request.Provider, request.Model, tier) + "|" + (mmprojPath ?? "nommproj"),
             mmprojPath,
             ct).ConfigureAwait(false);
+        meter.MarkWeightsReady();
         var weights = lease.Weights;
 
         var (contextParams, signature) = BuildContextParams(path, request.Model, request.Provider, weights, tier: tier);
@@ -312,7 +348,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             useReuse = false;
         }
 
-        var meter = new InferenceMeter(prefixReuse: useReuse, multimodal: images.Count > 0);
+        meter.ConfigurePath(useReuse, images.Count > 0);
         IAsyncEnumerable<LlmStreamEvent> stream;
         if (images.Count > 0)
         {

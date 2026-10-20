@@ -49,9 +49,20 @@ public sealed class KnowledgeSearchTool(
         }
 
         var sb = new StringBuilder();
+        // 出处标注：导入类条目带来源与分片序号，knowledge_save 直接写的条目没有来源——
+        // 模型回答时可引用「来自哪份文档」，幻觉可归因、可复核。
+        var attribution = knowledge.AttributionMap(scope);
         foreach (var entry in matches)
         {
             sb.Append('#').Append(entry.Id).Append(' ').AppendLine(entry.Title);
+            if (attribution.TryGetValue(entry.Id, out var source)
+                && !string.IsNullOrWhiteSpace(source.SourceTitle))
+            {
+                sb.Append("   来源：").Append(source.SourceTitle);
+                if (source.ChunkOrdinal is > 0)
+                    sb.Append(" · 第 ").Append(source.ChunkOrdinal).Append(" 部分");
+                sb.AppendLine();
+            }
             if (!string.IsNullOrEmpty(entry.Tags))
                 sb.Append("   Tags: ").AppendLine(entry.Tags);
             var content = entry.Content.Length > 600 ? entry.Content[..600] + "…" : entry.Content;

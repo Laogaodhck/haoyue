@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
+using LLama.Native;
 
 namespace Haoyue.Runtime.Providers;
 
@@ -40,7 +41,52 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
         var hasProvider = providers.Count > 0;
         results.Add(new HealthCheckResult("Provider Config", hasProvider, hasProvider ? $"{providers.Count} provider(s) configured. Active provider: {configStore.Config.Provider ?? "-"}, model: {configStore.Config.Model ?? "-"}" : "No providers configured"));
 
-        // 4. Memory File Check — MEMORY.md 是可选文件，Agent 首次写入时才生成，
+        // 4. Local GPU Backend Check — CPU 构建的 llama 后端会在用户毫不知情的情况下把
+        // 本地推理全程拖到 CPU（同机实测 11 倍差距）。体检显式报出并附重建指引，桌面
+        // 设置页的诊断区直接渲染本项；与 LocalLlmClient 运行时警告同一判断源。
+        var localProviders = configStore.Config.Providers
+            .Where(provider => provider.Kind.Equals("local", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (localProviders.Count == 0)
+        {
+            results.Add(new HealthCheckResult("Local GPU Backend", true, "No local provider configured"));
+        }
+        else if (NativeApi.llama_supports_gpu_offload())
+        {
+            results.Add(new HealthCheckResult("Local GPU Backend", true, "GPU offload supported by the loaded llama backend"));
+        }
+        else
+        {
+            var explicitRequests = localProviders
+                .SelectMany(provider => provider.Models.Select(model => (provider, model)))
+                .Select(pair => LocalLlmClient.ConfiguredGpuLayers(pair.provider, pair.model))
+                .Where(layers => layers > 0)
+                .ToList();
+            // 自动语义（AutoOptimize）下档位按 nvidia-smi 探测请求 offload：机器有
+            // NVIDIA GPU 而后端是 CPU 构建时，同样会被静默拖慢，必须报出来。
+            var autoOnGpuMachine = GpuProbe.Probe() is { } gpu
+                && localProviders.Any(provider => provider.Models.Any(
+                    model => model.Load is null || model.Load.AutoOptimize));
+            if (explicitRequests.Count > 0)
+            {
+                results.Add(new HealthCheckResult("Local GPU Backend", false,
+                    LocalLlmClient.GpuBackendDiagnostic(explicitRequests.Max())!));
+            }
+            else if (autoOnGpuMachine)
+            {
+                results.Add(new HealthCheckResult("Local GPU Backend", false,
+                    $"The loaded llama native backend does not support GPU offload (CPU build of"
+                    + $" LLamaSharp.Backend), but auto-optimized local models would request it on this machine."
+                    + $" Inference runs fully on CPU and large prompts prefill extremely slowly."
+                    + $" {LocalLlmClient.GpuBackendFixGuidance}"));
+            }
+            else
+            {
+                results.Add(new HealthCheckResult("Local GPU Backend", true, "CPU inference requested (no GPU offload configured)"));
+            }
+        }
+
+        // 5. Memory File Check — MEMORY.md 是可选文件，Agent 首次写入时才生成，
         // LoadMemory 对缺失已有优雅处理；只有目录都建不出来（权限/只读）才算异常。
         var memoryFile = workspace.MemoryFile;
         if (File.Exists(memoryFile))

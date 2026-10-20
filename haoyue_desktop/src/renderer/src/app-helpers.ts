@@ -276,15 +276,42 @@ export function finishReasonLabel(reason?: string): string | undefined {
 
 export function sessionStats(saved: RuntimeSession): ThreadStats {
   const assistantCount = saved.messages.filter((item) => item.role === 'assistant').length
+  // 持久化只存累计口径；上下文占比需要「最近一轮单次 prompt」，恢复时用会话均值代理，
+  // 运行中的 usage 事件会用实测值覆盖（见 daemon-event-handler usage 分支）。
+  const rounds = Math.max(1, saved.llmRounds || assistantCount)
+  const totalInput = saved.totalInputTokens ?? 0
   return {
     llmRounds: saved.llmRounds || assistantCount,
     executionSteps: saved.executionSteps || assistantCount,
     inputTokens: saved.inputTokens ?? 0,
     totalInputTokens: saved.totalInputTokens ?? 0,
+    lastRoundInputTokens: totalInput > 0 ? Math.round(totalInput / rounds) : undefined,
     cachedInputTokens: saved.cachedInputTokens ?? 0,
     outputTokens: saved.outputTokens ?? 0,
     outputElapsedMs: saved.outputElapsedMs ?? 0
   }
+}
+
+/**
+ * 上下文占用比例读数（修正累计口径虚涨）。
+ * usage 事件的 totalInputTokens 是「本次调用的完整 prompt 规模」，跨轮累计后再除以
+ * 模型窗口会随轮数线性高估（10 轮 20k prompt 会显示 200k/128k≈156%）。占比只按
+ * 最近一轮单次规模计算，与「下一轮至少要装下这么多」的真实约束对齐。
+ */
+export function formatContextRatio(lastRoundInputTokens?: number, contextWindow?: number): string {
+  if (!lastRoundInputTokens || !contextWindow || lastRoundInputTokens <= 0 || contextWindow <= 0) return ''
+  return ` | 上下文 ${Math.min(999, Math.round(lastRoundInputTokens / contextWindow * 100))}%`
+}
+
+/**
+ * 启动预热提示文案（daemon 后台装载本地权重期间常驻于输入区）。Failed 时说清楚
+ * 「不影响使用」——预热是纯优化，失败只意味着第一条消息要当场等加载，不是客户端坏了。
+ */
+export function formatPreloadLabel(preload?: { phase: string; percent: number } | null): string {
+  if (!preload) return ''
+  return preload.phase === 'Failed'
+    ? '本地模型预热失败，发送消息时将自动重试'
+    : `本地模型预热中 ${Math.round(preload.percent * 100)}%`
 }
 
 export function sessionScope(thread: ThreadItem, project?: ProjectItem): Record<string, unknown> {

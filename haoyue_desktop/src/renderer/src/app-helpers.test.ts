@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ThreadItem } from './types'
-import { cancelParams, classifyModelError, classifyTurnFailure, extractModelError, formatTokenCount, formatTurnFailure, messageMatches, normalizePath, pathName, samePath, stripModelErrorBlock } from './app-helpers'
+import { cancelParams, classifyModelError, classifyTurnFailure, extractModelError, formatContextRatio, formatPreloadLabel, formatTokenCount, formatTurnFailure, messageMatches, normalizePath, pathName, samePath, sessionStats, stripModelErrorBlock } from './app-helpers'
 
 describe('formatTokenCount', () => {
   it('formats millions with M suffix correctly without unnecessary trailing zeros', () => {
@@ -246,5 +246,58 @@ describe('cancelParams', () => {
 
   it('refuses an empty cancel, which would kill every turn on the connection', () => {
     expect(cancelParams(thread({}))).toBeNull()
+  })
+})
+
+describe('formatContextRatio', () => {
+  it('divides the latest single-round prompt by the model window', () => {
+    expect(formatContextRatio(64_000, 128_000)).toBe(' | 上下文 50%')
+    expect(formatContextRatio(20_000, 128_000)).toBe(' | 上下文 16%')
+  })
+
+  it('clamps runaway readings instead of showing absurd percentages', () => {
+    expect(formatContextRatio(5_000_000, 128_000)).toBe(' | 上下文 999%')
+  })
+
+  it('stays silent without a reading or a known window', () => {
+    expect(formatContextRatio(undefined, 128_000)).toBe('')
+    expect(formatContextRatio(0, 128_000)).toBe('')
+    expect(formatContextRatio(64_000, 0)).toBe('')
+    expect(formatContextRatio(64_000, undefined)).toBe('')
+  })
+})
+
+describe('formatPreloadLabel', () => {
+  it('shows the warming percentage while weights load', () => {
+    expect(formatPreloadLabel({ phase: 'Loading', percent: 0.624 })).toBe('本地模型预热中 62%')
+  })
+
+  it('frames a failed preload as recoverable, not as a broken client', () => {
+    expect(formatPreloadLabel({ phase: 'Failed', percent: 1 })).toBe('本地模型预热失败，发送消息时将自动重试')
+  })
+
+  it('stays silent when there is nothing to report', () => {
+    expect(formatPreloadLabel(null)).toBe('')
+    expect(formatPreloadLabel(undefined)).toBe('')
+  })
+})
+
+describe('sessionStats', () => {
+  const session = (extra: Record<string, unknown>) => ({
+    id: 's1',
+    createdAt: '2026-10-20T00:00:00Z',
+    updatedAt: '2026-10-20T00:00:00Z',
+    messages: [],
+    ...extra
+  })
+
+  it('derives a per-round prompt proxy so the context ratio survives a reload', () => {
+    // 累计口径 10 轮 × 20k = 200k：若直接拿来除以 128k 窗口会显示 156%（虚涨近 8 倍）。
+    const stats = sessionStats(session({ llmRounds: 10, totalInputTokens: 200_000 }) as never)
+    expect(stats.lastRoundInputTokens).toBe(20_000)
+  })
+
+  it('leaves the proxy undefined when no prompt was ever recorded', () => {
+    expect(sessionStats(session({}) as never).lastRoundInputTokens).toBeUndefined()
   })
 })

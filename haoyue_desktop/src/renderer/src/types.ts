@@ -115,6 +115,9 @@ export interface ThreadStats {
   inputTokens?: number
   outputTokens?: number
   totalInputTokens?: number
+  /** 最近一轮 LLM 调用的完整 prompt 规模（usage.totalInputTokens 口径，含缓存命中部分）。
+   *  上下文占比只认它：累计值随轮数线性虚涨，不能直接除以模型窗口。 */
+  lastRoundInputTokens?: number
   cachedInputTokens?: number
   outputElapsedMs?: number
 }

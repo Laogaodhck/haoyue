@@ -292,6 +292,10 @@ public sealed class DaemonServer : IAsyncDisposable
             _ => StartLocalModelIdleReclaim(), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
         // 本地模型预热（可选）：后台加载活跃本地模型，第一条消息免等权重加载。
         StartLocalModelPreload();
+        // GPU 后端启动自检：CPU 构建的后端 + GPU offload 请求 = 本地推理全程 CPU 化
+        // （同机实测 11 倍差距）。原有一次性 stderr 警告只有 CLI 场景可见，daemon +
+        // 桌面用户毫无感知——启动时显式广播，进事件台账并可经 events.recent 回放。
+        PublishGpuBackendWarning();
         // H-C 记忆固化：启动执行一次，之后每 6h 扫描近期会话沉淀事实；配置关闭时
         // 完全不启用（连定时器都不挂）。
         if (_runtime.ConfigStore.Config.Agent.MemoryConsolidationEnabled)
@@ -2077,6 +2081,49 @@ public sealed class DaemonServer : IAsyncDisposable
                 // 预热是纯优化：任何失败都退化为下一次请求的懒加载。
             }
         }, _shutdown.Token);
+    }
+
+    /// <summary>
+    /// GPU 后端启动自检：配置（或自动档位）请求 GPU offload 而原生后端不支持时广播一条
+    /// WarningEvent——事件台账持久化、桌面可经 events.recent 回放、doctor.run 的
+    /// 「Local GPU Backend」体检项与运行时 stderr 警告共用同一判断源
+    /// （LocalLlmClient.GpuBackendDiagnostic）。纯优化：任何失败都不影响启动。
+    /// </summary>
+    private void PublishGpuBackendWarning()
+    {
+        try
+        {
+            var localProviders = _runtime.ConfigStore.Config.Providers
+                .Where(provider => provider.Kind.Equals("local", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (localProviders.Count == 0) return;
+
+            var explicitRequests = localProviders
+                .SelectMany(provider => provider.Models
+                    .Select(model => Providers.LocalLlmClient.ConfiguredGpuLayers(provider, model)))
+                .Where(layers => layers > 0)
+                .ToList();
+            // 自动语义（AutoOptimize）下档位按 nvidia-smi 探测请求 offload：机器有
+            // NVIDIA GPU 而后端是 CPU 构建时，同样被静默拖慢，必须报出来。
+            var autoOnGpuMachine = Providers.GpuProbe.Probe() is not null
+                && localProviders.Any(provider => provider.Models.Any(
+                    model => model.Load is null || model.Load.AutoOptimize));
+
+            string? detail = explicitRequests.Count > 0
+                ? Providers.LocalLlmClient.GpuBackendDiagnostic(explicitRequests.Max())
+                : autoOnGpuMachine
+                    ? $"The loaded llama native backend does not support GPU offload (CPU build of"
+                        + $" LLamaSharp.Backend), but auto-optimized local models would request it on this"
+                        + $" machine. Inference runs fully on CPU and large prompts prefill extremely slowly."
+                        + $" {Providers.LocalLlmClient.GpuBackendFixGuidance}"
+                    : null;
+            if (detail is null) return;
+            _runtime.Events.Publish(new WarningEvent(detail));
+        }
+        catch (Exception)
+        {
+            // 自检是纯优化：失败时 doctor 体检仍会报出同一问题，不影响启动。
+        }
     }
 
     /// <summary>本地模型空闲回收：归还超过阈值的常驻权重（阈值为 0 时库里直接跳过）。</summary>

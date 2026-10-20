@@ -510,6 +510,60 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void HealthChecks_FlagCpuBackend_WhenGpuOffloadIsRequested()
+    {
+        // CPU 构建的后端 + GpuLayers>0：本地推理会全程 CPU 化（同机实测 11 倍差距），
+        // 体检必须显式报错并附重建指引——不能只写进没人看的 stderr。
+        var workspace = NewWorkspace("health-gpu");
+        using var httpFactory = new LlmHttpFactory();
+        var configStore = new ConfigStore(
+            Path.Combine(_dir, "health-gpu-config.json"),
+            Path.Combine(_dir, "health-gpu-state.json"));
+        configStore.Config.Providers.Add(new ProviderConfig
+        {
+            Id = "local",
+            Kind = "local",
+            GpuLayers = 32,
+            Models = [new ModelConfig { Id = "gemma" }]
+        });
+
+        var checker = new HealthChecker(httpFactory, configStore);
+        var gpu = Assert.Single(checker.RunChecks(workspace), c => c.Name == "Local GPU Backend");
+        Assert.False(gpu.Ok);
+        Assert.Contains("GPU offload", gpu.Detail);
+        Assert.Contains("Cuda12", gpu.Detail);
+    }
+
+    [Fact]
+    public void HealthChecks_PassGpuBackend_WithoutLocalProviderOrRequest()
+    {
+        var workspace = NewWorkspace("health-gpu-none");
+        using var httpFactory = new LlmHttpFactory();
+        var configStore = new ConfigStore(
+            Path.Combine(_dir, "health-gpu-none-config.json"),
+            Path.Combine(_dir, "health-gpu-none-state.json"));
+
+        var checker = new HealthChecker(httpFactory, configStore);
+        // 纯云端配置：没有本地 provider，体检不应制造存在感。
+        var none = Assert.Single(checker.RunChecks(workspace), c => c.Name == "Local GPU Backend");
+        Assert.True(none.Ok);
+        Assert.Contains("No local provider", none.Detail);
+
+        // 本地 provider 但显式选择 CPU 推理（AutoOptimize=false, GpuOffload=0）：
+        // 这是用户的主动选择，不是后端缺陷。
+        configStore.Config.Providers.Add(new ProviderConfig
+        {
+            Id = "local",
+            Kind = "local",
+            GpuLayers = 0,
+            Models = [new ModelConfig { Id = "gemma", Load = new Haoyue.Runtime.Providers.LocalModelSettings { AutoOptimize = false, GpuOffload = 0 } }]
+        });
+        var cpu = Assert.Single(checker.RunChecks(workspace), c => c.Name == "Local GPU Backend");
+        Assert.True(cpu.Ok);
+        Assert.Contains("CPU inference requested", cpu.Detail);
+    }
+
+    [Fact]
     public void KnowledgeStore_SaveSearchAndScopeIsolation()
     {
         var db = new HaoyueDatabase(Path.Combine(_dir, "knowledge.db"));
@@ -591,6 +645,44 @@ public sealed class CoreTests : IDisposable
             new JsonObject { ["id"] = entryId },
             context, CancellationToken.None);
         Assert.False(forgetAgain.Success);
+    }
+
+    [Fact]
+    public async Task KnowledgeSearch_CitesSourceAndChunk_ForImportedEntries()
+    {
+        // 导入类条目必须带出处：模型回答时才能引用「来自哪份文档的第几部分」，幻觉可归因。
+        var db = new HaoyueDatabase(Path.Combine(_dir, "kb-cite.db"));
+        var store = new KnowledgeStore(db);
+        var prompts = new FilePromptProvider();
+        var context = new ToolContext
+        {
+            Workspace = NewWorkspace("kb-cite-ws"),
+            Events = new EventBus(),
+            Agent = new AgentConfig(),
+        };
+        var tool = new KnowledgeSearchTool(
+            store, new KnowledgeSemanticIndex(db, new LlmHttpFactory()),
+            (IConfigStore)new ConfigStore(Path.Combine(_dir, "kb-cite-cfg.json"), Path.Combine(_dir, "kb-cite-state.json")),
+            prompts);
+
+        var scope = HaoyueDatabase.ScopeKey(context.Workspace);
+        var notebookId = store.EnsureDefaultNotebook(scope);
+        var (source, _) = store.SaveSource(scope, notebookId, "text", "部署手册", null, "第一段 第二段");
+        store.ReplaceSourceChunks(scope, source.Id, ["docker compose up -d 发布服务", "健康检查端点 /healthz"], "部署");
+
+        var hit = await tool.ExecuteAsync(new JsonObject { ["query"] = "docker" }, context, CancellationToken.None);
+        Assert.True(hit.Success);
+        Assert.Contains("来源：部署手册", hit.Output);
+        Assert.Contains("第 1 部分", hit.Output);
+
+        // knowledge_save 直接写的条目没有来源，检索结果不得伪造出处行。
+        await new KnowledgeSaveTool(store, prompts).ExecuteAsync(
+            new JsonObject { ["title"] = "手动偏好", ["content"] = "用户偏好 pnpm 发布" },
+            context, CancellationToken.None);
+        var manual = await tool.ExecuteAsync(new JsonObject { ["query"] = "偏好" }, context, CancellationToken.None);
+        Assert.True(manual.Success);
+        Assert.Contains("手动偏好", manual.Output);
+        Assert.DoesNotContain("来源：", manual.Output);
     }
 
     [Fact]

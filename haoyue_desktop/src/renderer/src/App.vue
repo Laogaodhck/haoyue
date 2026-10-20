@@ -59,6 +59,8 @@ import { ReasoningLevel } from './types'
 import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, ThreadStats, ToolActivity, WorkDockTab } from './types'
 import {
   cancelParams,
+  formatContextRatio,
+  formatPreloadLabel,
   formatPromptWithFiles,
   formatTurnFailure,
   hydrateMessages,
@@ -149,6 +151,8 @@ const rebuildingConfig = ref(false)
 const projects = ref<ProjectItem[]>([])
 const threads = ref<ThreadItem[]>([])
 const activeThreadId = ref('')
+// daemon 启动预热进度：无运行回合时展示在输入区（Ready/Failed 或断连即清除）。
+const modelPreload = ref<{ phase: string; percent: number } | null>(null)
 const selectedProjectId = ref('')
 const runtimeWorkspacePath = ref('')
 const models = ref<string[]>([])
@@ -334,16 +338,16 @@ const composerCaption = computed(() => {
   const speed = outputTokens > 0 && outputElapsedMs > 0
     ? (outputTokens / (outputElapsedMs / 1000)).toFixed(1)
     : '—'
-  // 上下文占用比例（P1-2.3）：绝对 token 数对用户没有意义，除以模型窗口才有。
+  // 上下文占用比例：只按最近一轮单次 prompt 规模 ÷ 模型窗口（累计口径会随轮数虚涨）。
   const contextWindow = modelCatalog.value.find((model) => model.ref === activeModel.value)?.contextWindow ?? 0
-  const contextUsed = totalInputTokens + outputTokens
-  const contextRatio = contextWindow > 0 && contextUsed > 0
-    ? ` | 上下文 ${Math.min(999, Math.round(contextUsed / contextWindow * 100))}%`
-    : ''
+  const contextRatio = formatContextRatio(stats?.lastRoundInputTokens, contextWindow)
   return `${number(stats?.llmRounds)} 轮 · ${number(stats?.executionSteps)} 步 | 缓存命中 ${cacheRate} | ${speed} tok/s | 输入 ${number(stats?.inputTokens)} tok · 输出 ${number(stats?.outputTokens)} tok${contextRatio}`
 })
 const settingsThread = computed(() => threads.value.find((thread) => thread.id === taskSettingsThreadId.value))
 const settingsProject = computed(() => projects.value.find((project) => project.id === settingsThread.value?.projectId))
+// 启动预热提示（Failed 时说清「不影响使用」）；断连时进度失去意义——daemon 可能已重启。
+const modelPreloadLabel = computed(() => formatPreloadLabel(modelPreload.value))
+watch(() => daemonState.value.connected, (connected) => { if (!connected) modelPreload.value = null })
 const conversationTitle = computed(() =>
   activeThread.value?.title || activeProject.value?.name || '任务')
 const runtimeConnectionLabel = computed(() => {
@@ -1829,6 +1833,7 @@ const handleDaemonEvent = createDaemonEventHandler({
   threads,
   activeThreadId,
   projects,
+  modelPreload,
   handleScheduleUpdated,
   handleEvolutionReflected,
   scrollToBottom,
@@ -2293,6 +2298,7 @@ watch(theme, applyTheme)
                 </button>
               </span>
             </div>
+            <p v-if="modelPreloadLabel" class="preload-chip"><LoaderCircle :size="13" aria-hidden="true" />{{ modelPreloadLabel }}</p>
             <!-- 空状态修复：无任务时输入框保持可用，发送时由 sendMessage 自动创建任务。 -->
             <Composer ref="composer" :busy="busy"
               :disabled="conversationLoading" :model="activeModel"

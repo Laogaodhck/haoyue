@@ -83,7 +83,8 @@ public static class ConfigSchema
         New("agent.localModelMaxResident", "int", 2, min: 1, max: 16),
         New("agent.localModelConcurrency", "int", 1, min: 1, max: 16),
         New("agent.localModelIdleUnloadMinutes", "int", 20, min: 0, max: 1_440),
-        New("agent.localModelPreload", "bool", false),
+        // 启动预热默认开启：本地模型首字延迟是体验主项（实测 -39%），关闭须显式选择。
+        New("agent.localModelPreload", "bool", true),
         // 工具执行策略闸门（运行时强制，模型无法绕过）。规则列表本身是用户数据。
         New("agent.toolPolicy.enabled", "bool", true),
         New("agent.toolPolicy.builtinBashGuard", "bool", true),

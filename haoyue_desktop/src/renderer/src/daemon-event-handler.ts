@@ -8,6 +8,9 @@ export interface DaemonEventContext {
   threads: Ref<ThreadItem[]>
   activeThreadId: Ref<string>
   projects: Ref<ProjectItem[]>
+  /** 启动预热（daemon 后台装权重）的全局进度：无运行回合时由 model.load.progress 驱动，
+   *  用于在输入区展示「本地模型预热中 x%」；回合内加载仍走线程 phase，不重复提示。 */
+  modelPreload?: Ref<{ phase: string; percent: number } | null>
   handleScheduleUpdated: () => Promise<void> | void
   handleEvolutionReflected: () => Promise<void> | void
   scrollToBottom: (smooth?: boolean, force?: boolean) => Promise<void>
@@ -23,6 +26,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
     threads,
     activeThreadId,
     projects,
+    modelPreload,
     handleScheduleUpdated,
     handleEvolutionReflected,
     scrollToBottom,
@@ -130,7 +134,16 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
       const phase = typeof event.details?.phase === 'string' ? event.details.phase : ''
       const percent = typeof event.details?.percent === 'number' ? event.details.percent : 0
       const loading = threads.value.find((item) => item.running)
-      if (!loading) return
+      if (!loading) {
+        // 没有运行回合：这是 daemon 启动预热（默认开启）。进度写进全局 ref，
+        // 输入区展示「预热中 x%」；Ready/Failed 收尾，断连时由 App 侧清掉。
+        if (modelPreload) {
+          modelPreload.value = phase === 'Ready'
+            ? null
+            : { phase, percent: phase === 'Failed' ? 1 : percent }
+        }
+        return
+      }
       loading.phase = phase === 'Ready'
         ? '思考中'
         : phase === 'Failed'
@@ -380,6 +393,9 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         thread.stats.inputTokens = (thread.stats.inputTokens ?? 0) + inputTokens
         thread.stats.outputTokens = (thread.stats.outputTokens ?? 0) + outputTokens
         thread.stats.totalInputTokens = (thread.stats.totalInputTokens ?? 0) + totalInputTokens
+        // 上下文占比只按最近一轮单次 prompt 规模计：totalInputTokens 是本次调用的完整
+        // prompt（含缓存命中），累计口径会随轮数虚涨，直接覆盖而非累加。
+        thread.stats.lastRoundInputTokens = totalInputTokens
         thread.stats.cachedInputTokens = (thread.stats.cachedInputTokens ?? 0) + cachedInputTokens
         thread.stats.outputElapsedMs = (thread.stats.outputElapsedMs ?? 0) + elapsedMs
         break

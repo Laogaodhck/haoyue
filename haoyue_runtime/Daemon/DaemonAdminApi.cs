@@ -931,6 +931,9 @@ internal sealed partial class DaemonAdminApi(
                 if (performance is { } perf)
                 {
                     row["ttftMs"] = Math.Round(perf.TtftMs, 1);
+                    // 加载等待单列：首轮的 TTFT 含权重装载，本字段让「冷启动等待」与
+                    // 「净 prefill 速率」可分辨（稳态命中为 0）。
+                    row["loadWaitMs"] = Math.Round(perf.LoadWaitMs, 1);
                     row["totalMs"] = Math.Round(perf.TotalMs, 1);
                     row["decodeMs"] = Math.Round(perf.DecodeMs, 1);
                     row["decodeTokensPerSecond"] = Math.Round(perf.DecodeTokensPerSecond, 2);
@@ -943,7 +946,8 @@ internal sealed partial class DaemonAdminApi(
                     if (perf.Hint is { } hint) row["hint"] = hint;
                     if (run > 1)
                     {
-                        // 首轮含模型加载等待（TTFT 覆盖加载），聚合并剔除以反映稳态性能。
+                        // 首轮含模型加载等待（TTFT 覆盖加载，另见 loadWaitMs 字段），
+                        // 聚合并剔除以反映稳态性能。
                         ttfts.Add(perf.TtftMs);
                         if (perf.DecodeTokensPerSecond > 0) decodes.Add(perf.DecodeTokensPerSecond);
                         if (perf.PrefillTokensPerSecond > 0) prefills.Add(perf.PrefillTokensPerSecond);

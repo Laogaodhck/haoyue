@@ -3024,6 +3024,33 @@ select:focus-visible {
   text-align: center;
 }
 
+/* daemon 启动预热进度：与 caption 同级的弱提示， spinner 常驻不抢焦点。 */
+.preload-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 auto 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.preload-chip svg {
+  animation: preload-spin 1.2s linear infinite;
+}
+
+@keyframes preload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preload-chip svg {
+    animation: none;
+  }
+}
+
 .modal-backdrop {
   position: fixed;
   z-index: 100;

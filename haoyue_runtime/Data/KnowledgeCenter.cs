@@ -316,6 +316,36 @@ public sealed partial class KnowledgeStore
 
     // ────────────────────── attribution-aware reads ─────────────────────
 
+    /// <summary>
+    /// Source attribution per entry id for the whole scope: id → (source title,
+    /// chunk ordinal). knowledge_search cites this so the model can tell the user
+    /// where an answer came from. Entries saved directly through knowledge_save
+    /// carry no source and are simply absent from the map.
+    /// </summary>
+    public IReadOnlyDictionary<long, (string? SourceTitle, int? ChunkOrdinal)> AttributionMap(string scope)
+    {
+        EnsureScopeReady(scope);
+        using var connection = database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT k.id, s.title, k.chunk_ordinal
+            FROM knowledge k
+            LEFT JOIN kb_sources s ON s.id = k.source_id
+            WHERE k.scope = $scope AND k.source_id IS NOT NULL;
+            """;
+        command.Parameters.AddWithValue("$scope", scope);
+        var map = new Dictionary<long, (string?, int?)>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var id = reader.GetInt64(0);
+            var title = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var ordinal = reader.IsDBNull(2) ? (int?)null : reader.GetInt32(2);
+            map[id] = (title, ordinal);
+        }
+        return map;
+    }
+
     public IReadOnlyList<KnowledgeEntryInfo> ListInfo(string scope, int limit = 100, long? notebookId = null, string? tag = null)
     {
         EnsureScopeReady(scope);

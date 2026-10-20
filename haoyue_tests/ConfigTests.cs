@@ -32,6 +32,9 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal(40, store.Config.Agent.MaxSteps);
         Assert.True(store.Config.Routing.FailoverEnabled); // failover default on
         Assert.False(store.Config.Routing.DeepSeekOptimizationEnabled); // DeepSeek optimization default off
+        // 本地模型启动预热默认开启：首条消息免等权重加载（实测 -39% 首字延迟），
+        // 关闭它必须是用户显式选择，而不是首次安装的默认姿势。
+        Assert.True(store.Config.Agent.LocalModelPreload);
     }
 
     [Fact]

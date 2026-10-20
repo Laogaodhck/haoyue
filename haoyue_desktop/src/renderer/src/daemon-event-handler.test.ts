@@ -459,3 +459,113 @@ describe('daemon event handler — local model load progress', () => {
     expect(thread.phase).toBe('本地模型加载失败')
   })
 })
+
+describe('daemon event handler — startup preload progress', () => {
+  function loadEvent(phase: string, percent: number): DaemonMessage {
+    return {
+      id: 0,
+      event: 'model.load.progress',
+      data: '本地模型加载进度',
+      details: { model: 'gemma.gguf', phase, percent }
+    }
+  }
+
+  it('surfaces startup preload progress when no turn is running', () => {
+    const context = createContext()
+    const preload = ref<{ phase: string; percent: number } | null>(null)
+    context.modelPreload = preload
+    const handler = createDaemonEventHandler(context)
+
+    handler(loadEvent('Loading', 0.624))
+    expect(preload.value).toEqual({ phase: 'Loading', percent: 0.624 })
+
+    // Ready 即收尾：常驻提示必须消失，不能变成永久角标。
+    handler(loadEvent('Ready', 1))
+    expect(preload.value).toBeNull()
+  })
+
+  it('reports a failed preload as recoverable, not as a broken client', () => {
+    const context = createContext()
+    const preload = ref<{ phase: string; percent: number } | null>(null)
+    context.modelPreload = preload
+    const handler = createDaemonEventHandler(context)
+
+    handler(loadEvent('Failed', 1))
+    expect(preload.value).toEqual({ phase: 'Failed', percent: 1 })
+  })
+
+  it('leaves the global preload state alone while a turn owns the phase label', () => {
+    const context = createContext()
+    const preload = ref<{ phase: string; percent: number } | null>(null)
+    context.modelPreload = preload
+    const thread: ThreadItem = {
+      id: 't1', title: '任务', updatedAt: Date.now(), messages: [],
+      sessionId: 's1', running: true, phase: '思考中'
+    }
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(loadEvent('Loading', 0.4))
+    // 回合内加载走线程 phase（原有行为），全局预热提示不重复出现。
+    expect(thread.phase).toBe('加载本地模型 40%')
+    expect(preload.value).toBeNull()
+  })
+})
+
+describe('daemon event handler — usage stats', () => {
+  beforeEach(() => {
+    ;(globalThis as unknown as { window: unknown }).window = {
+      haoyue: { notify: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) }
+    }
+  })
+
+  function usageEvent(details: Record<string, unknown>): DaemonMessage {
+    return { id: 7, event: 'usage' as DaemonMessage['event'], data: '', sessionId: 's1', requestMethod: 'chat', details }
+  }
+
+  function threadFixture(): ThreadItem {
+    const thread: ThreadItem = {
+      id: 't1',
+      title: '任务',
+      updatedAt: Date.now(),
+      messages: [],
+      sessionId: 's1',
+      running: true,
+      requestId: 7,
+      assistantId: 'a1'
+    }
+    thread.messages.push({
+      id: 'a1', role: 'assistant', content: '', thinking: '', tools: [], state: 'thinking', createdAt: Date.now()
+    })
+    return thread
+  }
+
+  it('tracks the latest single-round prompt separately from the cumulative total', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(usageEvent({ inputTokens: 100, outputTokens: 20, totalInputTokens: 20_000, cachedInputTokens: 18_000, elapsedMs: 1500 }))
+    handler(usageEvent({ inputTokens: 100, outputTokens: 20, totalInputTokens: 21_500, cachedInputTokens: 19_000, elapsedMs: 1200 }))
+
+    // 累计口径只服务「输入/输出/缓存命中」展示，继续累加。
+    expect(thread.stats!.totalInputTokens).toBe(41_500)
+    expect(thread.stats!.inputTokens).toBe(200)
+    expect(thread.stats!.outputTokens).toBe(40)
+    // 上下文占比只认最近一轮单次 prompt 规模：totalInputTokens 是本次调用的完整 prompt，
+    // 累计后再除以模型窗口会随轮数虚涨（修正前 10 轮 20k 会显示 156%）。
+    expect(thread.stats!.lastRoundInputTokens).toBe(21_500)
+  })
+
+  it('falls back to inputTokens when the daemon omits totalInputTokens', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(usageEvent({ inputTokens: 512, outputTokens: 8 }))
+
+    expect(thread.stats!.lastRoundInputTokens).toBe(512)
+  })
+})

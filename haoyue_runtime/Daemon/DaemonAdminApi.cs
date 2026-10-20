@@ -2251,6 +2251,9 @@ internal sealed partial class DaemonAdminApi(
         {
             throw new DaemonRequestException($"无法写入同义词表：{ex.Message}");
         }
+        // 写盘与随后的检索可能落在同一个文件系统时间戳桶里，「时间 + 长度」指纹会
+        // 判定未变而继续用旧表；这里显式失效，让下一次检索必然重读（不依赖时间戳精度）。
+        KnowledgeTuning.Invalidate();
         return GetKnowledgeSynonyms();
     }
 

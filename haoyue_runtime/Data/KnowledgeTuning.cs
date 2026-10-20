@@ -127,10 +127,24 @@ public static class KnowledgeTuning
     /// <summary>Drops the user table and reloads from the configured paths on next access.</summary>
     public static void ResetForTests() => ConfigurePaths([]);
 
+    /// <summary>
+    /// 丢掉已记录的指纹，下一次访问强制重读。
+    /// </summary>
+    /// <remarks>
+    /// **自身写盘路径必须调用**（daemon 的 knowledge.synonyms.save）：写盘与随后的
+    /// 检索可能落在同一个时间戳桶里，此时指纹相同推不出内容相同——显式失效不依赖
+    /// 文件系统精度，是唯一确定的做法。
+    /// </remarks>
+    public static void Invalidate()
+    {
+        lock (Gate) _timestamps.Clear();
+    }
+
     private static void EnsureFresh()
     {
         lock (Gate)
         {
+            var nowUtc = DateTime.UtcNow;
             var changed = false;
             for (var i = 0; i < _paths.Length; i++)
             {
@@ -145,7 +159,10 @@ public static class KnowledgeTuning
                 {
                     continue;
                 }
-                if (!_timestamps.TryGetValue(path, out var known) || known != stamp) changed = true;
+                // 指纹相同但时间戳还没「沉淀」时不能断定未变：粗粒度文件系统会把
+                // 新旧两次写入取整成同一个值（详见 <see cref="StampSettleWindow"/>）。
+                if (!_timestamps.TryGetValue(path, out var known) || known != stamp || !IsSettled(stamp, nowUtc))
+                    changed = true;
             }
             if (!changed) return;
 
@@ -154,8 +171,11 @@ public static class KnowledgeTuning
             {
                 if (string.IsNullOrEmpty(path)) continue;
                 var (ok, entries, stamp) = TryRead(path);
-                if (!ok) continue;
+                // 读失败（文件被占用/已删除）也记指纹：否则每次都判「有变化」，
+                // 把一次瞬时故障放大成每次检索都重试读盘。记下的指纹若与真实状态
+                // 不符，下次访问自然会再次命中差异并重试。
                 _timestamps[path] = stamp;
+                if (!ok) continue;
                 foreach (var (key, values) in entries)
                     merged[key] = values;
             }
@@ -164,14 +184,33 @@ public static class KnowledgeTuning
     }
 
     /// <summary>
+    /// 时间戳「沉淀窗口」：刚落盘的文件，其时间戳仍可能被文件系统按粗粒度取整
+    /// （NTFS ≈15.6 ms，FAT 与部分 SMB 共享可达 2 s）。窗口内一律重读，不看指纹。
+    /// </summary>
+    /// <remarks>
+    /// 这一条覆盖的是**外部写入**（用户用编辑器改文件）：若上次检索恰好落在同一个
+    /// 时间戳桶里，指纹会与新内容相等而漏检。同义词表只有几十行，重读代价远低于
+    /// 读到旧表——窗口取 2 s 是为了同时兜住 FAT/SMB 的粗粒度，实际开销是窗口内每次
+    /// 检索多读一个小文本文件。
+    ///
+    /// 文件时间戳来自未来（跨机拷贝、时钟回拨）时窗口永不满足，等价于「每次都重读」：
+    /// 结论仍然正确，只是多一次小文件读取，属可接受退让。
+    /// </remarks>
+    private static readonly TimeSpan StampSettleWindow = TimeSpan.FromSeconds(2);
+
+    /// <summary>文件不存在（或尚未读到）视为已沉淀：否则「无文件」会永远强制重读。</summary>
+    private static bool IsSettled(FileStamp stamp, DateTime nowUtc) =>
+        stamp.WrittenUtc == DateTime.MinValue || stamp.WrittenUtc <= nowUtc - StampSettleWindow;
+
+    /// <summary>
     /// 变更指纹 = 最后写入时间 + 文件长度。
     /// </summary>
     /// <remarks>
     /// 只看 <see cref="File.GetLastWriteTimeUtc"/> 会漏掉「同一时钟 tick 内的连续两次写入」：
-    /// NTFS 的时间戳更新受系统时钟粒度约束（Windows 上约 15.6 ms，快照/CI 环境更粗），
+    /// NTFS 的时间戳更新受系统时钟粒度约束（Windows 上约 15.6 ms，快照/CI/共享目录更粗），
     /// 两次写入可能拿到完全相同的时间戳 → 判定为未变化 → 热重载拿不到新内容。
-    /// 加上长度能兜住绝大多数真实编辑；同长度且同 tick 内的改写仍会漏（读取间隔内
-    /// 反复改写同一文件属异常场景，不值得为此每回合读盘做全量哈希）。
+    /// 加上长度能兜住绝大多数真实编辑；「同长度且同 tick」的改写由
+    /// <see cref="StampSettleWindow"/> 与 <see cref="Invalidate"/> 两条路兜底。
     /// </remarks>
     private static FileStamp StatOf(string path)
     {

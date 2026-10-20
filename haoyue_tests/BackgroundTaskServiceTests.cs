@@ -53,17 +53,23 @@ public sealed class BackgroundTaskServiceTests : IDisposable
         var task = service.Start(Workspace(runtime), "总结一下");
         Assert.Equal(BackgroundTaskStatus.Running, task.Status);
 
-        var finished = await WaitUntilAsync(() => service.Get(task.Id) is { Status: not BackgroundTaskStatus.Running });
-        Assert.True(finished, "后台任务未在时限内完成");
+        // 完成状态在 try 里就可见，而 EndedAt 与终态事件在 finally 才落（事件最后发）。
+        // 按「状态已不是 Running」断言会撞上这个窗口：CI 上任务毫秒级完成，测试线程
+        // 常常先于 finally 跑完就断言，于是拿到空事件列表。改为等终态事件真正送达，
+        // 此时状态 / EndedAt / 事件三者都已就绪。
+        var delivered = await WaitUntilAsync(() =>
+        {
+            lock (events)
+                return events.Any(e => e is BackgroundTaskEvent bte
+                    && bte.TaskId == task.Id && bte.Status == BackgroundTaskStatus.Completed);
+        });
+        Assert.True(delivered, "未在时限内收到后台任务的 Completed 终态事件");
+
         var info = service.Get(task.Id)!;
         Assert.Equal(BackgroundTaskStatus.Completed, info.Status);
         Assert.Equal("后台结果", info.Output);
         Assert.NotNull(info.EndedAt);
         Assert.NotNull(info.SessionId);
-
-        lock (events)
-            Assert.Contains(events, e => e is BackgroundTaskEvent bte
-                && bte.TaskId == task.Id && bte.Status == BackgroundTaskStatus.Completed);
     }
 
     [Fact]

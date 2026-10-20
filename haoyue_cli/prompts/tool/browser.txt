@@ -1,0 +1,7 @@
+Drive a built-in headless browser (system Edge/Chrome launched with a dedicated profile) for pages that need real rendering: local dev servers you are debugging, SPA pages, data: URLs, or data behind JavaScript. Actions: open (load a URL — http/https/data only; bare domains get https://; returns URL, title, and readable page text), eval (run JavaScript in the page context and return the last expression's value as JSON), text / html (extract full page text or DOM HTML), close (shut the headless instance down).
+
+Typical flow for frontend debugging: open http://localhost:5173 → eval scripts to inspect state (`document.querySelector('#app').innerHTML.length`, `window.__store.getState()`) → text to read rendered output → close when done. Console errors are not captured; evaluate what you need explicitly.
+
+External sites obey the allowed-websites allowlist (config web.allowedSites) exactly like web_fetch: with entries present, only listed origins plus localhost are openable. When denied, do NOT retry — tell the user which entry to add in desktop settings (设置 → 允许的网站) and wait.
+
+Limitations: one headless instance at a time (actions are serialized); page state persists across actions until close; use bash + curl instead when raw HTTP suffices; interactive logins, file downloads, and file uploads are not supported; screenshots are out of scope (use capture_screen for the user's screen).

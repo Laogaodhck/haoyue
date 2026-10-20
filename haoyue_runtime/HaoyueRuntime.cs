@@ -312,8 +312,10 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                      new GlobTool(prompts),
                      new GrepTool(prompts),
                      new BashTool(prompts),
+                     new TerminalTool(prompts),
                      new WebSearchTool(prompts),
                      new WebFetchTool(prompts, _services.GetRequiredService<IConfigStore>()),
+                     new BrowserTool(prompts, _services.GetRequiredService<IConfigStore>()),
                      new CaptureScreenTool(prompts),
                      new KnowledgeSearchTool(
                          Knowledge,

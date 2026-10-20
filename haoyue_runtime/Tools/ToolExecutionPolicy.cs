@@ -83,12 +83,14 @@ public sealed partial class ToolExecutionPolicy : IToolExecutionPolicy
 
     /// <summary>
     /// Tools that hand a command string to a real shell. computer_exec is the native
-    /// Computer-Use shell and takes the same guard as bash, otherwise the built-in
-    /// destructive-command block could be sidestepped by choosing the other entry point.
+    /// Computer-Use shell and terminal is the persistent-session shell; both take the
+    /// same guard as bash, otherwise the built-in destructive-command block could be
+    /// sidestepped by choosing another entry point.
     /// </summary>
     private static bool IsShellEntry(string toolName) =>
         toolName.Equals("bash", StringComparison.OrdinalIgnoreCase)
-        || toolName.Equals("computer_exec", StringComparison.OrdinalIgnoreCase);
+        || toolName.Equals("computer_exec", StringComparison.OrdinalIgnoreCase)
+        || toolName.Equals("terminal", StringComparison.OrdinalIgnoreCase);
 
     private static string DeEscapeJsonMarkup(string text) => text
         .Replace("\\u0026", "&")

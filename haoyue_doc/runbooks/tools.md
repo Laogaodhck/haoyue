@@ -102,6 +102,24 @@
 - **何时不用**：能用专用工具（read/edit/glob/grep）完成的文件操作——专用工具更安全且可审计。
 - **失败表现**：非零退出码原样返回 stderr/stdout；超时被取消并标记。
 
+## terminal
+
+- **用途**：持久会话的 shell 执行——会话记住工作目录，`cd` 后的命令在原目录继续，贴合"进入目录反复构建/测试"的终端工作流。
+- **参数**：`action`（exec 默认 / list / close）；`command`、`session_id`（默认 "default"）、`cwd`、`timeout_seconds`。
+- **何时用**：多步流程共享工作目录（configure → build → test、进入 venv 目录反复调用工具）。一次性命令用 bash 更直接。
+- **何时不用**：需要跨命令保留环境变量/shell 选项时——会话只延续 cwd，不延续 env；请按命令导出或写成脚本文件执行。
+- **安全**：与 bash 同构——同一内置高危命令守卫、同一沙箱与 JSONL 审计；同一会话串行执行（并发排队）。
+- **失败表现**：命令提前 `exit` 会丢失 cwd 回读（会话保留原目录）；路径越界/目录不存在直接报错。
+
+## browser
+
+- **用途**：内置无头浏览器（复用系统 Edge/Chrome，`--headless=new` 专用实例 + CDP 驱动，不随包分发 Chromium）：加载页面、在页面上下文执行 JavaScript、提取文本/HTML——用于调试本地前端页面与抓取需真实渲染的数据。
+- **参数**：`action`（open 默认 / eval / text / html / close）；`url`（http/https/data，裸域名补 https://，`file:` 等本地 scheme 拒绝）；`script`（eval）；`wait_ms`、`timeout_seconds`、`max_chars`。
+- **何时用**：调试 dev server（open http://localhost:5173 → eval 查状态 → text 看渲染结果）；SPA/JS 渲染页面取内容。
+- **何时不用**：纯静态文本用 web_fetch 更轻；需要截图用 capture_screen（browser 不截图）；交互登录/文件上传下载不支持。
+- **安全**：与 web_fetch 共用「允许的网站」白名单（data: URL 除外）；单实例串行，`open` 持有会话直到 `close`。
+- **失败表现**：无 Edge/Chrome 时启动失败并给出安装指引；脚本异常返回 exceptionDetails；页面导航失败（DNS/超时）明确报错。
+
 ## web_search
 
 - **用途**：联网搜索，返回结果块。

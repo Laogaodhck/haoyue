@@ -1,0 +1,5 @@
+Run shell commands in a persistent terminal session that remembers its working directory: after `cd build`, later commands in the same session run in build/ — useful for multi-step flows like configure → build → test, or activating a venv directory then repeatedly calling its tools. Actions: exec (default; runs a command), list (shows sessions and their directories), close (forgets a session).
+
+Prefer the bash tool for one-off commands; prefer terminal when a sequence of commands shares a working directory. A session keeps only its cwd across commands — environment variables and shell options set by one command do NOT carry to the next; export per-command or write a script file and run it.
+
+Sessions are serialized: concurrent commands to the same session queue up. A command that exits the shell early (a literal `exit`) may lose the cwd read-back — the session then keeps its previous directory. The same high-risk command guard, sandbox, and audit log as bash apply.

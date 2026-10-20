@@ -2101,7 +2101,8 @@ select:focus-visible {
 .composer-region {
   z-index: 5;
   min-width: 0;
-  padding: 0 28px 12px;
+  /* 与 .conversation-content 的水平 gutter 对齐（34px），窄窗口下左右边缘一条线。 */
+  padding: 0 34px 12px;
 }
 
 .pending-message-stack {
@@ -7124,14 +7125,14 @@ select:focus-visible {
   font-weight: 500;
 }
 
-.workspace-overview-row.is-dir .workspace-overview-name::before {
-  content: '\1F4C1\00A0';
-  font-size: 11px;
+/* P0-1：目录/文件图标统一 SVG（lucide），不再用 emoji content。 */
+.workspace-overview-row-icon {
+  flex: none;
+  color: var(--text-muted);
 }
 
-.workspace-overview-row.is-file .workspace-overview-name::before {
-  content: '\1F4C4\00A0';
-  font-size: 11px;
+.workspace-overview-row.is-dir .workspace-overview-row-icon {
+  color: var(--accent);
 }
 
 .workspace-overview-name {

@@ -1,6 +1,23 @@
 <script setup lang="ts">
-import { ChevronDown, LoaderCircle, PackageOpen, RefreshCw, Search } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import {
+  Bell,
+  CalendarDays,
+  ChevronDown,
+  ClipboardList,
+  Database,
+  GitBranch,
+  GitFork,
+  Globe2,
+  LoaderCircle,
+  Mail,
+  NotebookText,
+  PackageOpen,
+  Plug,
+  RefreshCw,
+  Rss,
+  Search
+} from '@lucide/vue'
+import { computed, onMounted, ref, type Component } from 'vue'
 
 const emit = defineEmits<{
   /** 目录发生变化（安装/卸载/启停），宿主可刷新 MCP 状态。 */
@@ -36,6 +53,8 @@ const catalog = ref<ConnectorEntry[]>([])
 const catalogAvailable = ref(true)
 const loading = ref(false)
 const error = ref('')
+/** 安装结果提示（未填写的配置项：已从配置剔除，功能可能降级）。 */
+const notice = ref('')
 const query = ref('')
 /** 正在安装/卸载/启停中的连接器 id。 */
 const pending = ref<string[]>([])
@@ -43,6 +62,29 @@ const pending = ref<string[]>([])
 const expanded = ref<string | null>(null)
 const formValues = ref<Record<string, string>>({})
 const formError = ref('')
+
+/**
+ * P0-1：连接器图标统一渲染为项目锁定的 SVG 图标（@lucide/vue）。
+ * connector.json 数据层的 icon 字段是历史 emoji，仅保留兼容不再渲染；
+ * 未登记的连接器回退到 Plug 语义图标。
+ */
+const CONNECTOR_ICONS: Record<string, Component> = {
+  browser: Globe2,
+  calendar: CalendarDays,
+  clipboard: ClipboardList,
+  email: Mail,
+  git: GitBranch,
+  github: GitFork,
+  'http-api': Plug,
+  notify: Bell,
+  notion: NotebookText,
+  rss: Rss,
+  sqlite: Database
+}
+
+function connectorIcon(connector: ConnectorEntry): Component {
+  return CONNECTOR_ICONS[connector.id] ?? Plug
+}
 
 const filtered = computed(() => {
   const normalized = query.value.trim().toLocaleLowerCase()
@@ -110,12 +152,17 @@ async function install(connector: ConnectorEntry): Promise<void> {
 
   pending.value = [...pending.value, connector.id]
   error.value = ''
+  notice.value = ''
   formError.value = ''
   try {
     const withValues = expanded.value === connector.id
-    const payload = await requestJson<{ connectors: ConnectorEntry[] }>('connectors.install',
+    const payload = await requestJson<{ connectors: ConnectorEntry[], unfilledInputs?: string[] }>(
+      'connectors.install',
       withValues ? { id: connector.id, values: { ...formValues.value } } : { id: connector.id })
     catalog.value = payload.connectors
+    notice.value = payload.unfilledInputs?.length
+      ? `未填写的配置项：${payload.unfilledInputs.join('、')}。相关功能可能不可用，重新安装并填写即可补齐。`
+      : ''
     expanded.value = null
     formValues.value = {}
     emit('changed')
@@ -180,6 +227,7 @@ onMounted(() => { void loadCatalog() })
     </div>
 
     <p v-if="error" class="connectors-error">{{ error }}</p>
+    <p v-if="notice" class="connectors-notice">{{ notice }}</p>
     <p v-if="!catalogAvailable && !loading" class="connectors-error">
       连接器目录不可用（缺少随包分发的 connectors/ 目录）。
     </p>
@@ -198,7 +246,9 @@ onMounted(() => { void loadCatalog() })
         <div v-for="connector in filtered" :key="connector.id" class="connector-card"
           :class="{ installed: connector.installed }">
           <div class="connector-head">
-            <span class="connector-icon" aria-hidden="true">{{ connector.icon || '🔌' }}</span>
+            <span class="connector-icon" aria-hidden="true">
+              <component :is="connectorIcon(connector)" :size="20" />
+            </span>
             <div class="connector-title">
               <strong :title="connector.id">{{ connector.name }}</strong>
               <span class="connector-status" :class="{ on: connector.installed && connector.enabled }">
@@ -323,6 +373,16 @@ onMounted(() => { void loadCatalog() })
   border-radius: 8px;
 }
 
+.connectors-notice {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  color: var(--warning, #b45309);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--warning, #b45309) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #b45309) 25%, transparent);
+  border-radius: 8px;
+}
+
 .connectors-grid-wrap {
   min-height: 0;
   overflow-y: auto;
@@ -388,7 +448,7 @@ onMounted(() => { void loadCatalog() })
   height: 38px;
   flex: none;
   place-items: center;
-  font-size: 20px;
+  color: var(--accent);
   background: var(--accent-soft);
   border-radius: 10px;
 }

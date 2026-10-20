@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, FolderOpen, LoaderCircle, RefreshCw } from '@lucide/vue'
+import { ChevronDown, FileText, Folder, FolderOpen, LoaderCircle, RefreshCw } from '@lucide/vue'
 import { onMounted, ref } from 'vue'
 import { summarizeWorkspaceFiles, type WorkspaceDirEntry } from '../workspace-overview'
 
@@ -62,6 +62,8 @@ onMounted(() => { void refresh() })
     <ul v-if="open && entries.length" class="workspace-overview-list">
       <li v-for="entry in entries" :key="entry.name" class="workspace-overview-row"
         :class="`is-${entry.kind}`">
+        <Folder v-if="entry.kind === 'dir'" :size="14" class="workspace-overview-row-icon" aria-hidden="true" />
+        <FileText v-else :size="14" class="workspace-overview-row-icon" aria-hidden="true" />
         <span class="workspace-overview-name" :title="entry.name">{{ entry.name }}</span>
         <small v-if="entry.kind === 'dir'" class="workspace-overview-meta">
           {{ entry.fileCount }} 个文件

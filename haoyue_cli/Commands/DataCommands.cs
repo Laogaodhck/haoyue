@@ -374,6 +374,12 @@ public static class ExpertCommands
         });
 
         command.Add(list); command.Add(show);
+        // 裸 `haoyue expert` 与 `skill` / `connectors` 保持一致：默认动作即 list。
+        command.SetAction(_ =>
+        {
+            RenderExperts(AnsiConsole.Console, ExpertCatalog.Entries);
+            return 0;
+        });
         return command;
     }
 

@@ -391,32 +391,35 @@ public static class ConnectorCommands
                 values[raw[..eq]] = raw[(eq + 1)..];
             }
 
-            // 缺失的必填项交互询问（secret 项回显为 *）。
+            // 缺失的必填项交互询问（secret 项回显为 *）；可选 secret 只在安装时可填，也一并询问。
+            // 非交互（管道/脚本）下不问可选项，免得 `--set` 批处理卡在提示上。
+            var interactive = !Console.IsInputRedirected;
             foreach (var input in package.Inputs ?? [])
             {
                 if (values.ContainsKey(input.Key) || string.Equals(input.Key, "LOCAL_SERVER", StringComparison.Ordinal))
                     continue;
-                if (!input.Required && input.Default is not null)
+                var required = input.Required && string.IsNullOrWhiteSpace(input.Default);
+                if (!required && !(interactive && input.Secret && string.IsNullOrWhiteSpace(input.Default)))
                     continue;
-                if (!input.Required)
-                    continue;
-                var prompt = new TextPrompt<string>($"{input.Title}（{input.Key}）")
+                var prompt = new TextPrompt<string>(
+                    required ? $"{input.Title}（{input.Key}）" : $"{input.Title}（{input.Key}，可选，回车跳过）")
                     .AllowEmpty();
                 if (input.Secret)
                     prompt.Secret('*');
                 var answer = AnsiConsole.Prompt(prompt);
                 if (!string.IsNullOrWhiteSpace(answer))
                     values[input.Key] = answer;
-                else if (input.Required)
+                else if (required)
                 {
                     AnsiConsole.MarkupLine("[red]必填项未提供，安装已取消。[/]");
                     return 1;
                 }
             }
 
+            Haoyue.Runtime.Connectors.ConnectorInstallResult result;
             try
             {
-                Haoyue.Runtime.Connectors.ConnectorInstaller.Install(rt.ConfigStore, package, values);
+                result = Haoyue.Runtime.Connectors.ConnectorInstaller.Install(rt.ConfigStore, package, values);
             }
             catch (Haoyue.Runtime.Connectors.ConnectorException ex)
             {
@@ -425,6 +428,10 @@ public static class ConnectorCommands
             }
             AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(package.Name)} 已安装[/]（mcp.servers.{Markup.Escape(package.Id)}）。" +
                 "重启会话或运行 [cyan]haoyue mcp test[/] 生效。");
+            if (!result.IsComplete)
+                AnsiConsole.MarkupLine($"[yellow]⚠ 未填写的配置项：{Markup.Escape(string.Join("、", result.UnfilledInputs))}[/]" +
+                    $"（已从配置中剔除，未写入 ${Markup.Escape("{KEY}")} 字面量）。" +
+                    $"补齐后重新安装：haoyue connectors install {Markup.Escape(package.Id)} --set KEY=value");
             return 0;
         });
 

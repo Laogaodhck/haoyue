@@ -139,6 +139,86 @@ public sealed class ConnectorCatalogTests : IDisposable
         Assert.False(store.Config.Mcp.Servers.ContainsKey("needs-token"), "失败安装不得写入");
     }
 
+    /// <summary>
+    /// L-4：可选配置未提供时，占位符不得以 <c>${KEY}</c> 字面量落盘（旧行为会把字面量交给子进程），
+    /// 并且未填项要随安装结果回报给调用方。
+    /// </summary>
+    [Fact]
+    public void Install_OptionalInputsMissing_DropsPlaceholdersAndReports()
+    {
+        var package = new ConnectorPackage
+        {
+            SchemaVersion = 1,
+            Id = "optional-conn",
+            Name = "可选配置",
+            Description = "测试",
+            Category = "data",
+            Server = new McpServerConfig
+            {
+                Transport = "stdio",
+                Command = "npx",
+                Args = ["-y", "@example/server", "--host", "${SMTP_HOST}", "--user", "${SMTP_USER}", "--flag"],
+                Env = new Dictionary<string, string>
+                {
+                    ["SMTP_HOST"] = "${SMTP_HOST}",
+                    ["SMTP_PORT"] = "${SMTP_PORT}",
+                    ["STATIC"] = "fixed",
+                },
+            },
+            Inputs =
+            [
+                new ConnectorInput { Key = "SMTP_HOST", Title = "主机", Required = true },
+                new ConnectorInput { Key = "SMTP_USER", Title = "用户", Secret = true },
+                new ConnectorInput { Key = "SMTP_PORT", Title = "端口" },
+            ],
+        };
+
+        var store = NewStore();
+        var result = ConnectorInstaller.Install(store, package, new Dictionary<string, string>
+        {
+            ["SMTP_HOST"] = "smtp.example.com",
+        });
+
+        var installed = store.Config.Mcp.Servers["optional-conn"];
+        var env = installed.Env!;
+        // 已提供的占位符照常替换。
+        Assert.Equal("smtp.example.com", env["SMTP_HOST"]);
+        Assert.Equal("fixed", env["STATIC"]);
+        // 未提供的 env 键整键剔除，不留 ${...} 字面量。
+        Assert.False(env.ContainsKey("SMTP_PORT"), "未填写的可选 env 键必须剔除");
+        Assert.DoesNotContain("${", string.Join('|', env.Values));
+        // 未提供的参数连同紧邻的 --user 开关一起丢弃，不留悬空开关。
+        Assert.Equal(new[] { "-y", "@example/server", "--host", "smtp.example.com", "--flag" }, installed.Args);
+        // 未填项按 key 排序回报，并带可读标题。
+        Assert.Equal(new[] { "SMTP_PORT（端口）", "SMTP_USER（用户）" }, result.UnfilledInputs);
+        Assert.False(result.IsComplete);
+
+        var reloaded = NewStore();
+        Assert.DoesNotContain("${", reloaded.Config.Mcp.Servers["optional-conn"].Args is { } args
+            ? string.Join('|', args) : string.Empty);
+    }
+
+    /// <summary>L-4：命令/URL 是启动必需项，占位符取不到值时抛可读错误且不写配置。</summary>
+    [Fact]
+    public void Install_UnresolvedCommandPlaceholder_ThrowsWithoutWriting()
+    {
+        var package = new ConnectorPackage
+        {
+            SchemaVersion = 1,
+            Id = "needs-binary",
+            Name = "需要路径",
+            Description = "测试",
+            Category = "dev",
+            Server = new McpServerConfig { Transport = "stdio", Command = "${BIN_PATH}" },
+            Inputs = [new ConnectorInput { Key = "BIN_PATH", Title = "可执行文件" }],
+        };
+
+        var store = NewStore();
+        var ex = Assert.Throws<ConnectorException>(() => ConnectorInstaller.Install(store, package));
+        Assert.Contains("BIN_PATH", ex.Message);
+        Assert.False(store.Config.Mcp.Servers.ContainsKey("needs-binary"), "失败的安装不得写入配置");
+    }
+
     /// <summary>卸载闭环：安装后可卸载，重复卸载返回 false。</summary>
     [Fact]
     public void Uninstall_RemovesAndReports()
@@ -244,13 +324,47 @@ public sealed class ConnectorIntegrityTests : IDisposable
         File.WriteAllText(manifest, """{"schemaVersion":1,"id":"someconn","name":"x","description":"x","category":"x"}""");
         var server = Path.Combine(root, "servers", "haoyue_local_server.py");
         File.WriteAllText(server, "print('tampered')");
-        // 清单只覆盖 server：manifest 未纳入则放行，server 哈希故意写错 → 必须拦截。
-        using (var stream = File.OpenRead(server))
-            File.WriteAllLines(Path.Combine(root, "SHA256SUMS"),
-                [$"{new string('a', 64)}  servers/haoyue_local_server.py"]);
+        // 清单登记该包（哈希正确）但把内置服务器哈希写错 → 必须拦截服务器。
+        File.WriteAllLines(Path.Combine(root, "SHA256SUMS"),
+        [
+            $"{Sha256Of(manifest)}  someconn/connector.json",
+            $"{new string('a', 64)}  servers/haoyue_local_server.py",
+        ]);
 
         var ex = Assert.Throws<ConnectorException>(() => ConnectorIntegrity.Verify(manifest));
         Assert.Contains("内置本地 MCP 服务器", ex.Message);
+    }
+
+    /// <summary>
+    /// L-7：清单是「已登记包」白名单。受管目录里多出一个未登记的连接器包时默认拒绝，
+    /// 只有显式设置 HAOYUE_CONNECTORS_ALLOW_UNSIGNED=1 才放行自建包。
+    /// </summary>
+    [Fact]
+    public void Verify_UnlistedPackage_ThrowsUnlessExplicitlyAllowed()
+    {
+        var root = Path.Combine(_dir, "connectors");
+        Directory.CreateDirectory(Path.Combine(root, "known"));
+        Directory.CreateDirectory(Path.Combine(root, "rogue"));
+        var known = Path.Combine(root, "known", "connector.json");
+        var rogue = Path.Combine(root, "rogue", "connector.json");
+        File.WriteAllText(known, """{"schemaVersion":1,"id":"known","name":"x","description":"x","category":"x"}""");
+        File.WriteAllText(rogue, """{"schemaVersion":1,"id":"rogue","name":"x","description":"x","category":"x"}""");
+        File.WriteAllLines(Path.Combine(root, "SHA256SUMS"), [$"{Sha256Of(known)}  known/connector.json"]);
+
+        ConnectorIntegrity.Verify(known); // 已登记包放行
+
+        var ex = Assert.Throws<ConnectorException>(() => ConnectorIntegrity.Verify(rogue));
+        Assert.Contains("未登记", ex.Message);
+
+        Environment.SetEnvironmentVariable(ConnectorIntegrity.AllowUnsignedEnvVar, "1");
+        try
+        {
+            ConnectorIntegrity.Verify(rogue); // 显式放行自建包
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ConnectorIntegrity.AllowUnsignedEnvVar, null);
+        }
     }
 
     /// <summary>目录无 SHA256SUMS（第三方/自定义目录）时跳过，不阻断安装。</summary>
@@ -262,6 +376,12 @@ public sealed class ConnectorIntegrityTests : IDisposable
         var manifest = Path.Combine(root, "third", "connector.json");
         File.WriteAllText(manifest, """{"schemaVersion":1,"id":"third","name":"x","description":"x","category":"x"}""");
         ConnectorIntegrity.Verify(manifest); // 不抛即通过
+    }
+
+    private static string Sha256Of(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
     }
 
     private static string FindRepoRoot()
@@ -342,6 +462,58 @@ public sealed class ConnectorDaemonApiTests : IDisposable
                 admin.UninstallConnectorAsync(new JsonObject { ["id"] = "clipboard" }, CancellationToken.None));
             await Assert.ThrowsAsync<Haoyue.Runtime.Daemon.DaemonRequestException>(() =>
                 admin.InstallConnectorAsync(new JsonObject { ["id"] = "no-such-connector" }, CancellationToken.None));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HAOYUE_CONNECTORS_DIR", null);
+        }
+    }
+
+    /// <summary>
+    /// L-4：可选配置未填时，daemon 安装回包必须列出「未填写项」，且配置里不得残留
+    /// <c>${KEY}</c> 字面量（桌面端据此提示功能降级）。
+    /// </summary>
+    [Fact]
+    public async Task Install_OptionalSecretsMissing_ReportedInPayloadAndNotPersisted()
+    {
+        var repoRoot = FindRepoRoot();
+        Environment.SetEnvironmentVariable("HAOYUE_CONNECTORS_DIR", Path.Combine(repoRoot, "connectors"));
+        try
+        {
+            var store = new ConfigStore(
+                Path.Combine(_dir, "config.json"), Path.Combine(_dir, "state.json"));
+            var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_dir, "global"));
+            await using var runtime = HaoyueRuntime.CreateIsolated(globalWorkspace, configureServices: services =>
+            {
+                services.AddSingleton<IConfigStore>(store);
+                services.AddSingleton(new HaoyueDatabase(Path.Combine(_dir, "state.db")));
+                services.AddSingleton<ILlmHttpFactory>(new LlmHttpFactory());
+                services.AddSingleton(new CircuitBreaker(store.Config.Routing.Retry));
+            });
+            var admin = new Haoyue.Runtime.Daemon.DaemonAdminApi(runtime, globalWorkspace, new FileLockCoordinator());
+
+            // email 的 SMTP_USER / SMTP_PASSWORD 是可选 secret：不填则从配置剔除并回报。
+            var payload = JsonNode.Parse(await admin.InstallConnectorAsync(new JsonObject
+            {
+                ["id"] = "email",
+                ["values"] = new JsonObject
+                {
+                    ["IMAP_HOST"] = "imap.example.com",
+                    ["IMAP_USER"] = "user@example.com",
+                    ["IMAP_PASSWORD"] = "imap-secret",
+                    ["SMTP_HOST"] = "smtp.example.com",
+                },
+            }, CancellationToken.None))!.AsObject();
+
+            var unfilled = payload["unfilledInputs"]!.AsArray()
+                .Select(node => node!.GetValue<string>()).ToArray();
+            Assert.Contains(unfilled, key => key.StartsWith("SMTP_USER", StringComparison.Ordinal));
+            Assert.Contains(unfilled, key => key.StartsWith("SMTP_PASSWORD", StringComparison.Ordinal));
+
+            var env = store.Config.Mcp.Servers["email"].Env!;
+            Assert.DoesNotContain("${", string.Join('|', env.Values));
+            Assert.False(env.ContainsKey("SMTP_USER"), "未填写的可选 env 键必须剔除");
+            Assert.Equal("993", env["IMAP_PORT"]); // 有默认值的不受影响
         }
         finally
         {

@@ -115,7 +115,8 @@ public static class ConnectorCatalog
 /// </summary>
 public static class ConnectorInstaller
 {
-    public static void Install(IConfigStore configStore, ConnectorPackage package, IReadOnlyDictionary<string, string>? values = null)
+    public static ConnectorInstallResult Install(
+        IConfigStore configStore, ConnectorPackage package, IReadOnlyDictionary<string, string>? values = null)
     {
         // 供应链完整性（P2）：安装前校验清单与内置本地服务器未被篡改。
         var manifest = ConnectorCatalog.ResolveRoot() is { } root
@@ -124,11 +125,12 @@ public static class ConnectorInstaller
         if (manifest is not null && File.Exists(manifest))
             ConnectorIntegrity.Verify(manifest);
 
-        var server = Instantiate(package, values ?? new Dictionary<string, string>());
+        var result = InstantiateDetailed(package, values ?? new Dictionary<string, string>());
 
         var servers = configStore.Config.Mcp.Servers;
-        servers[package.Id] = server;
+        servers[package.Id] = result.Server;
         configStore.Save();
+        return result;
     }
 
     public static bool Uninstall(IConfigStore configStore, string id)
@@ -144,12 +146,21 @@ public static class ConnectorInstaller
         configStore.Config.Mcp.Servers.ContainsKey(id);
 
     /// <summary>用 inputs 值实例化 server 配置：替换 ${KEY} 占位符并处理加密项。</summary>
-    public static McpServerConfig Instantiate(ConnectorPackage package, IReadOnlyDictionary<string, string> values)
+    public static McpServerConfig Instantiate(ConnectorPackage package, IReadOnlyDictionary<string, string> values) =>
+        InstantiateDetailed(package, values).Server;
+
+    /// <summary>
+    /// 用 inputs 值实例化 server 配置，并回报**没有取到值**的占位符键。
+    /// 解析不到的占位符绝不落盘（旧行为会把 <c>${KEY}</c> 字面量写进配置交给子进程）：
+    /// env/header 键直接删除、args 项整项丢弃；命令与 URL 是启动必需项，缺值直接抛可读错误。
+    /// </summary>
+    public static ConnectorInstallResult InstantiateDetailed(
+        ConnectorPackage package, IReadOnlyDictionary<string, string> values)
     {
-        // 1. 校验必填项。
+        // 1. 校验必填项（空白值视同未提供）。
         var missing = (package.Inputs ?? [])
             .Where(input => input.Required
-                && !values.ContainsKey(input.Key)
+                && !(values.TryGetValue(input.Key, out var provided) && !string.IsNullOrWhiteSpace(provided))
                 && string.IsNullOrWhiteSpace(input.Default))
             .Select(input => $"{input.Key}（{input.Title}）")
             .ToList();
@@ -180,39 +191,91 @@ public static class ConnectorInstaller
             }
         }
 
-        // 3. 深拷贝 server 配置并替换占位符；secret 项走 SecretResolver.Encrypt。
+        // 3. 深拷贝 server 配置并替换占位符；未解析的键记入 unfilled 并从配置中剔除。
+        var unfilled = new SortedSet<string>(StringComparer.Ordinal);
         var server = Clone(package.Server);
-        server.Command = Substitute(server.Command);
-        server.Url = Substitute(server.Url);
+
+        server.Command = ResolveOrDrop(package.Server.Command, secret: false);
+        if (package.Server.Command is not null && server.Command is null)
+            throw UnresolvedPlaceholders(package, unfilled);
+        server.Url = ResolveOrDrop(package.Server.Url, secret: false);
+        if (package.Server.Url is not null && server.Url is null)
+            throw UnresolvedPlaceholders(package, unfilled);
+
         if (server.Args is { } args)
-            server.Args = [.. args.Select(a => Substitute(a) ?? string.Empty)];
-        if (server.Env is { } env)
-            server.Env = env.ToDictionary(
-                pair => pair.Key, pair => SubstituteSecret(pair.Value));
-        if (server.Headers is { } headers)
-            server.Headers = headers.ToDictionary(
-                pair => pair.Key, pair => SubstituteSecret(pair.Value));
+        {
+            var keptArgs = new List<string>(args.Count);
+            foreach (var arg in args)
+            {
+                var value = ResolveOrDrop(arg, secret: false);
+                if (value is null)
+                {
+                    // 参数值缺失时连同紧邻的选项开关一起丢弃，避免留下 `--repository` 这类悬空开关。
+                    if (keptArgs.Count > 0 && IsLoneOption(keptArgs[^1])) keptArgs.RemoveAt(keptArgs.Count - 1);
+                    continue;
+                }
+                keptArgs.Add(value);
+            }
+            server.Args = keptArgs;
+        }
+        server.Env = ResolveMap(server.Env);
+        server.Headers = ResolveMap(server.Headers);
 
         server.MutatingTools = package.MutatingTools is { Count: > 0 } ? [.. package.MutatingTools] : null;
         server.ReadOnlyTools = package.ReadOnlyTools is { Count: > 0 } ? [.. package.ReadOnlyTools] : null;
         server.TrustReadOnly = package.TrustReadOnly;
-        return server;
+        return new ConnectorInstallResult(
+            package.Id, server, [.. unfilled.Select(key => InputLabel(package, key))]);
 
-        string? Substitute(string? template) =>
-            template is null ? null : s_placeholder.Replace(template, match =>
-                resolved.TryGetValue(match.Groups[1].Value, out var v) ? v : match.Value);
+        static string InputLabel(ConnectorPackage package, string key) =>
+            (package.Inputs ?? []).FirstOrDefault(input => input.Key == key) is { Title.Length: > 0 } input
+                ? $"{key}（{input.Title}）"
+                : key;
 
-        string SubstituteSecret(string template) =>
-            s_placeholder.Replace(template, match =>
+        /// <summary>形如 <c>--repository</c> / <c>-y</c> 的独立开关（不带 = 值）。</summary>
+        static bool IsLoneOption(string arg) =>
+            arg.Length > 1 && arg[0] == '-' && !arg.Contains('=');
+
+        static ConnectorException UnresolvedPlaceholders(ConnectorPackage package, IEnumerable<string> keys) =>
+            new($"连接器 {package.Id} 的启动配置引用了未提供的配置项：" +
+                string.Join("、", keys.Select(key => InputLabel(package, key))) +
+                "。请通过 --set KEY=value 或安装表单补齐后重试。");
+
+        Dictionary<string, string>? ResolveMap(Dictionary<string, string>? source)
+        {
+            if (source is null) return null;
+            var kept = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (key, template) in source)
+            {
+                var value = ResolveOrDrop(template, secret: true);
+                if (value is not null) kept[key] = value;
+            }
+            return kept.Count > 0 ? kept : null;
+        }
+
+        /// <summary>替换占位符；任一处取不到值则返回 null（调用方据此丢弃该键/参数）。</summary>
+        string? ResolveOrDrop(string? template, bool secret)
+        {
+            if (template is null) return null;
+            var missed = new List<string>();
+            var replaced = s_placeholder.Replace(template, match =>
             {
                 var key = match.Groups[1].Value;
-                if (!resolved.TryGetValue(key, out var value))
+                if (!resolved.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
+                {
+                    missed.Add(key);
                     return match.Value;
+                }
                 var input = (package.Inputs ?? []).FirstOrDefault(i => i.Key == key);
-                return input is { Secret: true }
+                return secret && input is { Secret: true }
                     ? SecretResolver.Encrypt($"connector:{package.Id}:{key}", value)
                     : value;
             });
+            if (missed.Count == 0) return replaced;
+            foreach (var key in missed)
+                unfilled.Add(key);
+            return null;
+        }
     }
 
     private static readonly System.Text.RegularExpressions.Regex s_placeholder =
@@ -229,6 +292,16 @@ public static class ConnectorInstaller
         ConnectTimeoutSeconds = source.ConnectTimeoutSeconds,
         Enabled = source.Enabled,
     };
+}
+
+/// <summary>
+/// 一次连接器安装的结果：已写入 mcp.servers 的配置 + 没有取到值、因此被剔除的配置项
+/// （<see cref="UnfilledInputs"/> 为空表示安装完整；非空时相关功能可能降级，需在 UI 明确提示）。
+/// </summary>
+public sealed record ConnectorInstallResult(
+    string Id, McpServerConfig Server, IReadOnlyList<string> UnfilledInputs)
+{
+    public bool IsComplete => UnfilledInputs.Count == 0;
 }
 
 /// <summary>连接器安装/运行期错误（可读消息，直接面向用户）。</summary>

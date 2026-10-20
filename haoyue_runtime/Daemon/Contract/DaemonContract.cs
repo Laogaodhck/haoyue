@@ -12,7 +12,7 @@ public enum DaemonErrorCode
     RequestFailed,
     /// <summary>请求行不是合法 JSON，或 id/method 字段类型错误。</summary>
     InvalidRequest,
-    /// <summary>方法名不在契约目录中。</summary>
+    /// <summary>方法名不在契约目录中（客户端调用了服务端不认识的方法，通常是版本不匹配）。</summary>
     UnknownMethod,
     /// <summary>参数缺失、类型错误或取值非法。</summary>
     InvalidParams,
@@ -24,7 +24,10 @@ public enum DaemonErrorCode
     Unauthorized,
     /// <summary>客户端声明的协议版本与 daemon 不兼容（主版本号不一致）。</summary>
     VersionMismatch,
-    /// <summary>服务端未预期的异常。</summary>
+    /// <summary>
+    /// 方法已命中契约、但执行期抛错（服务端实现故障）。details.method 指明失败的方法，
+    /// 与「方法不存在」的 <see cref="UnknownMethod"/> 严格区分。
+    /// </summary>
     InternalError,
 }
 
@@ -1609,7 +1612,7 @@ public static class DaemonContract
                     ("event", SString("事件名，终态见 methods[].terminalEvents"), true),
                     ("data", SString("事件数据（error 时为人类可读消息）"), true),
                     ("sessionId", SString("流式事件归属的会话 id"), false),
-                    ("details", SString("结构化元数据；error 事件必含 code"), false)),
+                    ("details", SString("结构化元数据；error 事件必含 code，internalError 时另含 method 指明失败的方法"), false)),
             },
             ["errorCodes"] = ErrorCodesJson(),
             ["events"] = new JsonObject

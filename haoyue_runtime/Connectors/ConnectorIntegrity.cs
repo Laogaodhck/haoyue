@@ -14,6 +14,12 @@ public static class ConnectorIntegrity
     public const string SumsFileName = "SHA256SUMS";
 
     /// <summary>
+    /// 显式放行「未登记在清单里的连接器包」的开关（值 <c>1</c> / <c>true</c>）。
+    /// 只有自建/第三方连接器目录才需要它；分发目录默认按白名单处理。
+    /// </summary>
+    public const string AllowUnsignedEnvVar = "HAOYUE_CONNECTORS_ALLOW_UNSIGNED";
+
+    /// <summary>
     /// 校验 <paramref name="manifestPath"/>（connector.json）与内置本地服务器的内容
     /// 哈希与 SHA256SUMS 一致；不一致抛 <see cref="ConnectorException"/>。
     /// </summary>
@@ -39,12 +45,32 @@ public static class ConnectorIntegrity
         }
 
         var relative = Path.GetRelativePath(root, manifestPath).Replace('\\', '/');
+        // 清单同时是「已登记连接器包」的白名单：受管目录里凭空多出一个包（自带
+        // connector.json）时，旧逻辑因「查无条目 → 放行」而完全失效，这里改为默认拒绝。
+        var entry = entries.FirstOrDefault(e => string.Equals(e.Path, relative, StringComparison.OrdinalIgnoreCase));
+        if (entry.Path is null)
+        {
+            if (UnsignedAllowed())
+                return;
+            throw new ConnectorException(
+                $"连接器 {Path.GetFileName(packageDir)} 未登记在完整性清单（{SumsFileName}）中：{relative}。" +
+                "连接器目录可能被第三方改动；如确属自建连接器，请设置 " +
+                $"{AllowUnsignedEnvVar}=1 后重试，或运行 python tools/generate_connector_checksums.py 重新生成清单。");
+        }
+
         VerifyEntry(entries, relative, manifestPath, "连接器清单");
 
         // 内置本地服务器是执行面，若存在则一并校验。
         var bundledServer = ConnectorCatalog.ResolveBundledServer(root);
         if (bundledServer is not null)
             VerifyEntry(entries, ConnectorCatalog.BundledServerRelativePath, bundledServer, "内置本地 MCP 服务器");
+    }
+
+    private static bool UnsignedAllowed()
+    {
+        var raw = Environment.GetEnvironmentVariable(AllowUnsignedEnvVar);
+        return string.Equals(raw, "1", StringComparison.Ordinal)
+            || string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void VerifyEntry(

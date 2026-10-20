@@ -41,6 +41,16 @@ haoyue mcp test                        # 验证连接与工具发现
 
 安装即写入全局配置 `mcp.servers.<id>`；重启会话或重连 MCP 后工具以 `mcp__<id>__<tool>` 形式进入工具列表。发现 → 可用只需：`list` → `install`（≤2 次交互）。
 
+占位符语义：`${KEY}` 取不到值时**绝不落盘**——`env`/`headers` 里的键整键删除，`args` 里的参数连同紧邻的 `--flag` 一起丢弃；`command`/`url` 属启动必需项，缺值直接报可读错误。安装结果会列出未填写的键（CLI 打印黄字、桌面弹出提示），补齐后重新安装即可。
+
+## 完整性校验（供应链）
+
+`connectors/SHA256SUMS` 覆盖 12 个文件（11 个 `connector.json` + 内置本地服务器），由 `python tools/generate_connector_checksums.py` 生成、CI 以 `--check` 锁定；运行时 `ConnectorIntegrity.Verify` 在安装前比对同一清单。
+
+- 清单同时是**已登记包白名单**：受管目录里凭空多出一个连接器包（自带 `connector.json`）时默认拒绝安装——旧逻辑「查无条目即放行」等于给任意新增包开口子。
+- 自建/第三方连接器目录：不提供 `SHA256SUMS` 时完全跳过校验；已提供清单但确实要装未登记包时，显式设置 `HAOYUE_CONNECTORS_ALLOW_UNSIGNED=1`。
+- 改动任一 `connector.json` 或 `connectors/servers/*.py` 后必须重跑生成脚本，否则 `ConnectorIntegrityTests.RepoSums_MatchDirectoryContents` 与 CI 的 `connectors` 作业会红。
+
 ## 首批目录（11 个）
 
 | ID | 名称 | 类型 | 依赖 |

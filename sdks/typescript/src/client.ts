@@ -1040,9 +1040,18 @@ export class DaemonClient {
       return;
     }
     if (event.event === "error") {
-      const { code } = this.parseDetails(event);
+      const { code, payload } = this.parseDetails(event);
       this.pending.delete(event.id);
-      pending.reject(new DaemonError(code ?? "requestFailed", event.data));
+      // internalError 的 details 携带 method（服务端实现故障）；unknownMethod 则没有，
+      // 二者语义不同，调用方不应再对 message 做字符串匹配。
+      const failedMethod = (payload as { method?: unknown } | undefined)?.method;
+      pending.reject(
+        new DaemonError(
+          code ?? "requestFailed",
+          event.data,
+          typeof failedMethod === "string" ? failedMethod : undefined,
+        ),
+      );
       return;
     }
     // 已缓冲的流式事件先吐出（按到达顺序）。

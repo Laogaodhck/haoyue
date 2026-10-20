@@ -2195,6 +2195,22 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ImplementedMethodThrowing_InternalErrorCarriesMethodName()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        // params.model 传数字 → GetValue<string>() 抛 InvalidOperationException：
+        // 方法存在但执行失败，必须是 internalError（而不是 unknownMethod），并带方法名。
+        await connection.SendAsync(1, "model.switch", new JsonObject { ["model"] = 42 });
+        var error = await connection.ReadUntilAsync(
+            r => r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "error");
+        Assert.Equal("internalError", error["details"]!["code"]!.GetValue<string>());
+        Assert.Equal("model.switch", error["details"]!["method"]!.GetValue<string>());
+        Assert.StartsWith("model.switch failed:", error["data"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Chat_MissingParams_ErrorCarriesInvalidParamsCode()
     {
         var connection = await StartServerAsync(

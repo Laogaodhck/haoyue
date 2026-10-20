@@ -1413,16 +1413,21 @@ internal sealed partial class DaemonAdminApi(
                     values[key] = text;
         }
 
+        ConnectorInstallResult installed;
         try
         {
-            ConnectorInstaller.Install(runtime.ConfigStore, package, values);
+            installed = ConnectorInstaller.Install(runtime.ConfigStore, package, values);
         }
         catch (ConnectorException ex)
         {
             throw new DaemonRequestException(ex.Message);
         }
         ReconnectMcpInBackground();
-        return Task.FromResult(ListConnectors());
+        // 未填写项随安装结果回给客户端：配置里已剔除对应键，UI 必须提示「功能可能不可用」。
+        var payload = JsonNode.Parse(ListConnectors())!.AsObject();
+        payload["unfilledInputs"] = new JsonArray(
+            [.. installed.UnfilledInputs.Select(key => (JsonNode)key)]);
+        return Task.FromResult(payload.ToJsonString());
     }
 
     /// <summary>卸载连接器：从全局配置移除该 MCP 服务器并后台重连。</summary>

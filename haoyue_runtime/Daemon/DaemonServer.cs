@@ -543,7 +543,15 @@ public sealed class DaemonServer : IAsyncDisposable
                     }
                     catch (Exception ex)
                     {
-                        await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Server error: {ex.Message}", context.ConnectionCt, code: DaemonErrorCode.InternalError).ConfigureAwait(false);
+                        // 方法名命中契约、但执行期抛错：固定回 internalError，并在 details.method
+                        // 带上方法名。客户端据此区分「版本不匹配（unknownMethod）」与「实现故障」，
+                        // 不再只能对 data 文本做字符串匹配。
+                        await WriteAsync(context.Writer, context.WriterGate, id, "error", FailureText(method, ex), context.ConnectionCt,
+                            details: new JsonObject
+                            {
+                                ["code"] = DaemonErrorCode.InternalError.ToWire(),
+                                ["method"] = method,
+                            }).ConfigureAwait(false);
                     }
                 }, ct);
             }
@@ -2942,21 +2950,22 @@ public sealed class DaemonServer : IAsyncDisposable
         {
             await WriteAsync(writer, writerGate, id, "error", $"Invalid request: {ex.Message}", ct, code: DaemonErrorCode.InvalidRequest).ConfigureAwait(false);
         }
-        catch (Exception ex)
-        {
-            // 内部错误附带异常类型与堆栈：前端「技术详情」直接可定位，而不是只有一句
-            // 「Object reference not set...」无从查起。DaemonRequestException 是面向用户
-            // 的受控错误，保持纯消息。
-            var detail = ex.StackTrace is { Length: > 0 } stack
-                ? $"{ex.GetType().FullName}: {ex.Message}\n{stack}"
-                : ex.Message;
-            await WriteAsync(writer, writerGate, id, "error", detail, ct, code: DaemonErrorCode.InternalError).ConfigureAwait(false);
-        }
+        // 其余异常直接上抛给分发层：由它统一回 internalError 并带上方法名，
+        // 避免「同一个故障在两条路径上产出两种错误信封」。
         finally
         {
             if (exclusive) _adminGate.Release();
         }
     }
+
+    /// <summary>
+    /// 内部错误的 data 文本：方法名 + 异常类型 + 消息 + 堆栈。前端「技术详情」
+    /// 直接可定位，而不是只有一句「Object reference not set...」无从查起。
+    /// </summary>
+    private static string FailureText(string method, Exception ex) =>
+        ex.StackTrace is { Length: > 0 } stack
+            ? $"{method} failed: {ex.GetType().FullName}: {ex.Message}\n{stack}"
+            : $"{method} failed: {ex.GetType().Name}: {ex.Message}";
 
     private static JsonObject Params(JsonObject request) =>
         request["params"] as JsonObject ?? new JsonObject();

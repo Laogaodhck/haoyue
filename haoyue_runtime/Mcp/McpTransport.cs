@@ -28,6 +28,10 @@ public sealed class StdioMcpTransport(
 
     private readonly Channel<JsonObject> _incoming = Channel.CreateUnbounded<JsonObject>();
     private readonly object _stderrGate = new();
+    // 写入互斥：Agent 会把只读工具批量并行执行（最多 4 路），同一 MCP 服务器的多个
+    // 调用会同时走到这里。StreamWriter 不是线程安全的，两帧交错写进同一条管道会让
+    // 服务器收到半行 JSON，整条连接随后失步——必须一帧一帧写。
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly Queue<string> _stderrLines = new();
     private bool _killRequested;
     private Process? _process;
@@ -216,8 +220,17 @@ public sealed class StdioMcpTransport(
     public async Task SendAsync(JsonObject message, CancellationToken ct)
     {
         if (_process is null) throw new InvalidOperationException("Transport not started.");
-        await _process.StandardInput.WriteLineAsync(message.ToJsonString().AsMemory(), ct).ConfigureAwait(false);
-        await _process.StandardInput.FlushAsync(ct).ConfigureAwait(false);
+        // 单帧原子写：并发调用（只读工具并行批次）在这里排队，避免 JSON 行交错。
+        await _writeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _process.StandardInput.WriteLineAsync(message.ToJsonString().AsMemory(), ct).ConfigureAwait(false);
+            await _process.StandardInput.FlushAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -241,6 +254,8 @@ public sealed class StdioMcpTransport(
         {
             try { await _readLoop.ConfigureAwait(false); } catch { }
         }
+        // _writeGate 不在此释放：释放会让仍在排队的 SendAsync 抛 ObjectDisposedException，
+        // 而不是可归因的管道关闭错误；SemaphoreSlim 无等待句柄时终结器可直接回收。
     }
 }
 

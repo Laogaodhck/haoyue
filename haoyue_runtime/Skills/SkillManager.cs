@@ -85,6 +85,15 @@ public interface ISkillManager
 
     /// <summary>Clears model-declared skills (called at the start of every turn).</summary>
     void ResetTurnDeclarations();
+
+    /// <summary>
+    /// Snapshot of the skills declared via declare_skill in this turn, sorted. Agent
+    /// mixes it into the system-prompt cache key: without it the prompt composed
+    /// before the declaration keeps being reused, so the freshly declared skill body
+    /// never reaches the model and declare_skill is a no-op. Default implementation
+    /// keeps non-skill managers (tests/stubs) compiling unchanged.
+    /// </summary>
+    IReadOnlyList<string> TurnDeclaredSkills() => [];
 }
 
 /// <summary>
@@ -245,6 +254,10 @@ public sealed class SkillManager : ISkillManager
 
     /// <inheritdoc />
     public void ResetTurnDeclarations() => _turnDeclared.Clear();
+
+    /// <inheritdoc />
+    public IReadOnlyList<string> TurnDeclaredSkills() =>
+        _turnDeclared.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
 
     /// <summary>
     /// N5 stage 1: a model-visible catalog of trigger-gated skills so the agent can
@@ -471,6 +484,11 @@ public sealed class SkillManager : ISkillManager
     {
         var invalid = Path.GetInvalidFileNameChars();
         var sanitized = new string(name.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray()).Trim();
+        // 分隔符已被 invalid 过滤掉，但 "." / ".." 本身是合法文件名字符串，
+        // Path.Combine 会把它们解析成当前/上级目录——显式拒绝，别把目录逃逸
+        // 交给后续的存在性检查去兜。
+        if (sanitized.Trim('.').Length == 0)
+            return "imported-skill";
         return string.IsNullOrWhiteSpace(sanitized) ? "imported-skill" : sanitized;
     }
 

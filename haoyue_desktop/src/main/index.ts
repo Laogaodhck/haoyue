@@ -361,6 +361,18 @@ function createWindow(): void {
     if (url.startsWith('https://') || url.startsWith('http://')) void shell.openExternal(url)
     return { action: 'deny' }
   })
+  // 渲染层是单页应用，任何整页跳转都意味着一次链接误点把应用导航走（返回键都回不来，
+  // 且跳转后的页面不再是本应用）。这里拦下并交给系统浏览器，只放行开发服务器的
+  // HMR 整页刷新（同一 origin）。
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const current = mainWindow?.webContents.getURL() ?? ''
+    const sameOrigin = (() => {
+      try { return new URL(url).origin === new URL(current).origin } catch { return false }
+    })()
+    if (sameOrigin && (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1'))) return
+    event.preventDefault()
+    if (url.startsWith('https://') || url.startsWith('http://')) void shell.openExternal(url)
+  })
 
   if (is.dev && process.env.ELECTRON_RENDERER_URL)
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -510,8 +522,14 @@ function registerIpc(): void {
 
   daemon.on('event', (message) => {
     if (message.event === 'tool_start' && (message.data === 'computer' || message.data === 'computer_inspect')) {
+      // 必须带上 sessionId：daemon 的 agent.cancel 在 params 为空时会取消「本连接上
+      // 所有活跃回合」（见 DaemonServer 该分支的兜底语义），浮层「停止」会顺手杀掉
+      // 另一个会话正在跑的任务。
+      const overlaySession = message.sessionId
       showComputerOverlay(() => {
-        void daemon.request('agent.cancel').catch(() => undefined)
+        void daemon
+          .request('agent.cancel', overlaySession ? { sessionId: overlaySession } : undefined)
+          .catch(() => undefined)
       })
     } else if (message.event === 'tool_done' && (message.data?.includes('computer') || isComputerOverlayActive())) {
       scheduleHideComputerOverlay(900)

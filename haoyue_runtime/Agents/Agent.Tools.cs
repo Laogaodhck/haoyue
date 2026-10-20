@@ -112,7 +112,7 @@ public sealed partial class Agent
             // 一次性放行，避免用户为了跑一条命令去改配置文件。无审批登记簿（CLI /
             // 测试上下文）时行为与从前一致。
             if (_approvals is not null
-                && policyDecision.Rule.Equals("builtin-bash-guard", StringComparison.OrdinalIgnoreCase))
+                && string.Equals(policyDecision.Rule, "builtin-bash-guard", StringComparison.OrdinalIgnoreCase))
             {
                 events.Publish(new ApprovalRequiredEvent(
                     call.Id, tool.Name, argsSummary, policyDecision.Reason));

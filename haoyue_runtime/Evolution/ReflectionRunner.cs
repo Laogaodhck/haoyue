@@ -177,23 +177,32 @@ public sealed class ReflectionRunner
         var now = DateTimeOffset.UtcNow;
         var candidates = 0;
         var noAction = 0;
-        foreach (var report in pending)
+        if (action is EvolutionAction.NewSkill or EvolutionAction.ReviseSkill)
         {
-            if (action == EvolutionAction.NewSkill || action == EvolutionAction.ReviseSkill)
+            // 一次反思只产出一份草稿，因此这里只提升一次，再把同一个候选挂到全部待处理
+            // 缺陷上。此前是「每条缺陷各提升一次」：第一条 Directory.Move 已经把 labs 草稿
+            // 移走，第二条找不到 skill.yaml 即返回错误，RecordFailed(pending) 随后把包括
+            // 刚记为 Candidate 的那条在内的整批记录全部改写成 Failed——盘上有候选目录、
+            // 账本却是全失败，且这批指纹再也不会被重试。
+            var promoted = PromoteCandidate(skillName, pending, sessionId, summary, now, out var error);
+            if (promoted is null)
             {
-                var promoted = PromoteCandidate(skillName, report, sessionId, summary, now, out var error);
-                if (promoted is null)
-                {
-                    RecordFailed(pending, sessionId, error ?? "candidate promotion failed without an error message");
-                    Publish(sessionId, 0, 0, skipped, pending.Count, error);
-                    return new ReflectionRunResult(0, 0, 0, skipped, pending.Count, sessionId, error);
-                }
+                RecordFailed(pending, sessionId, error ?? "candidate promotion failed without an error message");
+                Publish(sessionId, 0, 0, skipped, pending.Count, error);
+                return new ReflectionRunResult(0, 0, 0, skipped, pending.Count, sessionId, error);
+            }
+
+            foreach (var report in pending)
+            {
                 _store.Record(new EvolutionRecord(
                     report.Fingerprint, report.Kind.ToString(), EvolutionStatus.Candidate,
                     promoted, sessionId, summary, now, now));
                 candidates++;
             }
-            else
+        }
+        else
+        {
+            foreach (var report in pending)
             {
                 _store.Record(new EvolutionRecord(
                     report.Fingerprint, report.Kind.ToString(), EvolutionStatus.NoAction,
@@ -416,9 +425,10 @@ public sealed class ReflectionRunner
     /// repeated candidates of the same skill never collide.
     /// </summary>
     private string? PromoteCandidate(
-        string? skillName, DefectReport report, string sessionId, string? summary, DateTimeOffset now, out string? error)
+        string? skillName, IReadOnlyList<DefectReport> reports, string sessionId, string? summary, DateTimeOffset now, out string? error)
     {
         error = null;
+        var primary = reports[0];
         if (string.IsNullOrWhiteSpace(skillName) || skillName.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_'))
         {
             error = "skillName 非法（仅允许字母数字与 - _）";
@@ -442,14 +452,18 @@ public sealed class ReflectionRunner
         if (!manifestText.Contains("always-listed", StringComparison.OrdinalIgnoreCase))
             File.AppendAllText(manifest, "\nalways-listed: false\n");
 
-        // Provenance: every candidate carries its defect origin (design: 版本号+原因描述).
+        // Provenance: every candidate carries its defect origins (design: 版本号+原因描述).
+        // 一份草稿可能同时覆盖多条缺陷，逐条记账才不会让「为什么会有这个技能」缺证据。
         var rationalePath = Path.Combine(draft, "rationale.md");
         var provenance = new StringBuilder();
         provenance.AppendLine();
         provenance.AppendLine("---");
-        provenance.AppendLine($"- 进化指纹：{report.Fingerprint}");
-        provenance.AppendLine($"- 缺陷类型：{report.Kind}（{report.Occurrences} 次）");
-        provenance.AppendLine($"- 来源会话：{report.SessionId ?? "-"}；反思会话：{sessionId}");
+        foreach (var report in reports)
+        {
+            provenance.AppendLine($"- 进化指纹：{report.Fingerprint}");
+            provenance.AppendLine($"- 缺陷类型：{report.Kind}（{report.Occurrences} 次）");
+            provenance.AppendLine($"- 来源会话：{report.SessionId ?? "-"}；反思会话：{sessionId}");
+        }
         provenance.AppendLine($"- 生成时间：{now:yyyy-MM-dd HH:mm:ss}");
         if (!string.IsNullOrEmpty(summary))
             provenance.AppendLine($"- 反思结论：{summary}");
@@ -460,7 +474,7 @@ public sealed class ReflectionRunner
         catch (IOException) { }
 
         Directory.CreateDirectory(_candidatesRoot);
-        var destination = Path.Combine(_candidatesRoot, $"{skillName}-{report.Fingerprint[..8]}");
+        var destination = Path.Combine(_candidatesRoot, $"{skillName}-{primary.Fingerprint[..8]}");
         if (Directory.Exists(destination))
         {
             error = $"候选目录已存在：{destination}";

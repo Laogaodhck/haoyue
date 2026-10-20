@@ -16,6 +16,24 @@
 - **本地构建自动同步**：`build.py` 默认将版本号 patch+1 并同步全部版本源（构建失败自动回滚）；加 `--use-current-version` 则不递增（CI 使用该模式）。
 - 查看与手动操作：`python version.py`（报告）、`current`（输出统一版本）、`set X.Y.Z`（一键同步）。
 
+## 构建后端与锁文件（维护者必读）
+
+Haoyue 用 `packages.lock.json` 锁定依赖图（`Directory.Build.props` 开启 `RestorePackagesWithLockFile`），CI 以 locked-mode 还原。**仓库基准口径固定为「无 RID + 默认 CPU 后端」**，原因是锁文件会同时记录「直接引用集合」和「RID 段」：
+
+| 构建方式 | 对锁文件的影响 |
+| --- | --- |
+| `dotnet restore Haoyue.slnx`（默认） | 与基准一致，不产生变更 |
+| `-r win-x64`（发布） | 追加 `net10.0/win-x64` 组 |
+| `-p:LlamaBackend=Cuda12` | 把 `LLamaSharp.Backend.Cuda12` 记为直接引用，`Backend.Cpu` 降为传递依赖 |
+
+因此**带 RID 或 GPU 后端的构建必然改写锁文件**。若随代码提交，CI 第一道 `dotnet restore --locked-mode` 就会 NU1004 失败。
+
+约定：
+
+- 改依赖后按基准口径重算：`dotnet restore Haoyue.slnx --force-evaluate`，一次提交到位。
+- `build.py` 在 GPU/RID 发布结束后会自动把「本次构建新造成」的锁文件漂移还原（构建前已存在的改动不会被触碰）；手工 `dotnet publish` 后请自行 `git checkout -- '*packages.lock.json'`。
+- CI 的 `.NET build & test` 作业末尾有漂移守卫：锁文件被改写即失败并给出修复命令。
+
 ## 标准发版流程
 
 ```bash

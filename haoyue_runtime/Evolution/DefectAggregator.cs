@@ -345,6 +345,9 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                 0 => "该工作区对应语料为空",
                 > 0 => $"语料共 {last.Corpus} 条仍未命中",
                 null => "语料规模未知",
+                // 负值不属于任何合法语料规模，但 switch 必须穷举：漏了它运行时抛
+                // SwitchExpressionException，会把整条反思聚合打成失败。
+                _ => "语料规模未知",
             };
             var summary = $"{key.ToolName} 检索零命中 {count} 次（{coverage}）：{key.Error}"
                 + (string.IsNullOrWhiteSpace(last.Reason) ? "" : $"；{last.Reason}");

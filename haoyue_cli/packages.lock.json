@@ -8,12 +8,6 @@
         "resolved": "1.3.2",
         "contentHash": "fZgOC/3CswUrndjDTac70aQpYdtxbW5+5bRumR7vzvI2HJbkmgKisB1c9oT+GA6v0jB/JDR9BLa9FiPzQmaK6A=="
       },
-      "Microsoft.NET.ILLink.Tasks": {
-        "type": "Direct",
-        "requested": "[10.0.12, )",
-        "resolved": "10.0.12",
-        "contentHash": "xi+BDjFpW+Sb+MHFHaH6Y/gV9I8BluFwRXc1QyCdoZbIK26eNiBeFuMTe/FMwc33G1wdHCyDg7CVTmb8OdQrMQ=="
-      },
       "Spectre.Console": {
         "type": "Direct",
         "requested": "[0.57.2, )",
@@ -33,22 +27,6 @@
         "type": "Transitive",
         "resolved": "8.4.2",
         "contentHash": "2hmtrrU18x6NL3mbuAqwy0KpnoEEJOuK6sH5RKQfD/jHijn2pqvqBUC7WGy9dgNBL9BDA7eOC0kirsNPMp2f4Q=="
-      },
-      "LLamaSharp.Backend.Cuda12.Linux": {
-        "type": "Transitive",
-        "resolved": "0.27.0",
-        "contentHash": "bxVMBsX68jTfcOBKRgkgMWdHZcesrVMKFF/YPo0vWk6Zul6ptW9E+4MV3ydRNuHvF6k8wAzYbq8asMHDr0sK6Q==",
-        "dependencies": {
-          "LLamaSharp.Backend.Cpu": "0.27.0"
-        }
-      },
-      "LLamaSharp.Backend.Cuda12.Windows": {
-        "type": "Transitive",
-        "resolved": "0.27.0",
-        "contentHash": "JNxjyN1UmGMDduQkpYyAws9ou+OgN5hFF+9MIkPIU6tkPwZ2zX63wYL2AachalZ2ff4Hob5ZK48Nay8T2tARIQ==",
-        "dependencies": {
-          "LLamaSharp.Backend.Cpu": "0.27.0"
-        }
       },
       "Microsoft.Bcl.AsyncInterfaces": {
         "type": "Transitive",
@@ -198,7 +176,7 @@
           "Cronos": "[0.8.4, )",
           "DiffPlex": "[1.9.0, )",
           "LLamaSharp": "[0.27.0, )",
-          "LLamaSharp.Backend.Cuda12": "[0.27.0, )",
+          "LLamaSharp.Backend.Cpu": "[0.27.0, )",
           "Microsoft.Data.Sqlite": "[10.0.10, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.10, )",
           "Microsoft.Extensions.FileSystemGlobbing": "[10.0.10, )",
@@ -248,16 +226,6 @@
         "requested": "[0.27.0, )",
         "resolved": "0.27.0",
         "contentHash": "fZOfnsWKx/kaOqCMSkZ2w5ww++/YGq56T8PWst0KjtmXQBthNAuE11HIaxMK5TBD0EWqoCxqlC8oVCOssF4+MQ=="
-      },
-      "LLamaSharp.Backend.Cuda12": {
-        "type": "CentralTransitive",
-        "requested": "[0.27.0, )",
-        "resolved": "0.27.0",
-        "contentHash": "FLu293GfDc6mHReop07CmtQKwu/EKt0kRd2Y1vo9iyvwhlWA8ApPi5f3t4BH0KYjP3df/Xess8JI2z1yyjfFWg==",
-        "dependencies": {
-          "LLamaSharp.Backend.Cuda12.Linux": "0.27.0",
-          "LLamaSharp.Backend.Cuda12.Windows": "0.27.0"
-        }
       },
       "Microsoft.Data.Sqlite": {
         "type": "CentralTransitive",
@@ -347,13 +315,6 @@
         "requested": "[18.1.0, )",
         "resolved": "18.1.0",
         "contentHash": "5K+9KFg2TdTl7VXv88Qzi/0lqK6JFoNP3lRuImPYGRV7K/QYklDyTrj4+A+KAki1JsQi6qKY+hDyY7d6WRqjrw=="
-      }
-    },
-    "net10.0/win-x64": {
-      "SQLitePCLRaw.lib.e_sqlite3": {
-        "type": "Transitive",
-        "resolved": "2.1.12",
-        "contentHash": "fWi8Dbknuhgg72fWinIdjXVaqO1hHL4YBBwVLnr7e1c9TAZwJ0QE38j9syW1hwx6HaqEVTwI+O07WPdZn8Rp0w=="
       }
     }
   }

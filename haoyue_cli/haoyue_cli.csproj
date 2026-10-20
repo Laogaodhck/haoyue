@@ -30,8 +30,9 @@
          运行时经 ResolveToolkitPath 的「可执行文件相对目录」命中。 -->
     <None Include="..\doc_toolkit\**\*.py" Link="doc_toolkit\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <!-- 连接器目录（S5）：连接器包清单 + schema + 内置本地 MCP 服务器，随 CLI 分发，
-         运行时经 ConnectorCatalog.ResolveRoot 的「可执行文件相对目录」命中。 -->
-    <None Include="..\connectors\**\*" Link="connectors\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+         运行时经 ConnectorCatalog.ResolveRoot 的「可执行文件相对目录」命中。
+         servers/tests 是开发期 pytest 套件，不进分发产物。 -->
+    <None Include="..\connectors\**\*" Exclude="..\connectors\servers\tests\**\*" Link="connectors\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

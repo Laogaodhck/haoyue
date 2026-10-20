@@ -59,6 +59,25 @@ public sealed record ModelResidency(
 /// </summary>
 public sealed class LocalModelCache : IDisposable
 {
+    // llama.cpp 的原生日志默认直写 stdout/stderr：CLI 一次性对话时 sched_reserve /
+    // llama_context 之类的调试行会混进用户可见输出，daemon 下则灌满 daemon.log。
+    // 装载一次日志回调，只把 Warning 及以上转进 Debug 通道（调试时仍可见，正常使用不再污染）。
+    static LocalModelCache()
+    {
+        try
+        {
+            NativeLibraryConfig.All.WithLogCallback((level, message) =>
+            {
+                if (level is LLamaLogLevel.Warning or LLamaLogLevel.Error)
+                    System.Diagnostics.Debug.WriteLine($"[llama] {message}");
+            });
+        }
+        catch
+        {
+            // 日志路由失败绝不能影响模型加载本身。
+        }
+    }
+
     private readonly ConcurrentDictionary<string, Slot> _slots = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private readonly Lock _slotGate = new();

@@ -175,6 +175,45 @@ public sealed class EvolutionTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_NewSkill_TwoPendingDefects_ShareOneCandidateWithoutFailing()
+    {
+        // 两个不同签名的缺陷簇 → pending 两条。旧实现逐条 PromoteCandidate：第一条把
+        // labs 草稿 Directory.Move 走后，第二条找不到 skill.yaml 直接判失败，并把整批
+        // （含刚记为 Candidate 的那条）覆盖成 Failed。
+        SeedBashFailureCluster("s1", "error: command failed");
+        SeedBashFailureCluster("s2", "error: permission denied");
+        var store = NewStore();
+        var runner = NewRunner(store, (workspace, session, prompt, ct) =>
+        {
+            var draft = Path.Combine(_labs, "fix-bash-retry");
+            Directory.CreateDirectory(draft);
+            File.WriteAllText(Path.Combine(draft, "skill.yaml"),
+                "name: fix-bash-retry\ndescription: \"避免 bash 重试死循环\"\ntriggers:\n  - \"bash 失败\"\n");
+            File.WriteAllText(Path.Combine(draft, "prompt.txt"), "遇到命令失败时先检查退出码……");
+            return Task.FromResult(new AgentTurnResult(
+                "```json\n{\"action\":\"new-skill\",\"skillName\":\"fix-bash-retry\",\"summary\":\"新增重试技能\"}\n```",
+                false, null));
+        });
+
+        var result = await runner.RunAsync("manual", CancellationToken.None);
+
+        Assert.Null(result.Error);
+        Assert.Equal(2, result.Candidates);
+        Assert.Equal(0, result.Skipped);
+        // 一份草稿 → 一个候选目录，两条指纹都指向它且都是 Candidate。
+        var onlyDir = Directory.GetDirectories(_candidates).Single();
+        var recorded = store.List(EvolutionStatus.Candidate);
+        Assert.Equal(2, recorded.Count);
+        Assert.All(recorded, record =>
+        {
+            Assert.Equal(EvolutionStatus.Candidate, record.Status);
+            Assert.Equal(onlyDir, record.CandidateDir);
+        });
+        var rationale = File.ReadAllText(Path.Combine(onlyDir, "rationale.md"));
+        Assert.Equal(2, rationale.Split("进化指纹").Length - 1); // 两条缺陷各留一条溯源
+    }
+
+    [Fact]
     public async Task RunAsync_SecondPass_SkipsRecordedFingerprints()
     {
         SeedBashFailureCluster();

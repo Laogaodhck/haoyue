@@ -388,6 +388,12 @@ public sealed partial class Agent(
                         $"模型 {model.Model.Id} 探测不支持工具调用，本回合不注入工具清单（避免空谈与无效的 schema 开销）。"));
                 }
                 var expertId = session.Header.ExpertId;
+                // 技能段是本回合唯一会逐回合变化的 prompt 段，落在 PromptSlot.Skill（最后），
+                // 所以把「本回合已声明技能」并入缓存键只会让 key 在 declare_skill 后改变一次，
+                // 前半段前缀依旧稳定；漏掉它则声明后仍复用旧 prompt，declare_skill 完全失效。
+                var declaredSkillsKey = _skills is null
+                    ? ""
+                    : string.Join(",", _skills.TurnDeclaredSkills());
                 var promptKey = string.Join('|',
                     model.Provider.Id, model.Model.Id, effectiveNetworkEnabled, tools.Count,
                     string.Join(",", tools.Select(t => t.Name)),
@@ -395,7 +401,8 @@ public sealed partial class Agent(
                     workspace.Config?.Personality ?? agentConfig.Personality,
                     OutputLanguage.Resolve(workspace.Config, agentConfig),
                     ShouldVerify(workspace, agentConfig),
-                    expertId ?? "");
+                    expertId ?? "",
+                    declaredSkillsKey);
                 if (promptKey != cachedPromptKey)
                 {
                     cachedSystemPrompt = await ComposeSystemPromptAsync(

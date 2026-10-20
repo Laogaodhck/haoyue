@@ -861,6 +861,86 @@ def require_command(name: str) -> str:
     return command
 
 
+# --------------------------------------------------------------------------- #
+# packages.lock.json 漂移保护
+# --------------------------------------------------------------------------- #
+
+LOCKFILE_PATTERN = "*packages.lock.json"
+
+
+def _git_diff_lockfiles() -> set[str] | None:
+    """返回工作区中相对 HEAD 已被修改的 packages.lock.json 路径集合。
+
+    `dotnet restore`/`dotnet list package` 会按「当前 MSBuild 属性」重写锁文件：
+    本地 GPU 构建（-p:LlamaBackend=Cuda12 -r win-x64）必然把 Cuda12 记为 Direct 并
+    多出 RID 段，一旦随代码提交，CI 的 `restore --locked-mode` 立即 NU1004。仓库基准
+    必须是「无 RID + 默认 CPU」口径，故构建结束后把本次构建造成的漂移还原。
+
+    非 git 工作树（源码压缩包、容器内源码挂载）返回 None，调用方跳过。
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        probe = subprocess.run(
+            [git, "rev-parse", "--is-inside-work-tree"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        if probe.returncode != 0 or probe.stdout.strip() != "true":
+            return None
+        diff = subprocess.run(
+            [git, "diff", "--name-only", "--", LOCKFILE_PATTERN],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+        if diff.returncode != 0:
+            return None
+        return {line.strip() for line in diff.stdout.splitlines() if line.strip()}
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def capture_lockfile_drift() -> set[str] | None:
+    """记录构建开始前就已存在的锁文件改动（开发者自己的依赖变更不该被还原）。"""
+    return _git_diff_lockfiles()
+
+
+def restore_lockfile_drift(baseline: set[str] | None, verbose: bool = False) -> None:
+    """把「本次构建新造成的」锁文件漂移还原到 baseline 状态。"""
+    if baseline is None:
+        return
+    current = _git_diff_lockfiles()
+    if current is None:
+        return
+    drifted = sorted(current - baseline)
+    if not drifted:
+        return
+    git = shutil.which("git")
+    if git is None:
+        return
+    try:
+        run(git, ["checkout", "--", *drifted], REPO_ROOT, os.environ.copy(), verbose=verbose)
+    except (subprocess.CalledProcessError, OSError) as error:
+        console.print(
+            "[yellow]提示: 无法自动还原 packages.lock.json（"
+            f"{error}）。请手动执行 git checkout -- {' '.join(drifted)}。[/yellow]"
+        )
+        return
+    console.print(
+        "[dim]已还原构建过程重写的锁文件（仓库基准为无 RID + 默认 CPU 后端）："
+        f"{', '.join(drifted)}[/dim]"
+    )
+
+
 def run(command: str, arguments: Sequence[str], cwd: Path, env: dict[str, str], verbose: bool = False) -> None:
     """运行子进程。默认静默刷屏输出，失败时保留并显示 stderr 与 stdout 详情。"""
     printable = subprocess.list2cmdline([command, *arguments])
@@ -1610,6 +1690,9 @@ def main() -> int:
     if not args.use_current_version:
         sync_all_versions(release_version)
 
+    # 锁文件漂移保护：构建开始时记录既有改动，构建结束只还原本次新造成的漂移。
+    lockfile_baseline = capture_lockfile_drift()
+
     platform_display = (
         "WINDOWS + LINUX (win-x64 / linux-x64)"
         if platform == PLATFORM_BOTH
@@ -1694,6 +1777,11 @@ def main() -> int:
                         if entry.name != rid:
                             remove_directory(entry)
             console.print(f"[bold green]✓[/bold green] .NET 自包含 Runtime ({cur_platform} {rid}) 编译完成")
+
+        # 4b. 还原 GPU/RID 发布重写的锁文件：仓库基准是「无 RID + 默认 CPU 后端」，
+        # 带 -r 与 -p:LlamaBackend=Cuda12 的 publish 必然改写锁文件，提交即让 CI 的
+        # locked-mode 失败（NU1004）。此处还原，避免开发者误提交构建副产物。
+        restore_lockfile_drift(lockfile_baseline, verbose=args.verbose)
 
         # 5. 构建前端并逐个平台打包 Electron
         with console.status("[bold blue]正在构建前端组件...[/bold blue]", spinner="dots"):
@@ -1881,6 +1969,7 @@ def main() -> int:
 
     finally:
         # 回滚机制处理
+        restore_lockfile_drift(lockfile_baseline, verbose=args.verbose)
         if not version_committed and not args.use_current_version:
             sync_all_versions(previous_version)
             console.print(

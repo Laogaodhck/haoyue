@@ -373,6 +373,9 @@ public sealed class SkillManifestV2Tests : IDisposable
         // 模型声明后注入（下一 step 生效），并进入工具权威。
         Assert.True(manager.DeclareForTurn(Workspace, "deploy"));
         Assert.Contains("部署内容", Resolve("帮我看看这个报错"));
+        // Agent 的系统提示缓存键必须能观察到这次声明——否则同回合后续 step 继续复用
+        // 声明前合成的 prompt，declare_skill 形同无效。
+        Assert.Equal(["deploy"], manager.TurnDeclaredSkills());
 
         // 未知/隐藏/已禁用技能拒绝声明。
         Assert.False(manager.DeclareForTurn(Workspace, "no-such-skill"));
@@ -381,6 +384,7 @@ public sealed class SkillManifestV2Tests : IDisposable
 
         // 回合边界：重置后声明集合清空。
         manager.ResetTurnDeclarations();
+        Assert.Empty(manager.TurnDeclaredSkills());
         Assert.DoesNotContain("部署内容", Resolve("帮我看看这个报错"));
     }
 }

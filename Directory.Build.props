@@ -3,8 +3,13 @@
     Solution-wide shared properties. Lock files (P2 supply chain): restore emits
     packages.lock.json which is committed to source control; CI and release
     builds use locked-mode restore so the dependency graph cannot drift silently.
-    When changing package references locally, a normal restore updates the lock
-    file; commit both together. Keep XML comments free of double hyphens.
+
+    仓库基准口径固定为「无 RID + 默认 CPU 后端」：重算锁文件时对解决方案执行
+    force-evaluate 还原（见 RELEASING.md「构建后端与锁文件」）。
+    带 RID 或 LlamaBackend=Cuda12 的构建/发布会按该配置重写锁文件（记 Direct 引用
+    并追加 RID 段），提交后 CI 的 locked-mode 还原会 NU1004 失败。
+    build.py 会在 GPU/RID 发布后自动还原；手工构建请自行 checkout 后再提交。
+    CI 的 dotnet 作业末尾有漂移守卫（git diff 匹配 packages.lock.json）。
   -->
   <PropertyGroup>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>

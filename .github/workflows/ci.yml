@@ -45,6 +45,31 @@ jobs:
           name: dotnet-coverage
           path: coverage/**/coverage.cobertura.xml
           if-no-files-found: error
+      - name: Check packages.lock.json was not rewritten
+        # L-8：本地 GPU 构建（-p:LlamaBackend=Cuda12 -r win-x64）会把 Cuda12 记为直接
+        # 引用并追加 RID 段；一旦随代码提交，本 job 的 --locked-mode 立刻 NU1004。
+        # 仓库基准固定为「无 RID + 默认 CPU 后端」，任何还原/构建改写都必须还原后再提交。
+        shell: bash
+        run: |
+          if ! git diff --exit-code -- '*packages.lock.json'; then
+            echo "::error::packages.lock.json 被还原/构建改写。请执行 git checkout -- '*packages.lock.json' 后重新提交（仓库基准为无 RID + 默认 CPU 后端）。"
+            exit 1
+          fi
+
+  connectors:
+    name: Connector server tests (python)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install pytest
+        run: python -m pip install --disable-pip-version-check --no-input "pytest>=8"
+      - name: Test bundled local MCP server
+        # 内置本地服务器以 python 执行，是连接器的真实执行面；逻辑正确性此前没有任何
+        # 测试覆盖（仅由 connectors/SHA256SUMS 兜住完整性）。
+        run: python -m pytest connectors/servers/tests -q
 
   desktop:
     name: Desktop test & build

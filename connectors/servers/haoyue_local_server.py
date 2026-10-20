@@ -160,6 +160,12 @@ def clipboard_get(_: dict) -> str:
     raise RuntimeError("未找到可用的剪贴板工具（pbpaste/xclip/wl-paste）")
 
 
+def _ps_quote(value: str) -> str:
+    """PowerShell 单引号字面量：内部单引号双写。用于把任意用户文本安全内联进
+    -Command 脚本（既不破坏语法，也不给命令注入留口子）。"""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def clipboard_set(args: dict) -> str:
     text = args.get("text", "")
     if sys.platform == "win32":
@@ -170,7 +176,7 @@ def clipboard_set(args: dict) -> str:
             tmp.write(text)
             tmp_path = tmp.name
         try:
-            script = f"Get-Content -Raw -Encoding UTF8 {[json.dumps(tmp_path)]} | Set-Clipboard"
+            script = f"Get-Content -Raw -Encoding UTF8 {_ps_quote(tmp_path)} | Set-Clipboard"
             out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
                                  capture_output=True, timeout=15, check=False)
             if out.returncode != 0:
@@ -209,7 +215,7 @@ Add-Type -AssemblyName System.Windows.Forms
 $n = New-Object System.Windows.Forms.NotifyIcon
 $n.Icon = [System.Drawing.SystemIcons]::Information
 $n.Visible = $true
-$n.ShowBalloonTip(5000, {[json.dumps(title)]}, {[json.dumps(body)]}, [System.Windows.Forms.ToolTipIcon]::Info)
+$n.ShowBalloonTip(5000, {_ps_quote(title)}, {_ps_quote(body)}, [System.Windows.Forms.ToolTipIcon]::Info)
 Start-Sleep -Milliseconds 2500
 $n.Dispose()
 """
@@ -224,7 +230,7 @@ def notify_send(args: dict) -> str:
     if sys.platform == "win32":
         _notify_windows(title, body)
     elif sys.platform == "darwin":
-        script = f'display notification {[json.dumps(body)]} with title {[json.dumps(title)]}'
+        script = f'display notification {json.dumps(body)} with title {json.dumps(title)}'
         subprocess.run(["osascript", "-e", script], check=True, timeout=15,
                        capture_output=True)
     else:
@@ -244,7 +250,9 @@ def _fetch_text(source: str) -> str:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             return resp.read().decode("utf-8", "replace")
     if parsed.scheme == "file":
-        source = parsed.path
+        # urlparse 对 file:///C:/x.ics 给出 /C:/x.ics，Windows 上直接 open 会失败；
+        # url2pathname 负责按平台还原路径（POSIX 上同时做 %XX 反转义）。
+        source = urllib.request.url2pathname(parsed.path)
     with io.open(source, "r", encoding="utf-8", errors="replace") as fh:
         return fh.read()
 
@@ -291,7 +299,10 @@ def rss_read(args: dict) -> str:
                             .strip()[:200]),
             })
     elif root.tag.endswith("feed"):  # Atom
-        ns = root.tag.split("}")[0].lstrip("{") + "}"
+        # 命名空间前缀必须保留花括号："{http://www.w3.org/2005/Atom}entry"。
+        # 旧实现 split("}")[0].lstrip("{") 得到的是「无左括号」的命名空间，拼接后
+        # 永远匹配不到 entry，Atom 源恒返回 0 条。
+        ns = root.tag[: root.tag.index("}") + 1] if "}" in root.tag else ""
         for entry in root.iter(f"{ns}entry"):
             link_el = entry.find(f"{ns}link")
             items.append({
@@ -314,6 +325,12 @@ def rss_read(args: dict) -> str:
 
 def http_request(args: dict) -> str:
     url = args["url"]
+    # 只允许 http/https：urllib 默认的 FileHandler 会让 file:// 变成本地任意文件读取，
+    # FTPHandler/DataHandler 同理。连接器在只读模式下也被标为可用，必须在这里收口，
+    # 否则模型能绕过运行时的 PathGuard 读整块磁盘。
+    scheme = urlparse(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"仅支持 http/https，收到 {scheme or '(空)'}：{url}")
     method = (args.get("method") or "GET").upper()
     headers = {str(k): str(v) for k, v in (args.get("headers") or {}).items()}
     body = args.get("body")
@@ -441,7 +458,26 @@ def _dispatch(name: str, args: dict) -> dict:
         return {"isError": True, "content": [{"type": "text", "text": f"{type(err).__name__}: {err}"}]}
 
 
+def _configure_stdio() -> None:
+    """把 stdio 固定为 UTF-8。
+
+    Windows 上管道重定向时 sys.stdin/stdout 使用系统 ANSI 代码页（中文机器为 cp936），
+    而客户端（.NET 侧）固定以 UTF-8 收发：中文参数会被错误解码，轻则 mojibake，
+    重则 UnicodeDecodeError 逃出 JSON 解析兜底、服务器进程直接退出（表现为
+    「连接正常、一调用工具就掉线」）。errors="replace" 保证坏字节不会杀死进程。
+    """
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # 被包装/重定向到非 TextIOWrapper 时跳过
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError, AttributeError):
+            pass
+
+
 def main() -> int:
+    _configure_stdio()
     for raw in sys.stdin:
         raw = raw.strip()
         if not raw:

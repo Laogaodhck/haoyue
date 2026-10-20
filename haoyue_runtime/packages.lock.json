@@ -35,11 +35,15 @@
           "System.Numerics.Tensors": "10.0.5"
         }
       },
-      "LLamaSharp.Backend.Cpu": {
+      "LLamaSharp.Backend.Cuda12": {
         "type": "Direct",
         "requested": "[0.27.0, )",
         "resolved": "0.27.0",
-        "contentHash": "fZOfnsWKx/kaOqCMSkZ2w5ww++/YGq56T8PWst0KjtmXQBthNAuE11HIaxMK5TBD0EWqoCxqlC8oVCOssF4+MQ=="
+        "contentHash": "FLu293GfDc6mHReop07CmtQKwu/EKt0kRd2Y1vo9iyvwhlWA8ApPi5f3t4BH0KYjP3df/Xess8JI2z1yyjfFWg==",
+        "dependencies": {
+          "LLamaSharp.Backend.Cuda12.Linux": "0.27.0",
+          "LLamaSharp.Backend.Cuda12.Windows": "0.27.0"
+        }
       },
       "Microsoft.Data.Sqlite": {
         "type": "Direct",
@@ -140,6 +144,22 @@
         "type": "Transitive",
         "resolved": "8.4.2",
         "contentHash": "2hmtrrU18x6NL3mbuAqwy0KpnoEEJOuK6sH5RKQfD/jHijn2pqvqBUC7WGy9dgNBL9BDA7eOC0kirsNPMp2f4Q=="
+      },
+      "LLamaSharp.Backend.Cuda12.Linux": {
+        "type": "Transitive",
+        "resolved": "0.27.0",
+        "contentHash": "bxVMBsX68jTfcOBKRgkgMWdHZcesrVMKFF/YPo0vWk6Zul6ptW9E+4MV3ydRNuHvF6k8wAzYbq8asMHDr0sK6Q==",
+        "dependencies": {
+          "LLamaSharp.Backend.Cpu": "0.27.0"
+        }
+      },
+      "LLamaSharp.Backend.Cuda12.Windows": {
+        "type": "Transitive",
+        "resolved": "0.27.0",
+        "contentHash": "JNxjyN1UmGMDduQkpYyAws9ou+OgN5hFF+9MIkPIU6tkPwZ2zX63wYL2AachalZ2ff4Hob5ZK48Nay8T2tARIQ==",
+        "dependencies": {
+          "LLamaSharp.Backend.Cpu": "0.27.0"
+        }
       },
       "Microsoft.Bcl.AsyncInterfaces": {
         "type": "Transitive",
@@ -276,6 +296,19 @@
         "type": "Transitive",
         "resolved": "10.0.5",
         "contentHash": "2Njj2ree91ur3lWNyQrjlVgxtOz8hV7f92ezTdQc//2S1TEQiNJ6DR9/gxM91Sca0Khk28QjYiCy7C2fPgqcCw=="
+      },
+      "LLamaSharp.Backend.Cpu": {
+        "type": "CentralTransitive",
+        "requested": "[0.27.0, )",
+        "resolved": "0.27.0",
+        "contentHash": "fZOfnsWKx/kaOqCMSkZ2w5ww++/YGq56T8PWst0KjtmXQBthNAuE11HIaxMK5TBD0EWqoCxqlC8oVCOssF4+MQ=="
+      }
+    },
+    "net10.0/win-x64": {
+      "SQLitePCLRaw.lib.e_sqlite3": {
+        "type": "Transitive",
+        "resolved": "2.1.12",
+        "contentHash": "fWi8Dbknuhgg72fWinIdjXVaqO1hHL4YBBwVLnr7e1c9TAZwJ0QE38j9syW1hwx6HaqEVTwI+O07WPdZn8Rp0w=="
       }
     }
   }

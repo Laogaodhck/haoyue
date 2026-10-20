@@ -96,7 +96,7 @@ public static class KnowledgeTuning
 
     private static Dictionary<string, string[]> _synonyms = BuildDefaultSynonyms();
     private static string[] _paths = [DefaultPathValue];
-    private static Dictionary<string, DateTime> _timestamps = [];
+    private static Dictionary<string, FileStamp> _timestamps = [];
 
     /// <summary>
     /// Live synonym table (built-in defaults merged with user file entries).
@@ -136,10 +136,10 @@ public static class KnowledgeTuning
             {
                 var path = _paths[i];
                 if (string.IsNullOrEmpty(path)) continue;
-                DateTime stamp;
+                FileStamp stamp;
                 try
                 {
-                    stamp = File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+                    stamp = StatOf(path);
                 }
                 catch (IOException)
                 {
@@ -163,12 +163,32 @@ public static class KnowledgeTuning
         }
     }
 
-    private static (bool Ok, Dictionary<string, string[]> Entries, DateTime Stamp) TryRead(string path)
+    /// <summary>
+    /// 变更指纹 = 最后写入时间 + 文件长度。
+    /// </summary>
+    /// <remarks>
+    /// 只看 <see cref="File.GetLastWriteTimeUtc"/> 会漏掉「同一时钟 tick 内的连续两次写入」：
+    /// NTFS 的时间戳更新受系统时钟粒度约束（Windows 上约 15.6 ms，快照/CI 环境更粗），
+    /// 两次写入可能拿到完全相同的时间戳 → 判定为未变化 → 热重载拿不到新内容。
+    /// 加上长度能兜住绝大多数真实编辑；同长度且同 tick 内的改写仍会漏（读取间隔内
+    /// 反复改写同一文件属异常场景，不值得为此每回合读盘做全量哈希）。
+    /// </remarks>
+    private static FileStamp StatOf(string path)
+    {
+        var info = new FileInfo(path);
+        return info.Exists
+            ? new FileStamp(info.LastWriteTimeUtc, info.Length)
+            : new FileStamp(DateTime.MinValue, 0);
+    }
+
+    private readonly record struct FileStamp(DateTime WrittenUtc, long Length);
+
+    private static (bool Ok, Dictionary<string, string[]> Entries, FileStamp Stamp) TryRead(string path)
     {
         try
         {
-            if (!File.Exists(path)) return (false, [], DateTime.MinValue);
-            var stamp = File.GetLastWriteTimeUtc(path);
+            if (!File.Exists(path)) return (false, [], new FileStamp(DateTime.MinValue, 0));
+            var stamp = StatOf(path);
             var entries = new Dictionary<string, string[]>(StringComparer.Ordinal);
             foreach (var rawLine in File.ReadAllLines(path, Encoding.UTF8))
             {
@@ -196,11 +216,11 @@ public static class KnowledgeTuning
         }
         catch (IOException)
         {
-            return (false, [], DateTime.MinValue);
+            return (false, [], new FileStamp(DateTime.MinValue, 0));
         }
         catch (UnauthorizedAccessException)
         {
-            return (false, [], DateTime.MinValue);
+            return (false, [], new FileStamp(DateTime.MinValue, 0));
         }
     }
 

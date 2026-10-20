@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json.Nodes;
+using System.Runtime.InteropServices;
 using Haoyue.Runtime;
 using Haoyue.Runtime.ComputerUse;
 using Haoyue.Runtime.ComputerUse.Abstractions;
@@ -470,16 +472,53 @@ public sealed class ComputerUseTests : IAsyncDisposable
         var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
         var context = CreateToolContext();
 
+        const string cjk = "中文输出正常";
         var res = await tool.ExecuteAsync(new JsonObject
         {
             ["kind"] = "cmd",
-            ["command"] = "echo hello && echo 中文输出正常"
+            ["command"] = $"echo hello && echo {cjk}"
         }, context, CancellationToken.None);
 
         Assert.True(res.Success, res.Output);
         Assert.Contains("hello", res.Output);
-        Assert.Contains("中文输出正常", res.Output);
+        if (OemCodePageCanRepresent(cjk))
+        {
+            Assert.Contains(cjk, res.Output);
+        }
+        else
+        {
+            // 子进程侧已丢信息：cmd 的 `echo` 只能在 OEM 控制台代码页里编码，
+            // 英文运行器是 CP437，CJK 直接写成 '?'（chcp 对管道输出无效，已实测）。
+            // 此时仍应看到等长的 '?' 占位行，证明第二条命令确实被执行了。
+            Assert.Contains(new string('?', cjk.Length), res.Output);
+        }
     }
+
+    /// <summary>
+    /// 当前进程的 OEM 控制台代码页能否无损表示 <paramref name="text"/>。
+    /// </summary>
+    /// <remarks>
+    /// 这决定了 <c>cmd</c> 的 <c>echo</c> 是否能保住非 ASCII 字符：cmd 重定向输出固定
+    /// 用 OEM CP（GBK 的 zh-CN 机器可以，CP437 的英文 runner 只能输出 '?'），
+    /// 与 Haoyue 用什么编码去解码无关，所以在断言侧按平台能力分流。
+    /// </remarks>
+    private static bool OemCodePageCanRepresent(string text)
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        try
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            var oem = Encoding.GetEncoding((int)GetOEMCP());
+            return oem.GetString(oem.GetBytes(text)) == text;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetOEMCP();
 
     [Fact]
     public async Task ComputerExec_PowerShell_RunsScriptAndPreservesCjk()

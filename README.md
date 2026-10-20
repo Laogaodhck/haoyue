@@ -152,7 +152,7 @@ haoyue doctor       # 健康检查
 
 ### 从源码构建
 
-需要 .NET 10 SDK 与 Git：
+需要 .NET 10 SDK 与 Git（SDK 版本由仓库根的 `global.json` 精确固定，`rollForward: disable`；锁文件记录着 SDK 隐式包版本，SDK 漂移会让 `--locked-mode` 还原失败，详见 [RELEASING.md](RELEASING.md)）：
 
 ```bash
 git clone https://github.com/Laogaodhck/haoyue.git

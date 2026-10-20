@@ -54,6 +54,16 @@ public class MarketplaceDataTests
             new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     }
 
+    /// <summary>
+    /// 快照比对必须与行尾无关。
+    /// </summary>
+    /// <remarks>
+    /// 序列化器的换行是平台相关的（Windows 上写出来是 CRLF，仓库按 <c>eol=lf</c> 检出的是 LF），
+    /// 直接逐字符比较会让同一份代码在本地与 CI 判出相反结果——CI 上曾因此失败：
+    /// 本地生成快照时带 CRLF，检出侧是 LF。统一归一为 <c>\n</c> 后再比。
+    /// </remarks>
+    private static string Normalize(string text) => text.Replace("\r\n", "\n").TrimEnd();
+
     [Fact]
     public void Marketplace_Data_MatchesSingleSource()
     {
@@ -64,8 +74,8 @@ public class MarketplaceDataTests
         if (Environment.GetEnvironmentVariable("HAOYUE_EXPORT_MARKETPLACE") == "1")
         {
             Directory.CreateDirectory(dataDir);
-            File.WriteAllText(skillsPath, ExportSkills() + "\n");
-            File.WriteAllText(connectorsPath, ExportConnectors() + "\n");
+            File.WriteAllText(skillsPath, Normalize(ExportSkills()) + "\n");
+            File.WriteAllText(connectorsPath, Normalize(ExportConnectors()) + "\n");
             return;
         }
 
@@ -74,14 +84,14 @@ public class MarketplaceDataTests
         Assert.True(File.Exists(connectorsPath),
             $"marketplace/data/connectors.json 缺失：设置 HAOYUE_EXPORT_MARKETPLACE=1 运行测试以生成");
 
-        var skillsActual = ExportSkills();
-        var skillsCommitted = File.ReadAllText(skillsPath).TrimEnd();
+        var skillsActual = Normalize(ExportSkills());
+        var skillsCommitted = Normalize(File.ReadAllText(skillsPath));
         Assert.True(skillsActual == skillsCommitted,
             "官方技能目录与 marketplace/data/skills.json 不一致：" +
             "请设置 HAOYUE_EXPORT_MARKETPLACE=1 重新生成快照并提交。");
 
-        var connectorsActual = ExportConnectors();
-        var connectorsCommitted = File.ReadAllText(connectorsPath).TrimEnd();
+        var connectorsActual = Normalize(ExportConnectors());
+        var connectorsCommitted = Normalize(File.ReadAllText(connectorsPath));
         Assert.True(connectorsActual == connectorsCommitted,
             "连接器目录与 marketplace/data/connectors.json 不一致：" +
             "请设置 HAOYUE_EXPORT_MARKETPLACE=1 重新生成快照并提交。");

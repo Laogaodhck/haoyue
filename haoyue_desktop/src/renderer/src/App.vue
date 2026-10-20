@@ -2,7 +2,6 @@
 import {
   ArrowDown,
   Braces,
-  Bug,
   Check,
   ChevronDown,
   ChevronUp,
@@ -11,7 +10,6 @@ import {
   Folder,
   FolderOpen,
   Globe2,
-  Hammer,
   History,
   LoaderCircle,
   MoreHorizontal,
@@ -24,6 +22,7 @@ import {
   Trash2,
   Sparkles,
   Undo2,
+  Wrench,
   X
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
@@ -38,7 +37,7 @@ import ConfigAnomalyDialog from './components/ConfigAnomalyDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import ConversationMessage from './components/ConversationMessage.vue'
 import EditMessageDialog from './components/EditMessageDialog.vue'
-import GitWorkspacePanel from './components/GitWorkspacePanel.vue'
+import WorkDock from './components/WorkDock.vue'
 
 import KnowledgeBaseDialog from './components/KnowledgeBaseDialog.vue'
 import RulesMemoryDialog from './components/RulesMemoryDialog.vue'
@@ -48,6 +47,7 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import Sidebar from './components/Sidebar.vue'
 import TaskSettingsDialog from './components/TaskSettingsDialog.vue'
 import TaskStepList from './components/TaskStepList.vue'
+import WelcomeEmpty from './components/WelcomeEmpty.vue'
 import { computeTurnTaskSteps, type TaskStep } from './task-planner'
 import { confirmAction } from './confirmation'
 import { createWorkspaceFileSuggester } from './workspace-files'
@@ -56,7 +56,7 @@ import { journalCursor, openTurnsOf, recoverTurns, type JournalRow, type Recover
 import { isForbiddenProjectPath } from './project-paths'
 import { retryRuntimeConnection, RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
 import { ReasoningLevel } from './types'
-import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, ThreadStats, ToolActivity } from './types'
+import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, ThreadStats, ToolActivity, WorkDockTab } from './types'
 import {
   cancelParams,
   formatPromptWithFiles,
@@ -105,12 +105,6 @@ const CHAT_FIRST_EVENT_TIMEOUT_MS = 30_000
 // its own error: 3 retryable attempts x provider timeout (120s) + backoff
 // ~= 364s, so 420s guarantees the descriptive daemon error wins the race.
 const PROMPT_OPTIMIZE_TIMEOUT_MS = 420_000
-const starterPrompts = [
-  { label: '探索并理解代码', icon: Telescope, tone: 'blue' },
-  { label: '构建新功能、应用或工具', icon: Hammer, tone: 'purple' },
-  { label: '审查代码并提出修改建议', icon: RefreshCw, tone: 'green' },
-  { label: '修复问题和失败', icon: Bug, tone: 'orange' }
-] as const
 const appInfo = ref<AppInfo>({
   version: '0.1.0',
   platform: 'win32',
@@ -126,9 +120,9 @@ type AppPage = 'main' | 'settings' | 'extensions' | 'archived' | 'scheduled' | '
 const sidebarOpen = ref(true)
 const activePage = ref<AppPage>('main')
 const aboutOpen = ref(false)
-const gitPanelOpen = ref(false)
-const gitPanelTab = ref<'diff' | 'history'>('diff')
-const gitPanelWidth = ref(560)
+const workDockOpen = ref(false)
+const workDockTab = ref<WorkDockTab>('changes')
+const workDockWidth = ref(560)
 const toolDiff = ref<{ path: string; diff: string } | null>(null)
 
 const settingsSection = ref<'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'inference' | 'advanced'>('general')
@@ -466,11 +460,12 @@ function showActiveProject(): void {
   if (activeProject.value) void window.haoyue.showItemInFolder(activeProject.value.path)
 }
 
-function openGitPanel(tab: 'diff' | 'history'): void {
-  if (!activeProject.value) return
-  toolDiff.value = null
-  gitPanelTab.value = tab
-  gitPanelOpen.value = true
+/** 打开工作区面板的指定页签；再次点击已激活页签视为关闭（WorkBuddy 式切换语义）。 */
+function openWorkDock(tab: WorkDockTab): void {
+  if (tab !== 'tools' && !activeProject.value) return
+  if (tab !== 'tools') toolDiff.value = null
+  workDockOpen.value = !(workDockOpen.value && workDockTab.value === tab)
+  workDockTab.value = tab
 }
 
 function openDevTools(): void {
@@ -479,19 +474,19 @@ function openDevTools(): void {
 
 function openToolDiff(path: string, diff: string): void {
   toolDiff.value = { path, diff }
-  gitPanelTab.value = 'diff'
-  gitPanelOpen.value = true
+  workDockTab.value = 'changes'
+  workDockOpen.value = true
 }
 
-function closeGitPanel(): void {
-  gitPanelOpen.value = false
+function closeWorkDock(): void {
+  workDockOpen.value = false
   toolDiff.value = null
 }
 
-function resizeGitPanel(width: number): void {
+function resizeWorkDock(width: number): void {
   if (!Number.isFinite(width)) return
   const maxWidth = Math.min(720, Math.max(280, Math.floor(window.innerWidth * 0.66)))
-  gitPanelWidth.value = Math.min(maxWidth, Math.max(280, Math.round(width)))
+  workDockWidth.value = Math.min(maxWidth, Math.max(280, Math.round(width)))
 }
 
 async function openProjectTerminal(): Promise<void> {
@@ -2018,8 +2013,8 @@ watch(theme, applyTheme)
     <AppTitleBar :sidebar-open="sidebarOpen" :project-path="globalTaskActive ? undefined : activeProject?.path"
       @toggle-sidebar="sidebarOpen = !sidebarOpen" @new-task="newTask(selectedProjectId || undefined)"
       @open-workspace="openWorkspace" @show-project="showActiveProject" @open-settings="openSettings('general')"
-      @focus-composer="composer?.focus()" @open-terminal="openProjectTerminal" @open-git-changes="openGitPanel('diff')"
-      @open-git-history="openGitPanel('history')" @open-diagnostics="openSettings('diagnostics')"
+      @focus-composer="composer?.focus()" @open-terminal="openProjectTerminal" @open-git-changes="openWorkDock('changes')"
+      @open-git-history="openWorkDock('history')" @open-diagnostics="openSettings('diagnostics')"
       @open-dev-tools="openDevTools" @open-about="aboutOpen = true" />
 
     <div class="app-body" v-show="activePage === 'main'" :class="{ 'sidebar-collapsed': !sidebarOpen }">
@@ -2087,13 +2082,17 @@ watch(theme, applyTheme)
                 @click="openProjectTerminal">
                 <TerminalSquare :size="18" />
               </button>
-              <button v-if="activeProject" class="icon-button project-tool-button" title="查看代码更改"
-                @click="openGitPanel('diff')">
+              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen && workDockTab === 'changes' }"
+                title="查看代码更改" @click="openWorkDock('changes')">
                 <Braces :size="18" />
               </button>
-              <button v-if="activeProject" class="icon-button project-tool-button" title="查看 Git 提交记录"
-                @click="openGitPanel('history')">
+              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen && workDockTab === 'history' }"
+                title="查看 Git 提交记录" @click="openWorkDock('history')">
                 <History :size="18" />
+              </button>
+              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen && workDockTab === 'tools' }"
+                title="工具活动面板" @click="openWorkDock('tools')">
+                <Wrench :size="18" />
               </button>
               <button class="icon-button" title="任务设置" :disabled="!activeThread" @click="openTaskSettings()">
                 <MoreHorizontal :size="18" />
@@ -2172,23 +2171,23 @@ watch(theme, applyTheme)
                 </button>
               </template>
               <template v-else>
-                <h1>今天从哪里开始？</h1>
-                <p>{{ activeProject?.name || '任务 · 无工作目录' }}</p>
-                <div v-if="!activeThread?.archived" class="starter-prompts" aria-label="快速开始">
-                  <button v-for="prompt in starterPrompts" :key="prompt.label" type="button" class="starter-prompt-card"
-                    :data-tone="prompt.tone" @click="useStarterPrompt(prompt.label)">
-                    <component :is="prompt.icon" :size="20" aria-hidden="true" />
-                    <span>{{ prompt.label }}</span>
-                  </button>
-                </div>
+                <WelcomeEmpty :project="activeProject" :thread="activeThread" :show-bind-action="globalTaskActive"
+                  :daemon-connected="daemonState.connected" @use-starter-prompt="useStarterPrompt"
+                  @open-workspace="openWorkspace" />
               </template>
             </div>
             <div v-else class="empty-state no-task-state">
               <h1>还没有任务</h1>
               <p>新建一个任务以开始使用 Haoyue</p>
-              <button class="secondary-button empty-state-action" @click="newTask(selectedProjectId || undefined)">
-                新建任务
-              </button>
+              <div class="empty-state-actions">
+                <button class="secondary-button empty-state-action" @click="newTask(selectedProjectId || undefined)">
+                  新建任务
+                </button>
+                <button v-if="projects.length === 0" class="secondary-button empty-state-action"
+                  @click="openWorkspace">
+                  选择文件夹，添加项目
+                </button>
+              </div>
             </div>
           </section>
 
@@ -2306,9 +2305,9 @@ watch(theme, applyTheme)
           </footer>
         </main>
 
-        <GitWorkspacePanel v-show="activePage === 'main'" :open="gitPanelOpen" :project="activeProject"
-          :initial-tab="gitPanelTab" :diff-override="toolDiff" :width="gitPanelWidth" @close="closeGitPanel"
-          @resize="resizeGitPanel" @open-terminal="openProjectTerminal" />
+        <WorkDock v-show="activePage === 'main'" :open="workDockOpen" v-model:tab="workDockTab"
+          :width="workDockWidth" :project="activeProject" :thread="activeThread" :diff-override="toolDiff"
+          @close="closeWorkDock" @resize="resizeWorkDock" @open-terminal="openProjectTerminal" />
       </div>
     </div>
 

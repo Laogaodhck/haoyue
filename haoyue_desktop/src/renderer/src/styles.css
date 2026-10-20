@@ -6979,3 +6979,708 @@ select:focus-visible {
   font-size: 12px;
   font-weight: 600;
 }
+
+/* ============================================================
+   豆包对齐改造（2026-10-20）：欢迎页工作区引导 / 工作区速览卡片 /
+   侧栏「按时间」会话分组视图 / 视图切换
+   ============================================================ */
+
+/* --- 欢迎页：绑定工作目录引导 --- */
+.welcome-workspace-actions,
+.empty-state-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.welcome-workspace-actions .empty-state-action,
+.empty-state-actions .empty-state-action {
+  margin-top: 0;
+}
+
+/* --- 工作区速览卡片（欢迎页） --- */
+.workspace-overview {
+  width: min(100%, 640px);
+  margin-top: 26px;
+  overflow: hidden;
+  text-align: left;
+  background: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 5%);
+}
+
+.workspace-overview-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 9px 14px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.workspace-overview-header:hover {
+  background: var(--surface-hover);
+}
+
+.workspace-overview-header > svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.workspace-overview-header strong {
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workspace-overview-path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.workspace-overview-tools {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-overview-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.workspace-overview-refresh {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.workspace-overview-refresh:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.workspace-overview-chevron {
+  color: var(--text-muted);
+  transition: transform 160ms ease;
+}
+
+.workspace-overview-chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.workspace-overview-error {
+  margin: 0;
+  padding: 4px 14px 10px;
+  color: var(--danger, #ef4444);
+  font-size: 11.5px;
+}
+
+.workspace-overview-list {
+  margin: 0;
+  padding: 2px 6px 8px;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.workspace-overview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.workspace-overview-row.is-dir {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.workspace-overview-row.is-dir .workspace-overview-name::before {
+  content: '\1F4C1\00A0';
+  font-size: 11px;
+}
+
+.workspace-overview-row.is-file .workspace-overview-name::before {
+  content: '\1F4C4\00A0';
+  font-size: 11px;
+}
+
+.workspace-overview-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-overview-meta {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.workspace-overview-empty {
+  margin: 0;
+  padding: 4px 14px 12px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* --- 侧栏：按项目 / 按时间 视图切换 --- */
+.sidebar-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.sidebar-view-toggle .icon-button {
+  border: none;
+  background: transparent;
+}
+
+.sidebar-view-toggle .icon-button.is-active {
+  color: var(--accent);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+}
+
+/* --- 侧栏：按时间分组 --- */
+.session-time-group {
+  margin-bottom: 10px;
+}
+
+.session-group-heading {
+  padding: 6px 12px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.thread-row .thread-project-tag {
+  flex: none;
+  max-width: 76px;
+  overflow: hidden;
+  padding: 1px 7px;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+  border-radius: 999px;
+  font-size: 10.5px;
+}
+
+/* --- 侧栏：项目区空状态引导 --- */
+.sidebar-add-project {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  padding: 12px;
+  text-align: center;
+}
+
+.sidebar-add-project .empty-recent {
+  margin: 0;
+}
+
+.sidebar-add-project-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  justify-content: center;
+  padding: 8px 12px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  border: 1px dashed var(--border-strong, var(--border));
+  border-radius: 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.sidebar-add-project-button:hover {
+  color: var(--accent);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 10%, transparent));
+  border-color: var(--accent);
+}
+
+/* ============================================================
+   工具活动面板（ToolsPanel）：跨消息聚合工具调用，右侧滑入，
+   与 .git-panel 同一布局模型（flex 兄弟节点 + 左缘拖宽手柄）。
+   ============================================================ */
+
+.tools-panel {
+  position: relative;
+  z-index: 6;
+  display: grid;
+  flex: 0 0 auto;
+  width: min(var(--tools-panel-width), 100%);
+  grid-template-rows: 62px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border);
+}
+
+.tools-panel.is-resizing,
+.tools-panel.is-resizing * {
+  user-select: none;
+}
+
+.tools-panel-resize-handle {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.tools-panel-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 2px;
+  height: 34px;
+  content: '';
+  background: var(--border-strong);
+  border-radius: 2px;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 140ms ease, background-color 140ms ease;
+}
+
+.tools-panel-resize-handle:hover::after,
+.tools-panel.is-resizing .tools-panel-resize-handle::after {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.tools-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tools-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tools-panel-title > svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.tools-panel-title strong {
+  display: block;
+  font-size: 13px;
+}
+
+.tools-panel-title small {
+  display: block;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tools-panel-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.tools-panel-filters {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tools-panel-filters button {
+  flex: none;
+  padding: 3px 10px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.tools-panel-filters button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.tools-panel-filters button.active {
+  color: var(--accent);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+  border-color: var(--accent);
+}
+
+.tools-panel-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px 14px;
+}
+
+.tools-panel-state {
+  padding: 26px 14px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.tools-activity-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tools-activity-row {
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+
+.tools-activity-row[data-state='error'] {
+  border-color: color-mix(in srgb, #ef4444 35%, transparent);
+}
+
+.tools-activity-summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 9px;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.tools-activity-summary:hover {
+  background: var(--surface-hover);
+}
+
+.tools-activity-icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.tools-activity-row[data-state='running'] .tools-activity-icon {
+  color: var(--accent);
+}
+
+.tools-activity-name {
+  flex: none;
+  font-weight: 600;
+}
+
+.tools-activity-args {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tools-activity-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.tools-activity-state.is-error {
+  color: #ef4444;
+}
+
+.tools-activity-state.is-done {
+  color: var(--text-muted);
+}
+
+.tools-activity-chevron {
+  flex: none;
+  color: var(--text-muted);
+  transition: transform 160ms ease;
+}
+
+.tools-activity-chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.tools-activity-detail {
+  padding: 2px 10px 8px 31px;
+}
+
+.tools-activity-detail-label {
+  display: block;
+  margin: 4px 0 2px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.tools-activity-detail pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 7px 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.tools-activity-detail-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.tools-activity-locate {
+  padding: 2px 8px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.tools-activity-locate:hover {
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+}
+
+/* ============================================================
+   统一工作区面板（WorkDock）：Git 更改 / 提交记录 / 工具活动 以
+   页签切换，互不叠开；两个内容组件以 embedded 模式宿主，只渲染
+   主体。头部按钮的激活态也在此统一。
+   ============================================================ */
+
+.work-dock {
+  position: relative;
+  z-index: 6;
+  display: grid;
+  flex: 0 0 auto;
+  width: min(var(--work-dock-width), 100%);
+  grid-template-rows: 46px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border);
+}
+
+.work-dock.is-resizing,
+.work-dock.is-resizing * {
+  user-select: none;
+}
+
+.work-dock-resize-handle {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.work-dock-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 2px;
+  height: 34px;
+  content: '';
+  background: var(--border-strong);
+  border-radius: 2px;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 140ms ease, background-color 140ms ease;
+}
+
+.work-dock-resize-handle:hover::after,
+.work-dock.is-resizing .work-dock-resize-handle::after {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.work-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.work-dock-tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.work-dock-tabs button {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  height: 46px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.work-dock-tabs button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.work-dock-tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.work-dock-tab-badge {
+  display: inline-grid;
+  min-width: 17px;
+  height: 16px;
+  padding: 0 5px;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 14%, transparent));
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.work-dock-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.work-dock-body {
+  display: grid;
+  min-height: 0;
+}
+
+.work-dock-pane {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* --- embedded 内容组件：去外壳、占满 dock --- */
+.git-panel.is-embedded,
+.tools-panel.is-embedded {
+  width: 100%;
+  z-index: auto;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.git-panel.is-embedded {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.tools-panel.is-embedded {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* --- header 工具按钮激活态（面板开着时对应按钮点亮） --- */
+.icon-button.is-active {
+  color: var(--accent);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent));
+}
+
+/* --- 窄窗口：工作区面板浮层化，不再挤压对话区 --- */
+@media (max-width: 900px) {
+  .work-dock {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 18;
+    width: min(var(--work-dock-width), min(560px, 100vw - 48px));
+    box-shadow: var(--shadow);
+  }
+}

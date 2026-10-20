@@ -6,8 +6,10 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronRight,
+  Clock,
   Folder,
   FolderCog,
+  FolderPlus,
   Info,
   LoaderCircle,
   MoreHorizontal,
@@ -22,6 +24,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logoUrl from '../../../../resources/logo.png?url'
 import type { ProjectItem, SessionSearchHit, ThreadItem } from '../types'
 import { capTaskList, filterUnloadedHits, shouldSearchRemotely } from '../sidebar-search'
+import { groupThreadsByTime, type SessionGroup } from '../session-groups'
 
 const props = defineProps<{
   projects: ProjectItem[]
@@ -67,6 +70,34 @@ function focusSearch(): void {
 defineExpose({ focusSearch })
 const taskSectionExpanded = ref(true)
 const expandedProjects = ref(new Set<string>())
+
+// ---------------------------------------------------------------- 豆包式「按时间」会话视图
+// 侧栏会话列表的两种组织轴：按项目（默认，工作区配置的组织单位）与按时间
+// （豆包式历史会话管理：今天/昨天/近 7 天/近 30 天/更早）。选择持久化到 localStorage。
+const SIDEBAR_VIEW_KEY = 'haoyue-sidebar-view'
+const viewMode = ref<'projects' | 'time'>(
+  localStorage.getItem(SIDEBAR_VIEW_KEY) === 'time' ? 'time' : 'projects')
+
+watch(viewMode, (value) => {
+  try { localStorage.setItem(SIDEBAR_VIEW_KEY, value) } catch { /* 配额满不影响使用 */ }
+})
+
+function projectDisplayName(projectId?: string): string {
+  if (!projectId) return ''
+  return props.projects.find((project) => project.id === projectId)?.name ?? ''
+}
+
+const timeGroups = computed<Array<SessionGroup & { list: { rows: ThreadItem[]; hidden: number } }>>(() => {
+  if (viewMode.value !== 'time') return []
+  return groupThreadsByTime(props.threads).map((group) => ({
+    ...group,
+    list: buildTaskList(`time:${group.key}`, group.rows)
+  }))
+})
+
+function expandTimeGroup(key: string): void {
+  expandTaskList(`time:${key}`)
+}
 const menuKey = ref('')
 const menuPlacement = ref<'up' | 'down'>('down')
 const knownThreadIds = new Set<string>()
@@ -322,7 +353,7 @@ onBeforeUnmount(() => {
         <div class="section-heading task-section-heading">
           <button style="padding-left: unset;" class="task-section-toggle" type="button"
             :aria-expanded="taskSectionExpanded" @click="taskSectionExpanded = !taskSectionExpanded">
-            <span>任务</span>
+            <span>{{ viewMode === 'time' ? '会话' : '任务' }}</span>
             <ChevronDown v-if="taskSectionExpanded" :size="15" />
             <ChevronRight v-else :size="15" />
 
@@ -331,6 +362,16 @@ onBeforeUnmount(() => {
           <button class="icon-button compact" title="新建任务" @click="createTask()">
               <Plus :size="15" />
             </button>
+            <div class="sidebar-view-toggle" role="group" aria-label="会话列表分组方式">
+              <button class="icon-button compact" :class="{ 'is-active': viewMode === 'projects' }"
+                title="按项目分组" :aria-pressed="viewMode === 'projects'" @click="viewMode = 'projects'">
+                <Folder :size="15" />
+              </button>
+              <button class="icon-button compact" :class="{ 'is-active': viewMode === 'time' }"
+                title="按时间分组" :aria-pressed="viewMode === 'time'" @click="viewMode = 'time'">
+                <Clock :size="15" />
+              </button>
+            </div>
             <button class="icon-button compact" aria-label="任务菜单" @click.stop="toggleMenu('global', $event)">
               <MoreHorizontal :size="16" />
             </button>
@@ -351,7 +392,7 @@ onBeforeUnmount(() => {
           </Transition>
         </div>
 
-        <div v-if="taskSectionExpanded" class="task-list">
+        <div v-if="taskSectionExpanded && viewMode === 'projects'" class="task-list">
           <div v-for="thread in globalTaskList.rows" :key="thread.id" class="thread-heading-row"
             :class="{ active: thread.id === activeThreadId }">
             <button v-if="renamingThreadId !== thread.id" class="thread-row"
@@ -391,6 +432,57 @@ onBeforeUnmount(() => {
             @click="expandTaskList('global')">显示全部（还有 {{ globalTaskList.hidden }} 个）</button>
           <p v-if="globalTaskList.rows.length === 0" class="project-empty">无任务</p>
         </div>
+
+        <!-- 豆包式「按时间」视图：全部会话平铺进 今天/昨天/近 7 天/近 30 天/更早 分组，
+             行尾展示所属项目名，方便在跨项目检索会话时不迷失工作目录。 -->
+        <div v-if="taskSectionExpanded && viewMode === 'time'" class="task-list">
+          <template v-if="timeGroups.length">
+            <section v-for="group in timeGroups" :key="group.key" class="session-time-group">
+              <div class="session-group-heading">{{ group.label }}</div>
+              <div v-for="thread in group.list.rows" :key="thread.id" class="thread-heading-row"
+                :class="{ active: thread.id === activeThreadId }">
+                <button v-if="renamingThreadId !== thread.id" class="thread-row"
+                  @click="emit('selectThread', thread.id)" @dblclick.prevent="startRename(thread)"
+                  @keydown.f2.prevent="startRename(thread)">
+                  <span>{{ thread.title }}</span>
+                  <small v-if="projectDisplayName(thread.projectId)" class="thread-project-tag">
+                    {{ projectDisplayName(thread.projectId) }}
+                  </small>
+                  <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
+                </button>
+                <div v-else class="thread-rename-box">
+                  <input ref="renameInput" v-model="renameValue" aria-label="重命名任务"
+                    @keydown.enter.prevent="commitRename(thread)" @keydown.esc.prevent="renamingThreadId = ''"
+                    @blur="commitRename(thread)" />
+                </div>
+                <button class="icon-button compact row-menu-button" :aria-label="`${thread.title} 任务菜单`"
+                  @click.stop="toggleMenu(`thread:${thread.id}`, $event)">
+                  <MoreHorizontal :size="15" />
+                </button>
+                <Transition name="context-menu">
+                  <div v-if="menuKey === `thread:${thread.id}`" class="sidebar-context-menu task-menu"
+                    :class="{ 'menu-up': menuPlacement === 'up' }">
+                    <button @click="runAction(() => startRename(thread))">
+                      <SquarePen :size="15" />重命名
+                    </button>
+                    <button @click="runAction(() => emit('taskSettings', thread))">
+                      <SlidersHorizontal :size="15" />任务设置
+                    </button>
+                    <button @click="runAction(() => emit('archiveTask', thread))">
+                      <Archive :size="15" />归档任务
+                    </button>
+                    <button class="danger" @click="runAction(() => emit('deleteTask', thread))">
+                      <Trash2 :size="15" />删除任务
+                    </button>
+                  </div>
+                </Transition>
+              </div>
+              <button v-if="group.list.hidden" class="thread-more-row" type="button"
+                @click="expandTimeGroup(group.key)">显示全部（还有 {{ group.list.hidden }} 个）</button>
+            </section>
+          </template>
+          <p v-else class="project-empty">无会话</p>
+        </div>
       </section>
 
       <section v-if="shouldSearchRemotely(normalizedQuery)" class="sidebar-section search-results-section">
@@ -412,7 +504,9 @@ onBeforeUnmount(() => {
         <p v-else class="project-empty">无更多会话</p>
       </section>
 
-      <section class="sidebar-section project-section">
+      <!-- 按时间视图下项目区整体让位：工作区配置回到「按项目」视图操作，
+           避免同一份会话在两个区块重复出现。 -->
+      <section v-if="viewMode === 'projects'" class="sidebar-section project-section">
         <div class="section-heading">
           <span>项目</span>
           <button class="icon-button compact" title="添加项目" @click="emit('openWorkspace')">
@@ -506,7 +600,13 @@ onBeforeUnmount(() => {
           </Transition>
         </div>
 
-        <p v-if="projects.length === 0" class="empty-recent">添加一个项目以开始任务</p>
+        <div v-if="projects.length === 0" class="sidebar-add-project">
+          <p class="empty-recent">还没有项目</p>
+          <button type="button" class="sidebar-add-project-button" @click="emit('openWorkspace')">
+            <FolderPlus :size="16" />
+            <span>选择文件夹，添加项目</span>
+          </button>
+        </div>
       </section>
     </div>
 

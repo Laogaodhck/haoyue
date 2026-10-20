@@ -12,8 +12,11 @@ const props = withDefaults(defineProps<{
   initialTab: PanelTab
   diffOverride?: { path: string; diff: string } | null
   width?: number
+  /** 嵌入 WorkDock：隐藏自身外壳（手柄/头部/内建 tab），由 dock 统一提供。 */
+  embedded?: boolean
 }>(), {
-  width: 560
+  width: 560,
+  embedded: false
 })
 
 const emit = defineEmits<{
@@ -140,25 +143,29 @@ watch(() => props.open, (open) => {
 })
 
 onBeforeUnmount(stopResize)
+
+/** WorkDock 头部的刷新按钮经由该句柄触发。 */
+defineExpose({ refresh })
 </script>
 
 <template>
   <Transition name="side-panel">
     <aside
-      v-if="open"
+      v-if="open || embedded"
       class="git-panel"
-      :class="{ 'is-resizing': resizing }"
+      :class="{ 'is-resizing': resizing, 'is-embedded': embedded }"
       :style="panelStyle"
       aria-label="项目 Git 工具"
     >
       <div
+        v-if="!embedded"
         class="git-panel-resize-handle"
         role="separator"
         aria-label="调整 Git 面板宽度"
         aria-orientation="vertical"
         @pointerdown="startResize"
       />
-        <header class="git-panel-header">
+        <header v-if="!embedded" class="git-panel-header">
           <div class="git-panel-title">
             <Braces :size="19" />
             <div>
@@ -177,7 +184,7 @@ onBeforeUnmount(stopResize)
           </div>
         </header>
 
-        <div class="git-panel-tabs" role="tablist">
+        <div v-if="!embedded" class="git-panel-tabs" role="tablist">
           <button :class="{ active: tab === 'diff' }" role="tab" @click="selectTab('diff')">
             <Braces :size="16" />更改
           </button>

@@ -5,6 +5,9 @@ export interface ProjectItem {
   loaded?: boolean
 }
 
+/** 右侧统一工作区面板（WorkDock）的页签：Git 更改 / 提交记录 / 工具活动。 */
+export type WorkDockTab = 'changes' | 'history' | 'tools'
+
 /** Provider-neutral reasoning depth. Runtime wire clients perform API-specific mapping. */
 export enum ReasoningLevel {
   None = 'none',

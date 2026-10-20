@@ -70,6 +70,10 @@ jobs:
         # 内置本地服务器以 python 执行，是连接器的真实执行面；逻辑正确性此前没有任何
         # 测试覆盖（仅由 connectors/SHA256SUMS 兜住完整性）。
         run: python -m pytest connectors/servers/tests -q
+      - name: Check connector checksums are in sync
+        # 改动 connectors/servers/*.py 或任一 connector.json 后必须重新生成清单，
+        # 否则运行时 ConnectorIntegrity.Verify 会拒绝安装（哈希不一致）。
+        run: python tools/generate_connector_checksums.py --check
 
   desktop:
     name: Desktop test & build

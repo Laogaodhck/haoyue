@@ -15,9 +15,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      # 不指定 dotnet-version：setup-dotnet 读仓库根的 global.json（精确版本 + rollForward: disable）。
+      # 原因：锁文件记录了 SDK **隐式注入**的两个包版本（Microsoft.NET.ILLink.Tasks、
+      # Microsoft.AspNetCore.App.Internal.Assets），它们跟 SDK 捆绑的运行时补丁号绑定
+      # （SDK 10.0.401 → 运行时 10.0.12 → 这两个包也是 10.0.12）。CI 用 10.0.x 拉到更新补丁，
+      # 它们会变成 10.0.13，--locked-mode 直接 NU1004。升级 SDK 的姿势见 RELEASING.md。
       - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -110,8 +113,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.2

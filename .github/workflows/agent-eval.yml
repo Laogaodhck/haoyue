@@ -1,7 +1,7 @@
 name: Agent eval (scheduled)
 
 # Agent 级评测的定时回归：固定任务集 × 真实 runtime 链路（见 benchmarks/agent-eval/README.md）。
-# 评测需要一个真实 LLM 提供商；凭据经仓库 secrets 播种，未配置时整个 job 跳过（不误报失败）。
+# 评测需要一个真实 LLM 提供商；凭据经仓库 secrets 播种，未配置时跳过全部评测步骤（不误报失败）。
 #
 # 需要配置的 secrets：
 #   HAOYUE_EVAL_API_KEY  — OpenAI 兼容服务的 API key
@@ -21,14 +21,30 @@ jobs:
   eval:
     name: Run agent-eval benchmark
     runs-on: windows-latest
-    if: ${{ secrets.HAOYUE_EVAL_API_KEY != '' }}
+    # 注意：这里**不能**用 `if: secrets.X != ''`。job 级 if 的合法上下文只有
+    # github / needs / vars / inputs，引用 secrets 会让整个工作流被判为无效
+    # （表现为每次 push 生成一个 0 作业的失败运行，且工作流名显示为文件路径）。
+    # 因此把「凭据是否存在」的判定放到第一步，用 step output 门控后续步骤。
     timeout-minutes: 120
     steps:
+      - name: Check eval credentials
+        id: gate
+        shell: bash
+        env:
+          HAOYUE_EVAL_API_KEY: ${{ secrets.HAOYUE_EVAL_API_KEY }}
+        run: |
+          if [ -z "$HAOYUE_EVAL_API_KEY" ]; then
+            echo "::notice::未配置 HAOYUE_EVAL_API_KEY，跳过本次评测（不误报失败）。"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
       - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
+        if: steps.gate.outputs.enabled == 'true'
       - name: Seed provider config from secrets
+        if: steps.gate.outputs.enabled == 'true'
         shell: bash
         env:
           HAOYUE_EVAL_API_KEY: ${{ secrets.HAOYUE_EVAL_API_KEY }}
@@ -53,13 +69,14 @@ jobs:
           }
           EOF
       - name: Run agent eval
+        if: steps.gate.outputs.enabled == 'true'
         # 退出码 0=全部通过 1=存在失败：直接作为 job 失败信号，报告仍会作为 artifact 留档。
         run: >
           dotnet run --project benchmarks/agent-eval -c Release --
           --provider haoyue-eval --model ${{ secrets.HAOYUE_EVAL_MODEL }}
       - name: Upload eval report
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.gate.outputs.enabled == 'true'
         with:
           name: agent-eval-results
           path: benchmarks/agent-eval/results/

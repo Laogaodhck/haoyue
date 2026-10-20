@@ -34,6 +34,30 @@ Haoyue 用 `packages.lock.json` 锁定依赖图（`Directory.Build.props` 开启
 - `build.py` 在 GPU/RID 发布结束后会自动把「本次构建新造成」的锁文件漂移还原（构建前已存在的改动不会被触碰）；手工 `dotnet publish` 后请自行 `git checkout -- '*packages.lock.json'`。
 - CI 的 `.NET build & test` 作业末尾有漂移守卫：锁文件被改写即失败并给出修复命令。
 
+### SDK 版本必须与锁文件一致（global.json 精确固定）
+
+锁文件不只记录项目里写明的包，还记录 **SDK 隐式注入**的两个包：
+
+| 隐式包 | 来源 | 版本取自 |
+| --- | --- | --- |
+| `Microsoft.NET.ILLink.Tasks` | 裁剪（`PublishTrimmed`） | SDK 内置 `KnownILLinkPack` 的 `ILLinkPackVersion` |
+| `Microsoft.AspNetCore.App.Internal.Assets` | Web SDK 静态资源 | SDK 内置 `KnownAspNetCorePack` 的目标版本 |
+
+这两个版本跟 **SDK 捆绑的运行时补丁号**绑定（例如 SDK `10.0.401` 捆运行时 `10.0.12`，两者即为 `10.0.12`）。所以只要 CI 换到更新的 SDK 补丁，`--locked-mode` 就会报 `NU1004: version has changed from [10.0.12, ) to [10.0.13, )`——**跟代码无关，纯粹是工具链漂移**。
+
+因此仓库用 `global.json` 把 SDK 精确固定（`"rollForward": "disable"`），所有工作流的 `setup-dotnet` **不写 `dotnet-version`**，一律跟随 `global.json`（单一真相源）。
+
+升级 SDK 的正确姿势：
+
+```bash
+# 1. 改 global.json 的 sdk.version（安装好目标 SDK 后）
+# 2. 按基准口径重算锁文件
+dotnet restore Haoyue.slnx --force-evaluate
+# 3. 用 locked-mode 自证一致
+dotnet restore Haoyue.slnx --locked-mode   # 必须 exit 0
+# 4. global.json 与锁文件一起提交（分两次提交会让 CI 必然红一次）
+```
+
 ## 标准发版流程
 
 ```bash

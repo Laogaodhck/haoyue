@@ -16,6 +16,14 @@ import hashlib
 import sys
 from pathlib import Path
 
+# 中文控制台/管道默认可能是 GBK/cp1252（GitHub Actions 的 windows 运行器就是 cp1252），
+# 打印中文会 UnicodeEncodeError 让「校验通过」也以失败退出。统一强制 UTF-8 + replace 兜底。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 CONNECTORS = ROOT / "connectors"
 SUMS_PATH = CONNECTORS / "SHA256SUMS"

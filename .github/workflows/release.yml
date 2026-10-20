@@ -35,9 +35,8 @@ jobs:
       HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
+      # 跟随 global.json 的精确 SDK 版本（锁文件含 SDK 隐式包版本，SDK 漂移即 NU1004）。
       - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -65,9 +64,8 @@ jobs:
       ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
     steps:
       - uses: actions/checkout@v4
+      # 跟随 global.json 的精确 SDK 版本（锁文件含 SDK 隐式包版本，SDK 漂移即 NU1004）。
       - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.2
@@ -101,9 +99,8 @@ jobs:
       ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
     steps:
       - uses: actions/checkout@v4
+      # 跟随 global.json 的精确 SDK 版本（锁文件含 SDK 隐式包版本，SDK 漂移即 NU1004）。
       - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.2

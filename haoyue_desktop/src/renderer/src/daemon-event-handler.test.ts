@@ -568,4 +568,53 @@ describe('daemon event handler — usage stats', () => {
 
     expect(thread.stats!.lastRoundInputTokens).toBe(512)
   })
+
+  it('captures local inference telemetry from usage details', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(usageEvent({
+      inputTokens: 100,
+      outputTokens: 20,
+      totalInputTokens: 20_000,
+      cachedInputTokens: 18_000,
+      elapsedMs: 1500,
+      inference: {
+        ttftMs: 1234.5,
+        loadWaitMs: 300.4,
+        prefillTokensPerSecond: 3400.2,
+        decodeTokensPerSecond: 28.6,
+        cacheHitRate: 0.92,
+        prefixReuse: true
+      }
+    }))
+
+    expect(thread.stats!.lastInference).toEqual({
+      ttftMs: 1234.5,
+      loadWaitMs: 300.4,
+      prefillTokensPerSecond: 3400.2,
+      decodeTokensPerSecond: 28.6,
+      cacheHitRate: 0.92,
+      prefixReuse: true
+    })
+  })
+
+  it('clears inference telemetry when the daemon sends none (cloud calls)', () => {
+    const context = createContext()
+    const thread = threadFixture()
+    context.threads.value.push(thread)
+    const handler = createDaemonEventHandler(context)
+
+    handler(usageEvent({
+      inputTokens: 100,
+      outputTokens: 20,
+      totalInputTokens: 20_000,
+      inference: { ttftMs: 1234.5, loadWaitMs: 0, prefillTokensPerSecond: 0, decodeTokensPerSecond: 12, cacheHitRate: 0, prefixReuse: false }
+    }))
+    handler(usageEvent({ inputTokens: 100, outputTokens: 20, totalInputTokens: 20_000 }))
+
+    expect(thread.stats!.lastInference).toBeNull()
+  })
 })

@@ -110,6 +110,11 @@ public sealed partial class Agent(
         AgentSteeringQueue? steering = null,
         TurnExecutionScope? inheritedScope = null)
     {
+        // 回合身份上线下沉到事件层（TurnStamp）：本回合发布的所有事件都带 TurnId，
+        // 台账与 events.recent 回放因此能按回合归组。宿主（daemon 用客户端请求 id）
+        // 已设定身份时此处为空操作——委派子代理共享父回合身份。
+        using var turnIdentity = TurnStamp.BeginScope($"turn-{Guid.NewGuid().ToString("N")[..8]}");
+
         // Empty input would burn a model round on a guaranteed-empty answer. Text OR
         // images must be present; the desktop and CLI frontends never send both empty,
         // but scheduled tasks and API callers can.

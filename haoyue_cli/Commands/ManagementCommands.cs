@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Daemon;
+using Haoyue.Runtime.Skills;
 using Spectre.Console;
 
 namespace Haoyue.Cli.Commands;
@@ -233,7 +234,63 @@ public static class SkillCommands
             return 0;
         });
 
+        // 与 daemon 的 skill.official.install / marketplace README 同一能力面：
+        // 桌面技能市场能装的官方技能，CLI 用户同样一条命令装上。
+        var installArg = new Argument<string>("slug");
+        var install = new Command("install", "Install an official catalog skill by slug");
+        install.Add(installArg);
+        install.SetAction(parse =>
+        {
+            using var rt = CliHost.CreateRuntime();
+            var slug = parse.GetRequiredValue(installArg);
+            var entry = OfficialSkillCatalog.Entries.FirstOrDefault(candidate =>
+                candidate.Slug.Equals(slug, StringComparison.OrdinalIgnoreCase));
+            if (entry is null)
+            {
+                AnsiConsole.MarkupLine($"[red]Unknown official skill:[/] {Markup.Escape(slug)}");
+                AnsiConsole.MarkupLine("[gray]Available slugs:[/] "
+                    + Markup.Escape(string.Join(", ", OfficialSkillCatalog.Entries.Select(item => item.Slug))));
+                return 1;
+            }
+            try
+            {
+                rt.Skills.InstallOfficial(rt.Workspace, entry);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                AnsiConsole.MarkupLine($"[red]Install failed:[/] {Markup.Escape(ex.Message)}");
+                return 1;
+            }
+            AnsiConsole.MarkupLine($"[green]Installed[/] {Markup.Escape(entry.Name)}"
+                + $" ([cyan]{Markup.Escape(entry.Slug)}[/]) — enabled.");
+            return 0;
+        });
+
+        var importArg = new Argument<string>("file");
+        var import = new Command("import", "Import a skill from a .md (prompt-only) or .zip (skill directories) file");
+        import.Add(importArg);
+        import.SetAction(parse =>
+        {
+            using var rt = CliHost.CreateRuntime();
+            var file = parse.GetRequiredValue(importArg);
+            IReadOnlyList<Runtime.Skills.SkillInfo> skills;
+            try
+            {
+                skills = rt.Skills.ImportGlobal(file, rt.Workspace);
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException or InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                AnsiConsole.MarkupLine($"[red]Import failed:[/] {Markup.Escape(ex.Message)}");
+                return 1;
+            }
+            AnsiConsole.MarkupLine($"[green]Imported[/] {Markup.Escape(Path.GetFileName(file))}"
+                + $" — {skills.Count} skill(s) now discovered.");
+            return 0;
+        });
+
         command.Add(list); command.Add(enable); command.Add(disable);
+        command.Add(install); command.Add(import);
         return command;
     }
 }

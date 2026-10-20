@@ -59,7 +59,7 @@ import { ReasoningLevel } from './types'
 import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, ThreadStats, ToolActivity, WorkDockTab } from './types'
 import {
   cancelParams,
-  formatContextRatio,
+  formatContextRatio, formatInferenceFootnote,
   formatPreloadLabel,
   formatPromptWithFiles,
   formatTurnFailure,
@@ -341,7 +341,9 @@ const composerCaption = computed(() => {
   // 上下文占用比例：只按最近一轮单次 prompt 规模 ÷ 模型窗口（累计口径会随轮数虚涨）。
   const contextWindow = modelCatalog.value.find((model) => model.ref === activeModel.value)?.contextWindow ?? 0
   const contextRatio = formatContextRatio(stats?.lastRoundInputTokens, contextWindow)
-  return `${number(stats?.llmRounds)} 轮 · ${number(stats?.executionSteps)} 步 | 缓存命中 ${cacheRate} | ${speed} tok/s | 输入 ${number(stats?.inputTokens)} tok · 输出 ${number(stats?.outputTokens)} tok${contextRatio}`
+  // 本地推理读数（仅本地 provider 的 usage 事件携带）：预热 / KV 复用的效果直接可见。
+  const inference = formatInferenceFootnote(stats?.lastInference)
+  return `${number(stats?.llmRounds)} 轮 · ${number(stats?.executionSteps)} 步 | 缓存命中 ${cacheRate} | ${speed} tok/s | 输入 ${number(stats?.inputTokens)} tok · 输出 ${number(stats?.outputTokens)} tok${contextRatio}${inference ? ` | ${inference}` : ''}`
 })
 const settingsThread = computed(() => threads.value.find((thread) => thread.id === taskSettingsThreadId.value))
 const settingsProject = computed(() => projects.value.find((project) => project.id === settingsThread.value?.projectId))

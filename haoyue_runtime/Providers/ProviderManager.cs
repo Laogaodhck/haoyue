@@ -607,6 +607,9 @@ public sealed class ProviderManager(
     {
         stopwatch.Stop();
         var usage = completion?.Usage ?? new TokenUsage(0, 0);
+        // 本地推理性能遥测（InferenceMeter 实测）随用量一起落账：TTFT / 加载等待 /
+        // 净 prefill / decode / 缓存命中率——从此 usage.jsonl 与实时事件都是消费方。
+        var perf = completion?.Performance;
         usageTracker.Record(new UsageEntry
         {
             Provider = model.Provider.Id,
@@ -621,6 +624,12 @@ public sealed class ProviderManager(
             Cost = ComputeCost(model.Model, usage),
             ElapsedMs = stopwatch.Elapsed.TotalMilliseconds,
             Success = success,
+            TtftMs = perf is null ? null : perf.TtftMs,
+            LoadWaitMs = perf is null ? null : perf.LoadWaitMs,
+            PrefillTokensPerSecond = perf is null ? null : perf.PrefillTokensPerSecond,
+            DecodeTokensPerSecond = perf is null ? null : perf.DecodeTokensPerSecond,
+            CacheHitRate = perf is null ? null : perf.CacheHitRate,
+            PrefixReuse = perf is null ? null : perf.PrefixReuse,
         });
 
         // H-E: token 估算校准闭环。provider 回传的真实 prompt tokens 与发送前的本地

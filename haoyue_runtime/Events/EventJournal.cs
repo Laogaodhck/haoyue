@@ -68,6 +68,12 @@ public static class EventJournal
             && camel.TryGetPropertyValue("sessionId", out var session)
             && session is JsonValue && session.GetValueKind() == JsonValueKind.String)
             row["sessionId"] = session.GetValue<string>();
+        // 回合身份与 sessionId 同级暴露：重连回放按它把散事件归组到某一回合，
+        // 与实时帧的请求 id 同源（daemon 回合 = 客户端请求 id）。
+        if (projected is JsonObject camelTurn
+            && camelTurn.TryGetPropertyValue("turnId", out var turn)
+            && turn is JsonValue && turn.GetValueKind() == JsonValueKind.String)
+            row["turnId"] = turn.GetValue<string>();
         return row;
     }
 
@@ -131,18 +137,20 @@ public sealed class JournaledEventBus(IEventBus inner, HaoyueDatabase database) 
 {
     public void Publish(RuntimeEvent evt)
     {
-        if (EventJournal.IsPersistent(evt))
+        // 先盖章再落台账：否则台账行丢失回合身份，回放无法按回合归组。
+        var stamped = TurnStamp.Apply(evt);
+        if (EventJournal.IsPersistent(stamped))
         {
             try
             {
-                database.AppendEvent(evt.Timestamp, evt.GetType().Name, EventJournal.Serialize(evt));
+                database.AppendEvent(stamped.Timestamp, stamped.GetType().Name, EventJournal.Serialize(stamped));
             }
             catch (Exception ex) when (ex is SqliteException or IOException)
             {
                 // Journaling must never take the agent turn down with it.
             }
         }
-        inner.Publish(evt);
+        inner.Publish(stamped);
     }
 
     public IEventSubscription Subscribe() => inner.Subscribe();

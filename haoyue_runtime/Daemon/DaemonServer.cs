@@ -105,6 +105,9 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly Lock _clientsGate = new();
     private readonly Dictionary<long, ClientSink> _clients = [];
     private long _nextClientId;
+    // daemon 自身的事件日志（~/.haoyue/logs/daemon.log）：CLI / 独立 daemon 场景
+    // 此前零落盘，启动失败与告警无线索可查。桌面旁路只覆盖有桌面的场景。
+    private readonly DaemonFileLog _fileLog;
 
     // Live connection contexts (per connected client). Administration operations that
     // mutate global state (factory reset, database rebuild) use this registry to
@@ -129,8 +132,9 @@ public sealed class DaemonServer : IAsyncDisposable
     private readonly TurnUndoRegistry _undoRegistry = new();
 
     // 「本次允许」审批登记簿（P1-2.3）：进程级共享，让 agent.respondApproval RPC
-    // 能响应任意隔离回合运行时里挂起的审批请求。
-    private readonly ApprovalRegistry _approvals = new();
+    // 能响应任意隔离回合运行时里挂起的审批请求。Interactive = true 表示桌面端
+    // 存在真实响应通道（审批卡片）；CLI/测试运行时没有通道，请求方按拒绝立即收场。
+    private readonly ApprovalRegistry _approvals = new() { Interactive = true };
 
     // Turn ids recovered by startup crash recovery (this daemon process lifetime).
     // Clients query these via agent.interrupted on reconnect, because the startup
@@ -196,7 +200,8 @@ public sealed class DaemonServer : IAsyncDisposable
         Func<AgentSession, WorkspaceInfo, string, CancellationToken, Task<AgentTurnResult>>? runTurn,
         WorkspaceInfo globalWorkspace,
         string? handshakeToken = null,
-        string? activeTurnsFile = null)
+        string? activeTurnsFile = null,
+        string? daemonLogFile = null)
     {
         _runtime = runtime;
         _globalWorkspace = globalWorkspace;
@@ -204,6 +209,10 @@ public sealed class DaemonServer : IAsyncDisposable
         _useIsolatedTurnRuntime = runTurn is null;
         _handshakeToken = handshakeToken;
         _activeTurnsFile = activeTurnsFile ?? HaoyuePaths.ActiveTurnsFile;
+        // 事件日志先行打开：构造期发布的启动告警（GPU 自检等）也要有落盘证据。
+        _fileLog = daemonLogFile is null ? DaemonFileLog.OpenDefault() : DaemonFileLog.Open(daemonLogFile);
+        _fileLog.Marker($"daemon host starting pid={Environment.ProcessId} pipe={PipeName}"
+            + $" protocol={ProtocolVersion}");
         // Live config factory: a Reload() that replaces the whole Config object must also
         // change breaker thresholds; a snapshot here would freeze the old policy.
         _sharedBreaker = new CircuitBreaker(() => runtime.ConfigStore.Config.Routing.Retry);
@@ -268,6 +277,7 @@ public sealed class DaemonServer : IAsyncDisposable
         _sharedHttp.Dispose();
         _sharedLocalModels.Dispose();
         _shutdown.Dispose();
+        _fileLog.Dispose();
 
         if (!OperatingSystem.IsWindows() && File.Exists(SocketPath))
         {
@@ -305,6 +315,9 @@ public sealed class DaemonServer : IAsyncDisposable
                 _ => StartConsolidation(), null, TimeSpan.FromHours(6), TimeSpan.FromHours(6));
         }
         var schedulerTask = RunSchedulerAsync(runCt);
+        _fileLog.Info(OperatingSystem.IsWindows()
+            ? $"serving on named pipe {PipeName}"
+            : $"serving on unix socket {SocketPath}");
         try
         {
             if (OperatingSystem.IsWindows())
@@ -339,6 +352,7 @@ public sealed class DaemonServer : IAsyncDisposable
             catch (OperationCanceledException) when (runCt.IsCancellationRequested)
             {
             }
+            _fileLog.Marker("daemon host stopped");
         }
     }
 
@@ -1309,6 +1323,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         try
                         {
                             _runtime.ConfigStore.ApplyPatch(fields);
+                            _fileLog.Info($"config patch applied by CLI delegate: {string.Join(", ", fields.Select(field => field.Key))}");
                             await WriteAsync(context.Writer, context.WriterGate, id, "result",
                                 "saved", context.ConnectionCt).ConfigureAwait(false);
                         }
@@ -2039,11 +2054,26 @@ public sealed class DaemonServer : IAsyncDisposable
     /// 进程级共享的权重库。启动与配置热更新路径都可调用；并发数变更若有活跃推理
     /// 则延后生效（库内部处理）。
     /// </summary>
-    private void ConfigureLocalModelCache()
+    /// <summary>上次已告警的并发值（0 = 未告警过）。同一值只告警一次，避免配置抖动刷屏。</summary>
+    private int _lastConcurrencyWarning;
+
+    internal void ConfigureLocalModelCache()
     {
         var agent = _runtime.ConfigStore.Config.Agent;
         _sharedLocalModels.Configure(
             agent.LocalModelMaxResident, agent.LocalModelConcurrency, agent.LocalModelIdleUnloadMinutes);
+        // 并发 > 1 关闭 KV 前缀复用：这条静默退化让多轮大 prompt 每轮从头 prefill。
+        // 与 GPU 后端自检同一待遇——广播 WarningEvent 进事件台账，文件日志同步落盘。
+        var warning = Providers.LocalModelCache.ConcurrencyWarning(agent.LocalModelConcurrency);
+        if (warning is null)
+        {
+            _lastConcurrencyWarning = 0;
+        }
+        else if (_lastConcurrencyWarning != agent.LocalModelConcurrency)
+        {
+            _lastConcurrencyWarning = agent.LocalModelConcurrency;
+            _runtime.Events.Publish(new WarningEvent(warning));
+        }
     }
 
     /// <summary>
@@ -2241,6 +2271,19 @@ public sealed class DaemonServer : IAsyncDisposable
     {
         await foreach (var evt in reader.ReadAllAsync(ct).ConfigureAwait(false))
         {
+            // 告警/错误先落 daemon.log：无桌面场景（CLI / 独立 daemon）这是唯一的
+            // 持久证据；有桌面时与 stdout 旁路、事件台账三处互补。
+            switch (evt)
+            {
+                case WarningEvent warning:
+                    _fileLog.Warn(warning.Message);
+                    break;
+                case ErrorEvent error:
+                    _fileLog.Error(error.Detail is { } detail
+                        ? $"{error.Message} | {detail}"
+                        : error.Message);
+                    break;
+            }
             if (evt is ScheduledTaskUpcomingEvent upcoming)
             {
                 var upcomingDetails = new JsonObject
@@ -2385,6 +2428,11 @@ public sealed class DaemonServer : IAsyncDisposable
         CancellationToken connectionCt,
         AgentSteeringQueue steering)
     {
+        // 回合身份 = 客户端请求 id：本回合在事件总线上发布的一切（含 SQLite 台账行）
+        // 都带同一个 TurnId，events.recent 回放与实时帧的 id 字段因此可按回合归组。
+        // Agent.RunTurnAsync 内部的 BeginScope 检测到已有身份时为空操作，不会覆盖。
+        using var turnIdentity = TurnStamp.BeginScope(id.ToString());
+
         // Unique per-turn identity for file write-lock ownership; released when the
         // turn ends even if a tool was interrupted before its own finally ran.
         var owner = $"{session.Header.Id}/{Guid.NewGuid().ToString("N")[..8]}";
@@ -2609,6 +2657,19 @@ public sealed class DaemonServer : IAsyncDisposable
                         ["totalInputTokens"] = tokenEvent.TotalInputTokens,
                         ["cachedInputTokens"] = tokenEvent.CachedInputTokens,
                         ["elapsedMs"] = tokenEvent.Elapsed.TotalMilliseconds,
+                        // 本地推理遥测（InferenceMeter 实测）：桌面输入框读数直接消费。
+                        // 没有它，遥测只进 usage.jsonl，用户看不到预热 / KV 复用的真实效果。
+                        ["inference"] = tokenEvent.Performance is { } perf
+                            ? (JsonNode?)new JsonObject
+                            {
+                                ["ttftMs"] = Math.Round(perf.TtftMs, 1),
+                                ["loadWaitMs"] = Math.Round(perf.LoadWaitMs, 1),
+                                ["prefillTokensPerSecond"] = Math.Round(perf.PrefillTokensPerSecond, 1),
+                                ["decodeTokensPerSecond"] = Math.Round(perf.DecodeTokensPerSecond, 1),
+                                ["cacheHitRate"] = Math.Round(perf.CacheHitRate, 4),
+                                ["prefixReuse"] = perf.PrefixReuse,
+                            }
+                            : null,
                     }),
                 WorkflowEvent workflow => (
                     Name: (string?)"workflow",

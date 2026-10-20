@@ -78,14 +78,14 @@ public class DocsFactsTests
     {
         var n = CountXunitCases(Path.Combine(FindRepoRoot(), "haoyue_tests"));
         Assert.True(n >= 900, $"runtime 用例数异常：{n}");
-        AssertReadmeMentions([$"{n} 用例", $"{n}+13+"], [$"{n} cases", $"{n}+13+"]);
+        AssertReadmeMentions([$"{n} 用例", $"{n}+18+"], [$"{n} cases", $"{n}+18+"]);
     }
 
     [Fact]
     public void Cli_TestCount_MatchesReadme()
     {
         var n = CountXunitCases(Path.Combine(FindRepoRoot(), "haoyue_cli_tests"));
-        Assert.Equal(13, n);
+        Assert.Equal(18, n);
         AssertReadmeMentions([$"haoyue_cli_tests {n} 用例"], [$"haoyue_cli_tests {n} cases"]);
     }
 
@@ -127,7 +127,7 @@ public class DocsFactsTests
     /// </summary>
     [Theory]
     [InlineData("haoyue_runtime/Daemon/DaemonAdminApi.cs", 3250)]
-    [InlineData("haoyue_runtime/Daemon/DaemonServer.cs", 3100)]
+    [InlineData("haoyue_runtime/Daemon/DaemonServer.cs", 3150)]
     [InlineData("haoyue_desktop/src/renderer/src/components/SettingsDialog.vue", 2700)]
     [InlineData("haoyue_desktop/src/renderer/src/App.vue", 2400)]
     public void GiantClass_LineBudget_Maintained(string relativePath, int budget)

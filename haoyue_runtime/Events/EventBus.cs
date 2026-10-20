@@ -26,10 +26,12 @@ public sealed class EventBus : IEventBus
 
     public void Publish(RuntimeEvent evt)
     {
+        // 回合身份在出口统一盖章：生产者无需知道自己在哪个回合里。
+        var stamped = TurnStamp.Apply(evt);
         lock (_gate)
         {
             foreach (var sub in _subscriptions)
-                sub.Channel.Writer.TryWrite(evt);
+                sub.Channel.Writer.TryWrite(stamped);
         }
     }
 

@@ -123,6 +123,19 @@ public sealed class LocalModelCache : IDisposable
     /// <summary>并发 &gt; 1 时每请求独立 context，KV 前缀复用不可用（调用方据此改走无状态路径）。</summary>
     public bool SupportsPrefixReuse => MaxConcurrency <= 1;
 
+    /// <summary>
+    /// 并发 &gt; 1 关闭 KV 前缀复用的用户可见警告文案（纯函数，供 daemon 与测试共用）。
+    /// 并发 ≤ 1 返回 null（默认值，无需打扰）。这条退化此前完全静默：多轮对话的大
+    /// prompt 每轮从头 prefill，成本成倍上升，用户却不知道一个配置项就能找回。
+    /// </summary>
+    public static string? ConcurrencyWarning(int concurrency)
+    {
+        if (concurrency <= 1) return null;
+        return $"本地模型并发 = {concurrency}：每个请求使用独立 context，KV 前缀复用已自动关闭"
+            + "——多轮对话的重复前缀每轮都会完整重新 prefill，长上下文下显著变慢。"
+            + "如需启用 KV 前缀复用（本地推理通常单并发即可，多轮快 3-10 倍），请把 agent.localModelConcurrency 设为 1。";
+    }
+
     /// <summary>最近一次成功加载的报告（供 daemon model.status / 配置页展示）。</summary>
     public LocalModelLoadReport? LastLoadReport => _lastReport;
 

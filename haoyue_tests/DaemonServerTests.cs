@@ -83,6 +83,116 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task WarningAndErrorEvents_ArePersistedToDaemonFileLog()
+    {
+        // CLI / 独立 daemon 场景没有桌面旁路，daemon.log 是告警与错误的唯一持久证据。
+        // ErrorEvent 有意不转发给回合客户端（回合终态由 error 信封承载），因此只等
+        // 回合结束再轮询日志文件，不依赖事件泵与回合泵的帧序。
+        var connection = await StartServerAsync((_, _, _, _) =>
+        {
+            _runtime!.Events.Publish(new WarningEvent("GPU 后端缺失，本地推理退化为 CPU"));
+            _runtime!.Events.Publish(new ErrorEvent("MCP 连接失败", "connect ECONNREFUSED"));
+            return Task.FromResult(new AgentTurnResult("ok", false, null));
+        });
+
+        await connection.SendAsync(1, "chat", new JsonObject { ["message"] = "hello" });
+        await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "done");
+
+        var text = await WaitForDaemonLogLineAsync(
+            line => line.Contains("[WARN] GPU 后端缺失，本地推理退化为 CPU", StringComparison.Ordinal));
+        Assert.Contains("[ERROR] MCP 连接失败 | connect ECONNREFUSED", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>轮询 daemon 日志直到断言条件成立（事件泵落盘与回合泵收尾存在竞态）。</summary>
+    private async Task<string> WaitForDaemonLogLineAsync(Func<string, bool> predicate)
+    {
+        var path = Path.Combine(_tempDir, "daemon.log");
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        string text = string.Empty;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                // 写入方持有 FileShare.Read 之外的写句柄：读取必须显式共享写。
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                text = await reader.ReadToEndAsync();
+                if (predicate(text)) return text;
+            }
+            catch (IOException)
+            {
+                // 滚动/写入瞬间的共享冲突：下一轮重试。
+            }
+            await Task.Delay(50);
+        }
+        Assert.Fail($"daemon.log 未在超时前出现期望行。实际内容：\n{text}");
+        return text;
+    }
+
+    [Fact]
+    public async Task ConfigSave_DelegatedPatch_IsRecordedInDaemonFileLog()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)));
+
+        await connection.SendAsync(1, "config.save", new JsonObject
+        {
+            ["fields"] = new JsonObject
+            {
+                ["agent"] = new JsonObject { ["localModelConcurrency"] = 2 }
+            }
+        });
+        var saved = await connection.ReadUntilAsync(r =>
+            r["id"]!.GetValue<long>() == 1 && r["event"]!.GetValue<string>() == "result");
+        Assert.Equal("saved", saved["data"]!.GetValue<string>());
+
+        var text = await WaitForDaemonLogLineAsync(line =>
+            line.Contains("config patch applied by CLI delegate: agent", StringComparison.Ordinal));
+        Assert.Contains("config patch applied by CLI delegate: agent", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LocalModelConcurrencyAboveOne_PublishesKvReuseWarning_OncePerValue()
+    {
+        // 并发 > 1 自动关闭 KV 前缀复用：启动装配与配置变更都必须可见，同一值只告警一次。
+        var workspaceRoot = CreateWorkspace("concurrency-warning");
+        var configStore = new ConfigStore(
+            Path.Combine(_tempDir, "config-conc.json"),
+            Path.Combine(_tempDir, "state-conc.json"));
+        _runtime = HaoyueRuntime.Create(
+            workspaceRoot, configStore, Path.Combine(_tempDir, "haoyue-conc.db"),
+            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
+        var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-conc"));
+        var server = new DaemonServer(
+            _runtime, (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            globalWorkspace, null, daemonLogFile: Path.Combine(_tempDir, "daemon.log"));
+        _asyncDisposables.Add(server);
+        using var events = _runtime.Events.Subscribe();
+
+        // 默认并发 1：静默。
+        server.ConfigureLocalModelCache();
+        Assert.False(events.Reader.TryRead(out _));
+
+        // 提到 2：告警一次；重复装配同一值不刷屏。
+        configStore.Config.Agent.LocalModelConcurrency = 2;
+        server.ConfigureLocalModelCache();
+        var first = Assert.IsType<WarningEvent>(events.Reader.ReadAsync().AsTask().GetAwaiter().GetResult());
+        Assert.Contains("KV 前缀复用", first.Message, StringComparison.Ordinal);
+        server.ConfigureLocalModelCache();
+        Assert.False(events.Reader.TryRead(out _));
+
+        // 回到 1 后再变：配置确实变了，重新告警。
+        configStore.Config.Agent.LocalModelConcurrency = 1;
+        server.ConfigureLocalModelCache();
+        Assert.False(events.Reader.TryRead(out _));
+        configStore.Config.Agent.LocalModelConcurrency = 4;
+        server.ConfigureLocalModelCache();
+        var second = Assert.IsType<WarningEvent>(events.Reader.ReadAsync().AsTask().GetAwaiter().GetResult());
+        Assert.Contains("4", second.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ActiveChat_DoesNotBlockCancellation_AndEndsWithCancelledEvent()
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -174,7 +284,8 @@ public sealed class DaemonServerTests : IAsyncDisposable
             _runtime,
             (_, _, _, _) => Task.FromResult(new AgentTurnResult("后台完成", false, null)),
             new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-state")),
-            null);
+            null,
+            daemonLogFile: Path.Combine(_tempDir, "daemon.log"));
         _asyncDisposables.Add(server);
         var first = await OpenConnectionAsync(server);
         var second = await OpenConnectionAsync(server);
@@ -1994,7 +2105,8 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-state"));
         var server = new DaemonServer(
             runtime, (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
-            globalWorkspace, null, journalFile);
+            globalWorkspace, null, journalFile,
+            daemonLogFile: Path.Combine(_tempDir, "daemon.log"));
         _asyncDisposables.Add(server);
 
         await server.RecoverInterruptedTurnsAsync(CancellationToken.None);
@@ -2075,7 +2187,8 @@ public sealed class DaemonServerTests : IAsyncDisposable
             Path.Combine(_tempDir, "haoyue.db"),
             new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
         var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-state"));
-        var server = new DaemonServer(_runtime, runTurn, globalWorkspace, handshakeToken);
+        var server = new DaemonServer(_runtime, runTurn, globalWorkspace, handshakeToken,
+            daemonLogFile: Path.Combine(_tempDir, "daemon.log"));
         _asyncDisposables.Add(server);
 
         return await OpenConnectionAsync(server);

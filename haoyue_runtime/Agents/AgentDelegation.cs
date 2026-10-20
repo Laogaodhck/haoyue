@@ -146,10 +146,13 @@ public sealed class AgentDelegator(
     FileLockScope lockScope,
     ISkillManager? skills = null,
     TurnUndoRegistry? undoRegistry = null,
-    IToolExecutionPolicy? toolPolicy = null) : IAgentDelegator
+    IToolExecutionPolicy? toolPolicy = null,
+    ApprovalRegistry? approvals = null) : IAgentDelegator
 {
     public const string DelegateToolName = "delegate_task";
     public const string ParallelDelegateToolName = "delegate_tasks";
+
+    private readonly ApprovalRegistry? _approvals = approvals;
 
     public async Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, CancellationToken ct) =>
         await RunSubTaskAsync(workspace, task, ct, depth: 0, parallel: false, allowedTools: null, parentScope: null)
@@ -213,7 +216,7 @@ public sealed class AgentDelegator(
         var subAgent = new Agent(
             configStore, providerManager, subTools, promptProvider, promptComposer,
             workspaceManager, sessionStore, verifier, events, fileLocks, lockScope, skills,
-            undoRegistry, toolPolicy);
+            undoRegistry, toolPolicy, approvals: _approvals);
         var session = sessionStore.Create(workspace);
         return await subAgent.RunTurnAsync(session, workspace, task, ct, inheritedScope: parentScope)
             .ConfigureAwait(false);

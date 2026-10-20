@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ThreadItem } from './types'
-import { cancelParams, classifyModelError, classifyTurnFailure, extractModelError, formatContextRatio, formatPreloadLabel, formatTokenCount, formatTurnFailure, messageMatches, normalizePath, pathName, samePath, sessionStats, stripModelErrorBlock } from './app-helpers'
+import { cancelParams, classifyModelError, classifyTurnFailure, extractModelError, formatContextRatio, formatInferenceFootnote, formatPreloadLabel, formatTokenCount, formatTurnFailure, messageMatches, normalizePath, pathName, samePath, sessionStats, stripModelErrorBlock } from './app-helpers'
 
 describe('formatTokenCount', () => {
   it('formats millions with M suffix correctly without unnecessary trailing zeros', () => {
@@ -279,6 +279,36 @@ describe('formatPreloadLabel', () => {
   it('stays silent when there is nothing to report', () => {
     expect(formatPreloadLabel(null)).toBe('')
     expect(formatPreloadLabel(undefined)).toBe('')
+  })
+})
+
+describe('formatInferenceFootnote', () => {
+  const reading = {
+    ttftMs: 1234.5,
+    loadWaitMs: 300,
+    prefillTokensPerSecond: 3400,
+    decodeTokensPerSecond: 28,
+    cacheHitRate: 0.92,
+    prefixReuse: true
+  }
+
+  it('surfaces the full local inference reading as a composer footnote', () => {
+    // 预热与 KV 复用的收益必须可感知：TTFT 含加载等待，prefill 为净口径。
+    expect(formatInferenceFootnote(reading)).toBe('首字 1.2s · 加载 0.3s · 预填 3.4k tok/s · 解码 28 tok/s · 缓存命中 92% · KV 复用')
+  })
+
+  it('omits the load segment when weights were already warm', () => {
+    expect(formatInferenceFootnote({ ...reading, loadWaitMs: 12 })).toBe('首字 1.2s · 预填 3.4k tok/s · 解码 28 tok/s · 缓存命中 92% · KV 复用')
+  })
+
+  it('omits the KV reuse tag when the prefix cache did not apply', () => {
+    expect(formatInferenceFootnote({ ...reading, prefixReuse: false })).toBe('首字 1.2s · 加载 0.3s · 预填 3.4k tok/s · 解码 28 tok/s · 缓存命中 92%')
+  })
+
+  it('stays silent without telemetry (cloud calls) or without a first token', () => {
+    expect(formatInferenceFootnote(null)).toBe('')
+    expect(formatInferenceFootnote(undefined)).toBe('')
+    expect(formatInferenceFootnote({ ...reading, ttftMs: 0 })).toBe('')
   })
 })
 

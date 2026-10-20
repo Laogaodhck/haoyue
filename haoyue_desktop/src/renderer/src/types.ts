@@ -120,6 +120,16 @@ export interface ThreadStats {
   lastRoundInputTokens?: number
   cachedInputTokens?: number
   outputElapsedMs?: number
+  /** 最近一次本地推理的性能读数（usage 事件 details.inference；仅本地 provider 有值）。
+   *  让预热 / KV 前缀复用的效果对用户可见：TTFT 含加载等待，prefill 为净口径。 */
+  lastInference?: {
+    ttftMs: number
+    loadWaitMs: number
+    prefillTokensPerSecond: number
+    decodeTokensPerSecond: number
+    cacheHitRate: number
+    prefixReuse: boolean
+  } | null
 }
 
 export interface ThreadItem {

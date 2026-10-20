@@ -398,6 +398,21 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         thread.stats.lastRoundInputTokens = totalInputTokens
         thread.stats.cachedInputTokens = (thread.stats.cachedInputTokens ?? 0) + cachedInputTokens
         thread.stats.outputElapsedMs = (thread.stats.outputElapsedMs ?? 0) + elapsedMs
+        // 本地推理遥测（仅本地 provider 下发）：覆盖式记录最近一次调用，
+        // 输入框脚注据此展示 TTFT / 解码速率 / 缓存命中。
+        const inference = event.details?.inference as
+          | { ttftMs?: number; loadWaitMs?: number; prefillTokensPerSecond?: number; decodeTokensPerSecond?: number; cacheHitRate?: number; prefixReuse?: boolean }
+          | undefined
+        thread.stats.lastInference = inference && typeof inference.ttftMs === 'number'
+          ? {
+              ttftMs: inference.ttftMs,
+              loadWaitMs: inference.loadWaitMs ?? 0,
+              prefillTokensPerSecond: inference.prefillTokensPerSecond ?? 0,
+              decodeTokensPerSecond: inference.decodeTokensPerSecond ?? 0,
+              cacheHitRate: inference.cacheHitRate ?? 0,
+              prefixReuse: inference.prefixReuse === true
+            }
+          : null
         break
       }
       case 'workflow': {

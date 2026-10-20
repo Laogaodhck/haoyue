@@ -109,15 +109,18 @@ public sealed partial class Agent
         {
             // 内置高危守卫的拒绝走「本次允许」审批（P1-2.3）：用户自定义 allow/deny
             // 是显式配置，维持硬拒绝；只有 builtin-bash-guard 这类启发式拦截才提供
-            // 一次性放行，避免用户为了跑一条命令去改配置文件。无审批登记簿（CLI /
-            // 测试上下文）时行为与从前一致。
-            if (_approvals is not null
+            // 一次性放行，避免用户为了跑一条命令去改配置文件。无审批通道（CLI /
+            // 测试上下文）时立即按拒绝收场——等待必然超时，干等 120 秒只会让
+            // 回合看起来卡死。
+            if (_approvals is { Interactive: true }
                 && string.Equals(policyDecision.Rule, "builtin-bash-guard", StringComparison.OrdinalIgnoreCase))
             {
+                // 同上：先登记后发布，避免进程内响应器抢在登记之前。
+                var pendingApproval = _approvals.RequestAsync(
+                    call.Id, ApprovalRegistry.DefaultTimeoutSeconds, ct);
                 events.Publish(new ApprovalRequiredEvent(
                     call.Id, tool.Name, argsSummary, policyDecision.Reason));
-                var approved = await _approvals.RequestAsync(
-                    call.Id, ApprovalRegistry.DefaultTimeoutSeconds, ct).ConfigureAwait(false);
+                var approved = await pendingApproval.ConfigureAwait(false);
                 if (approved)
                 {
                     events.Publish(new StatusEvent($"用户已批准执行 {tool.Name}", argsSummary));
@@ -134,6 +137,43 @@ public sealed partial class Agent
             events.Publish(new WarningEvent($"工具 {call.Name} 被执行策略拒绝（{policyDecision.Rule}）"));
             events.Publish(new ToolCallCompletedEvent(call.Id, call.Name, false, message, TimeSpan.Zero));
             return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
+        }
+
+        // 高危工具执行前同意（agent.toolPolicy.requireConsentFor）：守卫规则只拦
+        // 「像破坏性命令」的调用，而 computer_exec 这类工具一启用就拿到 profile 级
+        // 无沙箱 shell，必须在第一次调用前让用户知情。回合内按工具批准一次——
+        // 交互式计算机使用不会每步弹卡；无审批通道（CLI/测试）立即拒绝并指路，
+        // 不静默放行一个无沙箱 shell。
+        var consentFor = configStore.Config.Agent.ToolPolicy.RequireConsentFor;
+        if (consentFor is { Count: > 0 }
+            && consentFor.Any(name => string.Equals(name, tool.Name, StringComparison.OrdinalIgnoreCase))
+            && !turnScope.IsConsented(tool.Name))
+        {
+            if (_approvals is not { Interactive: true })
+            {
+                var noChannel = $"工具 {tool.Name} 需要用户同意后执行（agent.toolPolicy.requireConsentFor），"
+                    + "但当前环境没有审批通道（CLI 或测试上下文）。请改用桌面端运行，或在配置中"
+                    + "将该工具从 agent.toolPolicy.requireConsentFor 移除（需自行承担无沙箱 shell 的风险）。";
+                events.Publish(new ToolCallCompletedEvent(call.Id, tool.Name, false, noChannel, TimeSpan.Zero));
+                return new ToolExecution(ChatMessage.ToolResult(call.Id, tool.Name, noChannel, false), false);
+            }
+            // 先登记后发布：RequestAsync 在方法体内同步完成 GetOrAdd 登记，事件若先于
+            // 登记送达，进程内响应器（桌面 RPC / 测试）会面对一个尚不存在的挂起请求。
+            var pendingConsent = _approvals.RequestAsync(
+                call.Id, ApprovalRegistry.DefaultTimeoutSeconds, ct);
+            events.Publish(new ApprovalRequiredEvent(
+                call.Id, tool.Name, argsSummary,
+                $"{tool.Name} 会以当前用户权限在你计算机上执行命令（无沙箱），请确认本次允许。"));
+            var consent = await pendingConsent.ConfigureAwait(false);
+            if (!consent)
+            {
+                var denied = $"工具 {tool.Name} 未获得用户同意，已取消执行。"
+                    + "可在桌面审批卡片中选择「本次允许」，或在配置 agent.toolPolicy.requireConsentFor 中调整需要同意的工具清单。";
+                events.Publish(new ToolCallCompletedEvent(call.Id, tool.Name, false, denied, TimeSpan.Zero));
+                return new ToolExecution(ChatMessage.ToolResult(call.Id, tool.Name, denied, false), false);
+            }
+            turnScope.GrantConsent(tool.Name);
+            events.Publish(new StatusEvent($"用户已批准执行 {tool.Name}", argsSummary));
         }
 
         Execute:

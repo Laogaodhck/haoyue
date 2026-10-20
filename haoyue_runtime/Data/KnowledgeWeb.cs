@@ -10,56 +10,98 @@ public sealed class KnowledgeWebException(string message) : Exception(message);
 /// User-Agent, 15 s timeout, 3 MB body cap, HTML reduced to readable text (script /
 /// style dropped, block tags become line breaks, entities decoded, blank lines
 /// collapsed). The page &lt;title&gt; (or the host) becomes the suggested source title.
+///
+/// SSRF 防线（2026-10-20）：抓取前对每一跳（含重定向目标）执行
+/// <see cref="KnowledgeUrlPolicy.Check"/>——http/https scheme、「允许的网站」白名单
+/// （启用时）、私网/链路本地/保留段硬拦截（白名单关闭时也生效）。重定向改手动跟随
+/// （AllowAutoRedirect=false），否则公网 URL 一条 302 就能打到云元数据地址。
 /// </summary>
 public static class KnowledgeWeb
 {
     public const int MaxBodyBytes = 3 * 1024 * 1024;
     public const int MaxTextChars = 200_000;
+    /// <summary>手动跟随的最大重定向跳数（与浏览器默认一致）。</summary>
+    public const int MaxRedirects = 5;
 
     private static readonly HttpClient Client = CreateClient();
 
-    public static (string Title, string Text) Fetch(Uri url)
+    public static (string Title, string Text) Fetch(Uri url, Func<Uri, (bool Ok, string? Reason)>? validate = null) =>
+        FetchCore(url, validate, Client);
+
+    /// <summary>测试缝：注入 HttpMessageHandler 验证重定向逐跳校验，不走真实网络。</summary>
+    internal static (string Title, string Text) Fetch(
+        Uri url, Func<Uri, (bool Ok, string? Reason)>? validate, HttpMessageHandler handler) =>
+        FetchCore(url, validate, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) });
+
+    private static (string Title, string Text) FetchCore(
+        Uri url, Func<Uri, (bool Ok, string? Reason)>? validate, HttpClient client)
     {
-        HttpResponseMessage response;
-        try
+        // 默认策略 = scheme + 公网主机（无白名单规则时）；daemon 传入带白名单的校验器。
+        validate ??= static u => KnowledgeUrlPolicy.Check(u, null);
+        var current = url;
+        for (var hop = 0; hop <= MaxRedirects; hop++)
         {
-            response = Client.GetAsync(url).ConfigureAwait(false).GetAwaiter().GetResult();
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
-        {
-            throw new KnowledgeWebException($"无法访问链接：{ex.Message}");
-        }
-        using (response)
-        {
-            if (!response.IsSuccessStatusCode)
-                throw new KnowledgeWebException($"链接返回错误：HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
+            var verdict = validate(current);
+            if (!verdict.Ok)
+                throw new KnowledgeWebException(verdict.Reason ?? "链接被安全策略拒绝。");
 
-            var mediaType = response.Content.Headers.ContentType?.MediaType ?? "";
-            if (mediaType is not ("text/html" or "application/xhtml+xml" or "text/plain" or "application/json"))
-                throw new KnowledgeWebException($"不支持的内容类型：{mediaType}（仅支持网页与纯文本）");
-
-            byte[] body;
+            HttpResponseMessage response;
             try
             {
-                body = response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                response = client.GetAsync(current).ConfigureAwait(false).GetAwaiter().GetResult();
             }
-            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
             {
-                throw new KnowledgeWebException($"读取链接内容失败：{ex.Message}");
+                throw new KnowledgeWebException($"无法访问链接：{ex.Message}");
             }
-            if (body.Length > MaxBodyBytes)
-                throw new KnowledgeWebException($"网页过大：超过 {MaxBodyBytes / 1024 / 1024} MB 限制");
+            using (response)
+            {
+                if (IsRedirect(response) && response.Headers.Location is { } location)
+                {
+                    current = location.IsAbsoluteUri ? location : new Uri(current, location);
+                    continue; // 下一跳重新过策略校验
+                }
 
-            var charset = response.Content.Headers.ContentType?.CharSet;
-            var text = Decode(body, charset);
-            if (mediaType.Contains("html"))
-            {
-                var (title, plain) = HtmlToText(text);
-                return (title ?? SuggestTitle(url), plain);
+                if (!response.IsSuccessStatusCode)
+                    throw new KnowledgeWebException($"链接返回错误：HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
+
+                var mediaType = response.Content.Headers.ContentType?.MediaType ?? "";
+                if (mediaType is not ("text/html" or "application/xhtml+xml" or "text/plain" or "application/json"))
+                    throw new KnowledgeWebException($"不支持的内容类型：{mediaType}（仅支持网页与纯文本）");
+
+                byte[] body;
+                try
+                {
+                    body = response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                }
+                catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+                {
+                    throw new KnowledgeWebException($"读取链接内容失败：{ex.Message}");
+                }
+                if (body.Length > MaxBodyBytes)
+                    throw new KnowledgeWebException($"网页过大：超过 {MaxBodyBytes / 1024 / 1024} MB 限制");
+
+                var charset = response.Content.Headers.ContentType?.CharSet;
+                var text = Decode(body, charset);
+                if (mediaType.Contains("html"))
+                {
+                    var (title, plain) = HtmlToText(text);
+                    return (title ?? SuggestTitle(current), plain);
+                }
+                return (SuggestTitle(current), text.Trim());
             }
-            return (SuggestTitle(url), text.Trim());
         }
+
+        throw new KnowledgeWebException($"重定向次数超过 {MaxRedirects} 次，已停止抓取。");
     }
+
+    private static bool IsRedirect(HttpResponseMessage response) =>
+        response.StatusCode is System.Net.HttpStatusCode.Redirect
+            or System.Net.HttpStatusCode.MovedPermanently
+            or System.Net.HttpStatusCode.Found
+            or System.Net.HttpStatusCode.SeeOther
+            or System.Net.HttpStatusCode.TemporaryRedirect
+            or System.Net.HttpStatusCode.PermanentRedirect;
 
     private static string SuggestTitle(Uri url) =>
         string.Equals(url.Host, "localhost", StringComparison.OrdinalIgnoreCase) || url.Host.Length == 0
@@ -70,8 +112,9 @@ public static class KnowledgeWeb
     {
         var handler = new SocketsHttpHandler
         {
-            AllowAutoRedirect = true,
-            MaxAutomaticRedirections = 5,
+            // 重定向手动跟随：每一跳都要过 KnowledgeUrlPolicy 校验，
+            // 自动重定向会把 302 目标直接抓回来，白名单与私网拦截被整体绕过。
+            AllowAutoRedirect = false,
             AutomaticDecompression = DecompressionMethods.All,
             ConnectTimeout = TimeSpan.FromSeconds(15),
         };

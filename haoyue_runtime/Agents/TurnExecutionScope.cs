@@ -41,6 +41,7 @@ public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
 
     private readonly List<TurnStepRecord> _steps = [];
     private readonly List<UndoableFileChange> _changes = [];
+    private readonly HashSet<string> _consentedTools = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _gate = new();
     private int _ordinal;
     private long _compensationBytes;
@@ -51,12 +52,26 @@ public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
     public IReadOnlyList<TurnStepRecord> Steps { get { lock (_gate) return [.. _steps]; } }
     public IReadOnlyList<UndoableFileChange> Changes { get { lock (_gate) return [.. _changes]; } }
 
-    /// <summary>
-    /// 崩溃对账观察者（daemon 逐步骤重写 active-turns 日志）。放在台账上而不是 Agent 实例上，
+    /// <summary>崩溃对账观察者（daemon 逐步骤重写 active-turns 日志）。放在台账上而不是 Agent 实例上，
     /// 是为了让共享父台账的子代理步骤同样进日志：否则一次崩溃会留下「文件已改但日志里没有」的
-    /// 子任务痕迹，对账报告不完整。
-    /// </summary>
+    /// 子任务痕迹，对账报告不完整。</summary>
     public Action<TurnStepRecord>? MutatingStepObserved { get; set; }
+
+    /// <summary>
+    /// 本回合已获用户批准的高危工具名（按工具一次性生效，不按 callId）：交互式
+    /// 计算机使用场景下同一回合批准 computer_exec 一次后放行后续调用，避免每一步
+    /// 都弹审批卡片把可用性磨没。批准仅在本回合有效——下一个回合重新征求同意。
+    /// </summary>
+    public bool IsConsented(string toolName)
+    {
+        lock (_gate) return _consentedTools.Contains(toolName);
+    }
+
+    /// <summary>记录用户对本回合某工具的批准。</summary>
+    public void GrantConsent(string toolName)
+    {
+        lock (_gate) _consentedTools.Add(toolName);
+    }
 
     /// <summary>Appends one executed step to the ledger.</summary>
     public void RecordStep(string kind, string tool, string target, bool compensable, bool success)

@@ -229,6 +229,15 @@ public sealed class ToolPolicyConfig
 
     /// <summary>内置高危命令守卫开关，作用于全部 shell 入口（bash 与 computer_exec）。</summary>
     public bool BuiltinBashGuard { get; set; } = true;
+
+    /// <summary>
+    /// 执行前需要用户明确同意的工具清单（默认 ["computer_exec"]）。守卫规则只拦
+    /// 「像破坏性命令」的调用，而这类工具一启用就等同把当前用户权限的 shell 交出去，
+    /// 必须在第一次调用前让用户知情。回合内按工具批准一次（交互式计算机使用不会
+    /// 每步弹审批卡）；无审批通道（CLI/测试）立即拒绝并提示改用桌面端或调整清单。
+    /// 置空列表即恢复旧行为（仅守卫规则触发审批）。
+    /// </summary>
+    public List<string> RequireConsentFor { get; set; } = ["computer_exec"];
 }
 
 /// <summary>单条策略规则：工具名（可通配）+ 参数正则 + 拒绝理由。</summary>

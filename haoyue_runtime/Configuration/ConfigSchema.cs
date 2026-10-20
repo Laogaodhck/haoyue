@@ -85,11 +85,14 @@ public static class ConfigSchema
         New("agent.localModelIdleUnloadMinutes", "int", 20, min: 0, max: 1_440),
         // 启动预热默认开启：本地模型首字延迟是体验主项（实测 -39%），关闭须显式选择。
         New("agent.localModelPreload", "bool", true),
-        // 工具执行策略闸门（运行时强制，模型无法绕过）。规则列表本身是用户数据。
-        New("agent.toolPolicy.enabled", "bool", true),
-        New("agent.toolPolicy.builtinBashGuard", "bool", true),
-        New("agent.toolPolicy.allow", "array", null),
-        New("agent.toolPolicy.deny", "array", null),
+    // 工具执行策略闸门（运行时强制，模型无法绕过）。规则列表本身是用户数据。
+    New("agent.toolPolicy.enabled", "bool", true),
+    New("agent.toolPolicy.builtinBashGuard", "bool", true),
+    New("agent.toolPolicy.allow", "array", null),
+    New("agent.toolPolicy.deny", "array", null),
+    // 执行前需用户同意的工具清单：默认 computer_exec（一启用即 profile 级无沙箱 shell）。
+    // 用户数据型（数组），空列表 = 仅守卫规则触发审批。
+    New("agent.toolPolicy.requireConsentFor", "array", null),
         // Windows Job Object 沙箱；0 表示该项不限制。
         New("agent.bashSandbox.enabled", "bool", false),
         New("agent.bashSandbox.memoryLimitMb", "int", 2_048, min: 0, max: 262_144),

@@ -13,6 +13,13 @@ public sealed class ApprovalRegistry
     /// <summary>审批请求的默认等待时长：超时按拒绝处理，回合不会无限挂起。</summary>
     public const int DefaultTimeoutSeconds = 120;
 
+    /// <summary>
+    /// 是否存在真实的响应通道（桌面审批卡片）。daemon 注入的登记簿为 true；
+    /// CLI / 测试上下文没有 UI 能回传 agent.respondApproval，等待必然超时——
+    /// 那些环境下调用方应按拒绝立即收场并给出可操作提示，而不是干等两分钟。
+    /// </summary>
+    public bool Interactive { get; init; }
+
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pending = new(StringComparer.Ordinal);
 
     /// <summary>当前挂起中的审批数量（诊断/测试用）。</summary>

@@ -4,9 +4,14 @@ namespace Haoyue.Runtime.Events;
 /// Base type for every event flowing through the runtime event bus.
 /// The renderer (CLI/GUI/Web) consumes these; the runtime never touches the console.
 /// </summary>
+/// <param name="TurnId">回合身份（daemon 请求 id / CLI 回合号）。由 <see cref="TurnStamp"/>
+/// 在回合执行体入口统一盖章，事件记录本身无需逐个携带；无回合上下文时为 null。</param>
 public abstract record RuntimeEvent
 {
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>回合身份：台账归组与 events.recent 回放按它对齐实时帧的请求 id。</summary>
+    public string? TurnId { get; init; }
 }
 
 // ---------------------------------------------------------------- turn lifecycle
@@ -81,6 +86,8 @@ public sealed record ProviderRetryEvent(string ModelRef, int Attempt, string Rea
 
 public sealed record ProviderSwitchedEvent(string FromRef, string ToRef, string Reason) : RuntimeEvent;
 
+/// <param name="Performance">本地推理性能遥测（仅本地 provider 的真实测量；云端调用为 null）。
+/// 2026-10-20 接通消费线：usage.jsonl 落盘 + 聚合 + 实时事件下发，桌面输入框读数。</param>
 public sealed record UsageRecordedEvent(
     string ProviderId,
     string ModelId,
@@ -89,7 +96,8 @@ public sealed record UsageRecordedEvent(
     decimal Cost,
     TimeSpan Elapsed,
     long TotalInputTokens,
-    long CachedInputTokens) : RuntimeEvent;
+    long CachedInputTokens,
+    Haoyue.Runtime.Providers.InferencePerformance? Performance = null) : RuntimeEvent;
 
 // ---------------------------------------------------------------- workflow & plan
 
@@ -142,8 +150,11 @@ public sealed record ErrorEvent(string Message, string? Detail = null) : Runtime
 // ---------------------------------------------------------------- approval
 
 /// <summary>
-/// 内置高危守卫拦截了执行类工具（bash / computer_exec）时请求用户「本次允许」（P1-2.3）。
-/// 桌面弹出审批卡片，用户选择经 agent.respondApproval 回传；超时/拒绝按拒绝处理。
+/// 执行类工具请求用户「本次允许」（P1-2.3，2026-10-20 扩展）。两个触发源：
+/// ① 内置高危守卫拦截了破坏性命令（bash / computer_exec / terminal 的启发式规则）——
+/// 桌面弹出审批卡片，用户选择经 agent.respondApproval 回传；超时/拒绝按拒绝处理；
+/// ② agent.toolPolicy.requireConsentFor 清单内工具（默认 computer_exec：一启用即
+/// profile 级无沙箱 shell）的首次调用——回合内批准一次后放行后续调用。
 /// 用户自定义 toolPolicy 规则不触发本事件——那类拒绝必须改配置。
 /// </summary>
 public sealed record ApprovalRequiredEvent(

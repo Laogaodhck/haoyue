@@ -2,7 +2,11 @@
 
 ## 状态
 
-已采纳（2026-10-15，随批次 E 护栏固化落地）
+已采纳（2026-10-15，随批次 E 护栏固化落地）；
+2026-10-21 显式评审上调 `DaemonServer` 预算 3100 → 3150（本批「观测运维补线」接线成本：
+daemon 自身文件日志的事件桥接与启停/配置记录、并发>1 关闭 KV 复用的可见警告、
+config.save 委派记录，共 +42 行。接线点本身已是最薄形态，下沉无收益；
+DaemonServer 拆分路径见决策 3，预算再次触顶时执行）。
 
 ## 背景
 
@@ -26,8 +30,8 @@
    搬迁式重构的风险（契约漂移、缓存契约破坏、Electron 验证盲区）大于当前收益。
 2. **冻结增长：行数预算护栏**。四个文件各设行数上限，由
    `haoyue_tests/DocsFactsTests.cs` 的 `GiantClass_LineBudget_Maintained` 强制：
-   `DaemonAdminApi ≤ 3250`、`DaemonServer ≤ 3100`、`SettingsDialog.vue ≤ 2700`、
-   `App.vue ≤ 2400`。超额即测试失败——这是刻意设计：**任何继续膨胀必须先经历一次
+   `DaemonAdminApi ≤ 3250`、`DaemonServer ≤ 3150`（2026-10-21 自 3100 上调，见状态行）、
+   `SettingsDialog.vue ≤ 2700`、`App.vue ≤ 2400`。超额即测试失败——这是刻意设计：**任何继续膨胀必须先经历一次
    显式的预算上调评审（改本 ADR 状态行 + 预算数字），而不是默认允许**。
 3. **拆分路径登记（触发条件式，非排期）**：
    - DaemonAdminApi：按域拆 partial class（providers / knowledge / evolution / tasks / models…），

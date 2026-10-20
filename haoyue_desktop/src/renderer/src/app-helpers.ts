@@ -314,6 +314,29 @@ export function formatPreloadLabel(preload?: { phase: string; percent: number } 
     : `本地模型预热中 ${Math.round(preload.percent * 100)}%`
 }
 
+/**
+ * 本地推理读数脚注（usage 事件 details.inference）。只展示有测量的行——
+ * 云端调用没有 inference 字段，脚注为空。格式：
+ * 「首字 1.2s（加载 0.3s）· 预填 3.4k tok/s · 解码 28 tok/s · 缓存命中 92% · KV 复用」。
+ * 预热是否值得、KV 前缀复用是否生效，用户从此能直接看见，而不是只能翻日志。
+ */
+export function formatInferenceFootnote(inference?: ThreadStats['lastInference']): string {
+  if (!inference || !(inference.ttftMs > 0)) return ''
+  const parts = [`首字 ${(inference.ttftMs / 1000).toFixed(1)}s`]
+  if (inference.loadWaitMs >= 50) parts.push(`加载 ${(inference.loadWaitMs / 1000).toFixed(1)}s`)
+  if (inference.prefillTokensPerSecond > 0) parts.push(`预填 ${formatRate(inference.prefillTokensPerSecond)}`)
+  if (inference.decodeTokensPerSecond > 0) parts.push(`解码 ${formatRate(inference.decodeTokensPerSecond)}`)
+  if (inference.cacheHitRate > 0) parts.push(`缓存命中 ${Math.round(inference.cacheHitRate * 100)}%`)
+  if (inference.prefixReuse) parts.push('KV 复用')
+  return parts.join(' · ')
+}
+
+function formatRate(tokensPerSecond: number): string {
+  return tokensPerSecond >= 1000
+    ? `${(tokensPerSecond / 1000).toFixed(1)}k tok/s`
+    : `${Math.round(tokensPerSecond)} tok/s`
+}
+
 export function sessionScope(thread: ThreadItem, project?: ProjectItem): Record<string, unknown> {
   return thread.projectId && project ? { workspace: project.path } : { global: true }
 }

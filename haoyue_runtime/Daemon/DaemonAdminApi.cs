@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text;
 using System.IO;
+using System;
 using Cronos;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
@@ -13,6 +14,7 @@ using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
 using Haoyue.Runtime.Secrets;
 using Haoyue.Runtime.Skills;
+using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Runtime.Daemon;
@@ -1824,6 +1826,15 @@ internal sealed partial class DaemonAdminApi(
     // ────────────────────── knowledge center: sources ──────────────────────
 
     /// <summary>
+    /// 知识库 URL 导入/刷新共用的链接校验器：现读「允许的网站」白名单（桌面端增删
+    /// 立即生效，无缓存），叠加私网/链路本地硬拦截。配置为空 = 白名单未启用，
+    /// 仅保留 scheme 与公网主机两道底线。
+    /// </summary>
+    private Func<Uri, (bool Ok, string? Reason)> KnowledgeUrlValidator() =>
+        u => KnowledgeUrlPolicy.Check(
+            u, WebSiteAllowlist.Parse(runtime.ConfigStore.Config.Web?.AllowedSites ?? []));
+
+    /// <summary>
     /// Adds one ingest source: kind "text" (title+content), "url" (page fetched and
     /// reduced to text) or "file" (paths[] reused from knowledge.import). Long text
     /// is chunked into 「标题 · 第N/M部分」 entries; re-adding the same url/file
@@ -1858,7 +1869,9 @@ internal sealed partial class DaemonAdminApi(
             if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
                 throw new DaemonRequestException("params.url 必须是 http(s) 绝对链接。");
             string title, text;
-            try { (title, text) = KnowledgeWeb.Fetch(uri); }
+            // 与 web_fetch 同一套白名单，另叠加私网/链路本地硬拦截（白名单关闭时也生效），
+            // 重定向逐跳校验——否则「允许的网站」对知识库导入形同虚设。
+            try { (title, text) = KnowledgeWeb.Fetch(uri, KnowledgeUrlValidator()); }
             catch (KnowledgeWebException ex) { throw new DaemonRequestException(ex.Message); }
             var chunks = KnowledgeImport.SplitChunks(text);
             if (chunks.Count == 0)
@@ -1979,7 +1992,8 @@ internal sealed partial class DaemonAdminApi(
                 if (!Uri.TryCreate(source.Locator, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
                     throw new DaemonRequestException($"来源链接无效：{source.Locator}");
                 string title, text;
-                try { (title, text) = KnowledgeWeb.Fetch(uri); }
+                // 刷新与新增同一套校验：白名单事后收紧 / 私网拦截不能只卡首次导入。
+                try { (title, text) = KnowledgeWeb.Fetch(uri, KnowledgeUrlValidator()); }
                 catch (KnowledgeWebException ex) { throw new DaemonRequestException(ex.Message); }
                 var urlChunks = KnowledgeImport.SplitChunks(text);
                 if (urlChunks.Count == 0)
@@ -2530,7 +2544,7 @@ internal sealed partial class DaemonAdminApi(
         var data = new JsonArray();
         foreach (var aggregate in runtime.Usage.Aggregate(since))
         {
-            data.Add((JsonNode)new JsonObject
+            var row = new JsonObject
             {
                 ["provider"] = aggregate.Provider,
                 ["model"] = aggregate.Model,
@@ -2544,7 +2558,19 @@ internal sealed partial class DaemonAdminApi(
                 ["totalTokens"] = aggregate.TotalTokens,
                 ["avgLatencyMs"] = aggregate.AvgLatencyMs,
                 ["successRate"] = aggregate.SuccessRate,
-            });
+            };
+            // 推理遥测列：无测量（纯云端调用）时整组省略，前端据此隐藏。
+            if (aggregate.TelemetryCalls > 0)
+            {
+                row["telemetryCalls"] = aggregate.TelemetryCalls;
+                row["avgTtftMs"] = aggregate.AvgTtftMs;
+                row["avgLoadWaitMs"] = aggregate.AvgLoadWaitMs;
+                row["avgPrefillTokensPerSecond"] = aggregate.AvgPrefillTokensPerSecond;
+                row["avgDecodeTokensPerSecond"] = aggregate.AvgDecodeTokensPerSecond;
+                row["avgCacheHitRate"] = aggregate.AvgCacheHitRate;
+                row["prefixReuseRate"] = aggregate.PrefixReuseRate;
+            }
+            data.Add((JsonNode)row);
         }
         return data.ToJsonString();
     }

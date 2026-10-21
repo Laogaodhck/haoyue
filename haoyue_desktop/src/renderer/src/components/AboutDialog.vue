@@ -7,6 +7,8 @@ import { useEscapeClose } from '../use-escape-close'
 const props = defineProps<{
   open: boolean
   appInfo: AppInfo | null
+  /** Runtime 侧协议版本（握手回报；7.7 让「桌面 ↔ daemon 版本匹配」在关于页可见）。 */
+  protocolVersion?: string
 }>()
 const emit = defineEmits<{
   close: []
@@ -53,6 +55,10 @@ function platformLabel(): string {
           <div class="about-row">
             <dt>平台</dt>
             <dd>{{ platformLabel() }}</dd>
+          </div>
+          <div class="about-row">
+            <dt>Runtime 协议</dt>
+            <dd>v{{ protocolVersion ?? '未连接' }}</dd>
           </div>
           <div class="about-row">
             <dt>作者</dt>

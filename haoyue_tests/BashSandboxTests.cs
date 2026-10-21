@@ -130,6 +130,66 @@ public class BashSandboxTests : IDisposable
     }
 
     [Fact]
+    public void JobObject_MemoryLimit_IsActuallyConfigured()
+    {
+        // 回归（2026-10-21）：2048MB * 1024 * 1024 曾因 int 溢出为负，导致
+        // JobObjectLimitProcessMemory flag 被静默丢弃——默认配置下内存上限从未生效。
+        // 回读内核侧配置锁死 flag 与数值，防止结构或算术回归再次静默丢限。
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var job = new WindowsJobObject(memoryLimitMb: 2048, maxProcesses: 256, uiRestrictions: false);
+        var info = new JobQuery.JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        var ok = JobQuery.QueryInformationJobObject(
+            job.HandleForTest, JobQuery.JobObjectInfoClass.JobObjectExtendedLimitInformation,
+            out info, System.Runtime.InteropServices.Marshal.SizeOf<JobQuery.JOBOBJECT_EXTENDED_LIMIT_INFORMATION>(), IntPtr.Zero);
+        Assert.True(ok, $"QueryInformationJobObject failed, Win32Error={System.Runtime.InteropServices.Marshal.GetLastWin32Error()}");
+
+        var flags = (uint)info.BasicLimitInformation.LimitFlags;
+        Assert.True((flags & 0x100) != 0, $"ProcessMemory flag missing, flags=0x{flags:X}");
+        Assert.True((flags & 0x8) != 0, $"ActiveProcess flag missing, flags=0x{flags:X}");
+        Assert.Equal(2048UL * 1024 * 1024, (ulong)info.ProcessMemoryLimit);
+    }
+
+    [Fact]
+    public async Task JobObject_MemoryLimit_TerminatesRunawayAllocation()
+    {
+        // 逃逸测试：job 内进程累计 commit 5GB 远超 2048MB 上限 → 内核在第 ~21 块
+        // 拒绝分配。用 Python 而非 .NET：MemoryError 是可优雅退出的普通异常
+        //（.NET OOM 会 failfast），断言稳定且不依赖分配器的失败形态。
+        if (!OperatingSystem.IsWindows()) return;
+        var python = FindPython();
+        if (python is null) return; // 本机无 Python 时跳过（逃逸机制由上一条回读用例锁定）
+
+        using var job = new WindowsJobObject(memoryLimitMb: 2048, maxProcesses: 0, uiRestrictions: false);
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = python,
+            Arguments = "-X utf8 -c \"x = []\nfor i in range(50):\n    x.append(bytearray(100 * 1024 * 1024))\nprint('alloc-done')\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        })!;
+        Assert.True(job.Assign(process.Handle));
+
+        var stdout = await process.StandardOutput.ReadToEndAsync();
+        await process.StandardError.ReadToEndAsync();
+        Assert.True(process.WaitForExit(60_000));
+        Assert.True(process.ExitCode != 0 || !stdout.Contains("alloc-done", StringComparison.Ordinal),
+            $"runaway allocation completed unimpeded: exit={process.ExitCode}, stdout={stdout}");
+    }
+
+    private static string? FindPython()
+    {
+        foreach (var name in new[] { "python.exe", "python3.exe" })
+        {
+            var found = ShellRunner.FindOnPath(name);
+            if (found is not null) return found;
+        }
+        return null;
+    }
+
+    [Fact]
     public async Task BashTool_SandboxTimeout_KillsProcessTree()
     {
         if (!OperatingSystem.IsWindows()) return; // Job Object 是 Windows 专属能力
@@ -141,5 +201,61 @@ public class BashSandboxTests : IDisposable
 
         Assert.False(result.Success);
         Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+/// <summary>QueryInformationJobObject 最小 P/Invoke（仅测试用：回读 job limit 配置）。</summary>
+internal static class JobQuery
+{
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool QueryInformationJobObject(
+        IntPtr hJob, JobObjectInfoClass infoClass, out JOBOBJECT_EXTENDED_LIMIT_INFORMATION lpInfo,
+        int cbInfo, IntPtr lpReturnLength);
+
+    public enum JobObjectInfoClass { JobObjectExtendedLimitInformation = 9 }
+
+    [Flags]
+    public enum LimitFlags : uint
+    {
+        JobObjectLimitActiveProcess = 0x00000008,
+        JobObjectLimitProcessMemory = 0x00000100,
+        JobObjectLimitJobMemory = 0x00000200,
+        JobObjectLimitKillOnJobClose = 0x00002000,
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    public struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    public struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public LimitFlags LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
     }
 }

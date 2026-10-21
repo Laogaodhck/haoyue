@@ -47,6 +47,8 @@ export class DaemonClient extends EventEmitter {
   private bufferChunks: string[] = []
   private nextId = 1
   private connecting: Promise<DaemonState> | null = null
+  /** Daemon 在握手响应里回报的协议版本（7.7：关于页展示，断连后保留上次读数）。 */
+  private daemonProtocolVersion: string | undefined = undefined
   private readonly pending = new Map<number, PendingRequest>()
   // Generation counter: disconnect() bumps it so an in-flight connect() can no
   // longer adopt its socket after the handshake — previously disconnect() during
@@ -108,7 +110,7 @@ export class DaemonClient extends EventEmitter {
           }
           this.socket = socket
           this.bindSocket(socket)
-          finish({ connected: true, endpoint: this.endpoint })
+          finish({ connected: true, endpoint: this.endpoint, protocolVersion: this.daemonProtocolVersion })
         } catch (error) {
           socket.destroy()
           finish({
@@ -167,6 +169,7 @@ export class DaemonClient extends EventEmitter {
               info = JSON.parse(response.data) as typeof info
             } catch { /* 版本信息缺失：旧 daemon，跳过校验 */ }
             if (info.version) {
+              this.daemonProtocolVersion = info.version
               const daemonMajor = info.version.split('.')[0]
               const clientMajor = DAEMON_PROTOCOL_VERSION.split('.')[0]
               if (daemonMajor !== clientMajor) {

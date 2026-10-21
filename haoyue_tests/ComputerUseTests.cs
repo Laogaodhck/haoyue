@@ -576,6 +576,92 @@ public sealed class ComputerUseTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ComputerExec_SandboxedEcho_Completes()
+    {
+        // 5.1 沙箱化：默认开启后正常命令必须照常工作（Job Object 不破坏常规路径），
+        // cmd 的 OEM CP 解码特例也必须保留。
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "powershell",
+            ["command"] = "Write-Output ('sandbox-' + 'ok')"
+        }, CreateToolContext(), CancellationToken.None);
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains("sandbox-ok", res.Output);
+    }
+
+    [Fact]
+    public async Task ComputerExec_SandboxMemoryCeiling_KillsRunawayProcess()
+    {
+        // 逃逸测试：累计分配远超 2048MB 的内存 → 进程被 Job Object 强制终止。
+        // 用 Python 而非 .NET：MemoryError 是可优雅退出的普通异常（.NET OOM 会
+        // failfast），断言稳定且不依赖分配器的失败形态。
+        if (!OperatingSystem.IsWindows()) return;
+        var python = FindPythonOnPath();
+        if (python is null) return; // 本机无 Python 时跳过（共享沙箱逃逸由 BashSandboxTests 锁定）
+
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "python",
+            ["timeout_seconds"] = 120,
+            ["command"] = "x = []\nfor i in range(50):\n    x.append(bytearray(100 * 1024 * 1024))\nprint('alloc-done')"
+        }, CreateToolContext(), CancellationToken.None);
+
+        Assert.False(res.Success, $"runaway allocation completed unimpeded: {res.Output}");
+    }
+
+    private static string? FindPythonOnPath()
+    {
+        foreach (var name in new[] { "python.exe", "python3.exe" })
+        {
+            var found = (Environment.GetEnvironmentVariable("PATH") ?? "")
+                .Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                .Select(dir => System.IO.Path.Combine(dir.Trim(), name))
+                .FirstOrDefault(File.Exists);
+            if (found is not null) return found;
+        }
+        return null;
+    }
+
+    [Fact]
+    public async Task ComputerExec_Unsandboxed_WhenDisabled()
+    {
+        // shellSandboxed=false 显式关闭：直跑路径可用（用户自担无沙箱风险）。
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig
+        {
+            ShellSandboxed = false
+        });
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "powershell",
+            ["command"] = "Write-Output 'direct-ok'"
+        }, CreateToolContext(), CancellationToken.None);
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains("direct-ok", res.Output);
+    }
+
+    [Fact]
+    public async Task ComputerExec_CwdDefaultsToWorkspaceRoot()
+    {
+        // 5.1 cwd 收紧：缺省从用户 profile 改为 workspace root（与 bash 工具对齐）。
+        if (!OperatingSystem.IsWindows()) return;
+        var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());
+        var res = await tool.ExecuteAsync(new JsonObject
+        {
+            ["kind"] = "powershell",
+            ["command"] = "(Get-Location).Path"
+        }, CreateToolContext(), CancellationToken.None);
+
+        Assert.True(res.Success, res.Output);
+        Assert.Contains(_tempDir, res.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ComputerExec_Cmd_HonorsCwd()
     {        if (!OperatingSystem.IsWindows()) return;
         var tool = new ComputerExecTool(new MockPromptProvider(), new ComputerUseConfig());

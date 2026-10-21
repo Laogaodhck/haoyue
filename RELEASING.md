@@ -143,6 +143,20 @@ printf '1\n1\n' | HAOYUE_BUILDER_OUTPUT=C:/Temp/haoyue-out HAOYUE_PUBLISH_DIR=C:
 
 运行时（.NET）修复必须重新打包才对使用安装版/便携版的用户生效。多客户端相关的改动（广播、事件泵）要在打包版上实测：同时拉起桌面端与一个 daemon 探针连接，确认两侧都收到 `model.load.progress` / `delta` / `done`，且 `%APPDATA%\haoyue-desktop\logs\daemon.log` 无 `Unhandled exception`、无 `Daemon broadcast failed`、结尾为正常退出而非 `exit code=1`。诊断链路见 [本地模型回合无输出诊断与修复](haoyue_doc/本地模型回合无输出诊断与修复-2026-10-14.md)。
 
+## 运行期回滚（2026-10-21，7.7）
+
+发布后用户侧出现回归时，回滚是显式流程而不是「重装一遍试试」：
+
+1. **定位上一可用版本**：GitHub Releases 页按时间取上一个 tag（如当前 `v1.3.30` 回归，回滚目标 `v1.3.29`）。
+2. **校验下载产物**：`sha256sum -c SHA256SUMS.txt`（Release 页附带的清单只覆盖本版文件；历史版本的清单在其自己的 Release 页）。
+3. **卸当前版 → 装上一版**：
+   - 桌面（Windows）：设置 → 应用 → 卸载 Haoyue，然后运行上一 tag 的 `Haoyue-Setup-*.exe`；便携版直接替换目录。用户数据（`~/.haoyue/` 与 `%APPDATA%\haoyue-desktop\`）各版本共享，无需迁移。
+   - CLI（npm）：`npm i -g haoyue@<上一版本号>`（精确版本，不用 `@latest`——那会装回回归版）。
+4. **验证回滚生效**：`haoyue doctor` 应正常完成并退出 0；桌面关于页的「Runtime 协议」版本应显示为上一 tag 的 daemon。协议主版本不一致时桌面端会明确报「协议版本不兼容」——这本身就是回滚到位的信号。
+5. **登记回归**：在 GitHub 给回归版 Release 评论已知问题 + 在下一版修复说明中引用，避免其他用户中招。
+
+发布链路的冒烟护栏（CI 内已强制）：CLI 归档解压后 `--version` + `doctor` 必须退出 0；桌面便携包启动后 30 秒内存活。冒烟不过 = 发布作业红，交付物永远不会处于「构建成功但起不来」的状态。
+
 ## 故障排查
 
 | 现象 | 处理 |

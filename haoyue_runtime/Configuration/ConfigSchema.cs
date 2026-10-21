@@ -143,6 +143,7 @@ public static class ConfigSchema
         New("computerUse.enabled", "bool", false),
         New("computerUse.driver", "enum", "auto", allowed: ["auto", "windows", "linux", "mac", "vision"]),
         New("computerUse.shellEnabled", "bool", true),
+        New("computerUse.shellSandboxed", "bool", true),
         New("computerUse.systemControlEnabled", "bool", true),
         New("computerUse.pythonPath", "string", ""),
         New("computerUse.maxStepsPerTurn", "int", 30, min: 0, max: 1_000),

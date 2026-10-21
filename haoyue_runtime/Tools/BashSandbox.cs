@@ -13,7 +13,10 @@ namespace Haoyue.Runtime.Tools;
 public sealed class WindowsJobObject : IDisposable
 {
     private IntPtr _handle;
-    private readonly int _memoryLimitBytes;
+    // long：2048MB * 1024 * 1024 恰好超出 int.MaxValue（2026-10-21 修复）——此前
+    // 默认 2048MB 配置溢出为负数，`> 0` 条件为假，JobObjectLimitProcessMemory
+    // flag 被静默丢弃，内存上限从未真正生效过。
+    private readonly long _memoryLimitBytes;
     private readonly int _maxProcesses;
     private readonly bool _uiRestrictions;
 
@@ -23,7 +26,7 @@ public sealed class WindowsJobObject : IDisposable
     {
         if (!IsSupported)
             throw new PlatformNotSupportedException("Job objects are Windows-only.");
-        _memoryLimitBytes = memoryLimitMb > 0 ? memoryLimitMb * 1024 * 1024 : 0;
+        _memoryLimitBytes = memoryLimitMb > 0 ? (long)memoryLimitMb * 1024 * 1024 : 0;
         _maxProcesses = maxProcesses;
         _uiRestrictions = uiRestrictions;
         _handle = Interop.CreateJobObjectW(IntPtr.Zero, null);
@@ -45,7 +48,7 @@ public sealed class WindowsJobObject : IDisposable
         var extended = new Interop.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
         {
             BasicLimitInformation = limits,
-            ProcessMemoryLimit = new UIntPtr(unchecked((uint)_memoryLimitBytes)),
+            ProcessMemoryLimit = new UIntPtr(unchecked((ulong)_memoryLimitBytes)),
         };
         var ok = Interop.SetInformationJobObject(
             _handle, Interop.JobObjectInfoClass.JobObjectExtendedLimitInformation,
@@ -70,6 +73,9 @@ public sealed class WindowsJobObject : IDisposable
 
     /// <summary>Assigns an already-started process (and its whole future child tree) to this job.</summary>
     public bool Assign(IntPtr processHandle) => Interop.AssignProcessToJobObject(_handle, processHandle);
+
+    /// <summary>Raw job handle（测试缝：QueryInformationJobObject 回读校验 limit 配置）。</summary>
+    internal IntPtr HandleForTest => _handle;
 
     public void Dispose()
     {

@@ -45,7 +45,7 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
     public override JsonObject ParameterSchema => ToolSchema.Object(
         ("kind", ToolSchema.String("Shell to run: 'auto' (OS default — PowerShell on Windows, bash on Linux/macOS; also used when kind is omitted), 'powershell', 'bash' (POSIX only), 'cmd' (Windows only), or 'python'", "auto", "powershell", "bash", "cmd", "python"), true),
         ("command", ToolSchema.String("Command or script text to execute"), true),
-        ("cwd", ToolSchema.String("Working directory (absolute path recommended; defaults to the user profile)"), false),
+        ("cwd", ToolSchema.String("Working directory (absolute path recommended; defaults to the workspace root)"), false),
         ("timeout_seconds", ToolSchema.Integer("Timeout in seconds (default 60, max 600)"), false));
 
     public override async Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
@@ -55,9 +55,12 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
         if (string.IsNullOrWhiteSpace(command))
             return ToolResult.Fail("command is required.");
 
+        // cwd 缺省对齐 bash 工具（workspace root；global workspace 用当前目录）：
+        // 此前的 profile 缺省等于把每次执行都放进用户主目录，配合无沙箱 shell 是
+        // 双重放大面。显式传 cwd 仍可覆盖到任何合法目录。
         var cwd = GetString(arguments, "cwd");
         if (string.IsNullOrWhiteSpace(cwd))
-            cwd = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            cwd = context.ResolvePath(".");
         if (!Directory.Exists(cwd))
             return ToolResult.Fail($"Working directory not found: {cwd}");
 
@@ -91,6 +94,14 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
             psi.ArgumentList.Add(arg);
 
         using var process = new Process { StartInfo = psi };
+        // 5.1 沙箱：Windows 上与 bash/terminal 共用同一 Job Object 机制（2048MB 内存
+        // 上限、256 活动进程上限、UI 限制 + kill-on-close）——此前启用 Computer Use
+        // 即获得 profile 级无沙箱 shell，是执行面最大单点。不复用
+        // ShellRunner.ExecuteSandboxedAsync：它强制 UTF-8 解码，会破坏本工具的
+        // cmd OEM CP / Python UTF-8 解码特例。POSIX 无 Job Object，与 bash 一致直跑。
+        using var sandbox = OperatingSystem.IsWindows() && config.ShellSandboxed
+            ? new WindowsJobObject(memoryLimitMb: 2048, maxProcesses: 256, uiRestrictions: true)
+            : null;
         try
         {
             process.Start();
@@ -98,6 +109,12 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
             return ToolResult.Fail($"{spec.Label} could not start: {ex.Message}");
+        }
+        if (sandbox is not null && !sandbox.Assign(process.Handle))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            return ToolResult.Fail(
+                $"{spec.Label} sandbox assignment failed (Win32 error {Marshal.GetLastWin32Error()})");
         }
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);

@@ -129,3 +129,17 @@ jobs:
       - name: Verify artifact
         shell: bash
         run: ls publish/Haoyue-portable-*.zip
+      # 7.7：与 release 作业同一探活口径——便携包解压实际启动并存活 30s，
+      # 让「构建成功但启动即崩」在每次 push 就暴露，而不是等到打 tag。
+      - name: Smoke test portable package (launch + stay alive 30s)
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem publish/Haoyue-portable-*.zip | Select-Object -First 1
+          Expand-Archive $zip.FullName -DestinationPath smoke/portable
+          $exe = Get-ChildItem smoke/portable -Recurse -Filter "Haoyue.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "Haoyue.exe not found in the portable package" }
+          $proc = Start-Process $exe.FullName -PassThru
+          Start-Sleep -Seconds 30
+          if ($proc.HasExited) { Write-Error "desktop app exited within 30s of launch (exit code $($proc.ExitCode))" }
+          Write-Host "desktop app alive after 30s (pid $($proc.Id)) — smoke passed"
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue

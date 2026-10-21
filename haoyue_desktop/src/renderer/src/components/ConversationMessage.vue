@@ -7,6 +7,7 @@ import {
   Copy,
   Eye,
   FastForward,
+  History,
   Image as ImageIcon,
   Layers,
   LoaderCircle,
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   Split,
   ThumbsDown,
+  Trash2,
   Wrench
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref } from 'vue'
@@ -51,9 +53,16 @@ const emit = defineEmits<{
   continueTurn: []
   /** Mark this answer as unsatisfactory (evolution-engine feedback signal, P4). */
   thumbsDown: [message: ChatMessage]
+  /** 1.2 单条删除（会话内视图移除，5 秒撤销窗口）。 */
+  delete: [message: ChatMessage]
+  /** 1.2 恢复此提示的历史回答（取版本链中最近一个 assistant 版本）。 */
+  restoreVersion: [message: ChatMessage]
 }>()
 
 const thinkingOpen = ref(false)
+// 1.2 版本链里有可恢复的历史回答时，user 气泡给出「恢复历史回答」入口。
+const hasAssistantVersions = computed(() =>
+  Boolean(props.message.versions?.some((version) => version.role === 'assistant')))
 // 模型没答完时给出明确文案（截断/拒答/空回答/超步数…）。error 卡片与「已手动停止」
 // 已有各自文案，这里不重复标注。
 const incompleteNote = computed(() =>
@@ -269,6 +278,16 @@ function openFileLocation(path?: string): void {
             >
               <Pencil :size="13" class="action-icon" />
             </button>
+            <button
+              v-if="hasAssistantVersions"
+              type="button"
+              class="action-btn"
+              title="恢复此提示的历史回答（regenerate/编辑前的版本，仅本会话可见）"
+              aria-label="恢复历史回答"
+              @click="emit('restoreVersion', message)"
+            >
+              <History :size="13" class="action-icon" />
+            </button>
           </div>
         </footer>
       </div>
@@ -454,6 +473,15 @@ function openFileLocation(path?: string): void {
             @click="emit('branch', message)"
           >
             <Split :size="13" class="action-icon" />
+          </button>
+          <button
+            type="button"
+            class="action-btn"
+            title="从会话视图移除此回答（5 秒内可撤销，仅影响当前会话）"
+            aria-label="删除此回答"
+            @click="emit('delete', message)"
+          >
+            <Trash2 :size="13" class="action-icon" />
           </button>
         </div>
         <span v-if="message.createdAt" class="message-time">

@@ -1,29 +1,9 @@
 <script setup lang="ts">
 import {
-  ArrowDown,
-  Braces,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Circle,
-  CornerDownLeft,
-  Folder,
-  FolderOpen,
-  Globe2,
-  History,
-  LoaderCircle,
-  MoreHorizontal,
-  PanelRight,
-  RefreshCw,
-  Search,
-  ShieldAlert,
-  Telescope,
-  TerminalSquare,
-  Trash2,
-  Sparkles,
-  Undo2,
-  Wrench,
-  X
+  ArrowDown, Braces, Check, ChevronDown, ChevronUp, Circle, CornerDownLeft,
+  Folder, FolderOpen, Globe2, History, LoaderCircle, MoreHorizontal, PanelRight,
+  RefreshCw, Search, ShieldAlert, Telescope, TerminalSquare, Trash2, Sparkles,
+  Undo2, Wrench, X
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import type { AppearanceTheme, AppInfo, DaemonMessage, DaemonState } from '../../shared/ipc'
@@ -33,12 +13,10 @@ import ArchivedTasksDialog from './components/ArchivedTasksDialog.vue'
 import ScheduledTasksDialog from './components/ScheduledTasksDialog.vue'
 import Composer from './components/Composer.vue'
 import ConfigAnomalyDialog from './components/ConfigAnomalyDialog.vue'
-
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import ConversationMessage from './components/ConversationMessage.vue'
 import EditMessageDialog from './components/EditMessageDialog.vue'
 import WorkDock from './components/WorkDock.vue'
-
 import KnowledgeBaseDialog from './components/KnowledgeBaseDialog.vue'
 import RulesMemoryDialog from './components/RulesMemoryDialog.vue'
 import ProjectPropertiesDialog from './components/ProjectPropertiesDialog.vue'
@@ -51,44 +29,27 @@ import WelcomeEmpty from './components/WelcomeEmpty.vue'
 import { computeTurnTaskSteps, type TaskStep } from './task-planner'
 import { confirmAction } from './confirmation'
 import { createWorkspaceFileSuggester } from './workspace-files'
-import { finalizeAssistantBubbles, markThreadInterrupted } from './conversation-state'
+import { DeletionUndoBuffer, finalizeAssistantBubbles, markThreadInterrupted, preserveTruncatedVersions, restoreAssistantVersion } from './conversation-state'
 import { journalCursor, openTurnsOf, recoverTurns, type JournalRow, type RecoveredTurn } from './turn-recovery'
 import { isForbiddenProjectPath } from './project-paths'
 import { retryRuntimeConnection, RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
 import { ReasoningLevel } from './types'
 import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, ThreadStats, ToolActivity, WorkDockTab } from './types'
 import {
-  cancelParams,
-  formatContextRatio, formatInferenceFootnote,
-  formatPreloadLabel,
-  formatPromptWithFiles,
-  formatTurnFailure,
-  hydrateMessages,
-  makeId,
-  messageMatches,
-  normalizePath,
-  normalizeReasoningLevel,
-  pathName,
-  phaseLabel,
-  plainImages,
-  queuedImageUrl,
-  queuedMessagePreview,
-  samePath,
-  sessionScope,
-  sessionStats,
-  updateThreadTitle
+  cancelParams, formatContextRatio, formatInferenceFootnote,
+  formatPreloadLabel, formatPromptWithFiles, formatTurnFailure,
+  hydrateMessages, makeId, messageMatches, normalizePath, normalizeReasoningLevel,
+  pathName, phaseLabel, plainImages, queuedImageUrl, queuedMessagePreview,
+  samePath, sessionScope, sessionStats, updateThreadTitle
 } from './app-helpers'
 import type { RuntimeModelCatalogItem, RuntimeProject, RuntimeSession, RuntimeWorkspace } from './app-helpers'
 import {
-  imageSourceKey,
-  loadEarlierMessages as loadEarlierMessagesFromStore,
+  imageSourceKey, loadEarlierMessages as loadEarlierMessagesFromStore,
   refreshAllProjectSessions as refreshAllProjectSessionsFromStore,
   refreshGlobalSessions as refreshGlobalSessionsFromStore,
   refreshProjectSessions as refreshProjectSessionsFromStore,
   reloadThreadSession as reloadThreadSessionFromStore,
-  requestSessionImageBytes,
-  SESSION_PAGE_SIZE,
-  sessionImageSources
+  requestSessionImageBytes, SESSION_PAGE_SIZE, sessionImageSources
 } from './session-sync'
 import { createThreadActions } from './thread-actions'
 import { createDaemonEventHandler } from './daemon-event-handler'
@@ -1151,7 +1112,8 @@ async function handleEditConfirm(revertFiles: boolean): Promise<void> {
     }
   }
 
-  // Step 3: Truncate frontend messages
+  // Step 3: Truncate frontend messages（1.2：截断前把被替换的整段历史压入版本链）
+  preserveTruncatedVersions(thread, promptIndex, 'edit')
   thread.messages = thread.messages.slice(0, promptIndex)
   thread.phase = undefined
   thread.assistantId = undefined
@@ -1443,9 +1405,34 @@ async function regenerateMessage(message: ChatMessage): Promise<void> {
     void window.haoyue?.notify?.('无法重新生成', `会话截断失败：${err instanceof Error ? err.message : String(err)}`)
     return
   }
+  // 1.2 截断视图前保留被替换回复为会话内历史版本（可从 user 气泡「恢复历史回答」取回）。
+  preserveTruncatedVersions(thread, promptIndex + 1, 'regenerate')
   thread.messages = thread.messages.slice(0, promptIndex + 1)
   thread.phase = undefined
   await sendMessage(prompt, [])
+}
+
+// 1.2 单条删除（5 秒撤销窗口）与历史回答恢复：状态机在 conversation-state，这里只转发。
+const undoBarVisible = ref(false)
+const deletionUndo = new DeletionUndoBuffer(() => { undoBarVisible.value = false })
+async function onDeleteMessage(message: ChatMessage): Promise<void> {
+  const thread = activeThread.value
+  if (thread && deletionUndo.delete(thread, message.id)) {
+    thread.assistantId = thread.assistantId === message.id ? undefined : thread.assistantId
+    undoBarVisible.value = true
+  }
+}
+function onUndoMessageDeletion(): void {
+  if (deletionUndo.undo()) undoBarVisible.value = false
+}
+function onRestoreVersion(message: ChatMessage): void {
+  const thread = activeThread.value
+  if (!thread) return
+  const index = (message.versions ?? []).length - 1
+  if (restoreAssistantVersion(thread, message.id, index)) {
+    thread.assistantId = undefined
+    undoBarVisible.value = false
+  }
 }
 
 // 归档任务收到新消息时自动恢复会话（等价于手动「恢复任务」），失败时返回 false 并中止发送。
@@ -2143,6 +2130,7 @@ watch(theme, applyTheme)
                       @edit="onEditUserMessage"
                       @regenerate="regenerateMessage"
                       @continue-turn="continueAssistant"
+                      @delete="onDeleteMessage" @restore-version="onRestoreVersion"
                       @thumbs-down="feedbackNegative" />
                   </div>
                 </template>
@@ -2159,6 +2147,7 @@ watch(theme, applyTheme)
                     @edit="onEditUserMessage"
                     @regenerate="regenerateMessage"
                     @continue-turn="continueAssistant"
+                    @delete="onDeleteMessage" @restore-version="onRestoreVersion"
                     @thumbs-down="feedbackNegative" />
                 </template>
               </template>
@@ -2301,6 +2290,11 @@ watch(theme, applyTheme)
               </span>
             </div>
             <p v-if="modelPreloadLabel" class="preload-chip"><LoaderCircle :size="13" aria-hidden="true" />{{ modelPreloadLabel }}</p>
+            <!-- 1.2 删除撤销窗口：仅最近一次删除可撤销，5 秒后自动消失。 -->
+            <p v-if="undoBarVisible" class="preload-chip undo-bar">
+              已从会话视图移除 1 条消息
+              <button type="button" class="action-btn" @click="onUndoMessageDeletion">撤销</button>
+            </p>
             <!-- 空状态修复：无任务时输入框保持可用，发送时由 sendMessage 自动创建任务。 -->
             <Composer ref="composer" :busy="busy"
               :disabled="conversationLoading" :model="activeModel"
@@ -2340,7 +2334,7 @@ watch(theme, applyTheme)
       @select-thread="selectArchivedThread" @restore-task="restoreTask" @delete-task="deleteTask"
       @delete-all="deleteArchivedTasks" />
 
-    <AboutDialog :open="aboutOpen" :app-info="appInfo" @close="aboutOpen = false" />
+    <AboutDialog :open="aboutOpen" :app-info="appInfo" :protocol-version="daemonState.protocolVersion" @close="aboutOpen = false" />
 
     <!-- 「本次允许」审批（P1-2.3）：内置高危守卫挂起执行类工具调用时弹出；
          用户选择经 agent.respondApproval 回传，超时（120s）按拒绝处理。 -->

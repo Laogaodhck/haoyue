@@ -15,6 +15,15 @@ public sealed class ComputerUseConfig
     /// <summary>Whether computer_exec (PowerShell / cmd / Python) is registered alongside the Computer Use tools.</summary>
     public bool ShellEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Whether computer_exec child processes run inside the same Windows Job Object
+    /// sandbox as bash/terminal (memory ceiling 2048MB, 256 active processes, UI
+    /// restrictions; POSIX hosts always run unsandboxed like bash). Default true —
+    /// without it, enabling Computer Use grants a profile-level unsandboxed shell.
+    /// Turn off only with explicit awareness of that trade-off.
+    /// </summary>
+    public bool ShellSandboxed { get; set; } = true;
+
     /// <summary>Whether system-control tools (computer_scan / computer_sysinfo / computer_browser_repair) are registered.</summary>
     public bool SystemControlEnabled { get; set; } = true;
 

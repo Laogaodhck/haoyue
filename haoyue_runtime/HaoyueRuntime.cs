@@ -301,6 +301,11 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     private void RegisterBuiltinTools()
     {
         var prompts = Prompts;
+        // PDF 导入桥（4.2）：知识导入的 .pdf 提取经 doc_toolkit 子进程完成。委托延迟
+        // 读配置（配置热更新后取最新值）；桥缺失（无 Python/doc_toolkit）时由
+        // KnowledgeImport 对 .pdf 报明确错误，而不是「请先转为文本」的含糊路径。
+        KnowledgeImport.PdfTextExtractor = path =>
+            Haoyue.Runtime.Tools.Builtin.DocToolkitBridge.ExtractText(path, ConfigStore.Config.DocRender);
         foreach (var tool in new ITool[]
                  {
                      new PlanTool(prompts),

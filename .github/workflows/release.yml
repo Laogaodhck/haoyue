@@ -54,6 +54,22 @@ jobs:
           name: cli
           path: dist/cli/*
           if-no-files-found: error
+      # 7.7 发布健康验证：交付物必须「可启动、可探活」——解压发布的 win-x64 归档
+      # 实际运行 --version 与 doctor 干跑（无 provider 配置也必须确定性退出 0）。
+      # 构建成功但二进制起不来的缺陷在发布作业内阻断，而不是等到用户手上传一遍。
+      - name: Smoke test win-x64 CLI (extract + version + doctor)
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/cli -Filter "haoyue-*-win-x64.zip" | Select-Object -First 1
+          if (-not $zip) { Write-Error "win-x64 release archive not found in dist/cli" }
+          Expand-Archive $zip.FullName -DestinationPath smoke/cli
+          $exe = Get-ChildItem smoke/cli -Recurse -Filter "haoyue.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "haoyue.exe not found in the release archive" }
+          & $exe.FullName --version
+          if ($LASTEXITCODE -ne 0) { Write-Error "--version failed with exit $LASTEXITCODE" }
+          & $exe.FullName doctor
+          if ($LASTEXITCODE -ne 0) { Write-Error "doctor failed with exit $LASTEXITCODE" }
+          Write-Host "CLI smoke passed: --version and doctor both exited 0"
 
   desktop-windows:
     name: Desktop Windows (installer + portable)
@@ -84,6 +100,21 @@ jobs:
         run: |
           mkdir -p dist/desktop-win
           cp publish/Haoyue-Setup-*.exe publish/Haoyue-portable-*.zip dist/desktop-win/
+      # 7.7 发布健康验证：便携包解压实际启动，30 秒内存活才算数——electron 主进程
+      # 立即退出（native 模块缺失 / asar 损坏 / 主进程异常）在此阻断发布。
+      - name: Smoke test portable package (launch + stay alive 30s)
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem publish/Haoyue-portable-*.zip | Select-Object -First 1
+          if (-not $zip) { Write-Error "portable package not found" }
+          Expand-Archive $zip.FullName -DestinationPath smoke/portable
+          $exe = Get-ChildItem smoke/portable -Recurse -Filter "Haoyue.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "Haoyue.exe not found in the portable package" }
+          $proc = Start-Process $exe.FullName -PassThru
+          Start-Sleep -Seconds 30
+          if ($proc.HasExited) { Write-Error "desktop app exited within 30s of launch (exit code $($proc.ExitCode))" }
+          Write-Host "desktop app alive after 30s (pid $($proc.Id)) — smoke passed"
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-windows

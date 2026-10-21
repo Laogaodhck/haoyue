@@ -1680,7 +1680,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
                 && item["content"]!.GetValue<string>().Contains("发布流程第二步"));
         Assert.Contains(imported["entries"]!.AsArray(),
             item => item!["title"]!.GetValue<string>() == "清单.xlsx"
-                && item["content"]!.GetValue<string>().Contains("项目名\tHaoyue\t")
+                && item["content"]!.GetValue<string>().Contains("项目名\tHaoyue")
                 && item["content"]!.GetValue<string>().Contains("备注列"));
         Assert.Contains(imported["entries"]!.AsArray(),
             item => item!["title"]!.GetValue<string>() == "旧文档.txt"

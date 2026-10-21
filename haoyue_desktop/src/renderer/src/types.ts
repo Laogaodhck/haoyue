@@ -60,6 +60,15 @@ export interface ImageReference {
   name: string
 }
 
+/** 被替换消息的会话内历史版本（1.2）：regenerate/edit 截断前压入，仅本次会话可见，不持久化。 */
+export interface MessageVersion {
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: number
+  reason: 'regenerate' | 'edit'
+  modelRef?: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -81,6 +90,8 @@ export interface ChatMessage {
   /** Raw technical detail of the model error that failed this turn (error card). */
   errorDetail?: string
   tools?: ToolActivity[]
+  /** 被替换前的历史版本（挂在保留区的锚点消息上）。仅本次会话可见。 */
+  versions?: MessageVersion[]
   createdAt: number
 }
 

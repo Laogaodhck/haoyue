@@ -53,6 +53,8 @@ export interface DaemonState {
   connected: boolean
   endpoint: string
   error?: string
+  /** Daemon 侧协议版本（握手响应回报；断连后保留上次读数供关于页展示）。 */
+  protocolVersion?: string
 }
 
 /** Optional per-request controls passed from the renderer to the daemon client. */

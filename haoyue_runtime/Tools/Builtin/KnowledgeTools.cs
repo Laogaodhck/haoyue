@@ -70,7 +70,9 @@ public sealed class KnowledgeSearchTool(
         }
         // H-B: 20 条 ×600 字符的硬切在 32K 窗口模型上会超预算 3 倍——最终输出收敛进
         // 自适应窗口预算，且 head+tail 保证靠后的条目不被整段丢弃。
-        var summary = $"{matches.Count} knowledge entries matched";
+        // 4.5 触发式遥测：语料规模随 tool_done 持久化——后续「>800 条走 FTS5 预筛」
+        // 的动刀决策靠这个数判断，不需要再埋独立的统计通道。
+        var summary = $"{matches.Count} knowledge entries matched (corpus {corpusSize})";
         if (caveat is not null) summary += $"（{caveat}）";
         return ToolResult.Ok(
             context.TruncateTailPrioritized(sb.ToString().TrimEnd(), "knowledge results"),

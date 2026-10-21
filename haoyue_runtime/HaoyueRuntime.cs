@@ -331,6 +331,8 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                      new KnowledgeForgetTool(Knowledge, prompts),
                      new DelegateTool(prompts, _services.GetRequiredService<IAgentDelegator>()),
                      new DelegateTasksTool(prompts, _services.GetRequiredService<IAgentDelegator>()),
+                     new BlackboardWriteTool(prompts),
+                     new BlackboardReadTool(prompts),
                      new FactSaveTool(prompts),
                      new FactSearchTool(prompts),
                      new FactForgetTool(prompts),

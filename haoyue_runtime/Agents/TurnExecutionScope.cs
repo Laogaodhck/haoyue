@@ -32,6 +32,9 @@ public sealed record TurnUndoLedger(
 /// and only the controlled subset (builtin file tools) claims compensability — shell
 /// and MCP side effects are recorded but honestly marked non-compensable.
 /// </summary>
+/// <summary>3.4 黑板条目：键 + 结论 + 写入者（角色或工具名），只增改不删（回合生命周期）。</summary>
+public sealed record BlackboardEntry(string Key, string Value, string Author);
+
 public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
 {
     /// <summary>Upper bound on retained compensations before they degrade to path-only records.</summary>
@@ -51,6 +54,10 @@ public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
     private long _delegatedOutputTokens;
     private decimal _delegatedCost;
     private int _delegationCount;
+    // 3.4 轻量共享黑板：委派子代理间的「共享发现」台账（键值对，同键覆盖）。
+    // 刻意不做成图引擎或消息总线——TurnExecutionScope 的定位是回合内的执行台账，
+    // 黑板只是它多出的一块可读写白板，生命周期随回合结束而清空。
+    private readonly List<BlackboardEntry> _blackboard = [];
 
     public string SessionId => sessionId;
     public string WorkspaceRoot => workspaceRoot;
@@ -106,6 +113,50 @@ public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
     }
 
     public int DelegationCount { get { lock (_gate) return _delegationCount; } }
+
+    /// <summary>黑板上限：超过后拒绝写入（防止单回合黑板被刷成第二份会话历史）。</summary>
+    public const int MaxBlackboardEntries = 64;
+    /// <summary>单条值上限（字符）：黑板放结论与发现，不放全文摘抄。</summary>
+    public const int MaxBlackboardValueChars = 4000;
+
+    /// <summary>
+    /// 3.4 写黑板：同键覆盖（保留首任作者之外的更新者）。返回 null 表示成功；
+    /// 非null 为拒绝原因（超限/超长）。并发安全（与执行台账同一把锁）。
+    /// </summary>
+    public string? WriteBlackboard(string key, string value, string author)
+    {
+        var trimmedKey = key.Trim();
+        var trimmedValue = value.Trim();
+        if (trimmedKey.Length is 0 or > 120) return "key 必须为 1-120 个字符。";
+        if (trimmedValue.Length is 0 or > MaxBlackboardValueChars)
+            return $"value 必须为 1-{MaxBlackboardValueChars} 个字符（黑板放结论，不放全文）。";
+        lock (_gate)
+        {
+            var existing = _blackboard.FindIndex(entry =>
+                string.Equals(entry.Key, trimmedKey, StringComparison.OrdinalIgnoreCase));
+            if (existing >= 0)
+            {
+                _blackboard[existing] = new BlackboardEntry(trimmedKey, trimmedValue, author);
+                return null;
+            }
+            if (_blackboard.Count >= MaxBlackboardEntries)
+                return $"黑板已满（{MaxBlackboardEntries} 条）：请合并或覆盖既有条目，而不是继续新增。";
+            _blackboard.Add(new BlackboardEntry(trimmedKey, trimmedValue, author));
+            return null;
+        }
+    }
+
+    /// <summary>读黑板：key 为空读全部，否则按键取单条（找不到返回 null 值元组）。</summary>
+    public IReadOnlyList<BlackboardEntry> ReadBlackboard(string? key = null)
+    {
+        lock (_gate)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return [.. _blackboard];
+            return _blackboard
+                .Where(entry => string.Equals(entry.Key, key.Trim(), StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+    }
 
     /// <summary>
     /// 本回合已获用户批准的高危工具名（按工具一次性生效，不按 callId）：交互式

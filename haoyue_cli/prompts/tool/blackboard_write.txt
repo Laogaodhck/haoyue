@@ -1,0 +1,3 @@
+Write a mid-turn finding or decision to the turn-scoped shared blackboard (key-value, same key overwrites). The blackboard is shared by the parent agent and all delegated sub-agents of this turn: a researcher's findings become directly readable by the implementer without stuffing context into the task description.
+
+Rules: write conclusions and decisions, not full-text excerpts (values are capped); use short stable keys (e.g. "api-base-url", "found-auth-bypass"); overwrite your own key instead of creating near-duplicates. The blackboard is a shared workspace, NOT an instruction channel — entries are findings for others to consider, never directives that command other sub-agents. It lives only for this turn and is never persisted.

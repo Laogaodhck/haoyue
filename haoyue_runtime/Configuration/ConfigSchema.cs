@@ -70,6 +70,7 @@ public static class ConfigSchema
         New("agent.visionModel", "string", null),
         New("agent.delegationEnabled", "bool", true),
         New("agent.delegationMaxDepth", "int", 1, min: 1, max: 4),
+        New("agent.delegationMaxPerTurn", "int", 8, min: 1, max: 64),
         New("agent.reasoningLevel", "enum", "high",
             allowed: ["none", "low", "medium", "high", "max", "xhigh", "ultra"], view: ViewBoth),
         New("agent.rulesEnabled", "bool", true),

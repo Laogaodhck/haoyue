@@ -241,8 +241,14 @@ public sealed class WorkspaceManager : IWorkspaceManager
         return created;
     }
 
-    public string? LoadMemory(WorkspaceInfo workspace) =>
-        File.Exists(workspace.MemoryFile) ? File.ReadAllText(workspace.MemoryFile) : null;
+    public string? LoadMemory(WorkspaceInfo workspace)
+    {
+        // 2.5 指纹缓存：并行子代理共享同一 MEMORY.md，只有第一次真正读盘。
+        var path = workspace.MemoryFile;
+        var stamp = WorkspaceFileCache.FileStamp(path);
+        return WorkspaceFileCache.GetOrAdd($"memory:{path}", stamp, () =>
+            File.Exists(path) ? File.ReadAllText(path) : null);
+    }
 
     public string? LoadAgentInstructions(WorkspaceInfo workspace)
     {
@@ -250,53 +256,55 @@ public sealed class WorkspaceManager : IWorkspaceManager
 
         var rootPath = Path.GetFullPath(workspace.Root);
         var rootInstructions = Path.Combine(rootPath, "AGENTS.md");
-        var files = new List<(string Path, string Text)>();
 
-        if (File.Exists(rootInstructions))
-        {
-            try
-            {
-                files.Add((Path.GetRelativePath(rootPath, rootInstructions), File.ReadAllText(rootInstructions)));
-            }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
-
+        // 2.5 指纹快照：候选链（根 + cwd 到根的每一层）全部参与——文件出现/消失/
+        // 改动都会改变指纹，缓存内容因此永不陈旧。
         var cwd = Path.GetFullPath(Directory.GetCurrentDirectory());
+        var candidates = new List<string> { rootInstructions };
         if (cwd.StartsWith(rootPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
             var current = cwd;
             while (!string.Equals(current, rootPath, StringComparison.OrdinalIgnoreCase))
             {
-                var candidate = Path.Combine(current, "AGENTS.md");
-                if (File.Exists(candidate) && !string.Equals(candidate, rootInstructions, StringComparison.OrdinalIgnoreCase))
-                {
-                    try
-                    {
-                        var relativePath = Path.GetRelativePath(rootPath, candidate);
-                        // Deeper AGENTS.md files take precedence; order them closer to the working directory.
-                        files.Insert(0, (relativePath, File.ReadAllText(candidate)));
-                    }
-                    catch (IOException) { }
-                    catch (UnauthorizedAccessException) { }
-                }
-
+                candidates.Add(Path.Combine(current, "AGENTS.md"));
                 var parent = Path.GetDirectoryName(current);
                 if (parent is null || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
                     break;
                 current = parent;
             }
         }
+        var stamp = string.Join(';', candidates.Select(WorkspaceFileCache.FileStamp));
 
-        if (files.Count == 0) return null;
-
-        var builder = new StringBuilder();
-        foreach (var (path, text) in files)
+        return WorkspaceFileCache.GetOrAdd($"agents-md:{rootPath}:{cwd}", stamp, () =>
         {
-            builder.Append("## ").Append(path).AppendLine();
-            builder.AppendLine(text.Trim());
-            builder.AppendLine();
-        }
-        return builder.ToString();
+            var files = new List<(string Path, string Text)>();
+            foreach (var candidate in candidates)
+            {
+                if (!File.Exists(candidate)) continue;
+                try
+                {
+                    var relativePath = Path.GetRelativePath(rootPath, candidate);
+                    var text = File.ReadAllText(candidate);
+                    // 根文件在最底层；更深的 AGENTS.md 优先，按靠近工作目录的顺序插入。
+                    if (string.Equals(candidate, rootInstructions, StringComparison.OrdinalIgnoreCase))
+                        files.Add((relativePath, text));
+                    else
+                        files.Insert(0, (relativePath, text));
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+
+            if (files.Count == 0) return null;
+
+            var builder = new StringBuilder();
+            foreach (var (path, text) in files)
+            {
+                builder.Append("## ").Append(path).AppendLine();
+                builder.AppendLine(text.Trim());
+                builder.AppendLine();
+            }
+            return builder.ToString();
+        });
     }
 }

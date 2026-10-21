@@ -281,6 +281,13 @@ public sealed class AgentConfig
     /// </summary>
     public int DelegationMaxDepth { get; set; } = 1;
     /// <summary>
+    /// 每回合允许的子任务总数（3.1 委派配额，默认 8）：delegate_task 一次占一席，
+    /// delegate_tasks 的每个子任务各占一席。超出即显式报错——没有配额时最坏情况
+    /// 是 6 路并行子代理各烧满回合预算，父回合却无从感知（委派用量现已汇入父预算，
+    /// 配额再把总扇出钉住）。
+    /// </summary>
+    public int DelegationMaxPerTurn { get; set; } = 8;
+    /// <summary>
     /// 读侧工作区边界之外的补充可读根目录（绝对路径）。文件读取工具默认只能访问工作区
     /// 内内容；把目录加入这里即表示用户授权智能体读取该目录（凭据文件仍被排除）。
     /// 全局会话额外隐式允许用户主目录，无需配置。

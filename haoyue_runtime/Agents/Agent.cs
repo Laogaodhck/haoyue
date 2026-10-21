@@ -18,7 +18,18 @@ namespace Haoyue.Runtime.Agents;
 
 /// <param name="FinishReason">回合终态（<see cref="TurnFinishReason"/> 词汇表）。
 /// 为 null 时调用方按「stop」处理——旧调用点与测试桩保持兼容。</param>
-public sealed record AgentTurnResult(string Text, bool Cancelled, string? Error, string? FinishReason = null);
+/// <summary>
+/// One finished turn. 3.1 起携带本回合的总消耗（主步骤 + 并入的委派子任务用量），
+/// 供测试桩与上层（进化实验室、批量委派）汇总；默认参数保持既有构造兼容。
+/// </summary>
+public sealed record AgentTurnResult(
+    string Text,
+    bool Cancelled,
+    string? Error,
+    string? FinishReason = null,
+    long InputTokens = 0,
+    long OutputTokens = 0,
+    decimal Cost = 0m);
 
 /// <summary>
 /// The agent loop: compose prompt → stream model → execute tools → repeat,
@@ -509,6 +520,12 @@ public sealed partial class Agent(
                 turnInputTokens += stepUsage.TotalInputTokens;
                 turnOutputTokens += stepUsage.OutputTokens;
                 turnCost += ProviderManager.ComputeCost(model.Model, stepUsage);
+                // 3.1 委派子任务的用量并入父回合：随后的预算闸门立即看到这笔开销，
+                // 「子代理逃逸预算」（6 路并行各烧满额度父回合不知情）从此有账可查。
+                var (delegatedIn, delegatedOut, delegatedCost) = turnScope.TakeDelegatedUsage();
+                turnInputTokens += delegatedIn;
+                turnOutputTokens += delegatedOut;
+                turnCost += delegatedCost;
                 if (completion.Text.Length > 0)
                 {
                     finalText = completion.Text;
@@ -814,7 +831,14 @@ public sealed partial class Agent(
                     "本回合有实际改动。如有值得长期记住的约定或决定，告诉我即可沉淀；后台记忆固化也会定期扫描近期会话。"));
             }
         }
-        return new AgentTurnResult(finalText, cancelled, error, turnOutcome);
+        // 3.1 兜底并入：最后一批委派子任务的用量可能还没被主循环取走（子任务完成
+        // 晚于最后一个模型步骤），回合结束时必须收干净，否则结论失真。
+        var (finalDelegatedIn, finalDelegatedOut, finalDelegatedCost) = turnScope.TakeDelegatedUsage();
+        turnInputTokens += finalDelegatedIn;
+        turnOutputTokens += finalDelegatedOut;
+        turnCost += finalDelegatedCost;
+        return new AgentTurnResult(finalText, cancelled, error, turnOutcome,
+            turnInputTokens, turnOutputTokens, turnCost);
     }
 
     private static string ToRelativePath(string absolutePath, string root) =>

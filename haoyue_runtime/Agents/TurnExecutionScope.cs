@@ -45,6 +45,12 @@ public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
     private readonly Lock _gate = new();
     private int _ordinal;
     private long _compensationBytes;
+    // 3.1 委派用量与配额：共享父台账的子代理把 token/费用记回这里，父回合的预算
+    // 闸门与最终用量随之可见——否则子代理是「逃逸预算」，烧多少父回合都不知道。
+    private long _delegatedInputTokens;
+    private long _delegatedOutputTokens;
+    private decimal _delegatedCost;
+    private int _delegationCount;
 
     public string SessionId => sessionId;
     public string WorkspaceRoot => workspaceRoot;
@@ -56,6 +62,50 @@ public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
     /// 是为了让共享父台账的子代理步骤同样进日志：否则一次崩溃会留下「文件已改但日志里没有」的
     /// 子任务痕迹，对账报告不完整。</summary>
     public Action<TurnStepRecord>? MutatingStepObserved { get; set; }
+
+    /// <summary>
+    /// 3.1 子代理用量入账：委派工具在每个子任务完成后调用，父回合随后的预算检查
+    /// （token/费用闸门）立即看到这笔开销。
+    /// </summary>
+    public void AddDelegatedUsage(long inputTokens, long outputTokens, decimal cost)
+    {
+        lock (_gate)
+        {
+            _delegatedInputTokens += inputTokens;
+            _delegatedOutputTokens += outputTokens;
+            _delegatedCost += cost;
+        }
+    }
+
+    /// <summary>取走并清零累计的委派用量（供父回合并入自身的 token/费用计数）。</summary>
+    public (long InputTokens, long OutputTokens, decimal Cost) TakeDelegatedUsage()
+    {
+        lock (_gate)
+        {
+            var result = (_delegatedInputTokens, _delegatedOutputTokens, _delegatedCost);
+            _delegatedInputTokens = 0;
+            _delegatedOutputTokens = 0;
+            _delegatedCost = 0m;
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// 3.1 委派配额：每回合允许的子任务总数（delegate_task 一次占一席，delegate_tasks
+    /// 每个子任务各占一席）。超出上限返回 false——调用方显式报错，让模型把多余子任务
+    /// 留到下一轮，而不是静默放行 6 路并行各烧满配额。
+    /// </summary>
+    public bool TryConsumeDelegationSlot(int maxPerTurn)
+    {
+        lock (_gate)
+        {
+            if (_delegationCount >= maxPerTurn) return false;
+            _delegationCount++;
+            return true;
+        }
+    }
+
+    public int DelegationCount { get { lock (_gate) return _delegationCount; } }
 
     /// <summary>
     /// 本回合已获用户批准的高危工具名（按工具一次性生效，不按 callId）：交互式

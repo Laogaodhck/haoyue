@@ -315,8 +315,12 @@ public class AgentDelegationTests : IDisposable
         public Dictionary<string, AgentTurnResult> Outcomes { get; } = new();
         public List<string> ReceivedTasks { get; } = [];
 
-        public Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, CancellationToken ct) =>
-            Task.FromResult(Outcomes.GetValueOrDefault(task, new AgentTurnResult("", false, null)));
+        public Task<AgentTurnResult> RunSubTaskAsync(WorkspaceInfo workspace, string task, CancellationToken ct)
+        {
+            // 3.2 起 DelegateTasksTool 逐任务调用（每任务独立超时），单任务路径同样要记录。
+            ReceivedTasks.Add(task);
+            return Task.FromResult(Outcomes.GetValueOrDefault(task, new AgentTurnResult("", false, null)));
+        }
 
         public Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
             WorkspaceInfo workspace, IReadOnlyList<string> tasks, CancellationToken ct)

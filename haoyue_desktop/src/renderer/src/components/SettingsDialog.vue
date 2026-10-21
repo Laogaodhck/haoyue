@@ -48,6 +48,7 @@ import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
 import { buildDiagnosticsBundle, diagnosticsFileName } from '../diagnostics-bundle'
+import { readSendKeyPreference } from '../app-helpers'
 import { useEscapeClose } from '../use-escape-close'
 import {
   EVOLUTION_INTERVAL_OPTIONS,
@@ -192,6 +193,12 @@ const networkOpsAllowMutating = ref(true)
 const allowedSitesOpen = ref(false)
 const allowedSitesCount = ref<number | null>(null)
 const replyLanguage = ref<'auto' | 'zh' | 'en'>('auto')
+// 1.5 发送键偏好：localStorage 持久化，Composer 每次按键直读（改完立即生效）。
+const sendKey = ref<'enter' | 'ctrl-enter'>(readSendKeyPreference())
+function setSendKey(key: 'enter' | 'ctrl-enter'): void {
+  sendKey.value = key
+  try { localStorage.setItem('haoyue.sendKey', key) } catch { /* 隐私模式：仅本次会话生效 */ }
+}
 const rulesEnabled = ref(true)
 const memoryMode = ref<'auto' | 'manual'>('auto')
 
@@ -1595,6 +1602,17 @@ onBeforeUnmount(() => {
                   title="简体中文" @click="setReplyLanguage('zh')">中文</button>
                 <button :class="{ active: replyLanguage === 'en' }" :disabled="action === 'language.set'"
                   title="English" @click="setReplyLanguage('en')">English</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div>
+                <strong>发送快捷键</strong>
+                <small>Enter 直接发送（Shift+Enter 换行）；Ctrl+Enter 发送时裸 Enter 换行，适合多行输入</small>
+              </div>
+              <div class="segmented-control">
+                <button :class="{ active: sendKey === 'enter' }" title="Enter 发送" @click="setSendKey('enter')">Enter</button>
+                <button :class="{ active: sendKey === 'ctrl-enter' }" title="Ctrl+Enter 发送"
+                  @click="setSendKey('ctrl-enter')">Ctrl+Enter</button>
               </div>
             </div>
             <div class="settings-row">

@@ -17,6 +17,7 @@
 
 ## 其他 Runbook
 
+- [incidents.md](incidents.md) — **故障排查**：daemon 崩溃/卡准备、本地模型加载失败、显存不足、MCP 与连接器失效、usage-db 损坏、日志与诊断包——每条按「现象 → 定位命令 → 恢复动作 → 升级路径」四段式，命令均为真实 CLI（护栏校验命令词表）。
 - [deployment-isolation.md](deployment-isolation.md) — 部署级网络隔离（代理白名单 / 防火墙 / 容器化）与自备 GGUF 模型配套（嵌入模型注册、图像生成通道）。
 - [connectors.md](connectors.md) — 连接器生态：包规范、安装/卸载两步接入、secret 加密、本地 MCP 服务器承载的后六类连接器。
 - [delegation-roles.md](delegation-roles.md) — 角色化子代理：researcher / implementer / reviewer 预设、工具白名单收敛与统一汇报模板。

@@ -8,6 +8,12 @@ using Xunit;
 
 namespace Haoyue.Tests;
 
+/// <summary>
+/// OAuth loopback 用例会真实绑定本地 HTTP 端口（GetFreePort 探测 + Start 之间可能被
+/// 并行测试抢走端口）。全量并行跑时曾出现 HttpListener 状态机被打断的偶发失败，
+/// 这里用独立 collection 串行化，避免与其他 MCP 测试并行。
+/// </summary>
+[Collection("oauth-loopback")]
 public class McpOAuthTests
 {
     private static readonly TimeSpan OriginalCallbackTimeout = McpOAuthFlow.CallbackTimeout;

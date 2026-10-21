@@ -3,9 +3,18 @@ import { ArrowUp, Globe, GlobeOff, LoaderCircle, Paperclip, Sparkles, Square, X 
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { FileAttachment, ImageAttachment, ReasoningLevel } from '../types'
 import { confirmAction } from '../confirmation'
-import { fileBadgeText, fileExtClass, getFileExtension } from '../app-helpers'
+import { fileBadgeText, fileExtClass, getFileExtension, readSendKeyPreference } from '../app-helpers'
 import { applyMention, mentionToken } from '../composer-mentions'
 import type { MentionToken } from '../composer-mentions'
+import {
+  applySlashCommand,
+  filterSlashCommands,
+  looksLikeUnknownCommand,
+  parseSlashCommand,
+  slashToken,
+  SLASH_COMMANDS,
+} from '../composer-slash'
+import type { SlashCommand, SlashToken } from '../composer-slash'
 import ImagePreviewDialog from './ImagePreviewDialog.vue'
 import ReasoningDepthMenu from './ReasoningDepthMenu.vue'
 import SelectMenu from './SelectMenu.vue'
@@ -31,6 +40,8 @@ const emit = defineEmits<{
   changeMode: [mode: string]
   changeReasoningLevel: [level: ReasoningLevel]
   changeNetwork: [enabled: boolean]
+  /** 1.5 slash 命令：id 见 composer-slash.ts 的 SLASH_COMMANDS。 */
+  slashCommand: [id: string, arg: string]
 }>()
 
 const maxImageCount = 10
@@ -51,6 +62,11 @@ const mentionFiles = ref<string[]>([])
 const mentionIndex = ref(0)
 const mentionLoading = ref(false)
 const mentionMenu = ref<HTMLElement | null>(null)
+// 1.5 slash 命令面板：纯本地过滤（无 RPC/防抖/序号守卫），与 @ 引用互斥。
+const slash = ref<SlashToken | null>(null)
+const slashCommands = ref<SlashCommand[]>([])
+const slashIndex = ref(0)
+const slashMenu = ref<HTMLElement | null>(null)
 // 请求序号：只接受最后一次查询的结果，避免慢响应把旧候选盖回新输入。
 let mentionTimer: number | undefined
 let mentionSeq = 0
@@ -451,9 +467,79 @@ function pickMention(path?: string): void {
   })
 }
 
+// ---------------------------------------------------------------- slash 命令（1.5）
+
+function closeSlash(): void {
+  slash.value = null
+  slashCommands.value = []
+  slashIndex.value = 0
+}
+
+function refreshSlash(): void {
+  const el = textarea.value
+  const token = el && !props.disabled
+    ? slashToken(el.value, el.selectionStart ?? el.value.length)
+    : null
+  if (!token) {
+    closeSlash()
+    return
+  }
+  closeMention() // 与 @ 引用互斥：命令面板出现即收起文件面板
+  slash.value = token
+  slashCommands.value = filterSlashCommands(token.query)
+  slashIndex.value = 0
+}
+
+/** 输入/点击后同时刷新两个面板（slash 优先检测，命中即收起 mention）。 */
+function refreshPanels(event?: Event): void {
+  refreshSlash()
+  if (!slash.value) refreshMention(event)
+}
+
+function moveSlash(delta: number): void {
+  const count = slashCommands.value.length
+  if (count === 0) return
+  slashIndex.value = (slashIndex.value + delta + count) % count
+  void nextTick(() => {
+    slashMenu.value?.querySelector<HTMLElement>(`[data-index="${slashIndex.value}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function pickSlash(command?: SlashCommand): void {
+  const el = textarea.value
+  const token = slash.value
+  const target = command ?? slashCommands.value[slashIndex.value]
+  if (!el || !token || !target) return
+  const next = applySlashCommand(el.value, el.selectionStart ?? el.value.length, token.start, target)
+  value.value = next.text
+  closeSlash()
+  void nextTick(() => {
+    el.focus()
+    el.setSelectionRange(next.caret, next.caret)
+    resize()
+  })
+}
+
 function submit(): void {
   const message = value.value.trim()
   if ((!message && images.value.length === 0 && attachedFiles.value.length === 0) || props.disabled) return
+
+  // 1.5 slash 命令：整条是命令时执行而不是发消息——「误发送可归零」。
+  const parsed = parseSlashCommand(message)
+  if (parsed) {
+    emit('slashCommand', parsed.command.id, parsed.arg)
+    value.value = ''
+    closeSlash()
+    imageNotice.value = ''
+    void nextTick(resize)
+    return
+  }
+  if (looksLikeUnknownCommand(message)) {
+    imageNotice.value = `未知命令。可用命令：${SLASH_COMMANDS.map((command) => command.label).join(' ')}`
+    return
+  }
+
   if (images.value.length > 0 && !props.supportsImages) {
     imageNotice.value = '当前模型不支持图片理解，请切换支持视觉的模型。'
     return
@@ -487,6 +573,23 @@ function moveMention(delta: number): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
+  if (slash.value && slashCommands.value.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveSlash(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveSlash(-1)
+      return
+    }
+    if ((event.key === 'Enter' || event.key === 'Tab') && !event.isComposing) {
+      event.preventDefault()
+      pickSlash()
+      return
+    }
+  }
   if (mention.value && mentionFiles.value.length > 0) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
@@ -505,6 +608,11 @@ function handleKeydown(event: KeyboardEvent): void {
     }
   }
   if (event.key === 'Escape') {
+    if (slash.value) {
+      event.preventDefault()
+      closeSlash()
+      return
+    }
     if (!mention.value) return
     // 引用面板打开时 Esc 只用于关面板：不拦下这次按键，App.vue 会把它当成「停止回合」。
     event.preventDefault()
@@ -513,6 +621,8 @@ function handleKeydown(event: KeyboardEvent): void {
     return
   }
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+  // 1.5 发送键偏好直读（设置改完立即生效）：ctrl-enter 模式下裸 Enter 换行。
+  if (readSendKeyPreference() === 'ctrl-enter' && !(event.ctrlKey || event.metaKey)) return
   event.preventDefault()
   submit()
 }
@@ -653,9 +763,20 @@ watch(() => props.supportsImages, async (supported) => {
       </p>
       <p v-else class="composer-mention-hint">↑↓ 选择 · Enter/Tab 插入 · Esc 关闭</p>
     </div>
+    <div v-if="slash" ref="slashMenu" class="composer-mention-menu composer-slash-menu" role="listbox" aria-label="slash 命令">
+      <button v-for="(command, idx) in slashCommands" :key="command.id" type="button" class="composer-mention-row"
+        :class="{ highlighted: idx === slashIndex }" :data-index="idx" role="option"
+        :aria-selected="idx === slashIndex" :title="command.usage"
+        @mousedown.prevent="pickSlash(command)" @mouseenter="slashIndex = idx">
+        <span class="mention-name">{{ command.label }}</span>
+        <span class="mention-dir">{{ command.description }}</span>
+      </button>
+      <p v-if="slashCommands.length === 0" class="composer-mention-empty">没有匹配的命令</p>
+      <p v-else class="composer-mention-hint">↑↓ 选择 · Enter/Tab 填入 · Esc 关闭</p>
+    </div>
     <textarea ref="textarea" v-model="value" :disabled="disabled" rows="1"
-      :placeholder="disabled ? '正在加载会话…' : '交给 Haoyue（@ 引用工作区文件）'" aria-label="消息" @keydown="handleKeydown"
-      @keyup="refreshMention" @click="refreshMention" @paste="handlePaste" @blur="closeMention" />
+      :placeholder="disabled ? '正在加载会话…' : '交给 Haoyue（@ 引用工作区文件 · / 查看命令）'" aria-label="消息" @keydown="handleKeydown"
+      @keyup="refreshPanels" @click="refreshPanels" @paste="handlePaste" @blur="closeMention(); closeSlash()" />
     <div class="composer-toolbar">
       <button class="icon-button composer-icon" type="button" title="添加文件附件（可直接拖拽任意文件或文件夹）"
         :disabled="disabled || selectingFiles" @click="selectFiles">

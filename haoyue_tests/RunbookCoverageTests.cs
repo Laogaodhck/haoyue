@@ -93,4 +93,68 @@ public sealed class RunbookCoverageTests
         var duplicates = headers.GroupBy(h => h).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         Assert.True(duplicates.Count == 0, $"tools.md 存在重复章节：{string.Join(", ", duplicates)}");
     }
+    /// <summary>7.8 故障 runbook：必备场景 + 每条四段式（现象/定位命令/恢复动作/升级路径）。</summary>
+    private static readonly string[] IncidentScenarios =
+    [
+        "## daemon 崩溃或桌面端「正在准备」卡住",
+        "## 本地模型加载失败 / 回合迟迟不开始",
+        "## 显存不足（CUDA out of memory）",
+        "## MCP 服务器 / 连接器失效",
+        "## usage 数据库（haoyue.db）损坏",
+        "## 日志与诊断包使用",
+    ];
+
+    /// <summary>四段式小标题：缺任何一条都算「写出来即空话」，护栏直接红灯。</summary>
+    private static readonly string[] IncidentSections = ["- **现象**", "- **定位命令**", "- **恢复动作**", "- **升级路径**"];
+
+    /// <summary>
+    /// `haoyue &lt;verb&gt;` 命令词白名单，镜像 Program.cs 的顶层命令表（`haoyue --help`）。
+    /// 白名单的意义是挡住文档里手滑/凭记忆编出来的命令——新增命令时同步在此登记。
+    /// </summary>
+    private static readonly string[] KnownCliVerbs =
+    [
+        "chat", "provider", "model", "usage", "doctor", "switch", "init", "skill", "mcp",
+        "connectors", "sessions", "knowledge", "memory", "rules", "expert", "schedule",
+        "evolve", "daemon",
+    ];
+
+    [Fact]
+    public void Incidents_RunbookHasAllScenariosInFourPartForm()
+    {
+        var runbook = ReadRunbook("incidents.md");
+        var problems = new List<string>();
+        foreach (var scenario in IncidentScenarios)
+        {
+            var start = runbook.IndexOf(scenario, StringComparison.Ordinal);
+            if (start < 0)
+            {
+                problems.Add($"缺少场景章节：{scenario[3..]}");
+                continue;
+            }
+            // 章节正文到下一个 ## 为止，检查四段式小标题齐全。
+            var next = runbook.IndexOf("\n## ", start + scenario.Length, StringComparison.Ordinal);
+            var body = next < 0 ? runbook[start..] : runbook[start..next];
+            foreach (var section in IncidentSections)
+                if (!body.Contains(section, StringComparison.Ordinal))
+                    problems.Add($"场景「{scenario[3..]}」缺少小节：{section}");
+        }
+        Assert.True(problems.Count == 0, "incidents.md 结构不完整：\n" + string.Join("\n", problems));
+    }
+
+    [Fact]
+    public void Incidents_OnlyReferencesExistingCliCommands()
+    {
+        var runbook = ReadRunbook("incidents.md");
+        // 抓 `haoyue <verb>`：verb 取第一个词（排除选项与占位符）。
+        var verbs = System.Text.RegularExpressions.Regex
+            .Matches(runbook, @"haoyue\s+([a-z][a-z-]*)")
+            .Select(match => match.Groups[1].Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        Assert.NotEmpty(verbs);
+        var unknown = verbs.Where(verb => !KnownCliVerbs.Contains(verb, StringComparer.Ordinal)).ToList();
+        Assert.True(unknown.Count == 0,
+            $"incidents.md 引用了不存在的 CLI 命令：{string.Join(", ", unknown)}（白名单见 RunbookCoverageTests.KnownCliVerbs）");
+    }
 }
+

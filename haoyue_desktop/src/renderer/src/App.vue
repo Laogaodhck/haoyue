@@ -40,8 +40,10 @@ import {
   formatPreloadLabel, formatPromptWithFiles, formatTurnFailure,
   hydrateMessages, makeId, messageMatches, normalizePath, normalizeReasoningLevel,
   pathName, phaseLabel, plainImages, queuedImageUrl, queuedMessagePreview,
-  samePath, sessionScope, sessionStats, updateThreadTitle
+  samePath, sessionScope, sessionStats, updateThreadTitle,
 } from './app-helpers'
+import { createChatActions } from './app-actions'
+import { clearScrollPositions, readScrollPosition, saveScrollPosition } from './scroll-memory'
 import type { RuntimeModelCatalogItem, RuntimeProject, RuntimeSession, RuntimeWorkspace } from './app-helpers'
 import {
   imageSourceKey, loadEarlierMessages as loadEarlierMessagesFromStore,
@@ -1159,6 +1161,9 @@ async function selectThread(id: string): Promise<void> {
   const thread = threads.value.find((item) => item.id === id)
   if (!thread) return
   if (activeThread.value) saveComposerDraft(activeThread.value.id)
+  // 1.6 切走前记住阅读位；任务切换同时释放虚拟列表高度缓存（否则内存单调增长）。
+  if (activeThread.value) saveScrollPosition(activeThread.value.id, conversationScrollTop.value)
+  messageHeights.clear()
   const project = projects.value.find((item) => item.id === thread.projectId)
   if (thread.projectId && !project) return
   const selectionToken = ++conversationSelectionToken.value
@@ -1217,12 +1222,20 @@ async function selectThread(id: string): Promise<void> {
     }
   }
   if (selectionToken !== conversationSelectionToken.value) return
-  autoFollowConversation.value = true
   // 无条件按目标任务的草稿回填（无草稿则清空），附件与文字一起恢复，避免上一个任务
   // 的输入串扰到当前任务，也不再出现「切个任务附件就没了」的静默丢失（H5）。
   const draft = composerDrafts.get(thread.id)
   composer.value?.populate(draft?.text ?? '', draft?.images, draft?.files)
-  await scrollToBottom(false, true)
+  // 1.6 阅读位恢复：有记忆时回到原位置（原值直存，偏差 <1px）而不是无条件回底。
+  const restoreTop = readScrollPosition(thread.id)
+  if (restoreTop > 0) {
+    autoFollowConversation.value = false
+    await nextTick()
+    if (scrollArea.value) scrollArea.value.scrollTop = restoreTop
+  } else {
+    autoFollowConversation.value = true
+    await scrollToBottom(false, true)
+  }
 }
 
 // 跨会话检索命中：本地列表没有该会话（未加载项目或已归档）时，按检索结果重建一个
@@ -1412,28 +1425,20 @@ async function regenerateMessage(message: ChatMessage): Promise<void> {
   await sendMessage(prompt, [])
 }
 
-// 1.2 单条删除（5 秒撤销窗口）与历史回答恢复：状态机在 conversation-state，这里只转发。
+// 1.2 / 1.5 / 1.6 的会话级动作（删除撤销、版本恢复、slash 命令、会话导出）：
+// 处理逻辑在 app-actions（依赖注入、可单测），这里只装配回调与共享状态。
 const undoBarVisible = ref(false)
-const deletionUndo = new DeletionUndoBuffer(() => { undoBarVisible.value = false })
-async function onDeleteMessage(message: ChatMessage): Promise<void> {
-  const thread = activeThread.value
-  if (thread && deletionUndo.delete(thread, message.id)) {
-    thread.assistantId = thread.assistantId === message.id ? undefined : thread.assistantId
-    undoBarVisible.value = true
-  }
-}
-function onUndoMessageDeletion(): void {
-  if (deletionUndo.undo()) undoBarVisible.value = false
-}
-function onRestoreVersion(message: ChatMessage): void {
-  const thread = activeThread.value
-  if (!thread) return
-  const index = (message.versions ?? []).length - 1
-  if (restoreAssistantVersion(thread, message.id, index)) {
-    thread.assistantId = undefined
-    undoBarVisible.value = false
-  }
-}
+const chatActions = createChatActions({
+  getThread: () => activeThread.value ?? null,
+  setUndoVisible: (visible) => { undoBarVisible.value = visible },
+  switchModel: (model) => void changeModel(model),
+  switchMode: (nextMode) => void changeMode(nextMode),
+  switchDepth: changeReasoningLevel,
+  clearDraft: (thread) => { composerDrafts.delete(thread.id); composer.value?.setValue('') },
+  saveTextFile: (name, content) => window.haoyue.saveTextFile(name, content),
+  notify: (title, body) => void window.haoyue?.notify?.(title, body),
+  models: () => models.value,
+})
 
 // 归档任务收到新消息时自动恢复会话（等价于手动「恢复任务」），失败时返回 false 并中止发送。
 // H6：首次恢复弹轻量确认（归档语义不再被无感破坏）；用户确认过一次后记住选择，
@@ -2130,7 +2135,7 @@ watch(theme, applyTheme)
                       @edit="onEditUserMessage"
                       @regenerate="regenerateMessage"
                       @continue-turn="continueAssistant"
-                      @delete="onDeleteMessage" @restore-version="onRestoreVersion"
+                      @delete="chatActions.deleteMessage" @restore-version="chatActions.restoreVersion"
                       @thumbs-down="feedbackNegative" />
                   </div>
                 </template>
@@ -2147,7 +2152,7 @@ watch(theme, applyTheme)
                     @edit="onEditUserMessage"
                     @regenerate="regenerateMessage"
                     @continue-turn="continueAssistant"
-                    @delete="onDeleteMessage" @restore-version="onRestoreVersion"
+                    @delete="chatActions.deleteMessage" @restore-version="chatActions.restoreVersion"
                     @thumbs-down="feedbackNegative" />
                 </template>
               </template>
@@ -2290,10 +2295,9 @@ watch(theme, applyTheme)
               </span>
             </div>
             <p v-if="modelPreloadLabel" class="preload-chip"><LoaderCircle :size="13" aria-hidden="true" />{{ modelPreloadLabel }}</p>
-            <!-- 1.2 删除撤销窗口：仅最近一次删除可撤销，5 秒后自动消失。 -->
             <p v-if="undoBarVisible" class="preload-chip undo-bar">
               已从会话视图移除 1 条消息
-              <button type="button" class="action-btn" @click="onUndoMessageDeletion">撤销</button>
+              <button type="button" class="action-btn" @click="chatActions.undoDeletion">撤销</button>
             </p>
             <!-- 空状态修复：无任务时输入框保持可用，发送时由 sendMessage 自动创建任务。 -->
             <Composer ref="composer" :busy="busy"
@@ -2301,6 +2305,7 @@ watch(theme, applyTheme)
               :models="models" :mode="mode" :task-id="activeThread?.id" :supports-images="activeModelSupportsImages"
               :reasoning-level="activeReasoningLevel" :network-enabled="activeThread?.networkEnabled ?? true"
               :optimize-prompt="optimizePrompt" :suggest-files="suggestWorkspaceFiles" @send="sendMessage" @stop="stopTurn" @change-model="changeModel"
+              @slash-command="chatActions.slashCommand"
               @change-mode="changeMode" @change-reasoning-level="changeReasoningLevel"
               @change-network="changeNetwork" />
             <p class="composer-caption">{{ composerCaption }}</p>

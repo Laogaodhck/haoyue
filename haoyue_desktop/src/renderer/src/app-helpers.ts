@@ -551,3 +551,66 @@ export function formatTurnFailure(error: unknown): { content: string; detail: st
   const detail = error instanceof Error ? error.message : String(error ?? '')
   return { kind, detail, content: `${TURN_FAILURE_LEADS[kind]}\n\n${ERROR_DETAIL_MARKER}\n\`\`\`text\n${detail}\n\`\`\`` }
 }
+
+/**
+ * 1.6 会话导出：把会话组装成可读的 Markdown（消息 + 角色 + 时间 + 工具调用摘要）。
+ * 工具详情按「名称 + 状态 + 参数/结果首行」压缩——导出物给人看，不是原始事件流。
+ */
+export function buildConversationMarkdown(thread: ThreadItem, exportedAt = Date.now()): string {
+  const lines: string[] = [
+    `# ${thread.title?.trim() || '未命名会话'}`,
+    '',
+    `> 导出时间：${formatMessageTime(exportedAt) || new Date(exportedAt).toISOString()}`,
+    `> 消息数：${thread.messages.length}`,
+    '',
+  ]
+  for (const message of thread.messages) {
+    const who = message.role === 'user' ? '用户' : '助手'
+    const when = formatMessageTime(message.createdAt)
+    lines.push(`## ${who}${when ? ` · ${when}` : ''}`, '')
+    if (message.role === 'assistant') {
+      if (message.modelRef) lines.push(`*模型：${message.modelRef}*`, '')
+      if (message.interrupted) lines.push('*（回答被手动停止，可能不完整）*', '')
+      if (message.finishReason && message.finishReason !== 'stop') {
+        lines.push(`*（回合终态：${message.finishReason}）*`, '')
+      }
+    }
+    lines.push(message.content?.trim() ? message.content : '（空消息）', '')
+    const tools = message.tools ?? []
+    if (tools.length > 0) {
+      lines.push('**工具调用**', '')
+      for (const tool of tools) {
+        const status = tool.state === 'error' ? '失败' : tool.state === 'running' ? '运行中' : '完成'
+        const detail = (tool.args || tool.detail || '').trim().split('\n')[0]?.slice(0, 160)
+        lines.push(`- \`${tool.name}\` · ${status}${detail ? ` · ${detail}` : ''}`)
+      }
+      lines.push('')
+    }
+  }
+  return lines.join('\n').trimEnd() + '\n'
+}
+
+/** 1.5 发送键偏好（localStorage 持久化）：enter = Enter 发送 / Shift+Enter 换行。 */
+export type SendKeyPreference = 'enter' | 'ctrl-enter'
+export function readSendKeyPreference(): SendKeyPreference {
+  try {
+    return localStorage.getItem('haoyue.sendKey') === 'ctrl-enter' ? 'ctrl-enter' : 'enter'
+  } catch {
+    return 'enter'
+  }
+}
+
+/** 1.6 导出文件名：会话标题清洗 + 日期，避免非法路径字符。 */
+export function conversationExportFileName(title: string | undefined, now = new Date()): string {
+  const safe = (title?.trim() || '会话').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40)
+  return `${safe}-${now.toISOString().slice(0, 10)}.md`
+}
+
+/** 1.5 /模型 命令的参数解析：按名称或关键字匹配当前可用模型。 */
+export function resolveModelRef(arg: string, models: readonly string[]): string | null {
+  const query = arg.trim().toLocaleLowerCase()
+  if (!query) return null
+  return models.find((model) => model.toLocaleLowerCase() === query)
+    ?? models.find((model) => model.toLocaleLowerCase().includes(query))
+    ?? null
+}

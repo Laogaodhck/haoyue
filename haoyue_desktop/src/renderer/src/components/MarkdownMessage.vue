@@ -14,6 +14,7 @@ import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import MarkdownIt from 'markdown-it'
 import { computed, nextTick, ref, watch } from 'vue'
+import { renderStreamingContent, restoreFences } from '../streaming-markdown'
 
 const props = withDefaults(defineProps<{
   content: string
@@ -75,8 +76,6 @@ md.renderer.rules.fence = (tokens, index, _options, env) => {
 
 // ---------------------------------------------------------------- math
 
-const mathHtml: string[] = []
-
 /** Extracts fenced code (math inside code must stay untouched). */
 function protectFences(source: string): { text: string; fences: string[] } {
   const fences: string[] = []
@@ -88,32 +87,52 @@ function protectFences(source: string): { text: string; fences: string[] } {
   return { text, fences }
 }
 
-function renderMath(source: string): string {
+/** 公式渲染：返回占位后的文本与待回填的 katex HTML（局部数组，块级复用在并发下安全）。 */
+function renderMath(source: string): { text: string; pending: string[] } {
+  const pending: string[] = []
   let result = source
   result = result.replace(/\$\$([\s\S]+?)\$\$/g, (_all, tex: string) => {
-    const token = `@@MATH${mathHtml.length}@@`
-    mathHtml.push(katex.renderToString(tex, { displayMode: true, throwOnError: false }))
+    const token = `@@MATH${pending.length}@@`
+    pending.push(katex.renderToString(tex, { displayMode: true, throwOnError: false }))
     return token
   })
   result = result.replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_all, prefix: string, tex: string) => {
-    const token = `@@MATH${mathHtml.length}@@`
-    mathHtml.push(katex.renderToString(tex, { displayMode: false, throwOnError: false }))
+    const token = `@@MATH${pending.length}@@`
+    pending.push(katex.renderToString(tex, { displayMode: false, throwOnError: false }))
     return `${prefix}${token}`
   })
-  return result
+  return { text: result, pending }
 }
 
+function resolveMath(html: string, pending: string[]): string {
+  if (pending.length === 0) return html
+  return html.replace(/@@MATH(\d+)@@/g, (_all, index: string) => pending[Number(index)] ?? '')
+}
+
+/**
+ * 渲染一个 markdown 单元（整篇或单个块）。finalized=false（流式尾部块）跳过
+ * katex 与 hljs——两者只在块定稿时执行一次（1.1：替代旧的全篇流式降级）。
+ */
+function renderUnit(source: string, streaming: boolean): string {
+  const { text, fences } = protectFences(source)
+  const math = streaming ? { text, pending: [] as string[] } : renderMath(text)
+  const html = md.render(restoreFences(math.text, fences), { streaming })
+  return resolveMath(html, math.pending)
+}
+
+const blockCache = new Map<string, string>()
+const fallbackBlock = (source: string): string =>
+  `<pre class="unclosed-fence">${md.utils.escapeHtml(source)}</pre>`
+
 const rendered = computed(() => {
-  mathHtml.length = 0
-  const { text, fences } = protectFences(props.content)
-  // Streaming bubbles skip the katex pass (the heaviest per-delta cost); the math
-  // renders properly on the final full pass once the turn completes.
-  let processed = props.streaming ? text : renderMath(text)
-  fences.forEach((fence, index) => {
-    processed = processed.replace(`@@FENCE${index}@@`, fence)
-  })
-  const html = md.render(processed, { streaming: props.streaming })
-  return html.replace(/@@MATH(\d+)@@/g, (_all, index: string) => mathHtml[Number(index)] ?? '')
+  // 定稿：全量渲染（与改造前完全一致，含公式/高亮/mermaid 布局）。
+  if (!props.streaming) return renderUnit(props.content, false)
+  // 流式：分块增量——定稿块命中缓存，每帧只解析尾部未定稿块。
+  return renderStreamingContent(props.content, {
+    renderBlock: (source, finalized) => renderUnit(source, !finalized),
+    cache: blockCache,
+    renderFallback: fallbackBlock,
+  }).html
 })
 
 // ---------------------------------------------------------------- mermaid

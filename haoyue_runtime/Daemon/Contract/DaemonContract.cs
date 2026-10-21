@@ -720,7 +720,11 @@ public static class DaemonContract
             ("architecture", SString("架构")),
             ("trainedContext", SInteger("训练上下文长度")),
             ("contextWindow", SInteger("上下文窗口 token")),
-            ("maxOutput", SInteger("最大输出 token"))))));
+            ("maxOutput", SInteger("最大输出 token")),
+            ("quantization", RObject(
+                ("label", SString("量化标签（未知为空串）")),
+                ("bitsPerWeight", SNumber("有效位宽")),
+                ("advice", SString("选型建议文案"))))))));
 
     /// <summary>模型连通性测试（model.test / provider.test 条目）。</summary>
     private static readonly JsonObject ModelTestResult = RObject(
@@ -831,7 +835,8 @@ public static class DaemonContract
     /// <summary>路由配置（routing.get/set）。</summary>
     private static readonly JsonObject RoutingResult = RObject(
         ("failoverEnabled", SBoolean("故障转移开关")),
-        ("deepSeekOptimizationEnabled", SBoolean("DeepSeek 优化开关")));
+        ("deepSeekOptimizationEnabled", SBoolean("DeepSeek 优化开关")),
+        ("localFailoverToCloud", SBoolean("本地→云故障转移（默认关：防意外计费）")));
 
     /// <summary>智能体设置（agent.config.get/set）。</summary>
     private static readonly JsonObject AgentConfigResult = RObject(

@@ -34,6 +34,8 @@ export interface ScannedLocalModel {
   trainedContext?: number | null
   contextWindow: number
   maxOutput: number
+  /** 2.6 量化引导：低效档位（Q8/FP16 级）才有值。 */
+  quantization?: { label: string; bitsPerWeight?: number | null; advice: string } | null
 }
 
 const props = defineProps<{
@@ -451,6 +453,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                           <span class="model-badge context-badge">{{ formatSize(model.sizeBytes) }}</span>
                           <span class="model-badge context-badge" :title="`训练上下文：${model.trainedContext ?? '未知'} Tokens`">
                             {{ formatTokenCount(model.contextWindow) }}
+                          </span>
+                          <span v-if="model.quantization?.advice" class="model-badge quant-hint-badge" :title="model.quantization.advice">
+                            {{ model.quantization.label || '低效量化' }} · 建议换 Q4_K_M
                           </span>
                         </div>
                         <div class="model-row-actions">

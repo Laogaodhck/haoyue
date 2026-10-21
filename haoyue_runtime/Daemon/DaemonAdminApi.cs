@@ -145,6 +145,8 @@ internal sealed partial class DaemonAdminApi(
     {
         ["failoverEnabled"] = runtime.ConfigStore.Config.Routing.FailoverEnabled,
         ["deepSeekOptimizationEnabled"] = runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled,
+        // 2.7 本地→云故障转移（默认关：防 surprise billing）。
+        ["localFailoverToCloud"] = runtime.ConfigStore.Config.Routing.LocalFailoverToCloud,
     }.ToJsonString();
 
     /// <summary>Agent behavior config shown on the desktop 智能体 settings page.</summary>
@@ -445,14 +447,21 @@ internal sealed partial class DaemonAdminApi(
             && deepSeekValue.TryGetValue<bool>(out var enabled)
                 ? enabled
                 : runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled;
+        // 2.7：缺省键保持现值；只允许显式置 true/false。
+        var localFailoverToCloud = parameters["localFailoverToCloud"] is JsonValue localValue
+            && localValue.TryGetValue<bool>(out var localEnabled)
+                ? localEnabled
+                : runtime.ConfigStore.Config.Routing.LocalFailoverToCloud;
 
         runtime.ConfigStore.Config.Routing.FailoverEnabled = failoverEnabled;
         runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled = deepSeekOptimizationEnabled;
+        runtime.ConfigStore.Config.Routing.LocalFailoverToCloud = localFailoverToCloud;
         runtime.ConfigStore.Save();
         return new JsonObject
         {
             ["failoverEnabled"] = failoverEnabled,
             ["deepSeekOptimizationEnabled"] = deepSeekOptimizationEnabled,
+            ["localFailoverToCloud"] = localFailoverToCloud,
         }.ToJsonString();
     }
 
@@ -844,6 +853,15 @@ internal sealed partial class DaemonAdminApi(
             ["trainedContext"] = model.TrainedContext,
             ["contextWindow"] = model.ContextWindow,
             ["maxOutput"] = model.MaxOutput,
+            // 2.6 量化引导：低效档位才有 advice（空串不透出该键）。
+            ["quantization"] = model.Quantization is { } quant && quant.HasAdvice
+                ? (JsonNode)new JsonObject
+                {
+                    ["label"] = quant.Label ?? "",
+                    ["bitsPerWeight"] = quant.BitsPerWeight,
+                    ["advice"] = quant.Advice,
+                }
+                : null,
         }).ToArray());
 
         return new JsonObject
@@ -2002,6 +2020,8 @@ internal sealed partial class DaemonAdminApi(
             added.Add(source);
             files.Add((JsonNode)new JsonObject { ["file"] = source.Title, ["entries"] = count });
             totalEntries += count;
+            try { KnowledgeSourceWatcher.EnsureStarted(runtime.Knowledge, scope); }
+            catch { /* watcher 是 best-effort 增强能力，启动失败不影响导入结果 */ }
         }
         var sources = new JsonArray();
         foreach (var source in added)

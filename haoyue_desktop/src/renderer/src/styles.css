@@ -6626,6 +6626,15 @@ select:focus-visible {
   font-size: 10px;
 }
 
+/* 2.6 量化引导徽标：低效档位提示（警示色调，hover 出完整建议文案）。 */
+.quant-hint-badge {
+  background: var(--surface-hover);
+  color: var(--warning, #b45309);
+  border: 1px solid color-mix(in srgb, var(--warning, #d97706) 35%, transparent);
+  font-size: 10px;
+  cursor: help;
+}
+
 .model-row-actions {
   display: flex;
   align-items: center;

@@ -303,7 +303,11 @@ public sealed class ProviderManager(
                             // instead of being hidden by a silent failover. But a fallback candidate
                             // rejecting the request (e.g. HTTP 401 from an unconfigured default)
                             // must not abort the remaining candidates: record it and keep walking.
-                            if (committed || (candidateIndex == 0 && !ex.Retryable)) throw;
+                            // 2.7 routing.localFailoverToCloud：本地模型的首候选非可重试失败
+                            // 默认直接抛（防 surprise billing 的有意设计）；显式开启后走云回退链。
+                            if (committed
+                                || (candidateIndex == 0 && !ex.Retryable
+                                    && !configStore.Config.Routing.LocalFailoverToCloud)) throw;
                             lastError = ex;
                             failures.Add((model.Ref, ex.Message));
                             goto NextCandidate;

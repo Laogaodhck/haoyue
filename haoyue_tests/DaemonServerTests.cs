@@ -445,6 +445,19 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var afterData = JsonNode.Parse(after["data"]!.GetValue<string>())!;
         Assert.False(afterData["failoverEnabled"]!.GetValue<bool>());
         Assert.True(afterData["deepSeekOptimizationEnabled"]!.GetValue<bool>());
+
+        // 2.7：localFailoverToCloud 默认关；显式开启后可读回。
+        Assert.False(afterData["localFailoverToCloud"]!.GetValue<bool>());
+        await connection.SendAsync(4, "routing.set", new JsonObject
+        {
+            ["failoverEnabled"] = true,
+            ["localFailoverToCloud"] = true,
+        });
+        var localSet = await connection.ReadUntilAsync(
+            response => response["id"]!.GetValue<long>() == 4
+                        && response["event"]!.GetValue<string>() == "result");
+        var localData = JsonNode.Parse(localSet["data"]!.GetValue<string>())!;
+        Assert.True(localData["localFailoverToCloud"]!.GetValue<bool>());
     }
 
     [Fact]

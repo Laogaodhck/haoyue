@@ -108,6 +108,7 @@ public static class ConfigSchema
         // routing
         New("routing.fallback", "array", null, view: ViewBoth),
         New("routing.failoverEnabled", "bool", true),
+    New("routing.localFailoverToCloud", "bool", false),
         New("routing.deepSeekOptimizationEnabled", "bool", false),
         New("routing.loadBalance", "enum", "priority",
             allowed: ["priority", "roundRobin", "leastUsed", "lowestCost", "fastest", "sticky"]),

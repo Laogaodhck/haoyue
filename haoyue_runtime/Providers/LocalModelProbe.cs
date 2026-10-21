@@ -14,7 +14,8 @@ public sealed record LocalModelInfo(
     string? Architecture,
     long? TrainedContext,
     int ContextWindow,
-    int MaxOutput);
+    int MaxOutput,
+    QuantizationAdvisor.Hint? Quantization = null);
 
 /// <summary>
 /// Turns the GGUF files of a local models directory into registrable model entries. The
@@ -55,7 +56,9 @@ public static class LocalModelProbe
                         : 8192,
                     MaxOutput: header.ContextLength is > 0 and var window
                         ? (int)Math.Clamp(window / 8, 2048, 8192)
-                        : 2048);
+                        : 2048,
+                    // 2.6 量化引导：纯提示（Q8/FP16 级给 Q4_K_M 收益预估），不影响注册。
+                    Quantization: QuantizationAdvisor.Describe(file.FileName, file.SizeBytes, header));
             })
             .ToList();
     }

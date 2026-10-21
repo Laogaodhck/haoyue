@@ -1,4 +1,6 @@
 using Microsoft.Data.Sqlite;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Haoyue.Runtime.Data;
 
@@ -125,7 +127,7 @@ public sealed partial class KnowledgeStore
         using var connection = database.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, notebook_id, kind, title, locator, content, chunk_count, created_at, updated_at
+            SELECT id, notebook_id, kind, title, locator, content, chunk_count, created_at, updated_at, content_hash
             FROM kb_sources
             WHERE notebook_id = $notebook
             ORDER BY updated_at DESC;
@@ -143,7 +145,7 @@ public sealed partial class KnowledgeStore
         using var connection = database.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT s.id, s.notebook_id, s.kind, s.title, s.locator, s.content, s.chunk_count, s.created_at, s.updated_at
+            SELECT s.id, s.notebook_id, s.kind, s.title, s.locator, s.content, s.chunk_count, s.created_at, s.updated_at, s.content_hash
             FROM kb_sources s
             JOIN kb_notebooks n ON n.id = s.notebook_id
             WHERE s.id = $id AND n.scope = $scope;
@@ -198,12 +200,13 @@ public sealed partial class KnowledgeStore
             using var update = connection.CreateCommand();
             update.CommandText = """
                 UPDATE kb_sources
-                SET title = $title, locator = $locator, content = $content, updated_at = $now
+                SET title = $title, locator = $locator, content = $content, content_hash = $hash, updated_at = $now
                 WHERE id = $id;
                 """;
             update.Parameters.AddWithValue("$title", trimmedTitle);
             update.Parameters.AddWithValue("$locator", (object?)locator ?? DBNull.Value);
             update.Parameters.AddWithValue("$content", content);
+            update.Parameters.AddWithValue("$hash", ContentFingerprint(content));
             update.Parameters.AddWithValue("$now", now);
             update.Parameters.AddWithValue("$id", updateId);
             update.ExecuteNonQuery();
@@ -213,20 +216,46 @@ public sealed partial class KnowledgeStore
         using (var insert = connection.CreateCommand())
         {
             insert.CommandText = """
-                INSERT INTO kb_sources (notebook_id, kind, title, locator, content, created_at, updated_at)
-                VALUES ($notebook, $kind, $title, $locator, $content, $now, $now);
+                INSERT INTO kb_sources (notebook_id, kind, title, locator, content, content_hash, created_at, updated_at)
+                VALUES ($notebook, $kind, $title, $locator, $content, $hash, $now, $now);
                 """;
             insert.Parameters.AddWithValue("$notebook", notebookId);
             insert.Parameters.AddWithValue("$kind", kind);
             insert.Parameters.AddWithValue("$title", trimmedTitle);
             insert.Parameters.AddWithValue("$locator", (object?)locator ?? DBNull.Value);
             insert.Parameters.AddWithValue("$content", content);
+            insert.Parameters.AddWithValue("$hash", ContentFingerprint(content));
             insert.Parameters.AddWithValue("$now", now);
             insert.ExecuteNonQuery();
         }
         var newId = LastRowId(connection);
         return (GetSource(scope, newId)!, Created: true);
     }
+
+    /// <summary>
+    /// 4.4 file 源清单（locator = 文件绝对路径），供后台 watcher 做 stat + hash 比对。
+    /// </summary>
+    public IReadOnlyList<KnowledgeSource> ListFileSources(string scope)
+    {
+        var sources = new List<KnowledgeSource>();
+        using var connection = database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT s.id, s.notebook_id, s.kind, s.title, s.locator, s.content, s.chunk_count, s.created_at, s.updated_at, s.content_hash
+            FROM kb_sources s
+            JOIN kb_notebooks n ON n.id = s.notebook_id
+            WHERE n.scope = $scope AND s.kind = 'file' AND s.locator IS NOT NULL
+            ORDER BY s.id;
+            """;
+        command.Parameters.AddWithValue("$scope", scope);
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) sources.Add(ReadSource(reader));
+        return sources;
+    }
+
+    /// <summary>4.4 内容指纹（导入/刷新时落库；watcher 与外部文件变化比对用）。</summary>
+    public static string ContentFingerprint(string content) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
 
     /// <summary>Deletes a source and the chunk entries derived from it (manual entries stay).</summary>
     public void DeleteSource(string scope, long sourceId)
@@ -537,7 +566,8 @@ public sealed partial class KnowledgeStore
         reader.GetString(5),
         (int)reader.GetInt64(6),
         reader.GetString(7),
-        reader.GetString(8));
+        reader.GetString(8),
+        reader.IsDBNull(9) ? null : reader.GetString(9));
 
     private static List<KnowledgeEntryInfo> ReadInfos(SqliteCommand command)
     {

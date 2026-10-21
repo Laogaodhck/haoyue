@@ -1207,6 +1207,75 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task StreamAsync_LocalFailoverToCloud_FallsThroughOnNonRetryableLocalFailure()
+    {
+        var store = _store;
+        // 2.7：默认关闭（防 surprise billing）；显式开启后，本地模型的首候选非可重试失败
+        // （模型文件缺失、加载失败等）也走云回退链，而不是直接终结回合。
+        store.Config.Routing.LocalFailoverToCloud = true;
+        store.Config.Routing.Retry.MaxAttempts = 1;
+        store.Config.Routing.Fallback = ["beta/tiny"];
+        store.Config.Provider = "alpha";
+        store.Config.Model = "big";
+
+        var alpha = new StubLlmClient("openai", new LlmException("model file missing: gguf not found", 500, retryable: false));
+        var beta = new StubLlmClient("anthropic", null, delayMs: 0, new LlmCompleted(new LlmCompletion { Text = "cloud ok" }));
+        var manager = NewManagerWithClients(store, _registry, Path.Combine(_dir, "usage-local-failover.jsonl"), alpha, beta);
+
+        var request = new LlmRequest
+        {
+            Provider = store.Config.Providers[0],
+            Model = store.Config.Providers[0].Models[0],
+            Messages = [ChatMessage.User("hi")],
+        };
+
+        var text = "";
+        var ex = await Record.ExceptionAsync(async () =>
+        {
+            await foreach (var evt in manager.StreamAsync(_ => request, null, CancellationToken.None))
+                if (evt is LlmCompleted done) text = done.Completion.Text;
+        });
+
+        Assert.Null(ex);
+        Assert.Equal("cloud ok", text);
+        Assert.Equal(1, alpha.Calls);
+        Assert.Equal(1, beta.Calls);
+    }
+
+    [Fact]
+    public async Task StreamAsync_LocalFailoverToCloud_OffByDefault_NonRetryableStillSurfaces()
+    {
+        var store = _store;
+        // 防 surprise billing 的默认值护栏：不显式开启时，本地首候选非可重试失败直接抛。
+        Assert.False(store.Config.Routing.LocalFailoverToCloud);
+        store.Config.Routing.Retry.MaxAttempts = 1;
+        store.Config.Routing.Fallback = ["beta/tiny"];
+        store.Config.Provider = "alpha";
+        store.Config.Model = "big";
+
+        var alpha = new StubLlmClient("openai", new LlmException("model file missing: gguf not found", 500, retryable: false));
+        var beta = new StubLlmClient("anthropic", null, delayMs: 0, new LlmCompleted(new LlmCompletion { Text = "cloud ok" }));
+        var manager = NewManagerWithClients(store, _registry, Path.Combine(_dir, "usage-local-failover-off.jsonl"), alpha, beta);
+
+        var request = new LlmRequest
+        {
+            Provider = store.Config.Providers[0],
+            Model = store.Config.Providers[0].Models[0],
+            Messages = [ChatMessage.User("hi")],
+        };
+
+        var ex = await Record.ExceptionAsync(async () =>
+        {
+            await foreach (var _ in manager.StreamAsync(_ => request, null, CancellationToken.None)) { }
+        });
+
+        Assert.NotNull(ex);
+        Assert.Equal("model file missing: gguf not found", ex.Message);
+        Assert.Equal(1, alpha.Calls);
+        Assert.Equal(0, beta.Calls); // 云从未被联系——这是默认关闭的意义
+    }
+
+    [Fact]
     public async Task EmbedBatchAsync_SendsTheWholeBatchToTheClientInOneCall()
     {
         // 本地通道每次 EmbedAsync 都要重新租用/加载权重：批量入口必须把整批发给一次客户端调用，

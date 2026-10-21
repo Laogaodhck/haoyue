@@ -12,7 +12,8 @@ public sealed record KnowledgeNotebook(
 
 /// <summary>An ingest unit inside a notebook: a text snippet, a local file or a fetched URL.</summary>
 public sealed record KnowledgeSource(
-    long Id, long NotebookId, string Kind, string Title, string? Locator, string Content, int ChunkCount, string CreatedAt, string UpdatedAt);
+    long Id, long NotebookId, string Kind, string Title, string? Locator, string Content, int ChunkCount, string CreatedAt, string UpdatedAt,
+    string? ContentHash = null);
 
 /// <summary>An entry plus its notebook/source attribution, for knowledge-center views.</summary>
 public sealed record KnowledgeEntryInfo(

@@ -162,6 +162,13 @@ public sealed class RoutingConfig
     public bool FailoverEnabled { get; set; } = true;
 
     /// <summary>
+    /// 2.7 本地→云故障转移（默认 false）：开启后本地模型的非可重试失败（模型文件缺失、
+    /// 加载失败等）也走云回退链。默认关闭是「防 surprise billing」的有意设计——静默切到
+    /// 付费云可能产生未预期的账单；开启前请确认云侧凭据与计费预期。
+    /// </summary>
+    public bool LocalFailoverToCloud { get; set; }
+
+    /// <summary>
     /// Opt-in DeepSeek-specific request optimizations. The policy is intentionally separate from
     /// model selection so it can evolve independently as DeepSeek models/API surface change.
     /// </summary>

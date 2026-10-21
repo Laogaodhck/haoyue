@@ -16,6 +16,10 @@ interface OfficialSkill {
   tags?: string[]
   installed: boolean
   enabled: boolean
+  /** 6.4 本地已装版本（版本账本或 manifest 回退）。 */
+  installedVersion?: string
+  /** 目录版本高于本地：点开关即更新（保留本地 prompt 修改）。 */
+  canUpdate?: boolean
 }
 
 const catalog = ref<OfficialSkill[]>([])
@@ -119,6 +123,10 @@ onMounted(() => { void loadCatalog() })
               <strong>{{ skill.name }}</strong>
               <span v-if="skill.version" class="version-text">v{{ skill.version }}</span>
               <span v-if="!skill.installed" class="inline-badge">未安装</span>
+              <span v-else-if="skill.canUpdate" class="inline-badge update-badge"
+                :title="`本地 v${skill.installedVersion ?? '?'} → 目录 v${skill.version}；更新只刷新清单版本，保留你对 prompt.txt 的本地修改`">
+                可更新
+              </span>
               <span v-for="tag in skill.tags" :key="tag" class="inline-badge">{{ tag }}</span>
             </div>
             <small>{{ skill.description }}</small>
@@ -279,5 +287,11 @@ onMounted(() => { void loadCatalog() })
   to {
     transform: rotate(360deg);
   }
+}
+
+/* 6.4 可更新徽标：中性提示色，避免与新装/启用状态混淆。 */
+.update-badge {
+  color: var(--color-warning, #854f0b);
+  border-color: currentColor;
 }
 </style>

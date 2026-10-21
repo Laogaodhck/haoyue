@@ -66,6 +66,37 @@ public static class ConnectorIntegrity
             VerifyEntry(entries, ConnectorCatalog.BundledServerRelativePath, bundledServer, "内置本地 MCP 服务器");
     }
 
+    /// <summary>
+    /// 包清单是否登记在完整性清单（SHA256SUMS）白名单里。6.3 用它判定
+    /// 「官方身份」：official 声明必须有清单登记为证，社区包自填不能生效。
+    /// 目录无清单（第三方/自定义目录）时返回 false——official 仅对受管分发目录成立。
+    /// </summary>
+    public static bool IsListed(string manifestPath)
+    {
+        var (root, relative) = ResolveRootAndRelative(manifestPath);
+        if (root is null || relative is null) return false;
+        var sumsPath = Path.Combine(root, SumsFileName);
+        if (!File.Exists(sumsPath)) return false;
+        try
+        {
+            return ParseSums(File.ReadAllLines(sumsPath))
+                .Any(entry => string.Equals(entry.Path, relative, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (FormatException)
+        {
+            return false; // 清单损坏视同未登记
+        }
+    }
+
+    private static (string? Root, string? Relative) ResolveRootAndRelative(string manifestPath)
+    {
+        var packageDir = Path.GetDirectoryName(Path.GetFullPath(manifestPath));
+        if (packageDir is null) return (null, null);
+        var root = Path.GetDirectoryName(packageDir);
+        if (root is null) return (null, null);
+        return (root, Path.GetRelativePath(root, manifestPath).Replace('\\', '/'));
+    }
+
     private static bool UnsignedAllowed()
     {
         var raw = Environment.GetEnvironmentVariable(AllowUnsignedEnvVar);

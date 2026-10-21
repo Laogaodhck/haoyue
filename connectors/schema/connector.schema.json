@@ -20,6 +20,17 @@
     },
     "tags": { "type": "array", "items": { "type": "string" }, "maxItems": 8 },
     "homepage": { "type": "string", "format": "uri" },
+    "source": {
+      "type": "string",
+      "enum": ["official", "verified", "community", "local"],
+      "default": "local",
+      "description": "来源可信度（6.3）：official 仅对随分发包、受 SHA256SUMS 清单登记的内置包生效——自建/社区目录声明 official 会被降级为 community 并给出警告；缺省按 local 处理（向后兼容旧包）。"
+    },
+    "minRuntimeVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "最低运行时版本（语义化 x.y.z）：低于此版本的运行时会在连接器卡片上给出升级提示。"
+    },
     "offline": { "type": "boolean", "description": "true = 无外部 npm/uvx 依赖，随 haoyue 分发" },
     "server": {
       "type": "object",

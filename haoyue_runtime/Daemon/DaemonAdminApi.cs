@@ -1394,6 +1394,11 @@ internal sealed partial class DaemonAdminApi(
                 ["tags"] = new JsonArray((package.Tags ?? []).Select(tag => (JsonNode)tag).ToArray()),
                 ["offline"] = package.Offline ?? false,
                 ["homepage"] = package.Homepage,
+                // 6.3 来源可信度：effective 是经清单校验后的结论（official 需 SHA256SUMS
+                // 登记为证），sourceWarning 说明声明的来源为何未通过校验。
+                ["source"] = package.EffectiveSource,
+                ["sourceWarning"] = package.SourceWarning,
+                ["minRuntimeVersion"] = package.MinRuntimeVersion,
                 ["installed"] = installed is not null,
                 ["enabled"] = installed?.Enabled ?? false,
                 ["inputs"] = inputs,
@@ -1636,11 +1641,17 @@ internal sealed partial class DaemonAdminApi(
     public string ListOfficialSkills()
     {
         var discovered = runtime.Skills.Discover(runtime.Workspace);
+        var installedVersions = runtime.ConfigStore.State.InstalledSkillVersions;
         var catalog = new JsonArray();
         foreach (var entry in OfficialSkillCatalog.Entries)
         {
             var installed = discovered.FirstOrDefault(skill =>
                 Path.GetFileName(skill.Directory).Equals(entry.Slug, StringComparison.OrdinalIgnoreCase));
+            // 6.4 版本治理：本地版本优先取版本账本（安装时记录），回退 manifest 的
+            // version 字段（手工放置的技能目录）。低于目录版本即可更新。
+            var installedVersion = installedVersions.TryGetValue(entry.Slug, out var recorded)
+                ? recorded
+                : installed?.Manifest.Version;
             catalog.Add((JsonNode)new JsonObject
             {
                 ["slug"] = entry.Slug,
@@ -1650,6 +1661,8 @@ internal sealed partial class DaemonAdminApi(
                 ["tags"] = new JsonArray(entry.Tags.Select(tag => (JsonNode)tag).ToArray()),
                 ["installed"] = installed is not null,
                 ["enabled"] = installed?.Enabled ?? false,
+                ["installedVersion"] = installedVersion,
+                ["canUpdate"] = installed is not null && OfficialSkillCatalog.IsNewer(entry.Version, installedVersion),
             });
         }
 

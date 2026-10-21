@@ -512,4 +512,9 @@ public sealed class RuntimeState
     public Dictionary<string, int> RoundRobinCursors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public string? LastSessionId { get; set; }
     public Dictionary<string, string> DisabledSkills { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// 6.4 skill 版本治理：官方技能 slug → 安装时的版本。用于判断「有可用更新」
+    /// 并在更新时保留用户对 prompt.txt 的本地修改（仅刷新 manifest 版本）。
+    /// </summary>
+    public Dictionary<string, string> InstalledSkillVersions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

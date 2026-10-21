@@ -18,6 +18,7 @@ import {
   Search
 } from '@lucide/vue'
 import { computed, onMounted, ref, type Component } from 'vue'
+import { confirmAction } from '../confirmation'
 
 const emit = defineEmits<{
   /** 目录发生变化（安装/卸载/启停），宿主可刷新 MCP 状态。 */
@@ -34,6 +35,12 @@ interface ConnectorEntry {
   tags?: string[]
   offline: boolean
   homepage?: string
+  /** 6.3 生效来源（经完整性清单校验）：official / verified / community / local。 */
+  source?: string
+  /** 声明的来源未通过校验时的降级说明。 */
+  sourceWarning?: string
+  /** 最低运行时版本（x.y.z）；低于当前运行时由 daemon 给出提示时使用。 */
+  minRuntimeVersion?: string
   installed: boolean
   enabled: boolean
   inputs: ConnectorInputMeta[]
@@ -62,6 +69,17 @@ const pending = ref<string[]>([])
 const expanded = ref<string | null>(null)
 const formValues = ref<Record<string, string>>({})
 const formError = ref('')
+
+const SOURCE_LABELS: Record<string, string> = {
+  official: '官方',
+  verified: '已认证',
+  community: '社区',
+  local: '本地',
+}
+/** 6.3 来源标签：daemon 已按完整性清单校验（official 需 SHA256SUMS 登记为证）。 */
+function sourceLabel(source: string | undefined): string {
+  return SOURCE_LABELS[source ?? 'local'] ?? source ?? '本地'
+}
 
 /**
  * P0-1：连接器图标统一渲染为项目锁定的 SVG 图标（@lucide/vue）。
@@ -137,6 +155,15 @@ function toggleForm(connector: ConnectorEntry): void {
 
 /** 一键安装：无需收集项直接装；有 inputs 时展开表单收集后再装。 */
 async function install(connector: ConnectorEntry): Promise<void> {
+  // 6.3 信任分级：非官方来源首次安装必须显式确认（它会以 MCP 服务器身份在本机运行）。
+  if (connector.source && connector.source !== 'official' && !await confirmAction({
+    title: '安装来源未经验证',
+    message: `「${connector.name}」的来源为「${sourceLabel(connector.source)}」，不是随分发包分发的官方连接器。`
+      + '安装后它会以 MCP 服务器身份在你的环境运行，请确认来源可信后再继续。',
+    confirmLabel: '仍然安装',
+    danger: true,
+  })) return
+
   const needed = connector.inputs.filter((input) => input.required && !input.hasDefault)
   if (needed.length > 0 && expanded.value !== connector.id) {
     toggleForm(connector)
@@ -260,8 +287,14 @@ onMounted(() => { void loadCatalog() })
           <div class="connector-badges">
             <span class="inline-badge">{{ connector.category }}</span>
             <span v-if="connector.offline" class="inline-badge">离线可用</span>
+            <!-- 6.3 来源角标：official 经清单校验；声明的 official 未通过校验时显示降级说明 -->
+            <span v-if="connector.source" class="inline-badge source-badge" :class="`source-${connector.source}`"
+              :title="connector.sourceWarning ?? sourceLabel(connector.source)">
+              {{ sourceLabel(connector.source) }}
+            </span>
             <span v-for="tag in connector.tags" :key="tag" class="inline-badge">{{ tag }}</span>
           </div>
+          <p v-if="connector.sourceWarning" class="connector-source-warning">{{ connector.sourceWarning }}</p>
 
           <div v-if="expanded === connector.id" class="connector-form">
             <label v-for="input in connector.inputs" :key="input.key" class="connector-field">
@@ -563,6 +596,23 @@ onMounted(() => { void loadCatalog() })
 
 .spinning {
   animation: connectors-spin .8s linear infinite;
+}
+
+/* 6.3 来源角标：official 最可信（成功色），community/local 用中性色，降级警告单独一行。 */
+.source-badge.source-official {
+  color: var(--color-success, #0f6e56);
+  border-color: currentColor;
+}
+
+.source-badge.source-community,
+.source-badge.source-local {
+  opacity: .75;
+}
+
+.connector-source-warning {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-warning, #854f0b);
 }
 
 @keyframes connectors-spin {

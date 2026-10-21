@@ -61,14 +61,26 @@ public sealed class McpManager(
     private const int MaxPromptContributionsTotal = 48;
 
     private readonly Func<string, McpServerConfig, string?, IMcpTransport> _transportFactory = transportFactory ?? CreateTransport;
-    private readonly List<McpClient> _clients = [];
-    private readonly List<IDisposable> _registrations = [];
+    /// <summary>
+    /// 6.2 按服务器名归属的连接与注册（原先是扁平 _clients/_registrations）：
+    /// 两段式灰度需要「只切换成功的服务器、保留失败服务器旧连接与旧工具集」，
+    /// 归属信息是前提。槽位建立/替换只在 _statusGate 内进行。
+    /// </summary>
+    private readonly Dictionary<string, ServerSlot> _slots = new(StringComparer.Ordinal);
     private readonly List<McpServerStatus> _status = [];
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
     private readonly Lock _statusGate = new();
 
     /// <summary>B3: prompt contributions registered across all servers this reload.</summary>
     private int _promptContributionCount;
+
+    /// <summary>一个 MCP 服务器的已建立连接与注册句柄（registration Dispose = 反注册）。</summary>
+    private sealed class ServerSlot
+    {
+        public List<IDisposable> Registrations { get; } = [];
+        public List<McpClient> Clients { get; } = [];
+        public int PromptCount { get; set; }
+    }
 
     public IReadOnlyList<McpServerStatus> Status
     {
@@ -126,38 +138,37 @@ public sealed class McpManager(
         await _connectionGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await ResetConnectionsAsync().ConfigureAwait(false);
-            lock (_statusGate) _status.Clear();
-            _promptContributionCount = 0;
-
             // 物化配置快照：并行连接时保持稳定的枚举顺序（status 按此顺序返回）。
             var configs = LoadServerConfigs(workspace).ToList();
             var enabled = new List<(string Name, McpServerConfig Server, int Index)>();
-            var results = new McpServerStatus?[configs.Count];
+            var statuses = new McpServerStatus?[configs.Count];
             for (var index = 0; index < configs.Count; index++)
             {
                 var (name, server) = configs[index];
                 if (!server.Enabled)
                 {
-                    results[index] = new McpServerStatus(name, server.Transport, false, 0, "disabled");
+                    statuses[index] = new McpServerStatus(name, server.Transport, false, 0, "disabled");
                     continue;
                 }
                 enabled.Add((name, server, index));
             }
 
+            // ---- 第一段：探测。建立连接并发现能力，全程不触碰现有槽位与工具注册表。
+            // 任一服务器失败只影响它自己——旧连接、旧工具集原封不动。
             var total = enabled.Count;
             // 串行连接时每个 stdio 服务器的进程冷启动（npx/uvx 解析+拉起）+ initialize
             // 握手要 20-40 秒，四个服务器串行轻松吃掉两分钟——这正是桌面端回合长时间
             // 停在"正在准备"的主导因素之一。并行连接后总耗时降为最慢单个服务器的耗时。
-            var tasks = enabled.Select(async entry =>
+            var probes = await Task.WhenAll(enabled.Select(async entry =>
             {
                 var (name, server, index) = entry;
                 progress?.Report($"连接 MCP 服务器 {name}（共 {total} 个）");
                 try
                 {
-                    var status = await ConnectOneAsync(name, server, workspace.Root, ct).ConfigureAwait(false);
-                    results[index] = status;
+                    var (status, client, discovery) = await ConnectAndDiscoverAsync(name, server, workspace.Root, ct)
+                        .ConfigureAwait(false);
                     progress?.Report($"MCP 服务器 {name} 就绪（{status.ToolCount} tools）");
+                    return (Entry: entry, Status: status, Client: (McpClient?)client, Discovery: discovery, Error: (string?)null);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -165,15 +176,76 @@ public sealed class McpManager(
                 }
                 catch (Exception ex)
                 {
-                    // One unreachable server must not abort the reload of the others;
-                    // record the reason so the UI can show why this row is offline.
-                    results[index] = new McpServerStatus(name, server.Transport, false, 0, DescribeConnectionError(ex));
                     progress?.Report($"MCP 服务器 {name} 连接失败");
+                    var detail = DescribeConnectionError(ex);
+                    return (Entry: entry, Status: new McpServerStatus(name, server.Transport, false, 0, detail),
+                        Client: (McpClient?)null, Discovery: (Discovery?)null, Error: (string?)detail);
                 }
-            }).ToList();
-            await Task.WhenAll(tasks).ConfigureAwait(false);
+            })).ConfigureAwait(false);
 
-            lock (_statusGate) _status.AddRange(results.Where(status => status is not null).Select(status => status!));
+            // ---- 第二段：切换。成功的服务器原子换槽（只断自己的旧连接）；失败的服务器
+            // 保留旧槽（旧工具集继续可用）；配置中消失/禁用的服务器才整体回收。
+            var retired = new List<ServerSlot>();
+            lock (_statusGate)
+            {
+                var keptNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // 本轮实际注册的 prompt 数（全局上限 MaxPromptContributionsTotal 按此累计，
+                // 切换完成后以各槽位 PromptCount 汇总校准）。
+                var registeredPrompts = 0;
+                foreach (var probe in probes)
+                {
+                    var (entry, status, client, discovery, error) = probe;
+                    var (name, server, index) = entry;
+                    if (client is null || discovery is null)
+                    {
+                        // 灰度保留：旧连接与旧工具集继续服务，状态行如实说明。
+                        if (_slots.TryGetValue(name, out var existing))
+                        {
+                            keptNames.Add(name);
+                            statuses[index] = status with
+                            {
+                                Error = $"{error}（已保留上一次成功连接的工具集）",
+                                ToolCount = existing.Registrations.Count > 0 ? StatusToolCount(name) : 0,
+                            };
+                        }
+                        else
+                        {
+                            statuses[index] = status;
+                        }
+                        continue;
+                    }
+
+                    // 先释放旧槽位的注册（同步反注册，工具名立即回收），再注册新的：
+                    // ToolRegistry.Register 对同名工具抛异常——顺序反过来会在 reload 时
+                    // 撞上「mcp__server__tool 已注册」。旧 client 的异步释放留到锁外。
+                    if (_slots.Remove(name, out var old))
+                    {
+                        foreach (var registration in old.Registrations) registration.Dispose();
+                        old.Registrations.Clear();
+                        retired.Add(old);
+                    }
+                    var (slot, warnings) = RegisterSlot(name, server, client, discovery, ref registeredPrompts);
+                    _slots[name] = slot;
+                    keptNames.Add(name);
+                    statuses[index] = warnings.Count > 0
+                        ? status with { Warnings = [.. status.Warnings ?? [], .. warnings] }
+                        : status;
+                }
+
+                foreach (var name in _slots.Keys.Where(name => !keptNames.Contains(name)).ToList())
+                    if (_slots.Remove(name, out var gone)) retired.Add(gone);
+
+                _promptContributionCount = _slots.Values.Sum(slot => slot.PromptCount);
+                _status.Clear();
+                _status.AddRange(statuses.Where(status => status is not null).Select(status => status!));
+            }
+
+            // 旧槽在锁外回收：registration Dispose 同步（反注册），client 释放是异步的。
+            foreach (var slot in retired)
+            {
+                foreach (var registration in slot.Registrations) registration.Dispose();
+                foreach (var client in slot.Clients) await client.DisposeAsync().ConfigureAwait(false);
+            }
             return Status;
         }
         finally
@@ -182,7 +254,22 @@ public sealed class McpManager(
         }
     }
 
-    private async Task<McpServerStatus> ConnectOneAsync(string name, McpServerConfig server, string? workspaceRoot, CancellationToken ct)
+    /// <summary>失败服务器的状态行显示保留中的工具数（注册表当前实际可用的该服务器工具）。</summary>
+    private int StatusToolCount(string serverName) =>
+        toolRegistry.All.Count(tool => tool.Name.StartsWith(
+            McpToolAdapter.BuildName(serverName, string.Empty), StringComparison.OrdinalIgnoreCase));
+
+    private sealed record Discovery(
+        IReadOnlyList<McpTool> Tools,
+        IReadOnlyList<McpPrompt> Prompts,
+        IReadOnlyList<McpResource> Resources);
+
+    /// <summary>
+    /// 第一段：建立连接 + 发现能力（tools/prompts/resources 只读取，不注册）。
+    /// 失败时释放本次连接并上抛——调用方据此保留该服务器的旧槽位。
+    /// </summary>
+    private async Task<(McpServerStatus Status, McpClient Client, Discovery Discovery)> ConnectAndDiscoverAsync(
+        string name, McpServerConfig server, string? workspaceRoot, CancellationToken ct)
     {
         var remote = IsRemoteTransport(server.Transport);
         HealBundledServerArgs(name, server);
@@ -220,9 +307,98 @@ public sealed class McpManager(
                 throw;
             }
 
-            lock (_statusGate) _clients.Add(client);
-            return await DiscoverAndRegisterAsync(name, server, client, ct).ConfigureAwait(false);
+            try
+            {
+                var tools = await client.ListToolsAsync(ct).ConfigureAwait(false);
+                var prompts = await client.ListPromptsAsync(ct).ConfigureAwait(false);
+                var resources = await client.ListResourcesAsync(ct).ConfigureAwait(false);
+                return (new McpServerStatus(name, server.Transport, true, tools.Count, null),
+                    client, new Discovery(tools, prompts, resources));
+            }
+            catch
+            {
+                // Discovery failed after the transport connected: without this cleanup the
+                // client (stdio: a live child process and two pump loops) stays alive until
+                // the next reload recycles it, and repeated failed reloads accumulate orphans.
+                await client.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
+    }
+
+    /// <summary>
+    /// 第二段：把探测结果注册成工具/提示/资源（纯本地操作，不触网）。注册动作在
+    /// 切换时刻发生——此时旧槽位即将释放，同名工具不会出现双注册。
+    /// </summary>
+    private (ServerSlot Slot, List<string> Warnings) RegisterSlot(
+        string name, McpServerConfig server, McpClient client, Discovery discovery, ref int registeredPrompts)
+    {
+        var slot = new ServerSlot();
+        slot.Clients.Add(client);
+        var warnings = new List<string>();
+
+        // Tools: names are sanitized to [a-zA-Z0-9_-] and de-duplicated so one server
+        // cannot register two tools under the same local name.
+        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tool in discovery.Tools)
+        {
+            var baseName = McpToolAdapter.BuildName(name, tool.Name);
+            var uniqueName = baseName;
+            var suffix = 2;
+            while (!usedNames.Add(uniqueName))
+                uniqueName = $"{baseName}_{suffix++}";
+            slot.Registrations.Add(toolRegistry.Register(new McpToolAdapter(
+                client, tool, uniqueName, McpToolAdapter.ResolveMutating(server, tool.Name))));
+        }
+
+        // Prompts: resolvers degrade to null when the server is gone or rejects the
+        // request, so an offline server never breaks prompt composition; text is fitted
+        // to the injected-fragment token budget and wrapped in a trust boundary.
+        var serverPromptCount = 0;
+        foreach (var prompt in discovery.Prompts)
+        {
+            if (serverPromptCount >= MaxPromptsPerServer || registeredPrompts >= MaxPromptContributionsTotal)
+            {
+                // B3: over the cap — skipped in the registry, visible in the status
+                // warnings, so users can see why a prompt never shows up.
+                warnings.Add(
+                    $"prompt '{prompt.Name}' 超出注册限额（每服务器 {MaxPromptsPerServer}，全局 {MaxPromptContributionsTotal}），未注入系统提示");
+                continue;
+            }
+            serverPromptCount++;
+            slot.PromptCount++;
+            registeredPrompts++;
+            var promptName = prompt.Name;
+            slot.Registrations.Add(promptRegistry.Register(new PromptContribution(
+                $"mcp:{name}:{promptName}", PromptSlot.Tool,
+                async (_, token) =>
+                {
+                    var text = await client.GetPromptAsync(promptName, token).ConfigureAwait(false);
+                    if (text is null) return null;
+                    // Third-party text enters the system prompt: wrap it in a trust
+                    // boundary so it is treated as data, not instructions.
+                    return ContextPlanner.WrapUntrustedSource(
+                        ContextPlanner.FitInjectedText(text), $"MCP server '{name}' prompt '{promptName}'");
+                }, DegradeRank: 20)));
+        }
+
+        // Resources: text contents exposed as context contributions under the same
+        // mcp:* id family; reads fail soft like prompts.
+        foreach (var resource in discovery.Resources.Take(MaxResourcesPerServer))
+        {
+            if (string.IsNullOrWhiteSpace(resource.Uri)) continue;
+            var uri = resource.Uri;
+            slot.Registrations.Add(promptRegistry.Register(new PromptContribution(
+                $"mcp:{name}:resource:{uri}", PromptSlot.Tool,
+                async (_, token) =>
+                {
+                    var text = await client.GetResourceAsync(uri, token).ConfigureAwait(false);
+                    if (text is null) return null;
+                    return ContextPlanner.WrapUntrustedSource(
+                        ContextPlanner.FitInjectedText(text), $"MCP server '{name}' resource '{uri}'");
+                }, DegradeRank: 20)));
+        }
+        return (slot, warnings);
     }
 
     private static bool IsRemoteTransport(string transport) =>
@@ -329,102 +505,6 @@ public sealed class McpManager(
         configStore.Save();
     }
 
-    private async Task<McpServerStatus> DiscoverAndRegisterAsync(
-        string name, McpServerConfig server, McpClient client, CancellationToken ct)
-    {
-        try
-        {
-            // Auto-discover tools. Names are sanitized to [a-zA-Z0-9_-] (the character set
-            // most providers accept for function names) and de-duplicated so one server
-            // cannot register two tools under the same local name.
-            var tools = await client.ListToolsAsync(ct).ConfigureAwait(false);
-            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var tool in tools)
-            {
-                var baseName = McpToolAdapter.BuildName(name, tool.Name);
-                var uniqueName = baseName;
-                var suffix = 2;
-                while (!usedNames.Add(uniqueName))
-                    uniqueName = $"{baseName}_{suffix++}";
-                var registration = toolRegistry.Register(new McpToolAdapter(
-                    client, tool, uniqueName, McpToolAdapter.ResolveMutating(server, tool.Name)));
-                lock (_statusGate) _registrations.Add(registration);
-            }
-
-            // Auto-discover prompts into the prompt registry. Resolvers degrade to
-            // null when the server is gone or rejects the request, so an offline
-            // server never breaks prompt composition; text is fitted to the
-            // injected-fragment token budget.
-            var prompts = await client.ListPromptsAsync(ct).ConfigureAwait(false);
-            var serverPromptCount = 0;
-            var warnings = new List<string>();
-            foreach (var prompt in prompts)
-            {
-                // 并行连接：计数器与注册列表的读写都在 _statusGate 内完成。
-                lock (_statusGate)
-                {
-                    if (serverPromptCount >= MaxPromptsPerServer || _promptContributionCount >= MaxPromptContributionsTotal)
-                    {
-                        // B3: over the cap — skipped in the registry, visible in the status
-                        // warnings, so users can see why a prompt never shows up.
-                        warnings.Add(
-                            $"prompt '{prompt.Name}' 超出注册限额（每服务器 {MaxPromptsPerServer}，全局 {MaxPromptContributionsTotal}），未注入系统提示");
-                        continue;
-                    }
-                    serverPromptCount++;
-                    _promptContributionCount++;
-                    var promptName = prompt.Name;
-                    _registrations.Add(promptRegistry.Register(new PromptContribution(
-                        $"mcp:{name}:{promptName}", PromptSlot.Tool,
-                        async (_, token) =>
-                        {
-                            var text = await client.GetPromptAsync(promptName, token).ConfigureAwait(false);
-                            if (text is null) return null;
-                            // Third-party text enters the system prompt: wrap it in a trust
-                            // boundary so it is treated as data, not instructions.
-                            return ContextPlanner.WrapUntrustedSource(
-                                ContextPlanner.FitInjectedText(text), $"MCP server '{name}' prompt '{promptName}'");
-                        }, DegradeRank: 20)));
-                }
-            }
-
-            // Auto-discover resources and expose their text contents as context
-            // contributions under the same mcp:* id family. Reads fail soft like
-            // prompts; blob-only resources resolve to null and are skipped by the
-            // composer.
-            var resources = await client.ListResourcesAsync(ct).ConfigureAwait(false);
-            foreach (var resource in resources.Take(MaxResourcesPerServer))
-            {
-                if (string.IsNullOrWhiteSpace(resource.Uri)) continue;
-                var uri = resource.Uri;
-                var registration = promptRegistry.Register(new PromptContribution(
-                    $"mcp:{name}:resource:{uri}", PromptSlot.Tool,
-                    async (_, token) =>
-                    {
-                        var text = await client.GetResourceAsync(uri, token).ConfigureAwait(false);
-                        if (text is null) return null;
-                        return ContextPlanner.WrapUntrustedSource(
-                            ContextPlanner.FitInjectedText(text), $"MCP server '{name}' resource '{uri}'");
-                    }, DegradeRank: 20));
-                lock (_statusGate) _registrations.Add(registration);
-            }
-
-            return new McpServerStatus(name, server.Transport, true, tools.Count, null)
-            {
-                Warnings = warnings.Count > 0 ? warnings : null,
-            };
-        }
-        catch
-        {
-            // Discovery failed after the transport connected: without this cleanup the
-            // client (stdio: a live child process and two pump loops) stays alive until
-            // the next reload recycles it, and repeated failed reloads accumulate orphans.
-            lock (_statusGate) _clients.Remove(client);
-            await client.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
-    }
-
     private static IMcpTransport CreateTransport(string name, McpServerConfig server, string? workspaceRoot)
     {
         // Credentials (env / headers) are stored with an optional "secret:" prefix;
@@ -518,11 +598,18 @@ public sealed class McpManager(
 
     private async ValueTask ResetConnectionsAsync()
     {
-        foreach (var registration in _registrations) registration.Dispose();
-        _registrations.Clear();
-        foreach (var client in _clients)
-            await client.DisposeAsync().ConfigureAwait(false);
-        _clients.Clear();
+        List<ServerSlot> slots;
+        lock (_statusGate)
+        {
+            slots = [.. _slots.Values];
+            _slots.Clear();
+            _promptContributionCount = 0;
+        }
+        foreach (var slot in slots)
+        {
+            foreach (var registration in slot.Registrations) registration.Dispose();
+            foreach (var client in slot.Clients) await client.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }
 

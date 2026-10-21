@@ -20,6 +20,28 @@ public sealed class ConnectorPackage
     /// <summary>true = 随 haoyue 分发、无 npm/uvx 外部依赖（内置本地服务器承载）。</summary>
     public bool? Offline { get; set; }
 
+    /// <summary>
+    /// 6.3 来源可信度声明：official / verified / community / local（缺省 local，
+    /// 向后兼容旧包）。**声明不等于事实**——official 必须经完整性清单登记校验，
+    /// 校验不过会被 <see cref="EffectiveSource"/> 降级。
+    /// </summary>
+    public string? Source { get; set; }
+
+    /// <summary>最低运行时版本（x.y.z）；低于此版本时卡片给出升级提示。</summary>
+    public string? MinRuntimeVersion { get; set; }
+
+    /// <summary>
+    /// 生效来源（加载时计算，不参与序列化）：声明 official 但包清单未登记在
+    /// SHA256SUMS 白名单里 → 降级 community 并写 <see cref="SourceWarning"/>，
+    /// 防止社区包自填 official 撒谎。
+    /// </summary>
+    [JsonIgnore]
+    public string EffectiveSource { get; set; } = "local";
+
+    /// <summary>来源降级原因（非空时 UI 需展示，说明「声明的来源未通过校验」）。</summary>
+    [JsonIgnore]
+    public string? SourceWarning { get; set; }
+
     public McpServerConfig Server { get; set; } = new();
     public List<ConnectorInput>? Inputs { get; set; }
     public List<string>? MutatingTools { get; set; }
@@ -87,7 +109,10 @@ public static class ConnectorCatalog
                 var package = JsonSerializer.Deserialize(
                     File.ReadAllText(manifest), ConnectorJsonContext.Default.ConnectorPackage);
                 if (package is { SchemaVersion: 1 } valid && !string.IsNullOrWhiteSpace(valid.Id))
+                {
+                    ApplySourceTrust(valid, manifest);
                     packages.Add(valid);
+                }
             }
             catch (JsonException)
             {
@@ -95,6 +120,28 @@ public static class ConnectorCatalog
             }
         }
         return packages.OrderBy(p => p.Id, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// 6.3 来源可信度判定：official 声明必须以「包清单登记在 SHA256SUMS 白名单」为证，
+    /// 未登记的声明降级为 community 并记警告（社区包自填 official 不能生效）。
+    /// 旧包缺省 source → local（100% 兼容）。
+    /// </summary>
+    private static void ApplySourceTrust(ConnectorPackage package, string manifestPath)
+    {
+        var declared = string.IsNullOrWhiteSpace(package.Source)
+            ? "local"
+            : package.Source.Trim().ToLowerInvariant();
+        if (declared is not ("official" or "verified" or "community" or "local"))
+            declared = "community"; // 未知取值按最低可信度处理，不静默信任
+        package.EffectiveSource = declared;
+        package.SourceWarning = null;
+
+        if (declared != "official") return;
+        if (ConnectorIntegrity.IsListed(manifestPath)) return;
+
+        package.EffectiveSource = "community";
+        package.SourceWarning = "该包声明 source=official，但未登记在完整性清单（SHA256SUMS）中，已按 community 处理。";
     }
 
     public static ConnectorPackage? Find(string id, string? root = null) =>

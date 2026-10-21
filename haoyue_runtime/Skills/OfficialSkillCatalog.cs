@@ -15,6 +15,14 @@ public static class OfficialSkillCatalog
         string[] Tags,
         string Prompt);
 
+    /// <summary>6.4 版本治理：目录版本严格高于本地已装版本才算「可更新」。</summary>
+    public static bool IsNewer(string catalogVersion, string? installedVersion)
+    {
+        if (string.IsNullOrWhiteSpace(installedVersion)) return false;
+        return Version.TryParse(catalogVersion, out var catalog) && Version.TryParse(installedVersion, out var local)
+            && catalog > local;
+    }
+
     public static IReadOnlyList<OfficialSkill> Entries { get; } =
     [
         new(

@@ -381,6 +381,9 @@ public sealed class SkillManager : ISkillManager
         {
             if (!LooksLikeSkillDirectory(directory))
                 throw new InvalidDataException($"A directory already occupies the skill path: {directory}");
+            // 6.4 已安装：走更新路径——只刷新 manifest 的版本行，prompt.txt 完全不动
+            // （用户的本地修改不会被静默覆盖），描述由用户 yaml 自主保留。
+            UpdateManifestVersion(directory, entry.Version);
         }
         else
         {
@@ -393,8 +396,28 @@ public sealed class SkillManager : ISkillManager
             File.WriteAllText(Path.Combine(directory, "prompt.txt"), entry.Prompt);
         }
 
+        // 6.4 版本账本：记录安装版本，供 ListOfficialSkills 判断 canUpdate。
+        _configStore.State.InstalledSkillVersions[entry.Slug] = entry.Version;
+        _configStore.SaveState();
         SetEnabled(entry.Name, true);
         return Discover(workspace);
+    }
+
+    /// <summary>
+    /// 6.4 保守更新：仅替换 skill.yaml 的 version 行（缺失则追加）。name/description
+    /// 与 prompt.txt 都保留用户现状——官方迭代能到达用户，但不会覆盖本地编辑。
+    /// </summary>
+    private static void UpdateManifestVersion(string directory, string version)
+    {
+        var yamlPath = Path.Combine(directory, "skill.yaml");
+        if (!File.Exists(yamlPath)) return;
+        var original = File.ReadAllText(yamlPath);
+        var updated = System.Text.RegularExpressions.Regex.Replace(
+            original, @"(?m)^version:.*$", $"version: \"{EscapeYaml(version)}\"");
+        if (!updated.Contains("version:", StringComparison.Ordinal))
+            updated = updated.TrimEnd() + $"\nversion: \"{EscapeYaml(version)}\"\n";
+        if (!string.Equals(original, updated, StringComparison.Ordinal))
+            File.WriteAllText(yamlPath, updated);
     }
 
     private void ImportMarkdown(string markdownFile)

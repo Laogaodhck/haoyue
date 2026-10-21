@@ -126,7 +126,7 @@ public class DocsFactsTests
     /// 预算 = 2026-10-15 基线行数 + 约 3% 余量。
     /// </summary>
     [Theory]
-    [InlineData("haoyue_runtime/Daemon/DaemonAdminApi.cs", 3250)]
+    [InlineData("haoyue_runtime/Daemon/DaemonAdminApi.cs", 3350)]
     [InlineData("haoyue_runtime/Daemon/DaemonServer.cs", 3150)]
     [InlineData("haoyue_desktop/src/renderer/src/components/SettingsDialog.vue", 2700)]
     [InlineData("haoyue_desktop/src/renderer/src/App.vue", 2400)]

@@ -157,7 +157,55 @@ internal sealed partial class DaemonAdminApi(
         ["turnTokenBudget"] = runtime.ConfigStore.Config.Agent.TurnTokenBudget,
         ["turnCostBudget"] = runtime.ConfigStore.Config.Agent.TurnCostBudget,
         ["turnWallClockSeconds"] = runtime.ConfigStore.Config.Agent.TurnWallClockSeconds,
+        // 5.6 工具执行策略 + Bash 沙箱：安全配置零手改 config.json。
+        ["toolPolicy"] = SerializeToolPolicy(runtime.ConfigStore.Config.Agent.ToolPolicy),
+        ["bashSandbox"] = new JsonObject
+        {
+            ["enabled"] = runtime.ConfigStore.Config.Agent.BashSandbox.Enabled,
+            ["memoryLimitMb"] = runtime.ConfigStore.Config.Agent.BashSandbox.MemoryLimitMb,
+            ["maxProcesses"] = runtime.ConfigStore.Config.Agent.BashSandbox.MaxProcesses,
+            ["uiRestrictions"] = runtime.ConfigStore.Config.Agent.BashSandbox.UiRestrictions,
+        },
     }.ToJsonString();
+
+    private static JsonArray SerializeRules(IEnumerable<ToolPolicyRule> rules) => new(rules.Select(rule => (JsonNode)new JsonObject
+    {
+        ["tool"] = rule.Tool,
+        ["pattern"] = rule.Pattern,
+        ["reason"] = rule.Reason ?? "",
+    }).ToArray());
+
+    private static JsonObject SerializeToolPolicy(ToolPolicyConfig policy) => new()
+    {
+        ["enabled"] = policy.Enabled,
+        ["builtinBashGuard"] = policy.BuiltinBashGuard,
+        ["riskGating"] = policy.RiskGating,
+        ["consentRiskTiers"] = new JsonArray(policy.ConsentRiskTiers.Select(t => (JsonNode)t).ToArray()),
+        ["requireConsentFor"] = new JsonArray(policy.RequireConsentFor.Select(t => (JsonNode)t).ToArray()),
+        ["allow"] = SerializeRules(policy.Allow),
+        ["deny"] = SerializeRules(policy.Deny),
+    };
+
+    /// <summary>5.6 allow/deny 规则整组替换：逐条解析（tool 必填、pattern 可空、reason 可空）。</summary>
+    private static List<ToolPolicyRule> ParseRules(JsonArray? array, string label)
+    {
+        var rules = new List<ToolPolicyRule>();
+        if (array is null) return rules;
+        foreach (var node in array)
+        {
+            if (node is not JsonObject rule) continue;
+            var tool = rule["tool"]?.GetValue<string>()?.Trim() ?? "";
+            if (tool.Length == 0)
+                throw new DaemonRequestException($"params.{label} 中存在没有 tool 字段的规则");
+            rules.Add(new ToolPolicyRule
+            {
+                Tool = tool,
+                Pattern = rule["pattern"]?.GetValue<string>()?.Trim() ?? "",
+                Reason = string.IsNullOrWhiteSpace(rule["reason"]?.GetValue<string>()) ? null : rule["reason"]!.GetValue<string>().Trim(),
+            });
+        }
+        return rules;
+    }
 
     /// <summary>
     /// Partial update for the 智能体 page: absent keys keep their stored value.
@@ -200,6 +248,41 @@ internal sealed partial class DaemonAdminApi(
             {
                 agent.VisionModel = null;
             }
+        }
+
+        // 5.6 工具执行策略与 Bash 沙箱的 partial 更新：缺省键保持原值。
+        var toolPolicy = agent.ToolPolicy;
+        if (parameters["toolPolicy"] is JsonObject policyPatch)
+        {
+            if (policyPatch["enabled"] is JsonValue enabledV && enabledV.TryGetValue<bool>(out var enabled))
+                toolPolicy.Enabled = enabled;
+            if (policyPatch["builtinBashGuard"] is JsonValue guardV && guardV.TryGetValue<bool>(out var guard))
+                toolPolicy.BuiltinBashGuard = guard;
+            if (policyPatch["riskGating"] is JsonValue riskV && riskV.TryGetValue<bool>(out var risk))
+                toolPolicy.RiskGating = risk;
+            if (policyPatch["consentRiskTiers"] is JsonArray tiers)
+                toolPolicy.ConsentRiskTiers = tiers
+                    .Select(node => node?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "")
+                    .Where(label => label.Length > 0)
+                    .ToList();
+            if (policyPatch["requireConsentFor"] is JsonArray consentList)
+                toolPolicy.RequireConsentFor = consentList
+                    .Select(node => node?.GetValue<string>()?.Trim() ?? "")
+                    .Where(name => name.Length > 0)
+                    .ToList();
+            if (policyPatch["allow"] is JsonArray allow) toolPolicy.Allow = ParseRules(allow, "toolPolicy.allow");
+            if (policyPatch["deny"] is JsonArray deny) toolPolicy.Deny = ParseRules(deny, "toolPolicy.deny");
+        }
+
+        var sandbox = agent.BashSandbox;
+        if (parameters["bashSandbox"] is JsonObject sandboxPatch)
+        {
+            if (sandboxPatch["enabled"] is JsonValue sandboxEnabled && sandboxEnabled.TryGetValue<bool>(out var se))
+                sandbox.Enabled = se;
+            if (sandboxPatch["uiRestrictions"] is JsonValue uiV && uiV.TryGetValue<bool>(out var ui))
+                sandbox.UiRestrictions = ui;
+            sandbox.MemoryLimitMb = OptionalInt(sandboxPatch, "memoryLimitMb", sandbox.MemoryLimitMb, 0, 65536);
+            sandbox.MaxProcesses = OptionalInt(sandboxPatch, "maxProcesses", sandbox.MaxProcesses, 0, 4096);
         }
 
         runtime.ConfigStore.Save();

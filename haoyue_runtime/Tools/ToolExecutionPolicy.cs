@@ -216,6 +216,47 @@ public sealed partial class ToolExecutionPolicy : IToolExecutionPolicy
 }
 
 /// <summary>agent.toolPolicy 配置节：规则化的工具执行强制策略。</summary>
+/// <summary>
+/// 5.2 风险分级判定（纯函数：审批闸门、配置 UI、测试共用一套口径）。
+/// 维度标签用字符串而非枚举值——配置文件里可读、可增删，不受 [Flags] 数值漂移影响。
+/// </summary>
+public static class ToolRiskGating
+{
+    /// <summary>风险维度是否命中「需要同意」的维度集合（大小写不敏感）。</summary>
+    public static bool Matches(ToolRiskTier tier, IReadOnlyList<string>? consentTiers)
+    {
+        if (consentTiers is not { Count: > 0 }) return false;
+        foreach (var label in consentTiers)
+        {
+            var normalized = label?.Trim().ToLowerInvariant();
+            var dimension = normalized switch
+            {
+                "read" => ToolRiskTier.Read,
+                "write" => ToolRiskTier.Write,
+                "network" => ToolRiskTier.Network,
+                "cost" => ToolRiskTier.Cost,
+                "system" => ToolRiskTier.System,
+                _ => ToolRiskTier.None,
+            };
+            if (dimension != ToolRiskTier.None && (tier & dimension) != 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>人类可读的风险描述（审批卡片与放行警告用）。</summary>
+    public static string Describe(ToolRiskTier tier)
+    {
+        if (tier == ToolRiskTier.None) return "无风险标记";
+        var parts = new List<string>();
+        if ((tier & ToolRiskTier.Read) != 0) parts.Add("读取");
+        if ((tier & ToolRiskTier.Write) != 0) parts.Add("写入");
+        if ((tier & ToolRiskTier.Network) != 0) parts.Add("外发");
+        if ((tier & ToolRiskTier.Cost) != 0) parts.Add("费用");
+        if ((tier & ToolRiskTier.System) != 0) parts.Add("系统");
+        return string.Join(" + ", parts);
+    }
+}
+
 public sealed class ToolPolicyConfig
 {
     /// <summary>总开关。关闭后跳过所有策略评估（含内置 bash 守卫），仅保留模式层约束。</summary>
@@ -238,6 +279,21 @@ public sealed class ToolPolicyConfig
     /// 置空列表即恢复旧行为（仅守卫规则触发审批）。
     /// </summary>
     public List<string> RequireConsentFor { get; set; } = ["computer_exec"];
+
+    /// <summary>
+    /// 5.2 风险分级闸门总开关：开启后，风险维度命中 <see cref="ConsentRiskTiers"/> 的
+    /// 工具在本回合首次调用前请求人工同意（交互环境走审批卡片；CLI/测试环境放行并
+    /// 记警告——分级闸门是软约束，不会剥夺 CLI 既有的 shell 能力）。
+    /// </summary>
+    public bool RiskGating { get; set; } = true;
+
+    /// <summary>
+    /// 触发同意的风险维度（小写标签：system / cost / network / write）。
+    /// 默认 system+cost——执行命令、控制本机、产生费用必须首次知情；
+    /// 写文件与普通网络请求默认不拦（否则日常编辑与外发查询每回合都被打断，
+    /// 用户会习惯性点同意，反而削弱审批的意义）。
+    /// </summary>
+    public List<string> ConsentRiskTiers { get; set; } = ["system", "cost"];
 }
 
 /// <summary>单条策略规则：工具名（可通配）+ 参数正则 + 拒绝理由。</summary>

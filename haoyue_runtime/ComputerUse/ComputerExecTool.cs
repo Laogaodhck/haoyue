@@ -33,6 +33,8 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
     public override string Name => "computer_exec";
     public override string StatusLabel => "Running shell";
     public override bool Mutating => true;
+    /// <summary>5.2：无沙箱 shell，系统面最高风险。</summary>
+    public ToolRiskTier RiskTier => ToolRiskTier.Write | ToolRiskTier.System;
     public override bool RequiresWorkspace => false;
 
     private const int MaxTimeoutSeconds = 600;

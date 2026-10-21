@@ -94,6 +94,8 @@ public static class ConfigSchema
     // 执行前需用户同意的工具清单：默认 computer_exec（一启用即 profile 级无沙箱 shell）。
     // 用户数据型（数组），空列表 = 仅守卫规则触发审批。
     New("agent.toolPolicy.requireConsentFor", "array", null),
+    New("agent.toolPolicy.riskGating", "bool", true),
+    New("agent.toolPolicy.consentRiskTiers", "array", null),
         // Windows Job Object 沙箱；0 表示该项不限制。
         New("agent.bashSandbox.enabled", "bool", false),
         New("agent.bashSandbox.memoryLimitMb", "int", 2_048, min: 0, max: 262_144),

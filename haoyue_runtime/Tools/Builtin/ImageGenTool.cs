@@ -20,6 +20,8 @@ public sealed class ImageGenTool(
     public override string Name => "image_generate";
     public override string StatusLabel => "Generating image";
     public override bool Mutating => true;
+    /// <summary>5.2：图像生成按次计费并外发提示词——费用 + 外发双维度。</summary>
+    public ToolRiskTier RiskTier => ToolRiskTier.Cost | ToolRiskTier.Network | ToolRiskTier.Write;
     public override bool RequiresNetwork => true;
 
     public override JsonObject ParameterSchema => ToolSchema.Object(

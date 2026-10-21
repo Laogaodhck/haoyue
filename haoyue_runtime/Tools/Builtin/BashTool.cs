@@ -9,6 +9,8 @@ public sealed class BashTool(IPromptProvider prompts) : BuiltinTool(prompts)
     public override string Name => "bash";
     public override string StatusLabel => "Running command";
     public override bool Mutating => true; // a shell command may change anything
+    /// <summary>5.2：执行任意命令 = 系统面 + 写入面，默认触发首次同意。</summary>
+    public ToolRiskTier RiskTier => ToolRiskTier.Write | ToolRiskTier.System;
 
     public override JsonObject ParameterSchema => ToolSchema.Object(
         ("command", ToolSchema.String("Shell command to execute"), true),

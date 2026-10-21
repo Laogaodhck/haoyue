@@ -49,6 +49,8 @@ import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
 import { buildDiagnosticsBundle, diagnosticsFileName } from '../diagnostics-bundle'
 import { readSendKeyPreference } from '../app-helpers'
+import { requestJson } from '../daemon-json'
+import ToolPolicyPanel from './ToolPolicyPanel.vue'
 import { useEscapeClose } from '../use-escape-close'
 import {
   EVOLUTION_INTERVAL_OPTIONS,
@@ -390,15 +392,6 @@ const connectorsView = ref<'store' | 'advanced'>('store')
 /** 连接器安装/卸载后让 MCP 面板状态随之刷新（重连由 daemon 后台完成）。 */
 function onConnectorsChanged(): void {
   window.haoyue.daemon.request('mcp.reload', {}).catch(() => {})
-}
-
-async function requestJson<T>(
-  method: string,
-  params: Record<string, unknown> = {},
-  timeoutMs?: number
-): Promise<T> {
-  const response = await window.haoyue.daemon.request(method, params, timeoutMs ? { timeoutMs } : undefined)
-  return JSON.parse(response.data) as T
 }
 
 function beginAction(name: string): void {
@@ -1621,6 +1614,15 @@ onBeforeUnmount(() => {
                 <RefreshCw :size="15" /> 重新连接
               </button>
             </div>
+          </section>
+
+          <section class="settings-group">
+            <div class="settings-section-heading">
+              <div>
+                <h3>工具执行策略</h3>
+              </div>
+            </div>
+            <ToolPolicyPanel />
           </section>
 
           <section class="settings-group">

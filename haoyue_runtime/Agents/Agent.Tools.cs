@@ -176,6 +176,46 @@ public sealed partial class Agent
             events.Publish(new StatusEvent($"用户已批准执行 {tool.Name}", argsSummary));
         }
 
+        // 5.2 风险分级闸门（软约束）：风险维度命中 agent.toolPolicy.consentRiskTiers 的
+        // 工具本回合首次调用前请求同意。与上面 requireConsentFor 的「强拒绝」区分——
+        // 分级闸门在无审批通道环境（CLI / 测试）放行并记警告：不剥夺 CLI 已有的 shell
+        // 能力，只保证交互环境下「执行命令/控制本机/花钱」类操作首次必过人工。
+        var riskPolicy = configStore.Config.Agent.ToolPolicy;
+        if (riskPolicy.RiskGating
+            && !turnScope.IsConsented(tool.Name)
+            && ToolRiskGating.Matches(tool.RiskTier, riskPolicy.ConsentRiskTiers))
+        {
+            var riskLabel = ToolRiskGating.Describe(tool.RiskTier);
+            if (_approvals is { Interactive: true })
+            {
+                var pendingRisk = _approvals.RequestAsync(
+                    call.Id, ApprovalRegistry.DefaultTimeoutSeconds, ct);
+                events.Publish(new ApprovalRequiredEvent(
+                    call.Id, tool.Name, argsSummary,
+                    $"{tool.Name} 属于高风险操作（{riskLabel}），请确认本次允许。"
+                    + "本回合后续调用不再重复询问。"));
+                if (!await pendingRisk.ConfigureAwait(false))
+                {
+                    var deniedByRisk = $"工具 {tool.Name} 未获得用户同意（高风险：{riskLabel}），已取消执行。"
+                        + "可在桌面审批卡片中选择「本次允许」，或在设置中调整「需要同意的风险维度」。";
+                    events.Publish(new WarningEvent($"高风险工具 {tool.Name} 被用户拒绝（{riskLabel}）"));
+                    events.Publish(new ToolCallCompletedEvent(call.Id, tool.Name, false, deniedByRisk, TimeSpan.Zero));
+                    return new ToolExecution(ChatMessage.ToolResult(call.Id, tool.Name, deniedByRisk, false), false);
+                }
+                turnScope.GrantConsent(tool.Name);
+                // 同意事件进审计：与拒绝事件并列，便于事后核对「谁在何时放行了什么」。
+                events.Publish(new StatusEvent($"用户已批准高风险操作 {tool.Name}", riskLabel));
+            }
+            else
+            {
+                // 无审批通道：本回合记账一次，避免每步重复警告刷屏。
+                turnScope.GrantConsent(tool.Name);
+                events.Publish(new WarningEvent(
+                    $"工具 {tool.Name} 属于高风险操作（{riskLabel}）；当前环境无审批通道，已放行。"
+                    + "在桌面端运行可在首次调用前收到审批卡片。"));
+            }
+        }
+
         Execute:
         var context = new ToolContext
         {

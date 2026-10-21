@@ -162,6 +162,26 @@ public sealed record ToolResult
         new() { Success = false, Output = error, Summary = error.Split('\n')[0] };
 }
 
+/// <summary>
+/// 工具风险五维（5.2）：分级同意矩阵的判定依据。默认不同意任何维度——
+/// 只有显式声明的工具才升风险；「读」维度仅用于 UI 展示，不触发审批。
+/// </summary>
+[Flags]
+public enum ToolRiskTier
+{
+    None = 0,
+    /// <summary>只读（不会改动任何外部状态）。</summary>
+    Read = 1,
+    /// <summary>写入文件或持久化数据。</summary>
+    Write = 2,
+    /// <summary>对外发送数据（网络请求、上传、外发内容）。</summary>
+    Network = 4,
+    /// <summary>产生费用（模型调用、图像生成、外部付费 API）。</summary>
+    Cost = 8,
+    /// <summary>系统级操作（执行命令、控制本机、提权面）。</summary>
+    System = 16,
+}
+
 public interface ITool
 {
     string Name { get; }
@@ -170,6 +190,15 @@ public interface ITool
     JsonObject ParameterSchema { get; }
     /// <summary>True when the tool changes files (triggers the auto build/verify cycle).</summary>
     bool Mutating { get; }
+    /// <summary>
+    /// 5.2 风险分级：默认按 Mutating 推断写/读，再叠加 RequiresNetwork 的外发维度
+    /// ——未显式打标的工具因此也拿到正确的外发标签；执行命令/系统控制/花钱类
+    /// 工具由各自声明升档。高风险维度由 agent.toolPolicy.consentRiskTiers 决定
+    /// 是否触发人工同意。
+    /// </summary>
+    ToolRiskTier RiskTier =>
+        (Mutating ? ToolRiskTier.Write : ToolRiskTier.Read)
+        | (RequiresNetwork ? ToolRiskTier.Network : ToolRiskTier.None);
     /// <summary>True when the tool needs a concrete local project directory.</summary>
     bool RequiresWorkspace => true;
     /// <summary>True when the tool needs outbound network access (web search / web fetch).</summary>

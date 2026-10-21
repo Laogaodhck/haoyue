@@ -16,6 +16,8 @@ public sealed class TerminalTool(IPromptProvider prompts) : BuiltinTool(prompts)
     public override string Name => "terminal";
     public override string StatusLabel => "Running in terminal";
     public override bool Mutating => true; // a shell command may change anything
+    /// <summary>5.2：交互式终端同样是系统面 + 写入面。</summary>
+    public ToolRiskTier RiskTier => ToolRiskTier.Write | ToolRiskTier.System;
 
     public override JsonObject ParameterSchema => ToolSchema.Object(
         ("action", ToolSchema.String("Action: exec (default), list, or close", "exec", "list", "close"), false),

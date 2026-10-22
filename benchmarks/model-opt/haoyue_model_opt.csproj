@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Haoyue.Benchmarks.ModelOpt</RootNamespace>
+    <AssemblyName>haoyue_model_opt</AssemblyName>
+    <!-- 同 local-model-eval / agent-eval：进解决方案让 CI 编译把关，但无测试适配器，
+         dotnet test 遍历解决方案时会失败，故显式标注为非测试工程。 -->
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\haoyue_runtime\haoyue_runtime.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -305,6 +305,34 @@ public sealed class LocalModelCache : IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 立即归还全部无活跃 lease 的常驻权重（自适应档位探测的显存回收通道）。
+    /// 与 <see cref="UnloadIdleAsync"/> 的区别是不看空闲时长：档位探测发现显存连
+    /// 一层都卸不了（纯 CPU 档）时，先腾出被其他空闲模型占着的显存再重新探测，
+    /// 避免「另一个模型白占 6GB → 本模型掉纯 CPU」的误判。有活跃 lease 的槽
+    /// 不受影响；<paramref name="keepPath"/> 指定的模型（通常是即将加载的同一个）
+    /// 即使空闲也保留。预热（PreloadAsync）装入的槽同样没有 lease，会被一并归还——
+    /// 那是预期代价：显存腾不出来时预热模型本就保不住。
+    /// </summary>
+    public Task UnloadIdleNowAsync(string? keepPath = null, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        List<Slot> victims;
+        lock (_slotGate)
+        {
+            victims = [];
+            foreach (var slot in _slots.Values)
+            {
+                if (slot.PendingDispose || Volatile.Read(ref slot.RefCount) > 0) continue;
+                if (keepPath is { } keep && string.Equals(slot.Path, keep, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (_slots.TryRemove(slot.Key, out _)) victims.Add(slot);
+            }
+        }
+        foreach (var slot in victims) DisposeSlot(slot);
+        return Task.CompletedTask;
+    }
+
     /// <summary>常驻快照（管理面板 / model.config.get）。</summary>
     public IReadOnlyList<ModelResidency> Snapshot()
     {

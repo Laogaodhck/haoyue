@@ -45,7 +45,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 ### 🤖 Multi-Provider & Models
 
 - **OpenAI-compatible / Anthropic / Google**: mainstream cloud models out of the box
-- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, KV cache quantization, Flash Attention, and cross-request KV prefix reuse; load failures retry automatically (falling back to CPU when GPU offload fails), and every successful load runs a small-context inference self-check — corrupted weights or an unallocatable context surface at load time rather than mid-conversation; the CUDA 12 backend delivers a measured **11× decoding speedup** (7.6 → 84.9 tok/s); multi-model LRU residency (default 2 models, so embedding/chat alternation reloads nothing — a measured **6.4~6.9×** speedup), background prewarm at daemon startup, live load-progress broadcasts (phase + ETA), a header/mmproj metadata cache that invalidates when the file changes, automatic idle-weight reclamation (default 20 minutes), and fallback models with early GGUF version / ABI compatibility diagnostics — see the [local model loading optimization report](haoyue_doc/本地模型加载优化报告-2026-10-14.md) (in Chinese)
+- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, MoE-expert weights pinned to CPU, KV cache quantization, Flash Attention, and cross-request KV prefix reuse; load failures retry automatically (falling back to CPU when GPU offload fails), and every successful load runs a small-context inference self-check — corrupted weights or an unallocatable context surface at load time rather than mid-conversation; the CUDA 12 backend delivers a measured **11× decoding speedup** (7.6 → 84.9 tok/s); multi-model LRU residency (default 2 models, so embedding/chat alternation reloads nothing — a measured **6.4~6.9×** speedup), background prewarm at daemon startup, live load-progress broadcasts (phase + ETA), a header/mmproj metadata cache that invalidates when the file changes, automatic idle-weight reclamation (default 20 minutes), and fallback models with early GGUF version / ABI compatibility diagnostics — see the [local model loading optimization report](haoyue_doc/本地模型加载优化报告-2026-10-14.md) (in Chinese)
 - **Local Multimodal Vision**: companion mmproj weights are auto-discovered so local models can directly "see" images in conversations and tool screenshots — image-bearing requests automatically fall back to a CPU context to dodge an upstream CUDA slow path, while text-only turns stay at full GPU speed
 - **Smart Routing**: fast, balanced, quality, budget, and offline strategies; automatic retry with exponential backoff and circuit-breaker failover
 - **Usage Analytics**: token counts, cost, and model distribution with desktop charts
@@ -288,14 +288,14 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (1177 cases, coverage gates: line ≥70% / branch ≥55%)
+├── haoyue_tests/         # Runtime unit tests (1184 cases, coverage gates: line ≥70% / branch ≥55%)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
 ├── connectors/           # Connector package catalog (schema + 11 official connectors + bundled local MCP servers, see connectors/README.md)
 ├── sdks/                 # Official embedding SDK (TypeScript client generated from the contract single source)
 ├── tools/                # Repository tooling (generate_ts_sdk.py: contract → TypeScript SDK generator)
-├── benchmarks/           # Eval harnesses: local model eval (fluency / speed / self-correction / vision) + agent-eval end-to-end agent benchmark
+├── benchmarks/           # Eval harnesses: local model eval (fluency / speed / self-correction / vision) + model-opt load & quantization baseline + agent-eval end-to-end agent benchmark
 ├── marketplace/          # Static skill & connector marketplace site (data/*.json snapshots kept in step with the code single source by guard tests)
 ├── models/               # Local GGUF models (dev environment, not committed)
 ├── packaging/            # Packaging scripts and configuration
@@ -358,6 +358,7 @@ Each project can override providers and models, temperature and context, tool pe
 - `mmprojPath`: path to the multimodal projector weights (mmproj GGUF); when left empty, the single `*mmproj*.gguf` in the model directory is auto-discovered — it must sit next to the main model and be the companion version built for that model (e.g. gemma-4-E4B pairs with the unsloth mmproj-F16)
 - `localPrefixReuse`: reuse KV prefixes across requests — multi-step turns only decode new tokens, throughput improves significantly (measured TTFT 20.5s → 0.61s)
 - `flashAttention` / `kvCacheQuantization`: attention-kernel acceleration and KV cache quantization (`q8_0` / `q4_0`); quantization only takes effect with Flash Attention enabled
+- `moeExpertsOnCpu` (per-model load setting, also editable on the desktop "Model Load Settings" page): MoE-aware offload — every tensor except the expert FFN (`ffn_*_exps`) stays in VRAM while expert weights are pinned to system RAM (llama.cpp `-n-cpu-moe`). The core technique for running 12GB+ MoE models (e.g. gpt-oss-20b) on 8GB-class cards: the attention chain stays 100% on the GPU and only the 4 activated experts' inputs/outputs cross PCIe per token
 - VRAM note: 8GB VRAM with long contexts may OOM — lower `gpuLayers` or enable KV quantization; image-bearing requests automatically switch to a CPU context (dodging the upstream CUDA multimodal slow path) while text-only turns stay at full GPU speed
 
 All of these can also be configured visually in the desktop app under "Settings → Advanced → Local Inference Acceleration".
@@ -479,13 +480,13 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1177 / haoyue_cli_tests 18 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1184 / haoyue_cli_tests 18 cases)
 
 # Desktop (requires pnpm install first)
 cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 311 cases across 29 files
 ```
 
-The gates apply to the `haoyue_runtime` assembly (`coverage.runsettings` only `Include`s runtime — CLI and desktop are unchecked): line coverage ≥70%, branch coverage ≥55% (measured baseline 56.9%). Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), and giant-class line budgets are all enforced by guard tests. The desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job; the two `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning, `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph).
+The gates apply to the `haoyue_runtime` assembly (`coverage.runsettings` only `Include`s runtime — CLI and desktop are unchecked): line coverage ≥70%, branch coverage ≥55% (measured baseline 56.9%). Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), and giant-class line budgets are all enforced by guard tests. The desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job; the three `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning, `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph).
 
 ## 📊 Local Model Benchmarks
 
@@ -500,6 +501,18 @@ dotnet run --project benchmarks/local-model-eval -- visiontest  # multimodal vis
 ```
 
 The measured gemma-4-E4B report is available at [`本地模型评测报告-gemma-4-E4B-2026-10-07.md`](benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md) (in Chinese).
+
+## ⚖️ Model Load & Quantization Baseline
+
+[`benchmarks/model-opt/`](benchmarks/model-opt/) is a comparison harness for local GGUF load and quantization tuning: it runs through the same real runtime `LocalLlmClient` path (tier selection, load params, KV estimation — identical to production) and quantifies before/after across cold load, RAM, VRAM, throughput, and output quality, in three modes:
+
+```bash
+dotnet run --project benchmarks/model-opt -- bench                      # performance baseline (all entries, or --filter a model)
+dotnet run --project benchmarks/model-opt -- quality --filter gemma     # output-quality comparison (same prompts, greedy + similarity)
+dotnet run --project benchmarks/model-opt -- compare <a.json> <b.json>  # per-question diff of two quality results
+```
+
+The first full run (RTX 3070 Ti 8GB) and conclusions are documented in [`本地GGUF模型加载与量化优化报告-2026-10-23.md`](haoyue_doc/本地GGUF模型加载与量化优化报告-2026-10-23.md) (in Chinese): after fixing per-layer KV-head parsing for hybrid architectures, tier estimation counts real attention layers (nemotron decode +22%); FlashAttention on everywhere (long-context decode +45%, prefill +106%); and the finding that requantizing from Q4_K_M up to Q5_K_M buys no quality.
 
 ## 📈 Agent-Level Evaluation
 
@@ -542,7 +555,8 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Model loading enhancement implementation plan (per-model load settings, auto-retry with CPU fallback, post-load inference self-check)
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1177+18+311, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Local GGUF load & quantization optimization report (per-layer KV-head parsing fix for hybrid architectures + Flash Attention everywhere + measured Q4/Q5/Q8 comparison: nemotron decode +22%, long-context +45%, requantization buys no quality; reproducible via benchmarks/model-opt) (in Chinese)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1184+18+311, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review
 

@@ -45,7 +45,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 🤖 多提供商与模型
 
 - **OpenAI 兼容 / Anthropic / Google**：主流云端模型开箱即用
-- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；加载失败自动重试（GPU 卸载失败自动降级 CPU），加载完成后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）；多模型 LRU 驻留（默认 2 个，嵌入/聊天交替零重载，实测 **6.4~6.9×** 加速）、daemon 启动后台预热、加载进度实时广播（阶段 + ETA）、header/mmproj 元数据缓存（换文件自动失效）、空闲权重自动回收（默认 20 分钟）、备用模型回退与 GGUF 版本 / ABI 兼容性早期诊断——详见 [本地模型加载优化报告](haoyue_doc/本地模型加载优化报告-2026-10-14.md)
+- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、MoE 专家权重钉 CPU、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；加载失败自动重试（GPU 卸载失败自动降级 CPU），加载完成后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）；多模型 LRU 驻留（默认 2 个，嵌入/聊天交替零重载，实测 **6.4~6.9×** 加速）、daemon 启动后台预热、加载进度实时广播（阶段 + ETA）、header/mmproj 元数据缓存（换文件自动失效）、空闲权重自动回收（默认 20 分钟）、备用模型回退与 GGUF 版本 / ABI 兼容性早期诊断——详见 [本地模型加载优化报告](haoyue_doc/本地模型加载优化报告-2026-10-14.md)
 - **本地多模态视觉**：GGUF 配套 mmproj 权重自动发现，本地模型可直接"看"对话中的图片与工具截图——带图请求自动降级 CPU 上下文规避上游 CUDA 慢路径，文本轮保持 GPU 全速
 - **智能路由**：快速、均衡、质量、经济、离线多种策略，自动重试、指数退避与熔断器故障转移
 - **用量统计**：Token 计数、成本与模型分布，桌面端图表可视化
@@ -287,14 +287,14 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（1177 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
+├── haoyue_tests/         # 运行时单元测试（1184 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
 ├── connectors/           # 连接器包目录（schema + 11 个官方连接器 + 本地 MCP 服务器，见 connectors/README.md）
 ├── sdks/                 # 官方嵌入 SDK（TypeScript 客户端，由契约单源生成）
 ├── tools/                # 仓库工具脚本（generate_ts_sdk.py 契约 → TS SDK 生成器）
-├── benchmarks/           # 评测 harness：本地模型评测（流畅性/速度/自修正/视觉）+ agent-eval Agent 级端到端评测
+├── benchmarks/           # 评测 harness：本地模型评测（流畅性/速度/自修正/视觉）+ 模型加载与量化对比基准（model-opt）+ agent-eval Agent 级端到端评测
 ├── marketplace/          # 技能与连接器市场站点（纯静态，data/*.json 快照由护栏测试与代码单源对齐）
 ├── models/               # 本地 GGUF 模型（开发环境，不入库）
 ├── packaging/            # 打包脚本与配置
@@ -357,6 +357,7 @@ Haoyue/
 - `mmprojPath`：多模态视觉投影权重（mmproj GGUF）路径；留空时自动发现模型目录下唯一 `*mmproj*.gguf`——必须与主模型同目录，且须使用与该模型配套的 mmproj 版本（如 gemma-4-E4B 配 unsloth 版 mmproj-F16）
 - `localPrefixReuse`：跨请求复用 KV 前缀，多步回合只解码新增 token，吞吐显著提升（实测 TTFT 20.5s → 0.61s）
 - `flashAttention` / `kvCacheQuantization`：注意力内核加速与 KV 缓存量化（`q8_0` / `q4_0`），量化仅在 Flash Attention 开启时生效
+- `moeExpertsOnCpu`（逐模型加载配置，桌面「模型加载配置」页可配）：MoE 感知卸载——除专家 FFN（`ffn_*_exps`）外的全部张量驻显存、专家权重钉系统内存（llama.cpp `-n-cpu-moe`），是 8GB 级显存跑 12GB+ MoE 模型（如 gpt-oss-20b）的核心手段：注意力串行链 100% 在 GPU，每 token 仅 4 个激活专家的输入/输出过 PCIe
 - 显存提示：8GB 显存 + 长上下文可能 OOM，届时下调 `gpuLayers` 或开启 KV 量化；带图请求会自动切换 CPU 上下文（规避上游 CUDA 多模态慢路径），文本轮保持 GPU 全速
 
 以上提供商级参数也可在桌面端「设置 → 高级设置 → 本地推理加速」图形化配置。
@@ -478,13 +479,13 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1177 / haoyue_cli_tests 18 用例）
+dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1184 / haoyue_cli_tests 18 用例）
 
 # 桌面端（需先 pnpm install）
 cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest 311 用例（29 个文件）
 ```
 
-门槛作用于 `haoyue_runtime` 程序集（`coverage.runsettings` 的 `Include` 只含 runtime，CLI/桌面不在检）：行覆盖 ≥70%、分支覆盖 ≥55%（实测基线 56.9%）。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算均有护栏测试强制。桌面 vitest 与 `pnpm typecheck && pnpm build` 在 CI 的 desktop job 中执行；`benchmarks/*` 两个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）。
+门槛作用于 `haoyue_runtime` 程序集（`coverage.runsettings` 的 `Include` 只含 runtime，CLI/桌面不在检）：行覆盖 ≥70%、分支覆盖 ≥55%（实测基线 56.9%）。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算均有护栏测试强制。桌面 vitest 与 `pnpm typecheck && pnpm build` 在 CI 的 desktop job 中执行；`benchmarks/*` 三个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）。
 
 ## 📊 本地模型评测
 
@@ -499,6 +500,18 @@ dotnet run --project benchmarks/local-model-eval -- visiontest  # 多模态视�
 ```
 
 gemma-4-E4B 实测报告见 [`本地模型评测报告-gemma-4-E4B-2026-10-07.md`](benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md)。
+
+## ⚖️ 模型加载与量化优化基准
+
+[`benchmarks/model-opt/`](benchmarks/model-opt/) 是本地 GGUF 模型加载与量化优化的对比 harness：同样走 runtime `LocalLlmClient` 真实链路（档位选择、装载参数、KV 估算与线上完全一致），按冷加载 / 内存 / 显存 / 吞吐 / 输出质量五个维度量化对比优化前后，三种模式：
+
+```bash
+dotnet run --project benchmarks/model-opt -- bench                 # 性能基准（全条目或 --filter 指定模型）
+dotnet run --project benchmarks/model-opt -- quality --filter gemma # 输出质量对比（同题贪心 + 相似度）
+dotnet run --project benchmarks/model-opt -- compare <a.json> <b.json> # 两份 quality 结果做逐题对比
+```
+
+首次全量实测（RTX 3070 Ti 8GB）与结论见 [`本地GGUF模型加载与量化优化报告-2026-10-23.md`](haoyue_doc/本地GGUF模型加载与量化优化报告-2026-10-23.md)：修复 hybrid 架构逐层 KV 头解析后档位估算回归真实注意力层数（nemotron 解码 +22%），FlashAttention 全开（长上下文解码 +45%、prefill +106%），并实证「从 Q4_K_M requantize 到 Q5_K_M 买不到质量」。
 
 ## 📈 Agent 级评测
 
@@ -541,7 +554,8 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - 模型加载模块增强实施方案（逐模型加载配置、自动重试与 CPU 降级、加载后推理自检）
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1177+18+311、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1184+18+311、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）
 - ProviderManager 并发与参数审查
 

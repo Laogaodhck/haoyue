@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Nodes;
 using Haoyue.Runtime.Providers;
 using Xunit;
 using Configuration = Haoyue.Runtime.Configuration;
@@ -175,6 +176,42 @@ public sealed class AdaptiveInferenceTests
         Assert.Equal("llama", header.Architecture);
         Assert.Null(header.BlockCount);
         Assert.Null(header.HeadCountKv);
+    }
+
+    [Fact]
+    public void GgufProbe_ReadsPerLayerKvHeadsArray()
+    {
+        // hybrid 架构（nemotron_h）逐层给出 KV 头数：Mamba/SSM 层记 0。
+        // 标量分支不收数组类型，没有数组分支时 head_count_kv 整体丢失，
+        // KV 宽度回落到 embedding/2——显存估算虚高一个量级。
+        var bytes = GgufFixture.Create(
+            ("general.architecture", "nemotron_h"),
+            ("nemotron_h.block_count", 42u),
+            ("nemotron_h.attention.head_count_kv", new uint[]
+            {
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 8,
+                0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            }),
+            ("nemotron_h.attention.key_length", 128u),
+            ("nemotron_h.attention.value_length", 128u),
+            ("nemotron_h.embedding_length", 3136u));
+        var header = GgufProbe.Read(WriteTemp("hybrid.gguf", bytes));
+        Assert.Equal(8, header.HeadCountKv);
+        Assert.Equal(4, header.AttentionLayerCount);
+        Assert.Equal(42, header.BlockCount);
+    }
+
+    [Fact]
+    public void GgufProbe_ScalarKvHeads_LeavesAttentionLayerCountNull()
+    {
+        // 标量形式（全注意力架构）不产出层数信息：KV 层数按 BlockCount 处理。
+        var bytes = GgufFixture.Create(
+            ("qwen3.block_count", 28u),
+            ("qwen3.attention.head_count_kv", 8u),
+            ("qwen3.attention.key_length", 128u));
+        var header = GgufProbe.Read(WriteTemp("scalar-kv.gguf", bytes));
+        Assert.Equal(8, header.HeadCountKv);
+        Assert.Null(header.AttentionLayerCount);
     }
 
     // ------------------------------------------------ ModelShape / ComputeTier
@@ -420,6 +457,39 @@ public sealed class AdaptiveInferenceTests
     }
 
     [Fact]
+    public void BuildLoadParams_MoeExpertsOnCpu_FullOffloadWithCpuExpertOverride()
+    {
+        var provider = new Configuration.ProviderConfig { Id = "local", Kind = "local" };
+        var model = new Configuration.ModelConfig
+        {
+            Id = "gpt-oss.gguf",
+            Load = LocalModelSettings.FromJson(new JsonObject { ["moeExpertsOnCpu"] = true }),
+        };
+        var parameters = LocalLlmClient.BuildLoadParams("gpt-oss.gguf", provider, model)(false);
+        // MoE 模式：层数档位让位——全量卸载 + 专家张量钉 CPU，注意力/嵌入随 999 上 GPU。
+        Assert.Equal(InferenceTier.FullOffloadLayers, parameters.GpuLayerCount);
+        var entry = Assert.Single(parameters.TensorBufferOverrides);
+        Assert.Equal("CPU", entry.BufferType);
+        Assert.Contains("exps", entry.Pattern);
+        // 未开启时不产生任何 override（既有按层卸载语义不变）。
+        Assert.Empty(LocalLlmClient.BuildLoadParams("gpt-oss.gguf", provider, null)(false).TensorBufferOverrides);
+    }
+
+    [Fact]
+    public void TierFor_MoeExpertsOnCpu_DisablesTuner()
+    {
+        var tuner = new AdaptiveInferenceTuner();
+        var provider = new Configuration.ProviderConfig { Id = "local", Kind = "local" };
+        var model = new Configuration.ModelConfig
+        {
+            Id = "gpt-oss.gguf",
+            Load = LocalModelSettings.FromJson(new JsonObject { ["moeExpertsOnCpu"] = true }),
+        };
+        // 显式装载决策：调优器整体让位，与提供商级显式 GpuLayers 同语义。
+        Assert.Null(LocalLlmClient.TierFor(tuner, provider, model, "gpt-oss.gguf"));
+    }
+
+    [Fact]
     public void LoadSignature_TierChangesSignature()
     {
         var provider = new Configuration.ProviderConfig { Id = "local", Kind = "local" };
@@ -454,6 +524,41 @@ public sealed class AdaptiveInferenceTests
     public void BuildShape_MissingFile_ReturnsNull()
     {
         Assert.Null(LocalLlmClient.BuildShape("Z:/不存在的模型.gguf"));
+    }
+
+    [Fact]
+    public void BuildShape_HybridArchitecture_CountsOnlyAttentionLayers()
+    {
+        // 42 层里只有 4 层承担 KV：按 BlockCount 全量算会把 KV 字节数虚高 10 倍，
+        // 档位决策从「KV 驻显存」误降到「KV 留系统内存」。
+        var bytes = GgufFixture.Create(
+            ("nemotron_h.block_count", 42u),
+            ("nemotron_h.attention.head_count_kv", new uint[]
+            {
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 8,
+                0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            }),
+            ("nemotron_h.attention.key_length", 128u),
+            ("nemotron_h.embedding_length", 3136u));
+        var shape = LocalLlmClient.BuildShape(WriteTemp("hybrid-shape.gguf", bytes));
+        Assert.NotNull(shape);
+        Assert.Equal(42, shape.BlockCount);
+        Assert.Equal(8 * 128, shape.KvDim);
+        // f16 KV 字节数按 4 个注意力层算：2(K+V) × 4 层 × 1024 × ctx × 2 字节。
+        Assert.Equal(2L * 4 * 1024 * 32768 * 2, shape.KvBytesFor(32_768));
+    }
+
+    [Fact]
+    public void ComputeTier_HybridMambaModel_KeepsKvOnGpu()
+    {
+        // nemotron_h 实测形状：42 层中 4 层注意力、kvDim 1024、权重约 2.6GB。
+        // 3070 Ti（6700MiB 空闲）下 32k f16 KV 仅 0.5GB——1 档（权重+KV 全驻显存）
+        // 必须可达；回归防护：KvLayers 丢失会退化成 4 档（KV 留系统内存）。
+        var shape = new ModelShape(2570L * 1024 * 1024, 42, 1024, KvLayers: 4);
+        var tier = AdaptiveInferenceTuner.ComputeTier(shape, Gpu(8192, 6700));
+        Assert.NotNull(tier);
+        Assert.Equal(1, tier.Level);
+        Assert.True(tier.KvOffload);
     }
 
     [Fact]
@@ -514,6 +619,13 @@ public sealed class AdaptiveInferenceTests
                     case uint number:
                         writer.Write(4u);
                         writer.Write(number);
+                        break;
+                    case uint[] array:
+                        // 数组元数据（type 9）：元素类型 + 数量 + 逐项。
+                        writer.Write(9u);
+                        writer.Write(4u);
+                        writer.Write((ulong)array.Length);
+                        foreach (var item in array) writer.Write(item);
                         break;
                 }
             }

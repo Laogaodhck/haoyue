@@ -191,3 +191,6 @@ haoyue_desktop/resources/backup-*/
 
 # Agent-level eval run artifacts (reports/json per run, regenerated locally)
 benchmarks/agent-eval/results/
+
+# Model load & quantization baseline run artifacts (regenerated locally)
+benchmarks/model-opt/results/

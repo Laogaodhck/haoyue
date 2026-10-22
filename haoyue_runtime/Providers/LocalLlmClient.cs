@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Haoyue.Runtime.Configuration;
 using LLama;
+using LLama.Abstractions;
 using LLama.Common;
 using LLama.Exceptions;
 using LLama.Native;
@@ -29,6 +30,14 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 
     /// <summary>一次性超长文档（约 2 万 token 以上）的字符阈值：复用命中率过低时改走无状态路径（P5）。</summary>
     private const int LongDocumentChars = 80_000;
+
+    /// <summary>
+    /// MoE 专家 FFN 张量的正则模式（llama.cpp tensor_buft_overrides 按张量名正则匹配，
+    /// 经 LLamaSharp ModelParams.TensorBufferOverrides 直通，等价 CLI 的
+    /// --override-tensor "ffn_(gate|up|down)_exps=CPU" / --n-cpu-moe）。命中
+    /// blk.N.ffn_{gate,up,down}_exps.weight 及其 bias——gpt-oss 的专家权重即这批张量。
+    /// </summary>
+    internal const string ExpertTensorPattern = "ffn_(gate|up|down)_exps";
 
     /// <summary>
     /// 思考开标记（单一事实来源）：部分模型家族的模板把生成提示渲染成以该字面量结尾，
@@ -100,21 +109,23 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// 计算本请求的自适应档位。仅在「自动」语义下生效（AutoOptimize 且提供商级未显式
     /// 配置 GpuLayers）；模型形状来自 GGUF header + 文件大小（经元数据缓存，重复请求
     /// 零 IO），GPU 能力来自 nvidia-smi 探测，任一不可得即返回 null（保持提供商默认
-    /// 行为，绝不猜测）。
+    /// 行为，绝不猜测）。MoE 感知卸载（load.MoeExpertsOnCpu）是显式装载决策：权重分布
+    /// 由 tensor override 决定、与层数档位无关，开启时调优器整体让位。
     /// </summary>
-    private InferenceTier? TierFor(Configuration.ProviderConfig provider, ModelConfig? model, string path) =>
-        TierFor(Tuner, provider, model, path, cache.Metadata);
+    private InferenceTier? TierFor(Configuration.ProviderConfig provider, ModelConfig? model, string path, bool force = false) =>
+        TierFor(Tuner, provider, model, path, cache.Metadata, force);
 
     /// <summary>静态形态：daemon 预热等无客户端实例的场景复用同一档位口径。</summary>
     internal static InferenceTier? TierFor(
         AdaptiveInferenceTuner tuner, Configuration.ProviderConfig provider, ModelConfig? model, string path,
-        LocalModelMetadataCache? metadata = null)
+        LocalModelMetadataCache? metadata = null, bool force = false)
     {
         if (!(model?.Load?.AutoOptimize ?? true)) return null;      // 用户手动配置：绝不干预
         if (provider.GpuLayers is not null) return null;            // 提供商级显式卸载：尊重配置
+        if (model?.Load is { MoeExpertsOnCpu: true }) return null;  // MoE 感知卸载：显式装载决策
         var shape = BuildShape(path, metadata);
         if (shape is null) return null;
-        return tuner.EnsureTier(path, shape, GpuProbe.Probe());
+        return tuner.EnsureTier(path, shape, GpuProbe.Probe(), force);
     }
 
     /// <summary>
@@ -122,6 +133,8 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// 隐藏维度的一半保守估算（介于 MHA 与常见 GQA 之间），完全缺失则为 null。
     /// header 读取经 <paramref name="metadata"/> 缓存（路径+大小+mtime 键），重复
     /// 请求不触盘。
+    /// KvLayers 透传逐层 KV 头数组解析出的注意力层数（hybrid 架构）：Mamba 层不占
+    /// KV cache，按 BlockCount 全量算会把显存需求高估一个量级。
     /// </summary>
     internal static ModelShape? BuildShape(string path, LocalModelMetadataCache? metadata = null)
     {
@@ -134,7 +147,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 && (header.KeyLength ?? header.ValueLength) is { } headDim
                     ? kvHeads * headDim
                     : header.EmbeddingLength is { } embedding ? embedding / 2 : null;
-            return new ModelShape(file.Length, header.BlockCount, kvDim);
+            return new ModelShape(file.Length, header.BlockCount, kvDim, header.AttentionLayerCount);
         }
         catch (Exception)
         {
@@ -309,6 +322,15 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 
         // 自适应档位（P3）：自动语义下按显存预算选档；签名携带档位身份，调档即走既有重载通道。
         var tier = TierFor(request.Provider, request.Model, path);
+        // 档位探测修正：nvidia-smi 的 free 含着「空闲但仍驻留的其他模型」占用的显存
+        // （MaxResidentModels=2，LRU 不会主动腾）。探测结论是纯 CPU 档时，先归还空闲
+        // 权重（有活跃 lease 的槽不受影响）再强制重探一次——否则「另一个模型白占
+        // 6GB → 本模型掉纯 CPU」是误判，大模型在 8GB 卡上会永远吃不到 GPU。
+        if (tier is { Level: 0 })
+        {
+            await cache.UnloadIdleNowAsync(path, ct).ConfigureAwait(false);
+            tier = TierFor(request.Provider, request.Model, path, force: true) ?? tier;
+        }
 
         // 遥测起点前移到 lease 获取之前：TTFT 从此是「用户感知的首字延迟」（含权重
         // 加载/排队等待），加载等待经 MarkWeightsReady 单独切出，prefill 速率按净
@@ -844,6 +866,8 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// unified KV and RoPE overrides all come straight from the configuration page.
     /// <paramref name="tier"/> 为自适应档位（P3）：仅在自动语义下由调用方传入，覆盖
     /// GPU 卸载层数、KV 卸载与物理批大小；null 表示保持原有自动/手动语义。
+    /// MoE 感知卸载（load.MoeExpertsOnCpu）优先于一切层数语义：全量卸载 + 专家张量
+    /// 经 tensor override 钉 CPU（详见 <see cref="ExpertTensorPattern"/>）。
     /// </summary>
     internal static Func<bool, ModelParams> BuildLoadParams(
         string path, ProviderConfig provider, ModelConfig? model, InferenceTier? tier = null)
@@ -854,7 +878,9 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         // 不能写成 `load is { AutoOptimize: true } or { GpuOffload: null }`——该写法在
         // load == null 时落入 else 分支对 load! 解引用，直接 NullReferenceException。
         // 档位存在（自动语义 + 提供商级未显式配 GPU）时，档位就是「自动」的最终答案。
-        var gpuLayers = tier is { } tierValue ? tierValue.GpuLayers
+        var moeExpertsOnCpu = load is { MoeExpertsOnCpu: true };
+        var gpuLayers = moeExpertsOnCpu ? InferenceTier.FullOffloadLayers
+            : tier is { } tierValue ? tierValue.GpuLayers
             : load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
                 ? explicitGpu
                 : provider.GpuLayers ?? 0;
@@ -879,6 +905,13 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             RopeFrequencyBase = (float?)load?.RopeFrequencyBase,
             RopeFrequencyScale = (float?)load?.RopeFrequencyScale,
         };
+        if (moeExpertsOnCpu)
+        {
+            // LLamaSharp 0.27 起 ModelParams.TensorBufferOverrides 直通 llama.cpp 的
+            // tensor_buft_overrides（加载期生效，随 load 签名变化触发权重重载）。专家
+            // 权重驻 CPU，其余张量（含 MoE 路由门与注意力）随 n_gpu_layers=999 上 GPU。
+            requested.TensorBufferOverrides = [new TensorBufferOverride(ExpertTensorPattern, "CPU")];
+        }
         return cpuOnly => cpuOnly ? requested with { GpuLayerCount = 0 } : requested;
     }
 
@@ -916,6 +949,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         // 属性模式 `or { X: null }` 对 null 恒为 false，原写法会 NRE。
         // 档位存在（自动语义 + 提供商级未显式配 GPU）时覆盖 GPU 卸载与 KV 卸载。
         var gpuLayers = forceCpu ? 0
+            : load is { MoeExpertsOnCpu: true } ? InferenceTier.FullOffloadLayers
             : tier is { } cpuTier ? cpuTier.GpuLayers
             : load is { AutoOptimize: false, GpuOffload: { } explicitGpu }
                 ? explicitGpu

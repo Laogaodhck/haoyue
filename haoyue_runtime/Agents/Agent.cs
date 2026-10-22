@@ -399,9 +399,9 @@ public sealed partial class Agent(
                     && await providerManager.ProbeToolCallingAsync(model, ct).ConfigureAwait(false)
                         == ToolCallingSupport.Unsupported)
                 {
+                    // 静默剥离工具清单：不再向对话流发布警告（用户反馈该提示每回合刷屏、
+                    // 无行动价值）。探测结果仍由 ProviderManager 记录，日志/诊断面可查。
                     tools = Array.Empty<ITool>();
-                    events.Publish(new WarningEvent(
-                        $"模型 {model.Model.Id} 探测不支持工具调用，本回合不注入工具清单（避免空谈与无效的 schema 开销）。"));
                 }
                 var expertId = session.Header.ExpertId;
                 // 技能段是本回合唯一会逐回合变化的 prompt 段，落在 PromptSlot.Skill（最后），

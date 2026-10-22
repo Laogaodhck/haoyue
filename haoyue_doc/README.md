@@ -42,6 +42,7 @@
 | [CUDA 本地推理加速优化方案](CUDA本地推理加速优化方案-2026-10-11.md) | 2026-10-11 | ✅ 已实施 | 自适应推理：`AdaptiveInferenceTuner` 按模型规模与显存自动选卸载层数 / FlashAttention / KV 量化 / ubatch，只在「自动」语义（`load.autoOptimize` 且提供商级未显式配置）下介入，用户手配值绝不覆盖；含三条推理路径（无状态 / KV 前缀复用 / 多模态）瓶颈定位与「性能提升不以质量为代价」的验证方案，配套 `AdaptiveInferenceTests` |
 | [Agent 架构四组件加强方案](Agent架构四组件加强方案-2026-10-14.md) | 2026-10-14 | ✅ 主体已实施 | 21 项整改后的增量评估：22 项加强方案中 H-A（bash 进程树治理 + 超时输出保留）、H-B（输出尾部优先截断）、H-C（记忆固化 ConsolidationRunner）、H-D（回合级失败工具隔离）、H-E（token 估算实测校准）、M-C（视觉历史跨回合治理）、M-D（事实冲突仲裁）、L-D（会话保留策略）已实施并逐条对账；H-A② / H-D② 为可选增强未做 |
 | [本地模型加载优化报告](本地模型加载优化报告-2026-10-14.md) | 2026-10-14 | ✅ 已实施 | 加载机制深度优化五项能力：多模型 LRU 驻留（默认 2，交替驻留 6.4~6.9× 加速）、daemon 启动预热与加载进度广播（阶段 + ETA）、元数据缓存（mtime 失效）、空闲权重回收、备用模型回退与 GGUF 版本 / ABI 诊断；并发槽如实报告无收益、默认串行 |
+| [本地GGUF模型加载与量化优化报告](本地GGUF模型加载与量化优化报告-2026-10-23.md) | 2026-10-23 | ✅ 已实施 | 加载侧修复 GgufProbe 逐层 KV 头数组解析（hybrid 架构 KV 层数估算回归真实注意力层数，nemotron 档位 tier3→tier1、解码 +22%）、FA 全开（长上下文解码 +45%、prefill +106%、内存 -37%）、MoE 专家权重钉 CPU；量化侧 Q4_K_M/Q5_K_M/Q8_0 全链路对比（体积/速度/困惑度），实证 requantize 提档买不到质量、Q8_0 在 8GB 卡不可用；配套 [benchmarks/model-opt](../benchmarks/model-opt/) 对比 harness |
 | [平台全量改进执行方案](平台全量改进执行方案-2026-10-20.md) | 2026-10-20 | 📋 待评审 | 上游为平台改进方向分析报告：46 项措施全量登记册（杠杆/成本评分 + 波次 + 依赖）、46 张可派发执行卡（目标/落点/步骤/验收）、短期必做 Top 10（严格按 R=L/C 降序 + 7.1 地基例外）、四波次路径、M1-M4 验收门、21 KPI、9 项风险与容量裁剪线（全量 74 人周） |
 
 ## 治理机制
@@ -58,3 +59,4 @@
 | [DeepSeek 官方 Agent 优化技术分析](deepseek-optimize.md) | — | 📄 研究 | 剖析 `deepseek-harness` 对 DeepSeek 模型的优化机制，提炼可移植到 Haoyue 的具体技术要点 |
 | [doc_toolkit 文档处理工具包](../doc_toolkit/README.md) | 2026-10-08 | ✅ 已交付 | 模块化文档处理：IR 中间模型 + 解析/渲染注册表扩展架构，TXT/MD/PDF/DOCX/XLSX/PPTX 提取互转，RapidOCR 图片识别与扫描件 PDF 回退；端到端验证 23 + 9 项全过；渲染器反向暴露为 doc_render 工具（25 项保真度验证），见 ADR 与 README |
 | [本地模型评测报告 gemma-4-E4B](../benchmarks/local-model-eval/本地模型评测报告-gemma-4-E4B-2026-10-07.md) | 2026-10-07 | ✅ 已完成 | 流畅性/速度/自修正/GPU/视觉五相评测：流畅性检查点 100% 命中；CUDA 12 解码 7.6 → 84.9 tok/s（11 倍）；KV 前缀复用 TTFT 20.5s → 0.61s；多模态视觉闭环验证通过（带图请求自动 CPU 上下文规避上游 CUDA 慢路径）。评测 harness 与复现方式见 [benchmarks/local-model-eval/](../benchmarks/local-model-eval/) |
+| [本地GGUF模型加载与量化优化报告](本地GGUF模型加载与量化优化报告-2026-10-23.md) | 2026-10-23 | ✅ 已完成 | RTX 3070 Ti 8GB 上的模型加载与量化优化实测：KV 估算修复 + FA 全开 + Q4/Q5/Q8 对比（冷加载/内存/显存/tok-s/困惑度五维度），量化结论与复现方式（benchmarks/model-opt 三模式）见报告全文 |

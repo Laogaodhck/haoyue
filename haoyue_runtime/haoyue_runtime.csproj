@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="haoyue_tests" />
+    <InternalsVisibleTo Include="haoyue_model_opt" />
   </ItemGroup>
 
   <ItemGroup>

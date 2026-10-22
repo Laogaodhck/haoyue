@@ -71,6 +71,14 @@ public sealed class LocalModelSettings
 
     /// <summary>KV cache 是否随上下文卸载到显存；关闭时映射 llama.cpp no_kv_offload。</summary>
     public bool OffloadKvCacheToGpu { get; set; } = true;
+    /// <summary>
+    /// MoE 感知卸载（对应 llama.cpp --n-cpu-moe / -ot 专家权重钉 CPU）：开启时忽略层数
+    /// 档位与 GPU 卸载层数，除专家 FFN（ffn_(gate|up|down)_exps）外的全部张量驻显存，
+    /// 专家权重驻系统内存。为 8GB 级显存跑 12GB+ MoE 模型（如 gpt-oss-20b）的核心手段：
+    /// 注意力串行链 100% 在 GPU，每 token 仅 4 个激活专家的输入/输出过 PCIe。
+    /// 需要 LLamaSharp ≥ 0.27（ModelParams.TensorBufferOverrides）；关闭时走既有按层卸载。
+    /// </summary>
+    public bool MoeExpertsOnCpu { get; set; }
 
     /// <summary>统一 KV cache（llama.cpp kv_unified）。null = 不显式设置（跟随后端默认）。</summary>
     public bool? UnifiedKvCache { get; set; }
@@ -185,7 +193,7 @@ public sealed class LocalModelSettings
         "enableThinking", "reasoningBudget", "reasoningBudgetMessage",
         // 内存
         "offloadKvCacheToGpu", "unifiedKvCache", "contextCheckpoints",
-        "kCacheQuantType", "vCacheQuantType", "keepModelInMemory", "tryMmap",
+        "kCacheQuantType", "vCacheQuantType", "keepModelInMemory", "tryMmap", "moeExpertsOnCpu",
         // 推测解码
         "speculativeDecoding",
         // 高级
@@ -251,6 +259,7 @@ public sealed class LocalModelSettings
             VCacheQuantType = node["vCacheQuantType"]?.GetValue<string>(),
             KeepModelInMemory = Get<bool>(node, "keepModelInMemory") ?? false,
             TryMmap = Get<bool>(node, "tryMmap"),
+            MoeExpertsOnCpu = Get<bool>(node, "moeExpertsOnCpu") ?? false,
             SpeculativeDecoding = node["speculativeDecoding"]?.GetValue<string>(),
             TopK = Get<int>(node, "topK"),
             TopP = Get<double>(node, "topP"),
@@ -310,6 +319,7 @@ public sealed class LocalModelSettings
         Set("vCacheQuantType", VCacheQuantType is { Length: > 0 } v ? JsonValue.Create(v) : null);
         Set("keepModelInMemory", JsonValue.Create(KeepModelInMemory));
         Set("tryMmap", TryMmap is { } mmap ? JsonValue.Create(mmap) : null);
+        Set("moeExpertsOnCpu", JsonValue.Create(MoeExpertsOnCpu));
         Set("speculativeDecoding", SpeculativeDecoding is { Length: > 0 } sd ? JsonValue.Create(sd) : null);
         Set("topK", TopK is { } topK ? JsonValue.Create(topK) : null);
         Set("topP", TopP is { } topP ? JsonValue.Create(topP) : null);
@@ -343,6 +353,7 @@ public sealed class LocalModelSettings
         VCacheQuantType ?? "vq-auto",
         KeepModelInMemory ? "mlock" : "nomlock",
         TryMmap is { } mmap ? $"mmap={mmap}" : "mmap-auto",
+        MoeExpertsOnCpu ? "moecpu" : "moegpu",
         RopeFrequencyBase?.ToString() ?? "rb-auto",
         RopeFrequencyScale?.ToString() ?? "rs-auto");
 

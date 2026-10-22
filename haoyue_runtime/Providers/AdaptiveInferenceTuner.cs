@@ -4,15 +4,20 @@ namespace Haoyue.Runtime.Providers;
 /// 参与 CUDA 装载档位计算的模型静态形状（来自 GGUF header 与文件大小，P2/P3）。
 /// KvDim 为每层 K（或 V）的宽度 = n_kv_heads × head_dim；估算不出时为 null——
 /// 此时跳过「KV 驻显存」的档位（L1~L3），只做权重显存预算，宁可保守不猜。
+/// <see cref="KvLayers"/> 为实际承担 KV cache 的层数：hybrid 架构（nemotron_h 等）
+/// 只有部分层有注意力，其余为 Mamba/SSM 循环层。null = 与 BlockCount 相同
+/// （全注意力架构）。用 BlockCount 全量估算会把 hybrid 的 KV 需求高估一个量级，
+/// 档位决策从「KV 驻显存」误降到「KV 留系统内存」。
 /// </summary>
 public sealed record ModelShape(
     long WeightBytes,
     long? BlockCount,
-    long? KvDim)
+    long? KvDim,
+    long? KvLayers = null)
 {
     /// <summary>指定上下文长度下 f16 KV cache 的字节数（K+V 两个张量 × 每 token 每层 kvDim×2 字节）。</summary>
     public long? KvBytesFor(long contextSize) =>
-        BlockCount is { } layers && KvDim is { } dim
+        (KvLayers ?? BlockCount) is { } layers && KvDim is { } dim
             ? 2L * layers * dim * contextSize * 2
             : null;
 
@@ -96,10 +101,12 @@ public sealed class AdaptiveInferenceTuner
     /// <summary>
     /// 为模型初始化（或因换模型重置）档位梯子。返回当前档位；硬件不可探测或
     /// 形状信息缺失到无法决策时返回 null（保持提供商默认行为，绝不猜测）。
+    /// <paramref name="force"/> 为 true 时忽略「同模型已初始化」的缓存强制重算
+    /// （档位探测修正路径用：腾出显存后需要按新的 free 重算可达最高档）。
     /// </summary>
-    public InferenceTier? EnsureTier(string modelPath, ModelShape shape, GpuInfo? gpu)
+    public InferenceTier? EnsureTier(string modelPath, ModelShape shape, GpuInfo? gpu, bool force = false)
     {
-        if (ModelPath == modelPath && _ladder is not null) return Current;
+        if (ModelPath == modelPath && _ladder is not null && !force) return Current;
         ModelPath = modelPath;
         _shape = shape;
         _gpu = gpu;

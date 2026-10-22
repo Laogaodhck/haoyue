@@ -89,6 +89,7 @@ public sealed class LocalModelLoadSettingsTests
             OffloadKvCacheToGpu = false,
             KeepModelInMemory = true,
             TryMmap = false,
+            MoeExpertsOnCpu = true,
             TopK = 64,
             Seed = 42,
         };
@@ -108,8 +109,19 @@ public sealed class LocalModelLoadSettingsTests
         Assert.Equal(original.OffloadKvCacheToGpu, parsed.OffloadKvCacheToGpu);
         Assert.Equal(original.KeepModelInMemory, parsed.KeepModelInMemory);
         Assert.Equal(original.TryMmap, parsed.TryMmap);
+        Assert.Equal(original.MoeExpertsOnCpu, parsed.MoeExpertsOnCpu);
         Assert.Equal(original.TopK, parsed.TopK);
         Assert.Equal(original.Seed, parsed.Seed);
+    }
+
+    [Fact]
+    public void Signature_MoeExpertsOnCpu_ChangesSignature()
+    {
+        var baseline = new LocalModelSettings().Signature();
+        var moe = new LocalModelSettings { MoeExpertsOnCpu = true };
+        // 专家权重分布随装载参数改变，必须触发权重重载。
+        Assert.NotEqual(baseline, moe.Signature());
+        Assert.Contains("moecpu", moe.Signature());
     }
 
     [Fact]

@@ -65,11 +65,11 @@ haoyue provider add
 
 # Add non-interactively
 haoyue provider add --id deepseek --kind openai \
-  --base-url "https://api.deepseek.com/v1" \
+  --base-url "https://api.deepseek.com" \
   --api-key "your-api-key" \
-  --model "deepseek-chat"
+  --model "deepseek-flash" --model "deepseek-v4-pro"
 
-haoyue provider edit deepseek --timeout 120 --priority 1
+haoyue provider edit deepseek --timeout 300 --priority 1
 haoyue provider test deepseek
 haoyue provider use deepseek
 haoyue provider remove deepseek

@@ -343,7 +343,7 @@ public sealed class AnthropicClient(ILlmHttpFactory httpFactory) : ILlmClient
                 : request.System;
         }
 
-        var thinkingBudget = request.EnableThinking && request.Model.Capabilities.Thinking
+        var thinkingBudget = request.ThinkingEnabled && request.Model.Capabilities.Thinking
             ? ReasoningLevelAdapter.AnthropicBudget(request)
             : 0;
         if (thinkingBudget > 0)

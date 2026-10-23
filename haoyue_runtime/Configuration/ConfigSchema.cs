@@ -50,6 +50,7 @@ public static class ConfigSchema
         New("agent.maxRepairAttempts", "int", 3, min: 0, max: 10),
         New("agent.personality", "enum", "pragmatic", allowed: ["pragmatic", "friendly"]),
         New("agent.enableContextCompaction", "bool", true),
+        New("agent.compactionTailRatio", "double", 0.5, min: 0.1, max: 0.9),
         New("agent.maxOutputContinuations", "int", 6, min: 0, max: 20),
         // 回合预算闸门：0 = 不限。此前任何回合都能无限烧 token/费用/时间（只有步数上限），
         // 模型卡在一个长任务上时用户只能手动停止。

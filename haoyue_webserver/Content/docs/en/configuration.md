@@ -82,6 +82,7 @@ This example uses the current field names:
     "autoVerify": true,
     "maxRepairAttempts": 3,
     "enableContextCompaction": true,
+    "compactionTailRatio": 0.5,
     "maxOutputContinuations": 6,
     "mode": "edit",
     "systemPrompt": "system/default",
@@ -95,7 +96,7 @@ This example uses the current field names:
 }
 ```
 
-> `thinkingBudgetTokens` is the base thinking budget; the effective budget scales with the reasoning depth level (high ×2, max ×4, xhigh ×8, ultra ×16) and is capped only by the model's `maxOutput` minus a small answer reserve — long tasks are no longer forced to stop thinking at half the output window. With `enableContextCompaction` enabled (default), when the history approaches the context limit the Agent first summarizes the earlier conversation into compact memory before continuing, so a single turn is never interrupted by context or thinking length; a failed compaction falls back to plain trimming and never aborts the turn. When a single completion hits the model's `maxOutput` cap (`finish_reason` length/max_tokens), the Agent automatically continues with the next step instead of ending the turn; for empty output it nudges the model to produce real content, and it only stops with a clear warning after `maxOutputContinuations` (default 6) consecutive truncations.
+> `thinkingBudgetTokens` is the base thinking budget; the effective budget scales with the reasoning depth level (high ×2, max ×4, xhigh ×8, ultra ×16) and is capped only by the model's `maxOutput` minus a small answer reserve — long tasks are no longer forced to stop thinking at half the output window. With `enableContextCompaction` enabled (default), when the history approaches the context limit the Agent first summarizes the earlier conversation into compact memory before continuing, so a single turn is never interrupted by context or thinking length; a failed compaction falls back to plain trimming and never aborts the turn. When a single completion hits the model's `maxOutput` cap (`finish_reason` length/max_tokens), the Agent automatically continues with the next step instead of ending the turn; for empty output it nudges the model to produce real content, and it only stops with a clear warning after `maxOutputContinuations` (default 6) consecutive truncations. `compactionTailRatio` (default 0.5, range 0.1–0.9) controls how much of the window budget keeps the most recent conversation verbatim during compaction; earlier history is replaced by the summary. Lower it for large-window cloud models, raise it for small local windows.
 
 ### Provider keys
 

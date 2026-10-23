@@ -49,6 +49,7 @@ import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
 import { buildDiagnosticsBundle, diagnosticsFileName } from '../diagnostics-bundle'
 import { readSendKeyPreference } from '../app-helpers'
+import { clampCompactionTailRatio } from '../agent-form'
 import { requestJson } from '../daemon-json'
 import ToolPolicyPanel from './ToolPolicyPanel.vue'
 import { useEscapeClose } from '../use-escape-close'
@@ -294,7 +295,8 @@ const agentConfig = reactive({
   autoVerify: false,
   turnTokenBudget: 0,
   turnCostBudget: 0,
-  turnWallClockSeconds: 0
+  turnWallClockSeconds: 0,
+  compactionTailRatio: 0.5
 })
 
 const CAPABILITY_LABELS: Record<string, string> = {
@@ -958,6 +960,7 @@ async function loadAgent(): Promise<void> {
       turnTokenBudget: number
       turnCostBudget: number
       turnWallClockSeconds: number
+      compactionTailRatio: number
     }>('agent.config.get'),
     loadModels()
   ])
@@ -968,6 +971,7 @@ async function loadAgent(): Promise<void> {
   agentConfig.turnTokenBudget = config.turnTokenBudget ?? 0
   agentConfig.turnCostBudget = config.turnCostBudget ?? 0
   agentConfig.turnWallClockSeconds = config.turnWallClockSeconds ?? 0
+  agentConfig.compactionTailRatio = config.compactionTailRatio ?? 0.5
 }
 
 async function saveAgentConfig(params: Record<string, unknown>): Promise<{
@@ -978,6 +982,7 @@ async function saveAgentConfig(params: Record<string, unknown>): Promise<{
   turnTokenBudget: number
   turnCostBudget: number
   turnWallClockSeconds: number
+  compactionTailRatio: number
 }> {
   return requestJson('agent.config.set', params)
 }
@@ -1062,6 +1067,25 @@ async function saveTurnBudgets(): Promise<void> {
       agentConfig.turnTokenBudget = config.turnTokenBudget
       agentConfig.turnCostBudget = config.turnCostBudget
       agentConfig.turnWallClockSeconds = config.turnWallClockSeconds
+    } catch { /* keep last known state */ }
+  } finally {
+    endAction()
+  }
+}
+
+async function saveCompactionRatio(): Promise<void> {
+  beginAction('agent.config.set:compaction')
+  try {
+    const raw = Number(agentConfig.compactionTailRatio)
+    const ratio = clampCompactionTailRatio(raw)
+    const config = await saveAgentConfig({ compactionTailRatio: ratio })
+    agentConfig.compactionTailRatio = config.compactionTailRatio
+    notice.value = `已保存上下文压缩保留比例：最近对话保留窗口预算的 ${Math.round(config.compactionTailRatio * 100)}%，更早的对话由摘要代替。`
+  } catch (reason) {
+    fail(reason)
+    try {
+      const config = await requestJson<{ compactionTailRatio: number }>('agent.config.get')
+      agentConfig.compactionTailRatio = config.compactionTailRatio ?? 0.5
     } catch { /* keep last known state */ }
   } finally {
     endAction()
@@ -2500,6 +2524,20 @@ onBeforeUnmount(() => {
             <button class="secondary-button primary-action" :disabled="action === 'agent.config.set:budget'"
               @click="saveTurnBudgets">
               {{ action === 'agent.config.set:budget' ? '保存中…' : '保存回合预算' }}
+            </button>
+          </section>
+
+          <section class="settings-group" aria-label="上下文压缩">
+            <div class="local-inference-grid">
+              <label>
+                <FieldLabel en="Compaction Tail Ratio" zh="压缩时保留的最近对话比例"
+                  help="上下文即将超出窗口时，最近对话按此比例逐字保留，更早部分交给摘要代替（0.1–0.9，默认 0.5）。大窗口云端模型可调小（多压缩，摘要调用命中前缀缓存更便宜）；小窗口本地模型可调大（多保留原文，少依赖摘要保真度）。" />
+                <input v-model.number="agentConfig.compactionTailRatio" type="number" min="0.1" max="0.9" step="0.05" />
+              </label>
+            </div>
+            <button class="secondary-button primary-action" :disabled="action === 'agent.config.set:compaction'"
+              @click="saveCompactionRatio">
+              {{ action === 'agent.config.set:compaction' ? '保存中…' : '保存压缩比例' }}
             </button>
           </section>
         </template>

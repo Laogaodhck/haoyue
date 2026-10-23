@@ -80,6 +80,27 @@ public sealed record ToolCallRequest(string Id, string Name, string ArgumentsJso
 /// <summary>Provider-neutral tool definition; Parameters is a JSON Schema object.</summary>
 public sealed record ToolDefinition(string Name, string Description, JsonObject Parameters);
 
+/// <summary>
+/// Call intent behind an <see cref="LlmRequest"/>. Non-chat purposes are short-output,
+/// tool-less auxiliary calls (context compaction, prompt rewriting, benchmarks, provider
+/// tests): they must never spend their output budget on a chain of thought nobody reads,
+/// which is also how the official DeepSeek harness drives its auxiliary calls. The gate is
+/// centralized via <see cref="LlmRequest.ThinkingEnabled"/> so every thinking switch the
+/// runtime controls (wire flags, budgets, local prompt building) cannot be forgotten by a
+/// call site. It is not a universal off-switch: OpenAI reasoning models expose no portable
+/// "disable" parameter, so auxiliary calls there only omit reasoning effort and may still
+/// reason at the server default — route those to a non-reasoning model when cost matters.
+/// </summary>
+public enum LlmPurpose
+{
+    /// <summary>Main agent conversation turn (default).</summary>
+    Chat = 0,
+    /// <summary>Context-compaction summarization call.</summary>
+    Compaction = 1,
+    /// <summary>Other short auxiliary calls (prompt rewriting, model tests, benchmarks).</summary>
+    Auxiliary = 2,
+}
+
 public sealed record LlmRequest
 {
     public required ProviderConfig Provider { get; init; }
@@ -90,6 +111,14 @@ public sealed record LlmRequest
     public double? Temperature { get; init; }
     public int? MaxTokens { get; init; }
     public bool EnableThinking { get; init; }
+    /// <summary>Call intent; non-chat purposes never think (see <see cref="LlmPurpose"/>).</summary>
+    public LlmPurpose Purpose { get; init; }
+    /// <summary>
+    /// Effective thinking switch: the request-level flag AND the purpose gate. Every
+    /// thinking-related decision (wire parameters, budgets, local prompt building) must
+    /// consult this instead of <see cref="EnableThinking"/> directly.
+    /// </summary>
+    public bool ThinkingEnabled => EnableThinking && Purpose == LlmPurpose.Chat;
     public int ThinkingBudgetTokens { get; init; } = 16_384;
     public ReasoningLevel ReasoningLevel { get; init; } = ReasoningLevel.Medium;
     /// <summary>Enables the opt-in DeepSeek optimization policy for this request.</summary>

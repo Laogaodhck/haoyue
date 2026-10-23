@@ -58,6 +58,64 @@ public sealed class ContextCompactionTests
         Assert.NotEqual(ChatRole.Tool, recent[0].Role);
     }
 
+    [Fact]
+    public void SplitForCompaction_TailRatio_ControlsRetainedShare()
+    {
+        var model = new ModelConfig { Id = "m", ContextWindow = 4_000, MaxOutput = 256 };
+        var messages = new List<ChatMessage>();
+        for (var i = 0; i < 40; i++)
+            messages.Add(ChatMessage.User($"Message {i}: " + new string('x', 400)));
+
+        var (oldSmall, smallTail) = ContextPlanner.SplitForCompaction(messages, model, "x", tailRatio: 0.2);
+        var (oldLarge, largeTail) = ContextPlanner.SplitForCompaction(messages, model, "x", tailRatio: 0.8);
+
+        Assert.True(largeTail.Count > smallTail.Count,
+            $"expected the larger ratio to keep more verbatim history, got {largeTail.Count} vs {smallTail.Count}");
+        Assert.True(oldLarge.Count < oldSmall.Count, "the larger tail must leave less to summarize");
+    }
+
+    [Fact]
+    public void SplitForCompaction_TailRatio_IsClampedToSaneRange()
+    {
+        var model = new ModelConfig { Id = "m", ContextWindow = 4_000, MaxOutput = 256 };
+        var messages = new List<ChatMessage>();
+        for (var i = 0; i < 40; i++)
+            messages.Add(ChatMessage.User($"Message {i}: " + new string('x', 400)));
+
+        // 退化配置（0 / 1 / 负数 / NaN）不得把整段历史判成「全旧」或「全新」——
+        // 任一端为空都会让压缩或保留失去意义。
+        foreach (var ratio in new[] { 0.0, -1.0, 1.0, 5.0, double.NaN })
+        {
+            var (old, recent) = ContextPlanner.SplitForCompaction(messages, model, "x", tailRatio: ratio);
+            Assert.True(old.Count > 0, $"ratio {ratio} produced no old part");
+            Assert.True(recent.Count > 0, $"ratio {ratio} produced no recent tail");
+            Assert.Equal(messages.Count, old.Count + recent.Count);
+        }
+    }
+
+    [Fact]
+    public void SummaryConverged_RequiresSummarySmallerThanMaskedHistory()
+    {
+        var masked = new List<ChatMessage>();
+        for (var i = 0; i < 20; i++)
+            masked.Add(ChatMessage.User($"Message {i}: " + new string('x', 200)));
+
+        Assert.True(ContextPlanner.SummaryConverged("完成了 X，下一步做 Y。", masked));
+        Assert.False(ContextPlanner.SummaryConverged(new string('x', 20_000), masked));
+    }
+
+    [Fact]
+    public void SummaryConverged_CountsReplacementMessageOverhead()
+    {
+        // 摘要本身比原文小，但加上压缩包装文案后净收益消失——这种「纸面上收敛」不该
+        // 被当成有效压缩（否则下一回合仍然超限，只是换了个地方空烧 token）。
+        var masked = new List<ChatMessage> { ChatMessage.User(new string('x', 400)) }; // ≈100 tok + 8
+        var summary = new string('x', 360); // ≈90 tok
+
+        Assert.True(ContextPlanner.SummaryConverged(summary, masked));
+        Assert.False(ContextPlanner.SummaryConverged(summary, masked, replacementOverheadTokens: 32));
+    }
+
     // ---------------------------------------------------------------- agent turn
 
     [Fact]
@@ -110,8 +168,12 @@ public sealed class ContextCompactionTests
 
             // A compaction summary request ran before the real turn request.
             var summaryRequest = capture.Requests[0];
+            var turnRequest = capture.Requests[1];
+            // 前缀复用：压缩调用与主回合共用同一 system 提示词（提示词前缀逐 token 一致，
+            // 可命中提供商缓存），摘要指令作为最后一条 user 消息追加而非独立 system。
             Assert.NotNull(summaryRequest.System);
-            Assert.Contains("memory compaction", summaryRequest.System);
+            Assert.Equal(turnRequest.System, summaryRequest.System);
+            Assert.Contains("memory compaction", summaryRequest.Messages[^1].Text);
             Assert.Empty(summaryRequest.Tools);
 
             // The session history was replaced by the summary plus a recent tail.

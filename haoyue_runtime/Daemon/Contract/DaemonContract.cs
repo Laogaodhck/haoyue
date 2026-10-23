@@ -846,7 +846,8 @@ public static class DaemonContract
         ("autoVerify", SBoolean("自动验证开关")),
         ("turnTokenBudget", SInteger("单回合 token 上限")),
         ("turnCostBudget", SNumber("单回合费用上限")),
-        ("turnWallClockSeconds", SInteger("单回合墙钟上限（秒）")));
+        ("turnWallClockSeconds", SInteger("单回合墙钟上限（秒）")),
+        ("compactionTailRatio", SNumber("压缩保留最近对话的比例（0.1-0.9）")));
 
     /// <summary>高级配置（advanced.get/set）。</summary>
     private static readonly JsonObject AdvancedResult = RObject(
@@ -1135,7 +1136,8 @@ public static class DaemonContract
             ("visionModel", SString("图像回合优先使用的模型 ref；空串恢复自动选择"), false),
             ("turnTokenBudget", SInteger("单回合 token 上限（输入+输出）；0 为不限"), false),
             ("turnCostBudget", SNumber("单回合费用上限（按模型定价折算）；0 为不限"), false),
-            ("turnWallClockSeconds", SInteger("单回合墙钟上限（秒）；0 为不限"), false)),
+            ("turnWallClockSeconds", SInteger("单回合墙钟上限（秒）；0 为不限"), false),
+            ("compactionTailRatio", SNumber("压缩保留最近对话的比例（0.1-0.9）"), false)),
             result: AgentConfigResult, errors: E(DaemonErrorCode.InvalidParams)),
         M("prompt.optimize", "config", "提示词优化（无状态改写）", parameters: SObject(
             ("text", SString("待优化提示词"), true),

@@ -248,8 +248,13 @@ public sealed class ProviderTests : IDisposable
         var request = new LlmRequest
         {
             Provider = new ProviderConfig { Id = "deepseek", Kind = "openai", BaseUrl = "https://api.deepseek.com" },
-            Model = new ModelConfig { Id = "deepseek-v4-flash" },
+            Model = new ModelConfig
+            {
+                Id = "deepseek-flash",
+                Capabilities = new ModelCapabilities { ToolCalling = true },
+            },
             OptimizeDeepSeek = true,
+            Tools = [new ToolDefinition("read_file", "reads a file", new JsonObject())],
             Messages =
             [
                 ChatMessage.User("go"),
@@ -269,12 +274,14 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
-    public void OpenAiBody_DeepSeekOptimization_PreservesReasoningContentAcrossTurns()
+    public void OpenAiBody_DeepSeekOptimization_ToolLessTurnDropsReasoningContent()
     {
+        // 官方规则：不带 tools 的请求，reasoning_content 即使回传也会被忽略、不计入上下文——
+        // 回传就是白付 token。优化开启时按此门控；关闭时保留 legacy 全量回传（见上一测试）。
         var request = new LlmRequest
         {
             Provider = new ProviderConfig { Id = "deepseek", Kind = "openai", BaseUrl = "https://api.deepseek.com" },
-            Model = new ModelConfig { Id = "deepseek-v4-flash" },
+            Model = new ModelConfig { Id = "deepseek-flash" },
             OptimizeDeepSeek = true,
             Messages =
             [
@@ -284,7 +291,54 @@ public sealed class ProviderTests : IDisposable
         };
 
         var body = OpenAiCompatibleClient.BuildBody(request);
-        Assert.Equal("previous thinking", body["messages"]![1]!["reasoning_content"]!.GetValue<string>());
+        Assert.Null(body["messages"]![1]!["reasoning_content"]);
+    }
+
+    [Fact]
+    public void OpenAiBody_DeepSeekOptimization_ThinkingDisabled_OmitsReasoningEffort()
+    {
+        // thinking 关闭时 reasoning_effort 不生效，省略而不是发一个被忽略的值。
+        var request = new LlmRequest
+        {
+            Provider = new ProviderConfig { Id = "deepseek", Kind = "openai", BaseUrl = "https://api.deepseek.com" },
+            Model = new ModelConfig
+            {
+                Id = "deepseek-flash",
+                Capabilities = new ModelCapabilities { Thinking = true, MaxReasoningLevel = ReasoningLevel.Max },
+            },
+            OptimizeDeepSeek = true,
+            Messages = [ChatMessage.User("hi")],
+            ReasoningLevel = ReasoningLevel.High,
+            EnableThinking = false,
+        };
+
+        var body = OpenAiCompatibleClient.BuildBody(request);
+        Assert.Equal("disabled", body["thinking"]!["type"]!.GetValue<string>());
+        Assert.Null(body["reasoning_effort"]);
+    }
+
+    [Fact]
+    public void OpenAiBody_DeepSeekOptimization_AuxiliaryPurpose_DisablesThinkingAndEffort()
+    {
+        // 辅助用途（压缩/改写/基准/测试）哪怕调用点忘了关思考，也被 purpose 门控兜底。
+        var request = new LlmRequest
+        {
+            Provider = new ProviderConfig { Id = "deepseek", Kind = "openai", BaseUrl = "https://api.deepseek.com" },
+            Model = new ModelConfig
+            {
+                Id = "deepseek-flash",
+                Capabilities = new ModelCapabilities { Thinking = true, MaxReasoningLevel = ReasoningLevel.Max },
+            },
+            OptimizeDeepSeek = true,
+            Messages = [ChatMessage.User("hi")],
+            ReasoningLevel = ReasoningLevel.High,
+            EnableThinking = true,
+            Purpose = LlmPurpose.Compaction,
+        };
+
+        var body = OpenAiCompatibleClient.BuildBody(request);
+        Assert.Equal("disabled", body["thinking"]!["type"]!.GetValue<string>());
+        Assert.Null(body["reasoning_effort"]);
     }
 
     [Fact]
@@ -579,9 +633,9 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Theory]
-    [InlineData(ReasoningLevel.XHigh)]
-    [InlineData(ReasoningLevel.Ultra)]
-    public void DeepSeek_ExtendedReasoning_MapsToMax(ReasoningLevel requested)
+    [InlineData(ReasoningLevel.XHigh, "high")] // 官方表：xhigh → high（不再隐性升级到 max）
+    [InlineData(ReasoningLevel.Ultra, "max")]  // 官方表：ultra → max
+    public void DeepSeek_ExtendedReasoning_MapsPerOfficialTable(ReasoningLevel requested, string expectedEffort)
     {
         var request = new LlmRequest
         {
@@ -593,7 +647,7 @@ public sealed class ProviderTests : IDisposable
             },
             Model = new ModelConfig
             {
-                Id = "deepseek-reasoner",
+                Id = "deepseek-flash",
                 Capabilities = new ModelCapabilities
                 {
                     MaxReasoningLevel = ReasoningLevel.Ultra,
@@ -601,11 +655,13 @@ public sealed class ProviderTests : IDisposable
             },
             Messages = [ChatMessage.User("think")],
             ReasoningLevel = requested,
+            EnableThinking = true,
         };
 
-        Assert.Equal(ReasoningLevel.Max,
+        // 归一化保留扩展档位本身（DeepSeek 词表上限 Ultra），由 effort 映射表收敛到官方三档。
+        Assert.Equal(requested,
             ReasoningLevelAdapter.Normalize(request.Provider, request.Model, requested));
-        Assert.Equal("max",
+        Assert.Equal(expectedEffort,
             OpenAiCompatibleClient.BuildBody(request)["reasoning_effort"]!.GetValue<string>());
     }
 

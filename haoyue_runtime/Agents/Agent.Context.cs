@@ -160,14 +160,15 @@ public sealed partial class Agent
         int toolSchemaTokens = 0)
     {
         var (old, recent) = ContextPlanner.SplitForCompaction(
-            source, model.Model, systemPrompt, windowCeiling, calibration, toolSchemaTokens);
+            source, model.Model, systemPrompt, windowCeiling, calibration, toolSchemaTokens,
+            configStore.Config.Agent.CompactionTailRatio);
         if (old.Count == 0) return;
 
         events.Publish(new StatusEvent("Compacting context", $"{old.Count} earlier messages"));
         string? summary;
         try
         {
-            summary = await SummarizeContextAsync(model, workspace, old, ct, windowCeiling, calibration, toolSchemaTokens).ConfigureAwait(false);
+            summary = await SummarizeContextAsync(model, workspace, old, systemPrompt, ct, windowCeiling, calibration, toolSchemaTokens).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -182,9 +183,21 @@ public sealed partial class Agent
 
         if (string.IsNullOrWhiteSpace(summary)) return;
 
+        // 收敛校验：替换后的消息（包装文案 + 摘要 + 消息开销）必须真的比被遮蔽的内容小，
+        // 否则这次压缩没有缩小任何体积——下一回合会话依旧超限，却在「压缩→还是超限」
+        // 之间空烧 token（摘要比原文更长时甚至每轮都在膨胀）。不收敛就放弃本次压缩，
+        // 回退到普通窗口裁剪。
         var summaryMessage = ChatMessage.User(
             ">>> [Context compaction] 之前的对话已被压缩以保持上下文可容纳，以下是阶段性总结：\n\n"
             + summary.Trim());
+        var replacementOverhead = ContextPlanner.EstimateTokens(summaryMessage, calibration)
+            - ContextPlanner.EstimateTokens(summary.Trim(), calibration);
+        if (!ContextPlanner.SummaryConverged(summary, old, calibration, replacementOverhead))
+        {
+            events.Publish(new WarningEvent(
+                $"上下文压缩未收敛：摘要不小于被压缩的 {old.Count} 条消息，已回退为普通历史裁剪。"));
+            return;
+        }
 
         session.Messages.Clear();
         session.Messages.Add(summaryMessage);
@@ -204,8 +217,8 @@ public sealed partial class Agent
     }
 
     private async Task<string?> SummarizeContextAsync(
-        ModelInfo model, WorkspaceInfo workspace, IReadOnlyList<ChatMessage> old, CancellationToken ct,
-        int? windowCeiling = null, double calibration = 1.0, int toolSchemaTokens = 0)
+        ModelInfo model, WorkspaceInfo workspace, IReadOnlyList<ChatMessage> old, string systemPrompt,
+        CancellationToken ct, int? windowCeiling = null, double calibration = 1.0, int toolSchemaTokens = 0)
     {
         // Image payloads are not needed for the summary; dropping them keeps the call small.
         var instruction = promptProvider.TryGet("builtin/summarize");
@@ -216,23 +229,30 @@ public sealed partial class Agent
         }
         var withoutImages = WithoutImages(old);
         var input = ContextPlanner.FitToWindow(
-            withoutImages, model.Model, instruction, windowCeiling, calibration, toolSchemaTokens);
+            withoutImages, model.Model, systemPrompt, windowCeiling, calibration, toolSchemaTokens);
         // The summarize input itself goes through a window fit: when the oldest portion
         // does not fit, it is dropped BEFORE being summarized — those facts would vanish
         // silently. Never hide that from the user.
         if (input.Count < withoutImages.Count)
             events.Publish(new WarningEvent(
                 $"上下文压缩：最早期 {withoutImages.Count - input.Count} 条消息超出摘要输入预算，未纳入本次总结，相关信息可能缺失。"));
+        // 前缀复用：压缩调用沿用主对话的 system 提示词与历史原文，仅把摘要指令作为
+        // 最后一条 user 消息追加。在无图、且摘要输入未被二次裁剪时，这段历史与主回合的
+        // 提示词前缀逐 token 一致，可命中提供商的 prompt 前缀缓存（DeepSeek 缓存命中价
+        // 约为未命中的几十分之一）；去图或二次裁剪会让缓存从分歧点起失效。
+        // 若把指令放在独立 system 消息里，两次调用不共享任何前缀，缓存全部落空。
+        var messages = new List<ChatMessage>(input) { ChatMessage.User(instruction) };
         var completion = await CollectCompletionAsync(
             candidate => new LlmRequest
             {
                 Provider = candidate.Provider,
                 Model = candidate.Model,
-                Messages = input,
-                System = instruction,
+                Messages = messages,
+                System = systemPrompt,
                 MaxTokens = 4_096,
                 EnableThinking = false,
                 ReasoningLevel = ReasoningLevel.None,
+                Purpose = LlmPurpose.Compaction,
             },
             workspace, ct).ConfigureAwait(false);
         return completion?.Text;

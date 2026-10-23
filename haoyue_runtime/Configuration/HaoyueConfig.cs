@@ -215,6 +215,12 @@ public sealed class AgentConfig
     public string Personality { get; set; } = "pragmatic";
     /// <summary>Summarizes older history when the context window would overflow, so a single turn can keep going.</summary>
     public bool EnableContextCompaction { get; set; } = true;
+    /// <summary>
+    /// 上下文压缩时保留的「最近对话」占窗口预算的比例（0.1–0.9，默认 0.5 = 历史行为）。
+    /// 大窗口模型（云端 1M）可调小——多压缩、少保留原文，摘要调用自身也享受前缀缓存；
+    /// 小窗口本地模型（24K）可调大——多保留逐字原文、少依赖摘要保真度。
+    /// </summary>
+    public double CompactionTailRatio { get; set; } = 0.5;
     /// <summary>Consecutive output-cap truncations allowed before a turn gives up instead of ending silently.</summary>
     public int MaxOutputContinuations { get; set; } = 6;
     /// <summary>

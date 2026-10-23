@@ -47,31 +47,43 @@ Provider 是数组，模型属于对应 Provider：
 {
   "activeProfile": "default",
   "profiles": {
-    "default": { "provider": "deepseek", "model": "deepseek-chat", "strategy": "balanced" }
+    "default": { "provider": "deepseek", "model": "deepseek-flash", "strategy": "balanced" }
   },
   "providers": [
     {
       "id": "deepseek",
       "name": "DeepSeek",
       "kind": "openai",
-      "baseUrl": "https://api.deepseek.com/v1",
+      "baseUrl": "https://api.deepseek.com",
       "apiKey": "your-api-key",
       "promptCaching": true,
       "enabled": true,
       "priority": 0,
-      "timeoutSeconds": 120,
+      "timeoutSeconds": 300,
       "models": [
         {
-          "id": "deepseek-chat",
-          "contextWindow": 128000,
-          "maxOutput": 8192,
-          "capabilities": { "streaming": true, "toolCalling": true }
+          "id": "deepseek-flash",
+          "contextWindow": 1000000,
+          "maxOutput": 65536,
+          "capabilities": {
+            "streaming": true,
+            "thinking": true,
+            "vision": true,
+            "toolCalling": true,
+            "jsonMode": true,
+            "reasoning": true,
+            "maxReasoningLevel": "ultra"
+          },
+          "inputPricePerMTok": 0.3,
+          "outputPricePerMTok": 1.2
         }
       ]
     }
   ]
 }
 ```
+
+DeepSeek 现行模型名为 `deepseek-flash`（由 DeepSeek-V4.1-Flash 提供服务）与 `deepseek-v4-pro`，上下文 1M、最大输出可达 384K；旧名 `deepseek-chat` / `deepseek-reasoner` / `deepseek-v4-flash` 已退役（`deepseek-v4-flash` 仍作别名接受，计费按 Flash）。思考模型务必声明 `thinking: true` 与 `reasoning: true`，否则 reasoning 档位与思维链回传不会启用。
 
 手写配置中的明文 `apiKey` 会在 Runtime 启动时自动迁移为加密引用；无论如何不要把包含凭据的个人全局配置提交到仓库。
 
@@ -95,11 +107,11 @@ Profile 可固定 Provider / 模型，也可以只指定策略让 Runtime 构建
 # 查看 Provider
 haoyue provider list
 
-# 添加 OpenAI-compatible Provider
+# 添加 OpenAI-compatible Provider（DeepSeek 为例）
 haoyue provider add --id deepseek --kind openai \
   --api-key "sk-..." \
-  --base-url "https://api.deepseek.com/v1" \
-  --model "deepseek-chat"
+  --base-url "https://api.deepseek.com" \
+  --model "deepseek-flash" --model "deepseek-v4-pro"
 
 # 检查连通性
 haoyue provider test deepseek

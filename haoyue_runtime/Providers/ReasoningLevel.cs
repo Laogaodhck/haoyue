@@ -76,16 +76,18 @@ public static class ReasoningLevelAdapter
 
         var supportedMaximum = model.Capabilities.MaxReasoningLevel;
 
-        // DeepSeek currently exposes Max as its highest portable effort. Extended UI levels
-        // deliberately converge here instead of leaking unsupported strings into its API.
-        if (deepSeek && supportedMaximum > ReasoningLevel.Max)
-            supportedMaximum = ReasoningLevel.Max;
-
+        // DeepSeek's wire vocabulary now reaches Ultra (the highest portable level), so no
+        // extra clamp is needed here; OpenAiEffort() narrows the extended levels to the
+        // official low/high/max table when the request is serialized.
         return requested > supportedMaximum ? supportedMaximum : requested;
     }
 
     public static string? OpenAiEffort(LlmRequest request)
     {
+        // Auxiliary purposes (compaction, benchmarks, tests) never think, so an effort
+        // value would be dead weight in the request body.
+        if (request.Purpose != LlmPurpose.Chat) return null;
+
         var effective = Normalize(request.Provider, request.Model, request.ReasoningLevel);
         if (effective == ReasoningLevel.None &&
             !request.Model.Capabilities.Thinking && !request.Model.Capabilities.Reasoning)
@@ -102,11 +104,15 @@ public static class ReasoningLevelAdapter
         // DeepSeek wire protocol accepts only low/high/max when thinking is enabled, and omits reasoning_effort when disabled.
         if (IsDeepSeek(request.Provider, request.Model))
         {
+            // Official effort table (api-docs.deepseek.com): requested minimal/low → low,
+            // medium/high/xhigh → high, max/ultra → max. Without an enabled thinking
+            // switch the server ignores the value, so omit it instead.
+            if (!request.ThinkingEnabled) return null;
             return effective switch
             {
                 ReasoningLevel.Low => "low",
-                ReasoningLevel.Medium or ReasoningLevel.High => "high",
-                ReasoningLevel.Max or ReasoningLevel.XHigh or ReasoningLevel.Ultra => "max",
+                ReasoningLevel.Medium or ReasoningLevel.High or ReasoningLevel.XHigh => "high",
+                ReasoningLevel.Max or ReasoningLevel.Ultra => "max",
                 _ => "high",
             };
         }
@@ -116,6 +122,9 @@ public static class ReasoningLevelAdapter
 
     public static int AnthropicBudget(LlmRequest request)
     {
+        // Auxiliary purposes never think; a budget would be dead weight in the body.
+        if (request.Purpose != LlmPurpose.Chat) return 0;
+
         var effective = Normalize(request.Provider, request.Model, request.ReasoningLevel);
         if (effective == ReasoningLevel.None) return 0;
 

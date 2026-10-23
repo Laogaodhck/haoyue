@@ -244,14 +244,19 @@ public static class ContextPlanner
 
     /// <summary>
     /// Splits history into the portion to summarize (Old) and the recent tail to keep
-    /// verbatim (Recent). The tail is capped at half the window budget and always starts
-    /// on a complete tool-turn boundary so no tool call is ever orphaned.
+    /// verbatim (Recent). The tail is capped at <paramref name="tailRatio"/> of the window
+    /// budget (clamped to 0.1–0.9) and always starts on a complete tool-turn boundary so
+    /// no tool call is ever orphaned.
     /// </summary>
     public static (IReadOnlyList<ChatMessage> Old, IReadOnlyList<ChatMessage> Recent) SplitForCompaction(
         IReadOnlyList<ChatMessage> messages, ModelConfig model, string systemPrompt, int? windowCeiling = null,
-        double calibration = 1.0, int toolSchemaTokens = 0)
+        double calibration = 1.0, int toolSchemaTokens = 0, double tailRatio = 0.5)
     {
-        var tailBudget = Math.Max(1_024, WindowBudget(model, systemPrompt, windowCeiling, calibration, toolSchemaTokens) / 2);
+        // NaN would slip through Math.Clamp (its comparisons are false) and only reach a
+        // sane budget via an undefined double→int cast; treat it as the default explicitly.
+        var ratio = double.IsFinite(tailRatio) ? Math.Clamp(tailRatio, 0.1, 0.9) : 0.5;
+        var tailBudget = Math.Max(1_024,
+            (int)(WindowBudget(model, systemPrompt, windowCeiling, calibration, toolSchemaTokens) * ratio));
 
         var split = messages.Count;
         var total = 0;
@@ -268,6 +273,19 @@ public static class ContextPlanner
         while (split < messages.Count && messages[split].Role == ChatRole.Tool) split++;
 
         return (messages.Take(split).ToList(), messages.Skip(split).ToList());
+    }
+
+    /// <summary>
+    /// 压缩收敛校验：新摘要（加上替换后消息的固定开销）的估算 token 必须小于被遮蔽内容的
+    /// 估算 token。摘要不缩小体积的压缩没有意义——下一回合会话依旧超限，却在「压缩→还是
+    /// 超限」之间空转，摘要比原文更长时甚至每轮都在膨胀。调用方据此回退到普通窗口裁剪。
+    /// </summary>
+    public static bool SummaryConverged(
+        string summary, IReadOnlyList<ChatMessage> masked, double calibration = 1.0, int replacementOverheadTokens = 0)
+    {
+        var summaryTokens = EstimateTokens(summary, calibration) + Math.Max(0, replacementOverheadTokens);
+        var maskedTokens = masked.Sum(message => EstimateTokens(message, calibration));
+        return summaryTokens < maskedTokens;
     }
 
     /// <summary>

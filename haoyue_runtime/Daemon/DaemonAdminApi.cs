@@ -159,6 +159,7 @@ internal sealed partial class DaemonAdminApi(
         ["turnTokenBudget"] = runtime.ConfigStore.Config.Agent.TurnTokenBudget,
         ["turnCostBudget"] = runtime.ConfigStore.Config.Agent.TurnCostBudget,
         ["turnWallClockSeconds"] = runtime.ConfigStore.Config.Agent.TurnWallClockSeconds,
+        ["compactionTailRatio"] = runtime.ConfigStore.Config.Agent.CompactionTailRatio,
         // 5.6 工具执行策略 + Bash 沙箱：安全配置零手改 config.json。
         ["toolPolicy"] = SerializeToolPolicy(runtime.ConfigStore.Config.Agent.ToolPolicy),
         ["bashSandbox"] = new JsonObject
@@ -232,6 +233,7 @@ internal sealed partial class DaemonAdminApi(
         agent.TurnTokenBudget = OptionalInt(parameters, "turnTokenBudget", agent.TurnTokenBudget, 0, 100_000_000);
         agent.TurnWallClockSeconds = OptionalInt(parameters, "turnWallClockSeconds", agent.TurnWallClockSeconds, 0, 86_400);
         agent.TurnCostBudget = OptionalDouble(parameters, "turnCostBudget", agent.TurnCostBudget, 0, 100_000);
+        agent.CompactionTailRatio = OptionalDouble(parameters, "compactionTailRatio", agent.CompactionTailRatio, 0.1, 0.9);
 
         if (parameters["visionModel"] is JsonValue visionValue)
         {
@@ -416,8 +418,8 @@ internal sealed partial class DaemonAdminApi(
             System = system,
             Temperature = 0.2,
             MaxTokens = maxTokens,
-            EnableThinking = false,
-            ReasoningLevel = ReasoningLevel.Medium,
+            // Auxiliary purpose centrally forces thinking off and omits reasoning_effort.
+            Purpose = LlmPurpose.Auxiliary,
         };
 
         var optimized = new StringBuilder();
@@ -1016,6 +1018,7 @@ internal sealed partial class DaemonAdminApi(
                         Messages = [ChatMessage.User(prompt)],
                         MaxTokens = maxTokens,
                         EnableThinking = false,
+                        Purpose = LlmPurpose.Auxiliary,
                     },
                     workspace: null,
                     ct,

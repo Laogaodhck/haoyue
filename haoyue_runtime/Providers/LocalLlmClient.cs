@@ -351,8 +351,11 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         WarnGpuBackendMissingOnce(request.Provider.Id, request.Model.Id,
             BuildLoadParams(path, request.Provider, request.Model, tier)(false).GpuLayerCount);
         string? marker = lease.Mtmd is null ? null : NativeApi.MtmdDefaultMarker();
-        // 思考默认值：模型加载设置可覆盖每次请求的开关（配置页「思考」分区）。
-        var thinkingEnabled = request.Model.Load?.EnableThinking ?? request.EnableThinking;
+        // 思考默认值：模型加载设置可覆盖每次请求的开关（配置页「思考」分区）；
+        // 非对话用途（压缩/基准/测试）一律不思考——输出预算必须留给回答本身。
+        var thinkingEnabled = request.Purpose == LlmPurpose.Chat
+            ? request.Model.Load?.EnableThinking ?? request.EnableThinking
+            : false;
         var (prompt, startsInThinking) = BuildPrompt(weights, request, marker, thinkingEnabled);
 
         // 路径调度（P5）：会话型请求走 KV 前缀复用；一次性超长文档（复用命中率观测过低）
@@ -432,7 +435,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                     if (performance is { } perf
                         && perf.DecodeTokensPerSecond < SlowDecodeHintTokensPerSecond
                         && perf.DecodeTokensPerSecond > 0
-                        && request.EnableThinking)
+                        && request.ThinkingEnabled)
                     {
                         finished = finished with
                         {
@@ -1022,7 +1025,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     private static (string Prompt, bool StartsInThinking) BuildPrompt(
         LLamaWeights weights, LlmRequest request, string? imageMarker = null, bool? enableThinking = null)
     {
-        var thinkingEnabled = enableThinking ?? request.EnableThinking;
+        var thinkingEnabled = enableThinking ?? request.ThinkingEnabled;
         LLamaTemplate template;
         try
         {
@@ -1232,7 +1235,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// </summary>
     internal static int? ThinkingBudgetTokens(LlmRequest request)
     {
-        if (!request.EnableThinking) return null;
+        if (!request.ThinkingEnabled) return null;
         if (!request.Model.Capabilities.Thinking) return null;
         var budget = request.ReasoningLevel switch
         {

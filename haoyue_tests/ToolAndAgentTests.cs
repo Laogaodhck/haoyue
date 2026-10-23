@@ -733,6 +733,18 @@ public sealed class ToolAndAgentTests
             var current = JsonNode.Parse(admin.GetAgentConfig())!.AsObject();
             Assert.False(current["delegationEnabled"]!.GetValue<bool>());
             Assert.Equal("", current["visionModel"]!.GetValue<string>());
+
+            // compactionTailRatio 往返：越界钳制到 0.1-0.9（填大是「想更宽松」，钳制而非报错）。
+            updated = JsonNode.Parse(admin.SetAgentConfig(
+                new JsonObject { ["compactionTailRatio"] = 0.75 }))!.AsObject();
+            Assert.Equal(0.75, updated["compactionTailRatio"]!.GetValue<double>());
+            Assert.Equal(0.75, store.Config.Agent.CompactionTailRatio);
+            updated = JsonNode.Parse(admin.SetAgentConfig(
+                new JsonObject { ["compactionTailRatio"] = 9.0 }))!.AsObject();
+            Assert.Equal(0.9, updated["compactionTailRatio"]!.GetValue<double>());
+            updated = JsonNode.Parse(admin.SetAgentConfig(
+                new JsonObject { ["compactionTailRatio"] = 0.0 }))!.AsObject();
+            Assert.Equal(0.1, updated["compactionTailRatio"]!.GetValue<double>());
         }
         finally
         {

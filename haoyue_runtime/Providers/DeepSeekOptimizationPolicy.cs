@@ -24,7 +24,15 @@ internal static class DeepSeekOptimizationPolicy
     public static bool ShouldPassBackReasoning(LlmRequest request, ChatMessage message)
     {
         if (!IsDeepSeek(request.Provider, request.Model)) return false;
-        return !string.IsNullOrEmpty(message.Thinking);
+        if (string.IsNullOrEmpty(message.Thinking)) return false;
+        // Legacy (optimization off): always pass back — safe against the 400, at the cost
+        // of ignored tokens on tool-less requests.
+        if (!request.OptimizeDeepSeek) return true;
+        // Optimized: mirror the official rule. reasoning_content is concatenated into the
+        // context (and must then be fully passed back, or the API returns 400) only when
+        // the wire request carries tools; tool-less requests ignore it entirely, so
+        // passing it back is pure token waste.
+        return request.Tools.Count > 0 && request.Model.Capabilities.ToolCalling;
     }
 
     public static string ToolResultContent(string text, LlmRequest request) =>
@@ -40,7 +48,7 @@ internal static class DeepSeekOptimizationPolicy
         if (!Applies(request)) return null;
         return new JsonObject
         {
-            ["type"] = request.EnableThinking ? "enabled" : "disabled",
+            ["type"] = request.ThinkingEnabled ? "enabled" : "disabled",
         };
     }
 

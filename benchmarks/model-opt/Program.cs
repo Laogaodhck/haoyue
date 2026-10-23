@@ -13,12 +13,14 @@ namespace Haoyue.Benchmarks.ModelOpt;
 /// LocalModelCache），配置直接读 ~/.haoyue/config.json——测的就是生产同一条路径。
 ///
 /// 用法（NVIDIA 机器必须带 Cuda12 后端，否则权重全部走 CPU）：
-///   dotnet run -c Release -p:LlamaBackend=Cuda12 -- bench   [--tag before] [--filter 子串] [--threads N]
+///   dotnet run -c Release -p:LlamaBackend=Cuda12 -- bench   [--tag before] [--filter 子串] [--threads N] [--thinking]
 ///   dotnet run -c Release -p:LlamaBackend=Cuda12 -- quality [--tag before] [--filter 子串]
 ///   dotnet run -c Release -- compare quality-&lt;a&gt;.json quality-&lt;b&gt;.json
 ///
 /// bench 每个模型输出：冷加载耗时（权重+512 自检）、加载期进程内存峰值、显存峰值
 /// （nvidia-smi 采样差值）、短/中/长提示的 TTFT、prefill tok/s、decode tok/s。
+/// --thinking 追加一轮思考冒烟（EnableThinking=true），验证推理模型的
+/// startsInThinking 探测 / ThinkTagParser 分流 / FinalizeOutput 兜底链路。
 /// quality 用固定题本 + 贪心解码（temperature 0 + 固定种子）输出可复现答案，
 /// 供量化前后/跨量化档位对比。
 /// 结果写入 benchmarks/model-opt/results/。
@@ -38,12 +40,13 @@ public static class Program
         var tag = Arg(args, "--tag") ?? DateTime.Now.ToString("HHmm");
         var filter = Arg(args, "--filter");
         var threads = int.TryParse(Arg(args, "--threads"), out var t) ? t : (int?)null;
+        var thinking = args.Any(a => string.Equals(a, "--thinking", StringComparison.OrdinalIgnoreCase));
 
         try
         {
             return mode switch
             {
-                "bench" => await BenchAsync(tag, filter, threads),
+                "bench" => await BenchAsync(tag, filter, threads, thinking),
                 "quality" => await QualityAsync(tag, filter),
                 "compare" => Compare(args.Skip(1).ToArray()),
                 _ => Usage(),
@@ -94,7 +97,7 @@ public static class Program
 
     // ---------------------------------------------------------------- bench
 
-    private static async Task<int> BenchAsync(string tag, string? filter, int? threads)
+    private static async Task<int> BenchAsync(string tag, string? filter, int? threads, bool thinking = false)
     {
         var models = ResolveModels(filter);
         if (models.Count == 0)
@@ -110,7 +113,7 @@ public static class Program
             BenchRecord record;
             try
             {
-                record = await BenchOneAsync(entry, tag, threads);
+                record = await BenchOneAsync(entry, tag, threads, thinking);
             }
             catch (Exception ex)
             {
@@ -132,7 +135,7 @@ public static class Program
         return 0;
     }
 
-    private static async Task<BenchRecord> BenchOneAsync(ModelEntry entry, string tag, int? threads)
+    private static async Task<BenchRecord> BenchOneAsync(ModelEntry entry, string tag, int? threads, bool thinking = false)
     {
         var provider = entry.Provider;
         var model = entry.Model;
@@ -203,6 +206,26 @@ public static class Program
         Console.WriteLine($"  长上下文 @ {Stamp()}");
         var longRun = await GenerateAsync(client, provider, model, Prompts.LongPrefill(), 96, 0.3, CancellationToken.None);
 
+        // 思考链路冒烟（--thinking）：推理模型（DeepSeek-R1 等）开启思考后走
+        // 模板 startsInThinking 探测 → ThinkTagParser 分流 → FinalizeOutput 兜底，
+        // 与 bench 主链路（EnableThinking=false）是两条不同路径，需单独取证。
+        // 口径说明：本地 usage 的 OutputTokens 是思考+回答的总生成量，不拆分；
+        // 思考/回答体量以字符数计（reasoning=Thinking 流，answer=Text 流）。
+        long thinkReasoningChars = 0, thinkAnswerChars = 0, thinkOutputTokens = 0;
+        if (thinking)
+        {
+            Console.WriteLine($"  思考冒烟 @ {Stamp()}");
+            var thinkRun = await GenerateAsync(client, provider, model, Prompts.Short, 512, 0.6, CancellationToken.None,
+                enableThinking: true);
+            thinkReasoningChars = thinkRun.Reasoning.Length;
+            thinkAnswerChars = thinkRun.Answer.Length;
+            thinkOutputTokens = thinkRun.OutputTokens;
+            Console.WriteLine($"  思考冒烟完成：reasoning {thinkReasoningChars} 字 / answer {thinkAnswerChars} 字"
+                              + $" / 总输出 {thinkOutputTokens} tok | decode {thinkRun.DecodeTps:F1} tok/s");
+            Console.WriteLine($"  [思考片段] {Truncate(thinkRun.Reasoning, 200)}");
+            Console.WriteLine($"  [回答片段] {Truncate(thinkRun.Answer, 200)}");
+        }
+
         sampler.Stop();
         cache.Dispose(); // 卸下权重再进下一个模型：每个模型的冷加载都是真冷加载。
         GC.Collect();
@@ -214,7 +237,10 @@ public static class Program
             shortRun.DecodeTps, mediumRun.DecodeTps, longRun.DecodeTps,
             mediumRun.PrefillTps, longRun.PrefillTps,
             (long)mediumRun.TtftMs, (long)longRun.TtftMs,
-            longRun.PromptTokens, Notes: tier?.Reason);
+            longRun.PromptTokens, Notes: tier?.Reason,
+            ThinkReasoningChars: thinkReasoningChars,
+            ThinkAnswerChars: thinkAnswerChars,
+            ThinkOutputTokens: thinkOutputTokens);
     }
 
     public sealed record BenchRecord(
@@ -224,7 +250,8 @@ public static class Program
         double ShortDecodeTps, double MediumDecodeTps, double LongDecodeTps,
         double MediumPrefillTps, double LongPrefillTps,
         long MediumTtftMs, long LongTtftMs,
-        long LongPromptTokens, string? Notes);
+        long LongPromptTokens, string? Notes,
+        long ThinkReasoningChars = 0, long ThinkAnswerChars = 0, long ThinkOutputTokens = 0);
 
     // ---------------------------------------------------------------- quality
 
@@ -297,7 +324,8 @@ public static class Program
 
     private static async Task<GenResult> GenerateAsync(
         LocalLlmClient client, ProviderConfig provider, ModelConfig model,
-        string prompt, int maxTokens, double temperature, CancellationToken ct)
+        string prompt, int maxTokens, double temperature, CancellationToken ct,
+        bool enableThinking = false)
     {
         var request = new LlmRequest
         {
@@ -306,11 +334,12 @@ public static class Program
             Messages = [ChatMessage.User(prompt)],
             MaxTokens = maxTokens,
             Temperature = temperature,
-            EnableThinking = false,
+            EnableThinking = enableThinking,
         };
         var ttft = TimeSpan.Zero;
         var started = Stopwatch.StartNew();
         var text = new StringBuilder();
+        var reasoning = new StringBuilder();
         LlmCompletion? completion = null;
         await foreach (var evt in client.StreamAsync(request, ct).ConfigureAwait(false))
         {
@@ -322,6 +351,7 @@ public static class Program
                     break;
                 case LlmThinkingDelta think:
                     if (ttft == TimeSpan.Zero && think.Text.Trim().Length > 0) ttft = started.Elapsed;
+                    reasoning.Append(think.Text);
                     break;
                 case LlmCompleted done:
                     completion = done.Completion;
@@ -330,14 +360,18 @@ public static class Program
         }
         started.Stop();
         var answer = completion?.Text is { Length: > 0 } t ? t : text.ToString();
+        var reasoningText = completion?.Thinking is { Length: > 0 } r ? r : reasoning.ToString();
         if (ttft == TimeSpan.Zero) ttft = started.Elapsed;
         var promptTokens = completion?.Usage.TotalInputTokens ?? 0;
         var outputTokens = completion?.Usage.OutputTokens ?? 0;
         return new GenResult(
-            answer, promptTokens, outputTokens, ttft.TotalMilliseconds, started.Elapsed.TotalMilliseconds);
+            answer, promptTokens, outputTokens, ttft.TotalMilliseconds, started.Elapsed.TotalMilliseconds,
+            reasoningText);
     }
 
-    private sealed record GenResult(string Answer, long PromptTokens, long OutputTokens, double TtftMs, double TotalMs)
+    private sealed record GenResult(
+        string Answer, long PromptTokens, long OutputTokens, double TtftMs, double TotalMs,
+        string Reasoning = "")
     {
         public double DecodeTps => OutputTokens > 1 && TotalMs > TtftMs
             ? (OutputTokens - 1) / ((TotalMs - TtftMs) / 1000.0) : 0;

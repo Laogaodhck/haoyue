@@ -381,6 +381,7 @@ public sealed class ProviderManager(
                 Model = model.Model,
                 Messages = [ChatMessage.User("Reply with the single word: ok")],
                 MaxTokens = 16,
+                Purpose = LlmPurpose.Auxiliary,
             };
 
             var text = "";

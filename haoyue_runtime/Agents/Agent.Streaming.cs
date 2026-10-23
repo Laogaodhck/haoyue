@@ -56,6 +56,7 @@ public sealed partial class Agent
             EnableThinking = reasoningLevel != ReasoningLevel.None && model.Model.Capabilities.Thinking,
             ThinkingBudgetTokens = config.Agent.ThinkingBudgetTokens,
             ReasoningLevel = reasoningLevel,
+            Purpose = LlmPurpose.Chat,
             OptimizeDeepSeek = configStore.Config.Routing.DeepSeekOptimizationEnabled,
         };
 

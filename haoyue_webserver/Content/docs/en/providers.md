@@ -47,31 +47,43 @@ Providers are stored as an array, with models nested under their Provider:
 {
   "activeProfile": "default",
   "profiles": {
-    "default": { "provider": "deepseek", "model": "deepseek-chat", "strategy": "balanced" }
+    "default": { "provider": "deepseek", "model": "deepseek-flash", "strategy": "balanced" }
   },
   "providers": [
     {
       "id": "deepseek",
       "name": "DeepSeek",
       "kind": "openai",
-      "baseUrl": "https://api.deepseek.com/v1",
+      "baseUrl": "https://api.deepseek.com",
       "apiKey": "your-api-key",
       "promptCaching": true,
       "enabled": true,
       "priority": 0,
-      "timeoutSeconds": 120,
+      "timeoutSeconds": 300,
       "models": [
         {
-          "id": "deepseek-chat",
-          "contextWindow": 128000,
-          "maxOutput": 8192,
-          "capabilities": { "streaming": true, "toolCalling": true }
+          "id": "deepseek-flash",
+          "contextWindow": 1000000,
+          "maxOutput": 65536,
+          "capabilities": {
+            "streaming": true,
+            "thinking": true,
+            "vision": true,
+            "toolCalling": true,
+            "jsonMode": true,
+            "reasoning": true,
+            "maxReasoningLevel": "ultra"
+          },
+          "inputPricePerMTok": 0.3,
+          "outputPricePerMTok": 1.2
         }
       ]
     }
   ]
 }
 ```
+
+DeepSeek's current model IDs are `deepseek-flash` (served by DeepSeek-V4.1-Flash) and `deepseek-v4-pro`: 1M context and up to 384K output. The old `deepseek-chat` / `deepseek-reasoner` / `deepseek-v4-flash` names are retired (`deepseek-v4-flash` is still accepted as an alias and billed as Flash). Thinking models must declare `thinking: true` and `reasoning: true`; otherwise reasoning levels and reasoning-content pass-back stay disabled.
 
 A plaintext `apiKey` written by hand into the configuration migrates automatically to an encrypted reference at Runtime startup; either way, never commit a personal global configuration containing credentials.
 
@@ -96,8 +108,8 @@ haoyue provider list
 
 haoyue provider add --id deepseek --kind openai \
   --api-key "sk-..." \
-  --base-url "https://api.deepseek.com/v1" \
-  --model "deepseek-chat"
+  --base-url "https://api.deepseek.com" \
+  --model "deepseek-flash" --model "deepseek-v4-pro"
 
 haoyue provider test deepseek
 haoyue model list

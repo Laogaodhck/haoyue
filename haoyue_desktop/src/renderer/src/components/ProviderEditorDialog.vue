@@ -23,6 +23,14 @@ export interface ProviderFormValue {
   timeoutSeconds: number
   proxy: string
   promptCaching: boolean
+  organization: string
+  /** 本地推理线程数；null = 交给 llama.cpp 自选。 */
+  threads: number | null
+  localPrefixReuse: boolean
+  /** 自定义请求头，一行一条 `Name: Value`（密钥类头的值不回传，留空即保持原值）。 */
+  headersText: string
+  /** 思考档位映射，一行一条 `level=wire`。 */
+  reasoningEffortMapText: string
 }
 
 export interface ScannedLocalModel {
@@ -55,7 +63,8 @@ const emit = defineEmits<{
 
 const form = reactive<ProviderFormValue>({
   id: '', name: '', kind: 'openai', baseUrl: '', modelListUrl: '', apiKey: '', clearApiKey: false, models: '', modelsDirectory: '',
-  enabled: true, priority: 0, timeoutSeconds: 120, proxy: '', promptCaching: true
+  enabled: true, priority: 0, timeoutSeconds: 120, proxy: '', promptCaching: true,
+  organization: '', threads: null, localPrefixReuse: true, headersText: '', reasoningEffortMapText: ''
 })
 const modelList = ref<ModelDetailConfig[]>([])
 const newModelInput = ref('')
@@ -85,7 +94,12 @@ function hasCustomAdvancedSettings(val: ProviderFormValue): boolean {
     (val.priority !== undefined && val.priority !== 0) ||
     Boolean(val.proxy && val.proxy.trim() !== '') ||
     val.enabled === false ||
-    val.promptCaching === false
+    val.promptCaching === false ||
+    (val.organization ?? '').trim() !== '' ||
+    Boolean(val.threads) ||
+    val.localPrefixReuse === false ||
+    (val.headersText ?? '').trim() !== '' ||
+    (val.reasoningEffortMapText ?? '').trim() !== ''
   )
 }
 
@@ -95,6 +109,11 @@ function resetAdvancedToDefaults(): void {
   form.proxy = ''
   form.enabled = true
   form.promptCaching = true
+  form.organization = ''
+  form.threads = null
+  form.localPrefixReuse = true
+  form.headersText = ''
+  form.reasoningEffortMapText = ''
 }
 
 function onAdvancedToggle(): void {
@@ -289,7 +308,12 @@ function save(): void {
       : 0,
     proxy: showAdvanced.value ? form.proxy.trim() : '',
     enabled: showAdvanced.value ? form.enabled : true,
-    promptCaching: showAdvanced.value ? form.promptCaching : true
+    promptCaching: showAdvanced.value ? form.promptCaching : true,
+    organization: showAdvanced.value ? form.organization.trim() : '',
+    threads: showAdvanced.value && form.threads && form.threads > 0 ? Math.floor(form.threads) : null,
+    localPrefixReuse: showAdvanced.value ? form.localPrefixReuse : true,
+    headersText: showAdvanced.value ? form.headersText.trim() : '',
+    reasoningEffortMapText: showAdvanced.value ? form.reasoningEffortMapText.trim() : ''
   })
 }
 
@@ -546,6 +570,42 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                   </span>
                   <input v-model="form.promptCaching" class="sr-only" type="checkbox" />
                   <span class="toggle-switch" aria-hidden="true"><span /></span>
+                </label>
+
+                <div class="provider-section-heading">
+                  <strong>鉴权与兼容</strong>
+                </div>
+                <div class="provider-form-grid two-columns">
+                  <label>
+                    <FieldLabel en="Organization" zh="组织标识"
+                      help="OpenAI 兼容服务用于计费归集的组织头（organization）。留空表示不发送。" />
+                    <input v-model="form.organization" placeholder="org-xxxx（留空不发送）" spellcheck="false" />
+                  </label>
+                  <label v-if="isLocalKind()">
+                    <FieldLabel en="Threads" zh="推理线程数"
+                      help="本地模型 CPU 推理线程数；留空交给 llama.cpp 按逻辑核心自选。GPU 层卸载后会剩余部分 CPU 层，调对能提吞吐。" />
+                    <input v-model.number="form.threads" type="number" min="1" step="1" placeholder="自动" />
+                  </label>
+                </div>
+                <label v-if="isLocalKind()" class="provider-enabled-row">
+                  <span>
+                    <strong>KV 前缀复用</strong>
+                    <small>新提示词以上次解码结果为前缀时复用 KV 缓存，多步回合省掉重复预填充；前缀不匹配时自动整体重算。</small>
+                  </span>
+                  <input v-model="form.localPrefixReuse" class="sr-only" type="checkbox" />
+                  <span class="toggle-switch" aria-hidden="true"><span /></span>
+                </label>
+                <label class="provider-field-block">
+                  <FieldLabel en="Headers" zh="自定义请求头"
+                    help="一行一条 Name: Value。用于网关鉴权或灰度头。密钥类（Authorization / api-key / token）的值不会回传，显示为空串，留空即保持已存值。" />
+                  <textarea v-model="form.headersText" rows="3" spellcheck="false"
+                    placeholder="X-Gateway-Key: ******&#10;X-Tenant: haoyue" />
+                </label>
+                <label class="provider-field-block">
+                  <FieldLabel en="Reasoning Effort Map" zh="思考档位映射"
+                    help="一行一条 level=wire，把中性档位映射到该供应商认识的取值。例：medium=high。" />
+                  <textarea v-model="form.reasoningEffortMapText" rows="2" spellcheck="false"
+                    placeholder="medium=high&#10;xhigh=max" />
                 </label>
               </div>
             </div>

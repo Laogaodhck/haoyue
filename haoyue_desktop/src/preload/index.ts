@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { toIpcPayload } from '../shared/ipc.js'
-import type { DaemonMessage, DaemonState, DesktopApi } from '../shared/ipc.js'
+import type { DaemonMessage, DaemonState, DesktopApi, WebBlockedNotice } from '../shared/ipc.js'
 
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke('app:info'),
@@ -29,6 +29,15 @@ const api: DesktopApi = {
     gitOverview: (path) => ipcRenderer.invoke('project:git-overview', path),
     gitHistory: (path) => ipcRenderer.invoke('project:git-history', path),
     revertFileDiffs: (workspace, patches) => ipcRenderer.invoke('project:revert-file-diffs', workspace, patches)
+  },
+  web: {
+    checkUrl: (url) => ipcRenderer.invoke('web:check-url', url),
+    openExternal: (url) => ipcRenderer.invoke('web:open-external', url),
+    onBlocked: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, notice: WebBlockedNotice): void => listener(notice)
+      ipcRenderer.on('web:blocked', handler)
+      return () => ipcRenderer.removeListener('web:blocked', handler)
+    }
   },
   daemon: {
     connect: () => ipcRenderer.invoke('daemon:connect'),

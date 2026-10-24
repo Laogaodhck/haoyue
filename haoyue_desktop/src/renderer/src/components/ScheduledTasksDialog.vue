@@ -21,7 +21,11 @@ const props = defineProps<{
   projects: ProjectItem[]
 }>()
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{
+  close: []
+  /** 打开上次运行所在的会话（已持久化 LastSessionId）。 */
+  openSession: [payload: { sessionId: string, workspace?: string }]
+}>()
 
 interface ScheduleForm {
   name: string
@@ -40,6 +44,8 @@ const action = ref('')
 const editingId = ref<string | null>(null)
 const editorOpen = ref(false)
 const customCron = ref(false)
+/** 展开查看全文的任务 id（输出可能几千字，默认只给两行摘要）。 */
+const expandedResult = ref<string | null>(null)
 
 const cronPresets = [
   { value: '*/30 * * * *', label: '每 30 分钟', description: '每 30 分钟' },
@@ -104,6 +110,16 @@ function statusLabel(task: ScheduledTaskInfo): string {
 
 function statusClass(task: ScheduledTaskInfo): string {
   return task.lastStatus === 'success' ? 'status-success' : task.lastStatus === 'error' ? 'status-error' : 'status-idle'
+}
+
+/** 输出摘要在列表里只占两行；全文点开看。 */
+function outputPreview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > 160 ? `${flat.slice(0, 160)}…` : flat
+}
+
+function toggleResult(taskId: string): void {
+  expandedResult.value = expandedResult.value === taskId ? null : taskId
 }
 
 function taskWorkspaceName(task: ScheduledTaskInfo): string {
@@ -273,6 +289,9 @@ onBeforeUnmount(() => {
       </div>
 
       <template v-else-if="!editorOpen">
+        <p class="scheduled-tasks-hint">
+          运行结果通知：无桌面连接时只会写进任务记录；要外部通知请到「设置 → 智能体 → 专家参数」配置 Schedule Webhook。
+        </p>
         <div v-if="tasks.length === 0" class="scheduled-tasks-empty">
           <CalendarClock :size="28" />
           <p>还没有计划任务</p>
@@ -308,6 +327,26 @@ onBeforeUnmount(() => {
               <button class="icon-button compact danger-icon" title="删除" @click="removeTask(task)">
                 <Trash2 :size="14" />
               </button>
+            </div>
+            <!-- 上次运行结果（3.2）：后端一直存着 lastRunAt/lastStatus/lastError/lastOutput，
+                 界面此前只显示「上次成功」，正文与失败原因全看不到，闭环是断的。 -->
+            <div v-if="task.lastRunAt || task.lastOutput || task.lastError" class="scheduled-task-result">
+              <div class="scheduled-task-result-head">
+                <span class="scheduled-task-status" :class="statusClass(task)">{{ statusLabel(task) }}</span>
+                <small>{{ formatTime(task.lastRunAt) }}</small>
+                <button v-if="task.lastSessionId" type="button" class="link-button"
+                  @click="emit('openSession', { sessionId: task.lastSessionId!, workspace: task.workspace })">
+                  打开本次会话
+                </button>
+                <button v-if="task.lastOutput" type="button" class="link-button" @click="toggleResult(task.id)">
+                  {{ expandedResult === task.id ? '收起输出' : '查看输出' }}
+                </button>
+              </div>
+              <template v-if="task.lastOutput">
+                <pre v-if="expandedResult === task.id" class="scheduled-task-output">{{ task.lastOutput }}</pre>
+                <p v-else class="scheduled-task-output-preview">{{ outputPreview(task.lastOutput) }}</p>
+              </template>
+              <p v-if="task.lastError" class="scheduled-task-error-line">{{ task.lastError }}</p>
             </div>
           </div>
         </div>
@@ -473,6 +512,7 @@ onBeforeUnmount(() => {
 
 .scheduled-task-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
@@ -484,6 +524,81 @@ onBeforeUnmount(() => {
 
 .scheduled-task-main {
   min-width: 0;
+}
+
+/* 上次运行结果：整行铺满，与上半部分（主信息 + 操作）视觉分层。 */
+.scheduled-task-result {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.scheduled-task-result-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.link-button {
+  padding: 0;
+  color: var(--accent);
+  font-size: 11.5px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.scheduled-task-output-preview {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.scheduled-task-output {
+  max-height: 240px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.scheduled-task-error-line {
+  margin: 0;
+  padding: 6px 9px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.55;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  border-radius: 7px;
+}
+
+.scheduled-tasks-hint {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.6;
 }
 
 .scheduled-task-title {

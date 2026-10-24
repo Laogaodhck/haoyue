@@ -20,6 +20,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Settings2,
   SlidersHorizontal,
   Sparkles,
@@ -52,6 +53,11 @@ import { readSendKeyPreference } from '../app-helpers'
 import { clampCompactionTailRatio } from '../agent-form'
 import { requestJson } from '../daemon-json'
 import ToolPolicyPanel from './ToolPolicyPanel.vue'
+import SettingsRoutingPanel from './SettingsRoutingPanel.vue'
+import SettingsInferencePanel from './SettingsInferencePanel.vue'
+import SettingsAgentExpertPanel from './SettingsAgentExpertPanel.vue'
+import SettingsIntegrationsPanel from './SettingsIntegrationsPanel.vue'
+import ConfigJsonEditor from './ConfigJsonEditor.vue'
 import { useEscapeClose } from '../use-escape-close'
 import {
   EVOLUTION_INTERVAL_OPTIONS,
@@ -98,6 +104,11 @@ interface ProviderInfo {
   timeoutSeconds: number
   proxy?: string
   promptCaching: boolean
+  organization?: string | null
+  threads?: number | null
+  localPrefixReuse?: boolean
+  headers?: Record<string, string> | null
+  reasoningEffortMap?: Record<string, string> | null
   active: boolean
 }
 
@@ -112,6 +123,13 @@ interface ProviderFormValue {
   models: string
   modelsDirectory: string
   modelDetails?: ModelDetailConfig[]
+  organization: string
+  threads: number | null
+  localPrefixReuse: boolean
+  /** 一行一条 `Name: Value`；保存时解析成 headers 对象。 */
+  headersText: string
+  /** 一行一条 `level=wire`；保存时解析成 reasoningEffortMap 对象。 */
+  reasoningEffortMapText: string
   enabled: boolean
   priority: number
   timeoutSeconds: number
@@ -186,8 +204,6 @@ const emit = defineEmits<{
 const section = ref<SettingsSection>('general')
 const loading = ref(false)
 const networkEnabled = ref(true)
-const failoverEnabled = ref(true)
-const deepSeekOptimizationEnabled = ref(false)
 const computerUseEnabled = ref(false)
 const computerUseDriver = ref('auto')
 const networkOpsEnabled = ref(false)
@@ -224,21 +240,6 @@ const candidateActiveFile = ref<Record<string, string>>({})
 const promptDraft = ref('')
 const promptDirty = ref(false)
 
-/** CUDA / local inference settings; null when no local provider is configured. */
-const localInference = reactive({
-  providerId: '',
-  gpuLayers: 0,
-  contextLength: 8192,
-  kvCacheQuantization: 'none',
-  flashAttention: false
-})
-const localInferenceAvailable = ref(false)
-const kvQuantOptions = [
-  { value: 'none', label: 'f16（原生，不量化）', description: '最高精度，显存占用最大' },
-  { value: 'q8_0', label: 'q8_0', description: '接近 f16 的精度，显存减半' },
-  { value: 'q4_0', label: 'q4_0', description: '显存占用最小，精度损失明显' }
-]
-
 const action = ref('')
 const error = ref('')
 const notice = ref('')
@@ -263,7 +264,8 @@ const editingProviderId = ref<string | null>(null)
 const providerForm = reactive<ProviderFormValue>({
   id: '', name: '', kind: 'openai', baseUrl: '',
   apiKey: '', clearApiKey: false, models: '', modelsDirectory: '', modelDetails: [], enabled: true, priority: 0,
-  modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true
+  modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true,
+  organization: '', threads: null, localPrefixReuse: true, headersText: '', reasoningEffortMapText: ''
 })
 
 const activeModel = computed(() => models.value.find((model) => model.active))
@@ -385,6 +387,38 @@ const pageTitle = computed(() => props.page === 'extensions' ? '扩展' : '设�
 const visibleSections = computed(() =>
   props.page === 'extensions' ? extensionSections : sections)
 
+/**
+ * 设置项搜索（2.8）：左侧导航原本只能靠记忆逐项点。
+ * 搜的是分区名 + 该分区覆盖的关键词，命中后直接跳分区，不另做一套结果页。
+ */
+const SECTION_KEYWORDS: Record<SettingsSection, string> = {
+  general: '外观 主题 语言 快捷键 发送 工具策略 权限 运行时 连接',
+  models: '模型 提供商 provider api key base url 上下文 定价 路由链 活动模型',
+  agent: '智能体 网页搜索 联网 委派 子智能体 自动验证 回合预算 上下文压缩 视觉',
+  mcp: 'mcp 连接器 服务器 connector 工具',
+  skills: '技能 skill 导入 市场 官方',
+  experts: '专家 expert 角色 子代理',
+  'rules-memory': '规则 记忆 AGENTS.md MEMORY.md 注入',
+  evolution: '进化 反思 缺陷 草稿 趋势',
+  diagnostics: '诊断 用量 日志 token 费用 健康检查 导出',
+  inference: '推理 加速 GPU 卸载 显存 KV 量化 flash attention 预热 卸载 驻留 基准',
+  advanced: '高级 网络 白名单 电脑操作 computer use 网络运维 故障转移 容灾 负载均衡 重试 专家参数 JSON 出厂'
+}
+
+const search = ref('')
+const filteredSections = computed(() => {
+  const keyword = search.value.trim().toLowerCase()
+  if (!keyword) return visibleSections.value
+  return visibleSections.value.filter((item) =>
+    item.label.toLowerCase().includes(keyword)
+    || SECTION_KEYWORDS[item.id]?.toLowerCase().includes(keyword))
+})
+
+/** 离线时空列表不能写成「尚未配置」——那会被读成"配置丢了"。 */
+function emptyCopy(empty: string): string {
+  return props.daemonConnected ? empty : '运行时未连接，暂时读不到数据（离线 ≠ 没有配置）'
+}
+
 /** 扩展页技能类目内的二级视图：本地已安装 / 技能市场。 */
 const skillsView = ref<'installed' | 'market'>('installed')
 
@@ -437,9 +471,6 @@ async function loadCurrentSection(): Promise<void> {
 }
 
 async function loadGeneral(): Promise<void> {
-  const routing = await requestJson<{ failoverEnabled: boolean; deepSeekOptimizationEnabled: boolean }>('routing.get')
-  failoverEnabled.value = routing.failoverEnabled
-  deepSeekOptimizationEnabled.value = routing.deepSeekOptimizationEnabled
   const advanced = await requestJson<{ language?: string }>('advanced.get')
   replyLanguage.value = normalizeReplyLanguage(advanced.language)
 }
@@ -700,23 +731,12 @@ async function refreshEvolutionAfterReflect(details: Record<string, unknown>): P
 async function loadAdvanced(): Promise<void> {
   const config = await requestJson<{
     networkEnabled: boolean
-    failoverEnabled: boolean
-    deepSeekOptimizationEnabled: boolean
     computerUseEnabled?: boolean
     computerUseDriver?: string
     networkOpsEnabled?: boolean
     networkOpsAllowMutating?: boolean
-    localInference?: {
-      providerId: string
-      gpuLayers: number
-      contextLength: number
-      kvCacheQuantization: string
-      flashAttention: boolean
-    } | null
   }>('advanced.get')
   networkEnabled.value = config.networkEnabled
-  failoverEnabled.value = config.failoverEnabled
-  deepSeekOptimizationEnabled.value = config.deepSeekOptimizationEnabled
   computerUseEnabled.value = config.computerUseEnabled ?? false
   computerUseDriver.value = config.computerUseDriver ?? 'auto'
   networkOpsEnabled.value = config.networkOpsEnabled ?? false
@@ -727,44 +747,6 @@ async function loadAdvanced(): Promise<void> {
   } catch {
     allowedSitesCount.value = null // daemon 版本较旧时静默隐藏计数
   }
-  if (config.localInference) {
-    localInference.providerId = config.localInference.providerId
-    localInference.gpuLayers = config.localInference.gpuLayers
-    localInference.contextLength = config.localInference.contextLength
-    localInference.kvCacheQuantization = config.localInference.kvCacheQuantization
-    localInference.flashAttention = config.localInference.flashAttention
-    localInferenceAvailable.value = true
-  } else {
-    localInferenceAvailable.value = false
-  }
-}
-
-async function saveLocalInference(): Promise<void> {
-  const previous = { ...localInference }
-  beginAction('advanced.set:localInference')
-  try {
-    const config = await requestJson<{ localInference: typeof localInference | null }>('advanced.set', {
-      localInference: {
-        providerId: localInference.providerId,
-        gpuLayers: Math.max(0, Math.floor(localInference.gpuLayers) || 0),
-        contextLength: Math.max(512, Math.floor(localInference.contextLength) || 8192),
-        kvCacheQuantization: localInference.kvCacheQuantization,
-        flashAttention: localInference.flashAttention
-      }
-    })
-    if (config.localInference) {
-      localInference.gpuLayers = config.localInference.gpuLayers
-      localInference.contextLength = config.localInference.contextLength
-      localInference.kvCacheQuantization = config.localInference.kvCacheQuantization
-      localInference.flashAttention = config.localInference.flashAttention
-    }
-    notice.value = '本地推理设置已保存，下一次本地模型请求生效'
-  } catch (reason) {
-    Object.assign(localInference, previous)
-    fail(reason)
-  } finally {
-    endAction()
-  }
 }
 
 async function toggleComputerUse(): Promise<void> {
@@ -772,14 +754,10 @@ async function toggleComputerUse(): Promise<void> {
   try {
     const config = await requestJson<{
       networkEnabled: boolean
-      failoverEnabled: boolean
-      deepSeekOptimizationEnabled: boolean
       computerUseEnabled: boolean
       computerUseDriver: string
     }>('advanced.set', {
       networkEnabled: networkEnabled.value,
-      failoverEnabled: failoverEnabled.value,
-      deepSeekOptimizationEnabled: deepSeekOptimizationEnabled.value,
       computerUseEnabled: computerUseEnabled.value,
       computerUseDriver: computerUseDriver.value
     })
@@ -839,34 +817,6 @@ async function toggleNetworkOpsMutating(): Promise<void> {
   }
 }
 
-async function toggleNetworkEnabled(): Promise<void> {
-
-  beginAction('advanced.set:network')
-  try {
-    const config = await requestJson<{
-      networkEnabled: boolean
-      failoverEnabled: boolean
-      deepSeekOptimizationEnabled: boolean
-    }>('advanced.set', {
-      networkEnabled: networkEnabled.value,
-      failoverEnabled: failoverEnabled.value,
-      deepSeekOptimizationEnabled: deepSeekOptimizationEnabled.value
-    })
-    networkEnabled.value = config.networkEnabled
-    notice.value = networkEnabled.value
-      ? '已开启全局网络访问（所有任务与项目可用网页搜索与抓取）'
-      : '已关闭全局网络访问（强制处于离线模式，禁止外网请求）'
-  } catch (reason) {
-    fail(reason)
-    try {
-      const config = await requestJson<{ networkEnabled: boolean }>('advanced.get')
-      networkEnabled.value = config.networkEnabled
-    } catch { /* keep last known state */ }
-  } finally {
-    endAction()
-  }
-}
-
 async function factoryReset(): Promise<void> {
   if (!props.daemonConnected) return
   if (!await confirmAction({
@@ -889,52 +839,6 @@ async function factoryReset(): Promise<void> {
     emit('close')
   } catch (reason) {
     fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
-async function toggleFailover(): Promise<void> {
-  beginAction('routing.set')
-  try {
-    const routing = await requestJson<{ failoverEnabled: boolean; deepSeekOptimizationEnabled: boolean }>('routing.set', {
-      failoverEnabled: failoverEnabled.value,
-      deepSeekOptimizationEnabled: deepSeekOptimizationEnabled.value
-    })
-    failoverEnabled.value = routing.failoverEnabled
-    deepSeekOptimizationEnabled.value = routing.deepSeekOptimizationEnabled
-    notice.value = failoverEnabled.value ? '已开启自动切换其他模型' : '已关闭自动切换，失败即停止'
-  } catch (reason) {
-    fail(reason)
-    try {
-      const routing = await requestJson<{ failoverEnabled: boolean; deepSeekOptimizationEnabled: boolean }>('routing.get')
-      failoverEnabled.value = routing.failoverEnabled
-      deepSeekOptimizationEnabled.value = routing.deepSeekOptimizationEnabled
-    } catch { /* keep the last known state */ }
-  } finally {
-    endAction()
-  }
-}
-
-async function toggleDeepSeekOptimization(): Promise<void> {
-  beginAction('routing.set:deepseek')
-  try {
-    const routing = await requestJson<{ failoverEnabled: boolean; deepSeekOptimizationEnabled: boolean }>('routing.set', {
-      failoverEnabled: failoverEnabled.value,
-      deepSeekOptimizationEnabled: deepSeekOptimizationEnabled.value
-    })
-    failoverEnabled.value = routing.failoverEnabled
-    deepSeekOptimizationEnabled.value = routing.deepSeekOptimizationEnabled
-    notice.value = deepSeekOptimizationEnabled.value
-      ? '已开启 DeepSeek 模型优化'
-      : '已关闭 DeepSeek 模型优化'
-  } catch (reason) {
-    fail(reason)
-    try {
-      const routing = await requestJson<{ failoverEnabled: boolean; deepSeekOptimizationEnabled: boolean }>('routing.get')
-      failoverEnabled.value = routing.failoverEnabled
-      deepSeekOptimizationEnabled.value = routing.deepSeekOptimizationEnabled
-    } catch { /* keep the last known state */ }
   } finally {
     endAction()
   }
@@ -1211,7 +1115,8 @@ function newProvider(): void {
   editingProviderId.value = null
   Object.assign(providerForm, {
     id: '', name: '', kind: 'openai', baseUrl: '', apiKey: '', clearApiKey: false,
-    models: '', modelsDirectory: '', modelDetails: [], enabled: true, priority: 0, modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true
+    models: '', modelsDirectory: '', modelDetails: [], enabled: true, priority: 0, modelListUrl: '', timeoutSeconds: 120, proxy: '', promptCaching: true,
+    organization: '', threads: null, localPrefixReuse: true, headersText: '', reasoningEffortMapText: ''
   })
   providerEditorOpen.value = true
 }
@@ -1233,19 +1138,47 @@ function editProvider(provider: ProviderInfo): void {
     priority: provider.priority,
     timeoutSeconds: provider.timeoutSeconds,
     proxy: provider.proxy ?? '',
-    promptCaching: provider.promptCaching ?? true
+    promptCaching: provider.promptCaching ?? true,
+    organization: provider.organization ?? '',
+    threads: provider.threads ?? null,
+    localPrefixReuse: provider.localPrefixReuse ?? true,
+    headersText: formatPairs(provider.headers),
+    reasoningEffortMapText: formatPairs(provider.reasoningEffortMap)
   })
   providerEditorOpen.value = true
+}
+
+/** `Name: Value` / `level=wire` 的一行式编辑 ↔ 对象。空文本返回 null（= 清空）。 */
+function parsePairs(text: string): Record<string, string> | null {
+  const map: Record<string, string> = {}
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const cut = line.search(/[:=]/)
+    if (cut <= 0) continue
+    const name = line.slice(0, cut).trim()
+    const value = line.slice(cut + 1).trim()
+    if (name) map[name] = value
+  }
+  return Object.keys(map).length > 0 ? map : null
+}
+
+function formatPairs(map?: Record<string, string> | null): string {
+  if (!map) return ''
+  return Object.entries(map).map(([name, value]) => `${name}: ${value}`).join('\n')
 }
 
 async function saveProvider(value: ProviderFormValue): Promise<void> {
   beginAction('provider.save')
   try {
-    const { apiKey, clearApiKey, ...provider } = value
+    const { apiKey, clearApiKey, headersText, reasoningEffortMapText, ...provider } = value
     const parameters: Record<string, unknown> = {
       ...provider,
       models: value.models.split(/\r?\n|,/).map((model) => model.trim()).filter(Boolean),
-      modelDetails: value.modelDetails ?? []
+      modelDetails: value.modelDetails ?? [],
+      // 头表整表提交：密钥类值读侧被置空，提交空串表示保持已存值；全删即清空自定义头。
+      headers: parsePairs(headersText),
+      reasoningEffortMap: parsePairs(reasoningEffortMapText)
     }
     // 明文不再回传，表单留空即「保持已存密钥不变」；删除需要显式勾选。
     if (clearApiKey) parameters.clearApiKey = true
@@ -1399,73 +1332,6 @@ function formatBytes(bytes: number): string {
   return `${Math.round(bytes / 1024 ** 2)} MB`
 }
 
-// ---------------------------------------------------------------- inference presets
-
-interface InferencePreset {
-  name: string
-  gpuLayers: number
-  contextLength: number
-  kvCacheQuantization: string
-  flashAttention: boolean
-}
-
-const INFERENCE_PRESETS_KEY = 'haoyue.inference-presets'
-
-/** Named load-parameter presets persisted locally for one-click switching. */
-const inferencePresets = ref<InferencePreset[]>(loadInferencePresets())
-const presetNameInput = ref('')
-
-function loadInferencePresets(): InferencePreset[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(INFERENCE_PRESETS_KEY) ?? '[]') as InferencePreset[]
-    return Array.isArray(raw) ? raw.filter((preset) => preset && typeof preset.name === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-function persistInferencePresets(): void {
-  localStorage.setItem(INFERENCE_PRESETS_KEY, JSON.stringify(inferencePresets.value))
-}
-
-function saveInferencePreset(): void {
-  const name = presetNameInput.value.trim() || `预设 ${inferencePresets.value.length + 1}`
-  if (inferencePresets.value.some((preset) => preset.name === name)) {
-    error.value = `预设「${name}」已存在，请换个名称`
-    return
-  }
-  inferencePresets.value = [...inferencePresets.value, {
-    name,
-    gpuLayers: localInference.gpuLayers,
-    contextLength: localInference.contextLength,
-    kvCacheQuantization: localInference.kvCacheQuantization,
-    flashAttention: localInference.flashAttention
-  }]
-  persistInferencePresets()
-  presetNameInput.value = ''
-  notice.value = `已保存预设「${name}」`
-}
-
-function applyInferencePreset(preset: InferencePreset): void {
-  localInference.gpuLayers = preset.gpuLayers
-  localInference.contextLength = preset.contextLength
-  localInference.kvCacheQuantization = preset.kvCacheQuantization
-  localInference.flashAttention = preset.flashAttention
-  notice.value = `已应用预设「${preset.name}」，保存后生效`
-}
-
-async function removeInferencePreset(preset: InferencePreset): Promise<void> {
-  // H21: preset deletion is irreversible (name can be recreated, tuned values cannot).
-  if (!await confirmAction({
-    title: '删除推理预设',
-    message: `删除预设「${preset.name}」？此操作无法撤销。`,
-    confirmLabel: '删除',
-    danger: true
-  })) return
-  inferencePresets.value = inferencePresets.value.filter((entry) => entry !== preset)
-  persistInferencePresets()
-}
-
 async function toggleSkill(skill: SkillInfo): Promise<void> {
   beginAction(`skill.toggle:${skill.name}`)
   try {
@@ -1522,6 +1388,20 @@ watch(section, (next) => {
   void loadCurrentSection()
 })
 
+/**
+ * 成功提示 4 秒自动消失（2.8）。
+ * 此前 notice 只在开始下一个动作时被清掉，于是「已保存…」会一直挂在屏幕右下角，
+ * 与之后手动改回的状态并存，读起来像当前值。错误提示不自动消失——需要用户处理。
+ */
+let noticeTimer: number | undefined
+watch(notice, (value) => {
+  window.clearTimeout(noticeTimer)
+  if (!value) return
+  noticeTimer = window.setTimeout(() => {
+    notice.value = ''
+  }, 4000)
+})
+
 let unsubscribeDaemonEvents: (() => void) | null = null
 
 // Esc 返回应用页，与规则/知识/计划/归档四个整页页签一致。整页设置用的是 role="region"
@@ -1537,6 +1417,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.clearTimeout(noticeTimer)
   unsubscribeDaemonEvents?.()
   unsubscribeDaemonEvents = null
 })
@@ -1556,12 +1437,23 @@ onBeforeUnmount(() => {
         {{ pageTitle }}
       </div>
 
+      <label class="settings-nav-search">
+        <Search :size="14" aria-hidden="true" />
+        <input v-model="search" type="search" placeholder="搜索设置项" aria-label="搜索设置项" />
+        <button v-if="search" type="button" class="settings-nav-search-clear" title="清除搜索" @click="search = ''">
+          <X :size="12" />
+        </button>
+      </label>
+
       <div class="settings-nav-list">
-        <button v-for="item in visibleSections" :key="item.id" class="settings-nav-item"
+        <button v-for="item in filteredSections" :key="item.id" class="settings-nav-item"
           :class="{ active: section === item.id }" @click="section = item.id">
           <component :is="item.icon" :size="17" />
           <span>{{ item.label }}</span>
         </button>
+        <p v-if="filteredSections.length === 0" class="settings-nav-empty">
+          没有匹配的设置项，试试「模型」「网络」「推理」
+        </p>
       </div>
 
       <!--
@@ -1580,7 +1472,16 @@ onBeforeUnmount(() => {
     </nav>
 
     <main class="settings-main">
-      <div class="settings-content">
+      <!-- 2.3：运行时离线时整页只读。以前这里是直接 return，于是「尚未配置提供商」
+           这类空态被读成"配置丢了"，开关显示的还是 ref 初值。 -->
+      <div v-if="!daemonConnected" class="settings-offline-banner" role="status">
+        <Circle :size="8" fill="currentColor" />
+        <span>运行时离线：以下内容是上次读取到的旧值，修改已全部禁用；列表为空只代表读不到，不代表没有配置。</span>
+        <button class="secondary-button compact-button" type="button" @click="emit('reconnect')">
+          <RefreshCw :size="13" /> 重新连接
+        </button>
+      </div>
+      <div class="settings-content" :class="{ 'is-offline': !daemonConnected }">
         <div v-if="loading" class="settings-loading">
           <LoaderCircle class="spin" :size="20" /> 正在加载
         </div>
@@ -1649,18 +1550,6 @@ onBeforeUnmount(() => {
             <ToolPolicyPanel />
           </section>
 
-          <section class="settings-group">
-            <div class="settings-row">
-              <div>
-                <strong>恢复出厂设置</strong>
-                <small>清空全局配置、会话数据并重建数据库；不会删除项目源码文件</small>
-              </div>
-              <button class="danger-button" :disabled="action === 'factory.reset'" @click="factoryReset">
-                <LoaderCircle v-if="action === 'factory.reset'" class="spin" :size="15" />
-                <RotateCcw v-else :size="15" /> 恢复出厂设置
-              </button>
-            </div>
-          </section>
         </template>
 
         <template v-else-if="section === 'models'">
@@ -1675,6 +1564,15 @@ onBeforeUnmount(() => {
           </div>
 
           <section class="settings-group compact-group">
+            <div class="settings-row">
+              <div><strong>视觉子智能体模型</strong><small>处理图像回合（聊天附件、屏幕截图）的模型；仅列出支持视觉能力的模型，自动 = 使用路由链中第一个支持视觉的模型</small></div>
+              <div class="row-actions model-actions">
+                <SelectMenu v-model="agentConfig.visionModel" class="settings-select model-select"
+                  :options="visionModelOptions" label="视觉子智能体模型" :menu-min-width="330" />
+                <button class="secondary-button primary-action" :disabled="action === 'agent.config.set:vision'"
+                  @click="setVisionModel">保存</button>
+              </div>
+            </div>
             <div class="settings-row">
               <div><strong>活动模型</strong><small>{{ activeModel ? `${activeModel.contextWindow.toLocaleString()} 上下文` :
                 '无可用模型' }}</small></div>
@@ -1755,7 +1653,7 @@ onBeforeUnmount(() => {
           </section>
 
           <section class="provider-switch-list" aria-label="提供商列表">
-            <div v-if="providers.length === 0" class="empty-settings">尚未配置提供商</div>
+            <div v-if="providers.length === 0" class="empty-settings">{{ emptyCopy('尚未配置提供商') }}</div>
             <div v-for="provider in providers" :key="provider.id" class="provider-switch-card"
               :class="{ active: provider.active, disabled: !provider.enabled }"
               @click="!provider.active && useProvider(provider)">
@@ -1806,6 +1704,10 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </section>
+          <!-- 11. 凡是「模型相关」的都归到这一页：路由容灾、图像生成、文档渲染、嵌入模型。 -->
+          <SettingsRoutingPanel :connected="daemonConnected" />
+
+          <SettingsIntegrationsPanel :connected="daemonConnected" />
         </template>
 
         <template v-else-if="section === 'mcp'">
@@ -1857,7 +1759,7 @@ onBeforeUnmount(() => {
 
           <template v-else>
             <section class="settings-list">
-              <div v-if="skills.length === 0" class="empty-settings">尚未发现技能，可导入 .md 或 .zip 文件</div>
+              <div v-if="skills.length === 0" class="empty-settings">{{ emptyCopy('尚未发现技能，可导入 .md 或 .zip 文件') }}</div>
               <div v-for="skill in skills" :key="skill.name" class="settings-list-row skill-row">
                 <Wrench :size="17" />
                 <div class="list-main">
@@ -2361,82 +2263,10 @@ onBeforeUnmount(() => {
           <div class="settings-section-heading">
             <div>
               <h3>推理加速</h3>
+              <p>每个本地模型最终生效的加载参数、来源层级与实测性能；写入口统一在「模型与提供商」</p>
             </div>
           </div>
-
-          <section v-if="localInferenceAvailable" class="settings-group">
-            <div class="settings-group-title">
-              <strong>本地推理加速（CUDA）</strong>
-              <small>作用于本地 GGUF 模型提供商「{{ localInference.providerId }}」；GPU 卸载需要 CUDA 后端运行时
-                (LLamaSharp.Backend.Cuda12)，仅 CPU 后端时这些选项将被忽略或效果有限。</small>
-            </div>
-            <div class="local-inference-grid">
-              <label>
-                <FieldLabel en="GPU Offload" zh="GPU 层卸载 (GPU Offload)"
-                  help="卸载到 GPU 的 Transformer 层数（0-999）。0 = 仅 CPU 推理；数值越大显存占用越高、速度越快。" />
-                <input v-model.number="localInference.gpuLayers" type="number" min="0" max="999" step="1" />
-              </label>
-              <label>
-                <FieldLabel en="Context Length" zh="上下文长度 (Context Length)"
-                  help="推理上下文窗口大小（512-32768 token）。越大可处理越长的对话，KV 缓存显存占用也成比例增长。" />
-                <input v-model.number="localInference.contextLength" type="number" min="512" max="32768" step="512" />
-              </label>
-              <label>
-                <FieldLabel en="KV Cache Quantization" zh="KV 缓存量化"
-                  help="量化 KV 缓存以降低显存占用；需要先开启 Flash Attention，否则保持 f16 不生效。" />
-                <SelectMenu v-model="localInference.kvCacheQuantization" class="settings-select"
-                  label="KV 缓存量化" :options="kvQuantOptions" :disabled="action === 'advanced.set:localInference'" />
-              </label>
-            </div>
-            <label class="provider-enabled-row">
-              <span>
-                <strong>Flash Attention（注意力加速）</strong>
-                <small>启用 llama.cpp flash attention 内核加速注意力计算，并解锁 KV 缓存量化；建议 GPU 推理时开启。</small>
-              </span>
-              <input v-model="localInference.flashAttention" class="sr-only" type="checkbox"
-                :disabled="action === 'advanced.set:localInference'" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
-            <button class="secondary-button primary-action save-inference-button"
-              :disabled="action === 'advanced.set:localInference'" @click="saveLocalInference">
-              {{ action === 'advanced.set:localInference' ? '保存中…' : '保存本地推理设置' }}
-            </button>
-
-            <div v-if="inferencePresets.length > 0" class="inference-presets">
-              <div class="inference-presets-header">
-                <strong>常用配置</strong>
-                <small>点击应用，保存后对本地推理生效</small>
-              </div>
-              <div class="inference-preset-chips">
-                <span v-for="preset in inferencePresets" :key="preset.name" class="inference-preset-chip">
-                  <button type="button" class="preset-apply" :title="`GPU ${preset.gpuLayers} 层 · 上下文 ${preset.contextLength}`"
-                    @click="applyInferencePreset(preset)">
-                    {{ preset.name }}
-                  </button>
-                  <button type="button" class="preset-remove" :title="`删除预设 ${preset.name}`"
-                    @click="removeInferencePreset(preset)">
-                    <X :size="12" />
-                  </button>
-                </span>
-              </div>
-            </div>
-            <div class="inference-preset-save">
-              <input v-model="presetNameInput" placeholder="将当前参数存为预设，例如：GPU 全量卸载" @keydown.enter.prevent="saveInferencePreset" />
-              <button type="button" class="secondary-button compact-button" @click="saveInferencePreset">
-                <Plus :size="13" /> 存为预设
-              </button>
-            </div>
-          </section>
-
-          <section v-else class="settings-group">
-            <label class="provider-enabled-row">
-              <span>
-                <strong>暂无可配置的本地模型提供商</strong>
-                <small>推理加速参数仅对本地 GGUF 模型提供商生效；请先在「模型与提供商」中添加 kind 为
-                  local 的提供商并注册 GGUF 模型，此区域将自动出现。</small>
-              </span>
-            </label>
-          </section>
+          <SettingsInferencePanel :connected="daemonConnected" />
         </template>
 
         <template v-else-if="section === 'agent'">
@@ -2455,15 +2285,6 @@ onBeforeUnmount(() => {
                   label="根模型" :menu-min-width="330" />
                 <button class="secondary-button primary-action" :disabled="!selectedModel || action === 'model.switch'"
                   @click="switchModel">使用</button>
-              </div>
-            </div>
-            <div class="settings-row">
-              <div><strong>视觉子智能体模型</strong><small>处理图像回合（聊天附件、屏幕截图）的模型；仅列出支持视觉能力的模型，自动 = 使用路由链中第一个支持视觉的模型</small></div>
-              <div class="row-actions model-actions">
-                <SelectMenu v-model="agentConfig.visionModel" class="settings-select model-select"
-                  :options="visionModelOptions" label="视觉子智能体模型" :menu-min-width="330" />
-                <button class="secondary-button primary-action" :disabled="action === 'agent.config.set:vision'"
-                  @click="setVisionModel">保存</button>
               </div>
             </div>
           </section>
@@ -2540,29 +2361,32 @@ onBeforeUnmount(() => {
               {{ action === 'agent.config.set:compaction' ? '保存中…' : '保存压缩比例' }}
             </button>
           </section>
+
+          <SettingsAgentExpertPanel :connected="daemonConnected" />
         </template>
 
         <template v-else-if="section === 'advanced'">
           <div class="settings-section-heading">
             <div>
               <h3>高级设置</h3>
+              <p>网络与桌面权限、路由容灾、专家参数与原始配置文档</p>
             </div>
           </div>
 
           <section class="settings-group">
-            <label class="provider-enabled-row">
+            <!-- 2.7：这里原本是「全局网络访问」的第二个写入口。同一开关两处可改，
+                 且这一处保存时会连带把 failover/deepSeek 的本地副本一起回写，
+                 在别处改过那两个值后就会互相覆盖。现在只读回显 + 跳转唯一入口。 -->
+            <div class="provider-enabled-row">
               <span>
                 <strong>全局网络访问（联网搜索与抓取）</strong>
-                <small>允许 Agent 使用网络搜索 (web_search) 与网页抓取 (web_fetch)
-                  等网络工具。默认对所有项目开启；若关闭，所有项目和任务将强制处于离线模式，禁止外部网络请求。</small>
+                <small v-if="networkEnabled">已开启：所有任务与项目都可用 web_search / web_fetch。开关只有一个写入口，在「智能体 → 网页搜索」。</small>
+                <small v-else>已关闭：所有项目和任务强制离线，网络工具被剥离。要开启请到「智能体 → 网页搜索」。</small>
               </span>
-              <input v-model="networkEnabled" class="sr-only" type="checkbox"
-                :disabled="action === 'advanced.set:network'" @change="toggleNetworkEnabled" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
-          </section>
-
-          <section class="settings-group">
+              <button class="secondary-button" type="button" @click="section = 'agent'">
+                <Sparkles :size="15" /> 去「智能体」管理
+              </button>
+            </div>
             <div class="provider-enabled-row">
               <span>
                 <strong>允许的网站（外部网站访问）</strong>
@@ -2607,25 +2431,27 @@ onBeforeUnmount(() => {
           </section>
 
 
+
           <section class="settings-group">
-            <label class="provider-enabled-row">
+            <div class="settings-group-title">
+              <strong>专家参数（直接编辑配置文档）</strong>
+              <small>上面没有覆盖到的字段都在这里：只提交你实际改动的叶子节点，没动过的配置不会被写回。</small>
+            </div>
+            <ConfigJsonEditor :connected="daemonConnected" />
+          </section>
+
+          <!-- 危险区永远放最后：恢复出厂是唯一会摧毁数据的按钮，不该待在「常规」首屏。 -->
+          <section class="settings-group danger-zone">
+            <div class="provider-enabled-row">
               <span>
-                <strong>自动切换其他模型（故障转移）</strong>
-                <small>激活模型请求失败时自动尝试路由链中的其他模型；关闭后失败即停止，并显示真实错误</small>
+                <strong>恢复出厂设置</strong>
+                <small>清空全局配置、会话数据并重建数据库；不会删除项目源码文件。此操作无法撤销。</small>
               </span>
-              <input v-model="failoverEnabled" class="sr-only" type="checkbox" :disabled="action === 'routing.set'"
-                @change="toggleFailover" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
-            <label class="provider-enabled-row">
-              <span>
-                <strong>优化 DeepSeek 模型</strong>
-                <small>针对 DeepSeek 启用思维链选择性回传、空响应重试与空工具结果兜底；策略集中管理，可随模型变化调整</small>
-              </span>
-              <input v-model="deepSeekOptimizationEnabled" class="sr-only" type="checkbox"
-                :disabled="action === 'routing.set:deepseek'" @change="toggleDeepSeekOptimization" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
+              <button class="danger-button" :disabled="action === 'factory.reset'" @click="factoryReset">
+                <LoaderCircle v-if="action === 'factory.reset'" class="spin" :size="15" />
+                <RotateCcw v-else :size="15" /> 恢复出厂设置
+              </button>
+            </div>
           </section>
         </template>
 

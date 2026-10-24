@@ -15,6 +15,7 @@ type MenuAction =
   | 'openGitHistory'
   | 'openDiagnostics'
   | 'openDevTools'
+  | 'exportSession'
   | 'openAbout'
 
 interface MenuItem {
@@ -29,9 +30,15 @@ interface MenuItem {
 const props = defineProps<{
   sidebarOpen: boolean
   projectPath?: string
+  /** 会话浏览历史是否可后退 / 前进（由 App 的 view-history 提供）。 */
+  canGoBack?: boolean
+  canGoForward?: boolean
 }>()
 const emit = defineEmits<{
   toggleSidebar: []
+  back: []
+  forward: []
+  exportSession: []
   newTask: []
   openWorkspace: []
   showProject: []
@@ -56,6 +63,7 @@ const menus: Array<{ id: MenuName; label: string; items: MenuItem[] }> = [
       { label: '打开文件夹…', shortcut: 'Ctrl+O', action: 'openWorkspace' },
       { separator: true },
       { label: '在资源管理器中显示', action: 'showProject', requiresProject: true },
+      { label: '导出会话为 Markdown…', action: 'exportSession' },
       { separator: true },
       { label: '设置', shortcut: 'Ctrl+,', action: 'openSettings' }
     ]
@@ -113,6 +121,7 @@ function runAction(action?: MenuAction): void {
     case 'openGitHistory': emit('openGitHistory'); break
     case 'openDiagnostics': emit('openDiagnostics'); break
     case 'openDevTools': emit('openDevTools'); break
+    case 'exportSession': emit('exportSession'); break
     case 'openAbout': emit('openAbout'); break
   }
 }
@@ -175,10 +184,12 @@ onBeforeUnmount(() => {
       <button class="icon-button" title="切换侧栏" @click="emit('toggleSidebar')">
         <PanelLeft :size="18" />
       </button>
-      <button class="icon-button is-muted" title="后退" disabled>
+      <button class="icon-button" :class="{ 'is-muted': !canGoBack }" title="后退到上一个查看过的会话"
+        :disabled="!canGoBack" @click="emit('back')">
         <ArrowLeft :size="18" />
       </button>
-      <button class="icon-button is-muted" title="前进" disabled>
+      <button class="icon-button" :class="{ 'is-muted': !canGoForward }" title="前进到下一个会话"
+        :disabled="!canGoForward" @click="emit('forward')">
         <ArrowRight :size="18" />
       </button>
     </div>

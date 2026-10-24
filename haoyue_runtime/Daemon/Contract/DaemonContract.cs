@@ -207,6 +207,10 @@ public static class DaemonContract
     private static JsonObject SInteger(string description) =>
         new() { ["type"] = "integer", ["description"] = description };
 
+    /// <summary>自由形状对象（键值表）：只声明类型，不约束具体键名。</summary>
+    private static JsonObject SFreeObject(string description) =>
+        new() { ["type"] = "object", ["description"] = description, ["additionalProperties"] = new JsonObject { ["type"] = "string" } };
+
     private static JsonObject SNumber(string description) =>
         new() { ["type"] = "number", ["description"] = description };
 
@@ -254,12 +258,20 @@ public static class DaemonContract
         ("promptCaching", SBoolean("提示缓存开关"), false),
         ("apiKey", SString("API Key（留空保持已存值；响应不回传明文）"), false),
         ("clearApiKey", SBoolean("清除已存 API Key"), false),
+        ("organization", SString("组织标识（OpenAI organization 头）"), false),
+        ("threads", SInteger("本地推理线程数；0/缺省 = 自动"), false),
+        ("localPrefixReuse", SBoolean("本地模型复用 KV 前缀"), false),
+        ("headers", SFreeObject("自定义请求头；值为空串表示保持已存值"), false),
+        ("reasoningEffortMap", SFreeObject("思考档位 → 供应商 wire 值的映射"), false),
         ("modelDetails", SArray("模型明细列表", SObject(
             ("id", SString("模型 id"), true),
             ("alias", SString("显示别名"), false),
             ("contextWindow", SInteger("上下文窗口"), false),
             ("maxOutput", SInteger("最大输出 token"), false),
-            ("vision", SBoolean("是否支持视觉"), false))), false));
+            ("vision", SBoolean("是否支持视觉"), false),
+            ("fallbackModelId", SString("备用回退模型 id"), false),
+            ("inputPricePerMTok", SNumber("输入价（每百万 token）"), false),
+            ("outputPricePerMTok", SNumber("输出价（每百万 token）"), false))), false));
 
     private static readonly string[] ReasoningValues =
         ["none", "low", "medium", "high", "max", "xhigh", "ultra"];
@@ -414,7 +426,10 @@ public static class DaemonContract
             ("toolCalling", SBoolean("工具调用能力")),
             ("localPath", SString("本地 GGUF 路径")),
             ("mmprojPath", SString("多模态投影器路径")),
-            ("load", SString("加载配置对象；null=自动"))))),
+            ("load", SString("加载配置对象；null=自动")),
+            ("fallbackModelId", SString("备用回退模型 id")),
+            ("inputPricePerMTok", SNumber("输入价（每百万 token）")),
+            ("outputPricePerMTok", SNumber("输出价（每百万 token）"))))),
         ("enabled", SBoolean("是否启用")),
         ("priority", SInteger("路由优先级")),
         ("timeoutSeconds", SInteger("超时秒数")),
@@ -422,6 +437,11 @@ public static class DaemonContract
         ("modelsDirectory", SString("模型目录")),
         ("defaultModelsDirectory", SString("解析后的默认模型目录")),
         ("promptCaching", SBoolean("提示词缓存开关")),
+        ("organization", SString("组织标识")),
+        ("threads", SInteger("本地推理线程数")),
+        ("localPrefixReuse", SBoolean("本地模型复用 KV 前缀")),
+        ("headers", SFreeObject("自定义请求头（密钥类值为空串）")),
+        ("reasoningEffortMap", SFreeObject("思考档位映射")),
         ("proxy", SString("代理地址")),
         ("active", SBoolean("是否为活跃提供商")));
 
@@ -441,6 +461,8 @@ public static class DaemonContract
             ("tools", SBoolean("工具调用")),
             ("thinking", SBoolean("思考段")),
             ("vision", SBoolean("视觉输入")),
+            ("image", SBoolean("图像生成输出")),
+            ("embedding", SBoolean("向量嵌入（检索/语义索引）")),
             ("reasoning", SBoolean("推理")),
             ("maxReasoningLevel", SString("最高推理深度")),
             ("mcp", SBoolean("MCP 工具"))))));
@@ -832,11 +854,21 @@ public static class DaemonContract
         ("secretWarnings", SArray("凭据告警（明文迁移失败等）")),
         ("secretStorage", SString("凭据存储方式")));
 
-    /// <summary>路由配置（routing.get/set）。</summary>
+    /// <summary>路由配置（routing.get/set）。含回退链、负载均衡与重试/熔断全字段。</summary>
     private static readonly JsonObject RoutingResult = RObject(
         ("failoverEnabled", SBoolean("故障转移开关")),
         ("deepSeekOptimizationEnabled", SBoolean("DeepSeek 优化开关")),
-        ("localFailoverToCloud", SBoolean("本地→云故障转移（默认关：防意外计费）")));
+        ("localFailoverToCloud", SBoolean("本地→云故障转移（默认关：防意外计费）")),
+        ("fallback", SArray("全局回退链（有序，出现故障后按序尝试）")),
+        ("loadBalance", SString("负载均衡策略：priority|roundRobin|leastUsed|lowestCost|fastest|sticky")),
+        ("retry", RObject(
+            ("maxAttempts", SInteger("激活模型的最大尝试次数")),
+            ("baseDelaySeconds", SNumber("首次重试退避（秒）")),
+            ("maxDelaySeconds", SNumber("退避上限（秒）")),
+            ("fallbackRetryAttempts", SInteger("每个回退候选额外尝试次数")),
+            ("circuitBreakThreshold", SInteger("连续失败多少次的模型熔断")),
+            ("circuitCooldownSeconds", SNumber("熔断冷却（秒）")),
+            ("chainBudgetSeconds", SNumber("整条回退链的墙钟预算（秒）")))));
 
     /// <summary>智能体设置（agent.config.get/set）。</summary>
     private static readonly JsonObject AgentConfigResult = RObject(
@@ -847,7 +879,29 @@ public static class DaemonContract
         ("turnTokenBudget", SInteger("单回合 token 上限")),
         ("turnCostBudget", SNumber("单回合费用上限")),
         ("turnWallClockSeconds", SInteger("单回合墙钟上限（秒）")),
-        ("compactionTailRatio", SNumber("压缩保留最近对话的比例（0.1-0.9）")));
+        ("compactionTailRatio", SNumber("压缩保留最近对话的比例（0.1-0.9）")),
+        ("maxSteps", SInteger("单回合最大步数")),
+        ("thinkingBudgetTokens", SInteger("本地思考预算（token）")),
+        ("maxToolOutputChars", SInteger("单次工具输出硬上限（字符）")),
+        ("bashTimeoutSeconds", SInteger("bash 单次执行超时（秒）")),
+        ("scheduledTurnTimeoutSeconds", SInteger("计划任务回合墙钟上限（秒）")),
+        ("maxRepairAttempts", SInteger("自动验证失败后的修复次数上限")),
+        ("maxOutputContinuations", SInteger("输出截断后的续写次数上限")),
+        ("enableContextCompaction", SBoolean("上下文压缩总开关")),
+        ("personality", SString("人格提示词键：pragmatic|friendly")),
+        ("systemPrompt", SString("主系统提示词键（如 system/default）")),
+        ("delegationMaxDepth", SInteger("子代理嵌套深度上限（1-4）")),
+        ("delegationMaxPerTurn", SInteger("每回合子任务配额")),
+        ("factsInjectTopK", SInteger("每回合注入的项目事实条数上限")),
+        ("extraReadableRoots", SArray("工作区之外额外授权读取的绝对路径")),
+        ("sessionRetentionDays", SInteger("会话保留天数（0 = 不自动归档）")),
+        ("memoryConsolidationEnabled", SBoolean("记忆固化总开关")),
+        ("memoryConsolidationLookbackDays", SInteger("记忆固化扫描窗口（天）")),
+        ("scheduleWebhookUrl", SString("计划任务结果回调地址（空 = 关闭）")),
+        ("localModelPreload", SBoolean("启动预热活跃本地模型")),
+        ("localModelMaxResident", SInteger("本地权重同时驻留上限")),
+        ("localModelConcurrency", SInteger("本地推理并发槽")),
+        ("localModelIdleUnloadMinutes", SInteger("本地权重空闲回收（分钟，0 = 不回收）")));
 
     /// <summary>高级配置（advanced.get/set）。</summary>
     private static readonly JsonObject AdvancedResult = RObject(
@@ -1105,9 +1159,22 @@ public static class DaemonContract
             result: RText, errors: E(DaemonErrorCode.InvalidParams)),
 
         // config
-        M("config.save", "config", "配置字段级补丁（多端单写者收敛）", parameters: SObject(
-            ("fields", SString("递归字段补丁对象"), true)),
-            result: RText, errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.Conflict)),
+        M("config.save", "config", "配置字段级补丁（多端单写者收敛；带 workspace 时写该项目 .haoyue/config.json）", parameters: SObject(
+            ("fields", SString("递归字段补丁对象"), true),
+            ("workspace", SString("目标工作区绝对路径；留空写全局配置"), false)),
+            result: RText, errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.Conflict, DaemonErrorCode.NotFound)),
+        M("config.get", "config", "读取配置文档（密钥不回传）；带 workspace 时读该项目 .haoyue/config.json", parameters: SObject(
+            ("workspace", SString("目标工作区绝对路径；留空读全局配置"), false)),
+            result: RObject(
+                ("scope", SString("global | workspace")),
+                ("path", SString("配置文件绝对路径")),
+                ("exists", SBoolean("文件是否存在")),
+                ("config", new JsonObject
+                {
+                    ["type"] = "object",
+                    ["description"] = "配置对象（字段级深合并补丁的写入目标；密钥字段不回传）",
+                })),
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.Conflict, DaemonErrorCode.NotFound)),
         M("config.status", "config", "配置一致性诊断", parameters: EmptyParams,
             result: ConfigStatusResult, errors: E()),
         M("config.rebuild", "config", "重建配置存储", parameters: EmptyParams,
@@ -1116,7 +1183,18 @@ public static class DaemonContract
             result: RoutingResult, errors: E()),
         M("routing.set", "config", "更新智能路由配置", parameters: SObject(
             ("failoverEnabled", SBoolean("故障转移开关"), true),
-            ("deepSeekOptimizationEnabled", SBoolean("DeepSeek 优化开关"), false)),
+            ("deepSeekOptimizationEnabled", SBoolean("DeepSeek 优化开关"), false),
+            ("localFailoverToCloud", SBoolean("本地→云故障转移（默认关：防意外计费）"), false),
+            ("fallback", SArray("全局回退链（有序）", SString("模型 ref（providerId/modelId）")), false),
+            ("loadBalance", SString("负载均衡策略", "priority", "roundRobin", "leastUsed", "lowestCost", "fastest", "sticky"), false),
+            ("retry", SObject(
+                ("maxAttempts", SInteger("激活模型的最大尝试次数（1-10）"), false),
+                ("baseDelaySeconds", SNumber("首次重试退避（秒）"), false),
+                ("maxDelaySeconds", SNumber("退避上限（秒）"), false),
+                ("fallbackRetryAttempts", SInteger("每个回退候选额外尝试次数（0-5）"), false),
+                ("circuitBreakThreshold", SInteger("熔断阈值（连续失败次数）"), false),
+                ("circuitCooldownSeconds", SNumber("熔断冷却（秒）"), false),
+                ("chainBudgetSeconds", SNumber("整条回退链墙钟预算（秒）"), false)), false)),
             result: RoutingResult, errors: E(DaemonErrorCode.InvalidParams)),
         M("advanced.get", "config", "查询高级配置", parameters: EmptyParams,
             result: AdvancedResult, errors: E()),
@@ -1137,7 +1215,30 @@ public static class DaemonContract
             ("turnTokenBudget", SInteger("单回合 token 上限（输入+输出）；0 为不限"), false),
             ("turnCostBudget", SNumber("单回合费用上限（按模型定价折算）；0 为不限"), false),
             ("turnWallClockSeconds", SInteger("单回合墙钟上限（秒）；0 为不限"), false),
-            ("compactionTailRatio", SNumber("压缩保留最近对话的比例（0.1-0.9）"), false)),
+            ("compactionTailRatio", SNumber("压缩保留最近对话的比例（0.1-0.9）"), false),
+            // 专家参数（此前只能手改 config.json）
+            ("maxSteps", SInteger("单回合最大步数（1-500）"), false),
+            ("thinkingBudgetTokens", SInteger("本地思考预算（token，0 = 不思考）"), false),
+            ("maxToolOutputChars", SInteger("单次工具输出硬上限（字符）"), false),
+            ("bashTimeoutSeconds", SInteger("bash 单次执行超时（秒）"), false),
+            ("scheduledTurnTimeoutSeconds", SInteger("计划任务回合墙钟上限（秒）"), false),
+            ("maxRepairAttempts", SInteger("自动验证失败后的修复次数上限（0-10）"), false),
+            ("maxOutputContinuations", SInteger("输出截断后的续写次数上限（0-50）"), false),
+            ("enableContextCompaction", SBoolean("上下文压缩总开关"), false),
+            ("personality", SString("人格提示词键", "pragmatic", "friendly"), false),
+            ("systemPrompt", SString("主系统提示词键（如 system/default，不能为空）"), false),
+            ("delegationMaxDepth", SInteger("子代理嵌套深度上限（1-4）"), false),
+            ("delegationMaxPerTurn", SInteger("每回合子任务配额（1-64）"), false),
+            ("factsInjectTopK", SInteger("每回合注入的项目事实条数上限（0-100）"), false),
+            ("extraReadableRoots", SArray("工作区之外额外授权读取的绝对路径（整组替换）", SString("绝对路径")), false),
+            ("sessionRetentionDays", SInteger("会话保留天数（0 = 不自动归档）"), false),
+            ("memoryConsolidationEnabled", SBoolean("记忆固化总开关"), false),
+            ("memoryConsolidationLookbackDays", SInteger("记忆固化扫描窗口（天，1-30）"), false),
+            ("scheduleWebhookUrl", SString("计划任务结果回调地址（http(s)；空串 = 关闭）"), false),
+            ("localModelPreload", SBoolean("启动预热活跃本地模型"), false),
+            ("localModelMaxResident", SInteger("本地权重同时驻留上限（1-16）"), false),
+            ("localModelConcurrency", SInteger("本地推理并发槽（1-16）"), false),
+            ("localModelIdleUnloadMinutes", SInteger("本地权重空闲回收（分钟，0 = 不回收）"), false)),
             result: AgentConfigResult, errors: E(DaemonErrorCode.InvalidParams)),
         M("prompt.optimize", "config", "提示词优化（无状态改写）", parameters: SObject(
             ("text", SString("待优化提示词"), true),

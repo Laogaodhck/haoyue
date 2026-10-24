@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowUp, Globe, GlobeOff, LoaderCircle, Paperclip, Sparkles, Square, X } from '@lucide/vue'
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { FileAttachment, ImageAttachment, ReasoningLevel } from '../types'
 import { confirmAction } from '../confirmation'
 import { fileBadgeText, fileExtClass, getFileExtension, readSendKeyPreference } from '../app-helpers'
@@ -29,6 +29,11 @@ const props = defineProps<{
   reasoningLevel: ReasoningLevel
   supportsImages: boolean
   networkEnabled?: boolean
+  /**
+   * 运行时全局网络闸门（`Agent.NetworkEnabled`）。真正生效的能力是「本任务 && 全局」，
+   * 只给任务级开关不传全局值时，全局关闭会让界面显示"已联网"而工具实际被剥离。
+   */
+  globalNetworkEnabled?: boolean
   optimizePrompt?: (text: string) => Promise<string>
   suggestFiles?: (query: string) => Promise<string[]>
 }>()
@@ -78,6 +83,20 @@ const modeOptions = [
   { value: 'readonly', label: '只读', description: '仅分析，不修改文件' },
   { value: 'auto', label: '自动', description: '根据任务自动选择' }
 ]
+
+/** 全局网络被关时，任务级开关点亮也没有实际能力，图标必须显式置灰。 */
+const networkBlockedByGlobal = computed(
+  () => props.globalNetworkEnabled === false && props.networkEnabled !== undefined
+)
+const networkOn = computed(() => props.networkEnabled === true && !networkBlockedByGlobal.value)
+const networkTitle = computed(() => {
+  if (networkBlockedByGlobal.value) {
+    return props.networkEnabled
+      ? '全局网络访问已关闭，本任务联网不会生效。请到「设置 → 智能体 → 网页搜索」开启'
+      : '全局网络访问已关闭，请先在「设置 → 智能体 → 网页搜索」开启'
+  }
+  return props.networkEnabled ? '本任务联网已开启，点击关闭' : '本任务联网已关闭，点击开启'
+})
 
 function imageUrl(image: ImageAttachment): string {
   return `data:${image.mediaType};base64,${image.data}`
@@ -787,8 +806,14 @@ watch(() => props.supportsImages, async (supported) => {
         <LoaderCircle v-if="optimizing" class="spin" :size="16" />
         <Sparkles v-else :size="16" />
       </button>
-      <SelectMenu class="composer-select mode-control" :model-value="mode" :options="modeOptions" label="Agent 模式"
-        :disabled="busy || disabled" :menu-min-width="220" @update:model-value="emit('changeMode', $event)" />
+      <!-- 2.5 作用域显性化：模式是全局设置（还会写进当前项目的 .haoyue/config.json），
+           与旁边按任务保存的推理深度/联网不是一个层级，必须标出来。 -->
+      <span class="composer-scope"
+        title="Agent 模式是全局设置：对所有任务生效，并会写入当前项目的 .haoyue/config.json。旁边的推理深度与联网才是按任务保存。">
+        <SelectMenu class="composer-select mode-control" :model-value="mode" :options="modeOptions" label="Agent 模式"
+          :disabled="busy || disabled" :menu-min-width="220" @update:model-value="emit('changeMode', $event)" />
+        <em class="composer-scope-tag">全局</em>
+      </span>
       <SelectMenu class="composer-select model-control" :model-value="model"
         :options="models.length > 0 ? models.map((item) => ({ value: item, label: item })) : [{ value: '', label: '未配置模型' }]"
         label="模型" :disabled="busy || disabled || models.length === 0" :menu-min-width="300" searchable
@@ -797,9 +822,9 @@ watch(() => props.supportsImages, async (supported) => {
       <ReasoningDepthMenu :model-value="reasoningLevel" :disabled="busy || disabled"
         @update:model-value="emit('changeReasoningLevel', $event)" />
       <button v-if="networkEnabled !== undefined" class="icon-button composer-icon" type="button"
-        :title="networkEnabled ? '本任务联网已开启，点击关闭' : '本任务联网已关闭，点击开启'"
+        :class="{ 'is-suppressed': networkBlockedByGlobal }" :title="networkTitle" :aria-pressed="networkOn"
         :disabled="busy || disabled" @click="emit('changeNetwork', !networkEnabled)">
-        <GlobeOff v-if="!networkEnabled" :size="16" />
+        <GlobeOff v-if="!networkOn" :size="16" />
         <Globe v-else :size="16" />
       </button>
       <!-- Stop is always reachable while a turn runs: typing text must not hide the

@@ -71,6 +71,12 @@ defineExpose({ focusSearch })
 const taskSectionExpanded = ref(true)
 const expandedProjects = ref(new Set<string>())
 
+/** 项目区在时间视图下默认折叠，但保留标题与加项目入口。 */
+const projectSectionExpanded = ref(true)
+const primaryTaskScopeHint = computed(() => props.activeProjectId
+  ? `在项目「${projectDisplayName(props.activeProjectId) || props.activeProjectId}」中新建任务`
+  : '新建任务（不绑定项目）')
+
 // ---------------------------------------------------------------- 豆包式「按时间」会话视图
 // 侧栏会话列表的两种组织轴：按项目（默认，工作区配置的组织单位）与按时间
 // （豆包式历史会话管理：今天/昨天/近 7 天/近 30 天/更早）。选择持久化到 localStorage。
@@ -80,7 +86,9 @@ const viewMode = ref<'projects' | 'time'>(
 
 watch(viewMode, (value) => {
   try { localStorage.setItem(SIDEBAR_VIEW_KEY, value) } catch { /* 配额满不影响使用 */ }
-})
+  // 时间视图里任务已按时间平铺，项目区只保留标题，默认收起省空间（可手动展开）。
+  projectSectionExpanded.value = value === 'projects'
+}, { immediate: true })
 
 function projectDisplayName(projectId?: string): string {
   if (!projectId) return ''
@@ -326,9 +334,12 @@ onBeforeUnmount(() => {
     </Transition>
 
     <nav class="primary-nav">
-      <button class="nav-item is-primary" @click="createTask(activeProjectId)">
+      <!-- 1.1 作用域显性化：主入口建在「当前项目」里，而任务区标题旁那个建的是全局任务。
+           两处外观相同却落点不同，必须把落点写出来。 -->
+      <button class="nav-item is-primary" :title="primaryTaskScopeHint" @click="createTask(activeProjectId)">
         <SquarePen :size="18" />
         <span>新建任务</span>
+        <em class="nav-scope">{{ activeProjectId ? '当前项目' : '全局' }}</em>
       </button>
       <button class="nav-item" @click="emit('openArchived')">
         <Archive :size="18" />
@@ -359,7 +370,7 @@ onBeforeUnmount(() => {
 
           </button>
           <div class="section-heading-actions">
-          <button class="icon-button compact" title="新建任务" @click="createTask()">
+          <button class="icon-button compact" title="新建全局任务（不绑定项目）" @click="createTask()">
               <Plus :size="15" />
             </button>
             <div class="sidebar-view-toggle" role="group" aria-label="会话列表分组方式">
@@ -380,7 +391,7 @@ onBeforeUnmount(() => {
             <div v-if="menuKey === 'global'" class="sidebar-context-menu project-menu"
               :class="{ 'menu-up': menuPlacement === 'up' }">
               <button @click="runAction(() => createTask())">
-                <SquarePen :size="15" />新建任务
+                <SquarePen :size="15" />新建全局任务
               </button>
               <button @click="runAction(() => emit('archiveGlobalTasks'))">
                 <Archive :size="15" />归档全部任务
@@ -504,17 +515,22 @@ onBeforeUnmount(() => {
         <p v-else class="project-empty">无更多会话</p>
       </section>
 
-      <!-- 按时间视图下项目区整体让位：工作区配置回到「按项目」视图操作，
-           避免同一份会话在两个区块重复出现。 -->
-      <section v-if="viewMode === 'projects'" class="sidebar-section project-section">
+      <!-- 1.1：时间视图下项目区不再整块消失，而是折叠起来。整块隐藏会让「切到时间视图
+           就找不到项目了」——项目本身仍可展开看标题/进项目属性，只是任务列表交给时间分组。 -->
+      <section class="sidebar-section project-section">
         <div class="section-heading">
-          <span>项目</span>
+          <button class="task-section-toggle" type="button" :aria-expanded="projectSectionExpanded"
+            @click="projectSectionExpanded = !projectSectionExpanded">
+            <span>项目</span>
+            <ChevronDown v-if="projectSectionExpanded" :size="15" />
+            <ChevronRight v-else :size="15" />
+          </button>
           <button class="icon-button compact" title="添加项目" @click="emit('openWorkspace')">
             <Plus :size="15" />
           </button>
         </div>
 
-        <div v-for="project in projects" :key="project.id" class="project-group">
+        <div v-show="projectSectionExpanded" v-for="project in projects" :key="project.id" class="project-group">
           <div class="project-heading-row">
             <button class="project-row" :title="project.path" @click="toggleProject(project)">
               <Folder :size="18" />
@@ -532,7 +548,7 @@ onBeforeUnmount(() => {
               <div v-if="menuKey === `project:${project.id}`" class="sidebar-context-menu project-menu"
                 :class="{ 'menu-up': menuPlacement === 'up' }">
                 <button @click="runAction(() => createTask(project.id))">
-                  <SquarePen :size="15" />新建任务
+                  <SquarePen :size="15" />在此项目中新建任务
                 </button>
                 <button @click="runAction(() => emit('openProjectProperties', project))">
                   <Info :size="15" />项目属性
@@ -554,7 +570,7 @@ onBeforeUnmount(() => {
           </div>
 
           <Transition name="project-collapse">
-            <div v-if="expandedProjects.has(project.id)" class="project-tasks">
+            <div v-if="expandedProjects.has(project.id) && viewMode === 'projects'" class="project-tasks">
               <div v-for="thread in visibleThreads(project.id)" :key="thread.id" class="thread-heading-row"
                 :class="{ active: thread.id === activeThreadId }">
                 <button v-if="renamingThreadId !== thread.id" class="thread-row"
@@ -600,7 +616,7 @@ onBeforeUnmount(() => {
           </Transition>
         </div>
 
-        <div v-if="projects.length === 0" class="sidebar-add-project">
+        <div v-if="projectSectionExpanded && projects.length === 0" class="sidebar-add-project">
           <p class="empty-recent">还没有项目</p>
           <button type="button" class="sidebar-add-project-button" @click="emit('openWorkspace')">
             <FolderPlus :size="16" />

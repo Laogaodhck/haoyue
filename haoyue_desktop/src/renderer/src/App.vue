@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import {
-  ArrowDown, Braces, Check, ChevronDown, ChevronUp, Circle, CornerDownLeft,
-  Folder, FolderOpen, Globe2, History, LoaderCircle, MoreHorizontal, PanelRight,
+  ArrowDown, Check, ChevronDown, ChevronUp, Circle, CornerDownLeft,
+  Folder, FolderOpen, History, LoaderCircle, MoreHorizontal, PanelRight,
   RefreshCw, Search, ShieldAlert, Telescope, TerminalSquare, Trash2, Sparkles,
-  Undo2, Wrench, X
+  Undo2, X
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import type { AppearanceTheme, AppInfo, DaemonMessage, DaemonState } from '../../shared/ipc'
@@ -44,6 +44,10 @@ import {
 } from './app-helpers'
 import { createChatActions } from './app-actions'
 import { clearScrollPositions, readScrollPosition, saveScrollPosition } from './scroll-memory'
+import { loadDrafts, persistDrafts as persistDraftsToStorage } from './thread-drafts'
+import { createViewHistory } from './view-history'
+import { createConversationSearch } from './conversation-search'
+import { openBackgroundTaskSession, openSessionHit, type SessionOpenerDeps } from './session-opener'
 import type { RuntimeModelCatalogItem, RuntimeProject, RuntimeSession, RuntimeWorkspace } from './app-helpers'
 import {
   imageSourceKey, loadEarlierMessages as loadEarlierMessagesFromStore,
@@ -90,7 +94,7 @@ const workDockTab = ref<WorkDockTab>('changes')
 const workDockWidth = ref(560)
 const toolDiff = ref<{ path: string; diff: string } | null>(null)
 
-const settingsSection = ref<'general' | 'models' | 'mcp' | 'skills' | 'rules-memory' | 'diagnostics' | 'inference' | 'advanced'>('general')
+const settingsSection = ref<'general' | 'models' | 'agent' | 'mcp' | 'skills' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'>('general')
 const extensionsSection = ref<'mcp' | 'skills' | 'experts'>('mcp')
 const taskSettingsThreadId = ref('')
 const activePropertiesProject = ref<ProjectItem | null>(null)
@@ -122,6 +126,16 @@ const models = ref<string[]>([])
 const modelCatalog = ref<RuntimeModelCatalogItem[]>([])
 const activeModel = ref('')
 const mode = ref('edit')
+/**
+ * 全局网络开关（`Agent.NetworkEnabled`）。会话级的 networkEnabled 只是「本任务想不想联网」，
+ * 真正生效值是 `session && global`（Agent.cs）。全局关时消息级地球图标必须置灰并说明原因，
+ * 否则用户点亮了它、工具却仍被剥离，界面状态与真实能力不一致。
+ */
+const globalNetworkEnabled = ref(true)
+/** 任务级意图（不含全局闸门）。生效值是两者相与，由 Composer 自己判断并置灰。 */
+const taskNetworkEnabled = computed(() => activeThread.value?.networkEnabled ?? true)
+/** 标题栏「后退 / 前进」的会话浏览历史。 */
+const viewHistory = createViewHistory()
 const busy = computed(() => Boolean(activeThread.value?.running))
 const scrollArea = ref<HTMLElement | null>(null)
 const composer = ref<InstanceType<typeof Composer> | null>(null)
@@ -132,61 +146,21 @@ const conversationQuery = ref('')
 const messageHeights = new Map<string, number>()
 const conversationScrollTop = ref(0)
 const conversationViewportHeight = ref(600)
-/** Per-task composer drafts (text + attachments), kept across task switches (H5). */
-interface ComposerDraft { text: string; images: ImageAttachment[]; files: FileAttachment[] }
-const composerDrafts = new Map<string, ComposerDraft>()
-/** 草稿落盘 key（P1-2.3）：未发送草稿此前仅存内存 Map，刷新/崩溃即丢。 */
-const DRAFT_STORAGE_KEY = 'haoyue-composer-drafts'
-
-function loadPersistedDrafts(): void {
-  try {
-    const raw = localStorage.getItem(DRAFT_STORAGE_KEY)
-    if (!raw) return
-    const parsed = JSON.parse(raw) as Record<string, ComposerDraft>
-    for (const [threadId, draft] of Object.entries(parsed))
-      if (draft && typeof draft.text === 'string') composerDrafts.set(threadId, draft)
-  } catch {
-    // 损坏的草稿存储不影响启动：按无草稿处理。
-  }
-}
-
-function persistDrafts(): void {
-  try {
-    const entries: Record<string, ComposerDraft> = {}
-    for (const [threadId, draft] of composerDrafts) {
-      // 只持久化有内容的草稿：空文本不占存储，也不该在恢复时抢焦点。
-      if (draft.text.trim() || draft.images.length > 0 || draft.files.length > 0)
-        entries[threadId] = draft
-    }
-    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(entries))
-  } catch {
-    // 存储配额满等故障静默降级：内存 Map 仍是权威来源。
-  }
-}
+/** Per-task composer drafts (text + attachments), kept across task switches (H5).
+ *  读写与落盘细节下沉到 thread-drafts.ts（App.vue 有行数预算，逻辑不带状态就不该留在这）。 */
+const composerDrafts = loadDrafts()
+const persistDrafts = (): void => persistDraftsToStorage(composerDrafts)
 
 // ---------------------------------------------------------------- H9/H10/H11/H19/H25
 const conversationSearchInput = ref<HTMLInputElement | null>(null)
 const sidebarPanel = ref<InstanceType<typeof Sidebar> | null>(null)
 const queuedHintDismissed = ref(false)
 
-/** H10: match count + prev/next navigation across content/thinking/tool results. */
-const searchMatches = computed(() => {
-  const query = conversationQuery.value.trim()
-  if (!query || !activeThread.value) return []
-  return activeThread.value.messages.filter((message) => messageMatches(message, query))
-})
-const searchCursor = ref(0)
-watch(() => conversationQuery.value, () => { searchCursor.value = 0 })
-
-function jumpSearch(delta: number): void {
-  const matches = searchMatches.value
-  if (matches.length === 0) return
-  searchCursor.value = (searchCursor.value + delta + matches.length) % matches.length
-  const target = matches[searchCursor.value]
-  if (!target) return
-  document.querySelector(`[data-message-id="${CSS.escape(target.id)}"]`)
-    ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-}
+/** H10: 匹配计数 + 上下跳转（状态与滚动逻辑在 conversation-search.ts）。 */
+const conversationSearch = createConversationSearch(() => activeThread.value)
+const searchMatches = conversationSearch.matches
+const searchCursor = conversationSearch.cursor
+const jumpSearch = conversationSearch.jump
 
 /** H9: floating "back to latest" when the user scrolled up during streaming. */
 async function jumpToLatest(): Promise<void> {
@@ -431,10 +405,32 @@ function showActiveProject(): void {
 
 /** 打开工作区面板的指定页签；再次点击已激活页签视为关闭（WorkBuddy 式切换语义）。 */
 function openWorkDock(tab: WorkDockTab): void {
-  if (tab !== 'tools' && !activeProject.value) return
-  if (tab !== 'tools') toolDiff.value = null
+  if (needsProject(tab) && !activeProject.value) {
+    // 旧实现是静默 return：标题栏菜单和 header 按钮看起来都能点，实际毫无反应。
+    void window.haoyue.notify?.('需要先绑定项目',
+      '代码更改与提交记录只对绑定了项目的任务可用。请在欢迎页绑定项目，或从左侧项目里新建任务。')
+    return
+  }
+  if (tab !== 'tools' && tab !== 'browser') toolDiff.value = null
   workDockOpen.value = !(workDockOpen.value && workDockTab.value === tab)
   workDockTab.value = tab
+}
+
+/** Git 两类页签依赖工作区路径；工具活动 / 浏览 / 后台任务与会话无关。 */
+function needsProject(tab: WorkDockTab): boolean {
+  return tab === 'changes' || tab === 'history'
+}
+
+/**
+ * header 的单一「面板」开关：header 不再为每个页签各放一个按钮（那与面板自己的页签重复），
+ * 只保留一个开关。记住的页签不可用时退回「工具活动」，避免点了没用。
+ */
+function toggleWorkDock(): void {
+  if (workDockOpen.value) {
+    closeWorkDock()
+    return
+  }
+  openWorkDock(needsProject(workDockTab.value) && !activeProject.value ? 'tools' : workDockTab.value)
 }
 
 function openDevTools(): void {
@@ -539,13 +535,14 @@ async function loadRuntimeState(): Promise<void> {
   try {
     await migrateStoredProjects()
     void refreshEvolutionCandidates() // restore the candidate banner after reconnect
-    const [projectResponse, modelResponse, workspaceResponse, modeResponse, catalogResponse, configStatusResponse] = await Promise.all([
+    const [projectResponse, modelResponse, workspaceResponse, modeResponse, catalogResponse, configStatusResponse, agentConfigResponse] = await Promise.all([
       window.haoyue.daemon.request('project.list'),
       window.haoyue.daemon.request('model.list'),
       window.haoyue.daemon.request('workspace.get'),
       window.haoyue.daemon.request('agent.mode.get'),
       window.haoyue.daemon.request('model.catalog'),
-      window.haoyue.daemon.request('config.status').catch(() => null)
+      window.haoyue.daemon.request('config.status').catch(() => null),
+      window.haoyue.daemon.request('agent.config.get').catch(() => null)
     ])
     if (configStatusResponse) {
       try {
@@ -586,6 +583,12 @@ async function loadRuntimeState(): Promise<void> {
         ? (available.includes(activeModel.value) ? activeModel.value : available[0] ?? '')
         : '')
     mode.value = modeResponse.data
+    if (agentConfigResponse) {
+      try {
+        const agentConfig = JSON.parse(agentConfigResponse.data) as { networkEnabled?: boolean }
+        globalNetworkEnabled.value = agentConfig.networkEnabled ?? true
+      } catch { /* 老版本 daemon 不回传该字段时保持默认为开 */ }
+    }
     await refreshAllProjectSessions()
     await migrateImplicitDocumentsProject()
     await replayMissedTerminals()
@@ -1157,9 +1160,11 @@ async function loadEarlier(): Promise<void> {
   if (element && delta > 0) element.scrollTop = topBefore + delta
 }
 
-async function selectThread(id: string): Promise<void> {
+async function selectThread(id: string, fromHistory = false): Promise<void> {
   const thread = threads.value.find((item) => item.id === id)
   if (!thread) return
+  // 记录浏览历史（后退/前进用）。历史内部跳转不再入栈，否则会截断前进分支。
+  if (!fromHistory) viewHistory.record(id)
   if (activeThread.value) saveComposerDraft(activeThread.value.id)
   // 1.6 切走前记住阅读位；任务切换同时释放虚拟列表高度缓存（否则内存单调增长）。
   if (activeThread.value) saveScrollPosition(activeThread.value.id, conversationScrollTop.value)
@@ -1169,6 +1174,7 @@ async function selectThread(id: string): Promise<void> {
   const selectionToken = ++conversationSelectionToken.value
   const needsLoad = Boolean(thread.sessionId && (!thread.sessionLoaded || !thread.running))
   activeThreadId.value = id
+  activePage.value = 'main'
   selectedProjectId.value = project?.id ?? ''
   conversationLoadError.value = ''
 
@@ -1238,35 +1244,37 @@ async function selectThread(id: string): Promise<void> {
   }
 }
 
-// 跨会话检索命中：本地列表没有该会话（未加载项目或已归档）时，按检索结果重建一个
-// 懒加载 ThreadItem（sessionLoaded=false，selectThread 会走 session.get 拉取）。
+async function goBack(): Promise<void> {
+  const target = viewHistory.back()
+  if (target) await selectThread(target, true)
+}
+
+async function goForward(): Promise<void> {
+  const target = viewHistory.forward()
+  if (target) await selectThread(target, true)
+}
+
+const sessionOpenerDeps = (): SessionOpenerDeps => ({
+  threads: threads.value,
+  projects: projects.value,
+  select: (threadId) => selectThread(threadId),
+  notify: (title, body) => { void window.haoyue?.notify?.(title, body) }
+})
+
+/** 后台任务面板「打开对应会话」。 */
+async function openTaskSession(payload: { sessionId: string; workspace?: string }): Promise<void> {
+  await openBackgroundTaskSession(payload, sessionOpenerDeps())
+}
+
+/** 计划任务「打开本次会话」：先退回主视图，再按 sessionId 载入。 */
+async function openScheduledRunSession(payload: { sessionId: string; workspace?: string }): Promise<void> {
+  closePage()
+  await openTaskSession(payload)
+}
+
+// 跨会话检索命中：本地列表没有该会话（未加载项目或已归档）时重建懒加载条目（见 session-opener.ts）。
 async function openSearchSession(hit: SessionSearchHit): Promise<void> {
-  const existing = threads.value.find((thread) => thread.sessionId === hit.id)
-  if (existing) {
-    await selectThread(existing.id)
-    return
-  }
-  const project = hit.workspace
-    ? projects.value.find((item) => item.path === hit.workspace)
-    : undefined
-  if (hit.workspace && !project) {
-    void window.haoyue?.notify?.('无法打开会话', `会话所属项目尚未添加：${hit.workspace}`)
-    return
-  }
-  const thread: ThreadItem = {
-    id: project ? `${project.id}:session:${hit.id}` : `global:session:${hit.id}`,
-    title: hit.title || '未命名会话',
-    projectId: project?.id,
-    updatedAt: hit.updatedAt ? new Date(hit.updatedAt).getTime() : Date.now(),
-    messages: [],
-    sessionId: hit.id,
-    sessionLoaded: false,
-    reasoningLevel: ReasoningLevel.High,
-    networkEnabled: true,
-    archived: Boolean(hit.archived)
-  }
-  threads.value.unshift(thread)
-  await selectThread(thread.id)
+  await openSessionHit(hit, sessionOpenerDeps())
 }
 
 interface ConversationItem {
@@ -1910,6 +1918,10 @@ async function stopTurn(): Promise<void> {
 async function changeNetwork(enabled: boolean): Promise<void> {
   const thread = activeThread.value
   if (!thread || thread.archived) return
+  if (enabled && !globalNetworkEnabled.value) {
+    void window.haoyue.notify?.('全局网络访问已关闭',
+      '本任务的联网开关已打开，但运行时全局网络访问处于关闭状态，网络工具不会生效。请到「设置 → 智能体 → 网页搜索」开启。')
+  }
   thread.networkEnabled = enabled
   const project = projects.value.find((item) => item.id === thread.projectId)
   if (!thread.sessionId || !daemonState.value.connected || (thread.projectId && !project)) return
@@ -1979,7 +1991,6 @@ function useStarterPrompt(prompt: string): void {
 
 onMounted(async () => {
   applyTheme(theme.value)
-  loadPersistedDrafts()
   appInfo.value = await window.haoyue.getAppInfo()
   document.documentElement.dataset.platform = appInfo.value.platform
   document.documentElement.dataset.material = appInfo.value.supportsMica ? 'mica' : 'solid'
@@ -2014,9 +2025,11 @@ watch(theme, applyTheme)
       @open-workspace="openWorkspace" @show-project="showActiveProject" @open-settings="openSettings('general')"
       @focus-composer="composer?.focus()" @open-terminal="openProjectTerminal" @open-git-changes="openWorkDock('changes')"
       @open-git-history="openWorkDock('history')" @open-diagnostics="openSettings('diagnostics')"
+      :can-go-back="viewHistory.canBack.value" :can-go-forward="viewHistory.canForward.value"
+      @back="goBack" @forward="goForward" @export-session="chatActions.exportConversation"
       @open-dev-tools="openDevTools" @open-about="aboutOpen = true" />
 
-    <div class="app-body" v-show="activePage === 'main'" :class="{ 'sidebar-collapsed': !sidebarOpen }">
+    <div class="app-body" :class="{ 'sidebar-collapsed': !sidebarOpen }">
       <Transition name="sidebar-slide">
         <Sidebar v-if="sidebarOpen" ref="sidebarPanel" :projects="projects" :threads="threads" :active-thread-id="activeThreadId"
           :active-project-id="selectedProjectId" :version="appInfo.version" @new-task="newTask"
@@ -2040,7 +2053,6 @@ watch(theme, applyTheme)
           <header class="conversation-header">
             <div class="conversation-title">
               <strong>{{ conversationTitle }}</strong>
-              <!--  <small v-if="activeThread">{{ activeProject?.name || '任务' }}</small>-->
               <span v-if="activeThread?.running && activeThread?.phase" class="task-phase-chip">
                 <span class="phase-dot" />{{ activeThread.phase }}<template v-if="phaseElapsedSeconds > 0"> · 已进行 {{ phaseElapsedSeconds }} 秒</template>
               </span>
@@ -2081,23 +2093,15 @@ watch(theme, applyTheme)
                 @click="openProjectTerminal">
                 <TerminalSquare :size="18" />
               </button>
-              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen && workDockTab === 'changes' }"
-                title="查看代码更改" @click="openWorkDock('changes')">
-                <Braces :size="18" />
-              </button>
-              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen && workDockTab === 'history' }"
-                title="查看 Git 提交记录" @click="openWorkDock('history')">
-                <History :size="18" />
-              </button>
-              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen && workDockTab === 'tools' }"
-                title="工具活动面板" @click="openWorkDock('tools')">
-                <Wrench :size="18" />
+              <!-- 工作区面板只留一个开关：五个页签由面板自己导航。此前 header 为每个页签
+                   各放一个按钮、又在末尾重复了标题栏已有的「切换侧栏」，同一屏 9 个可点元素。 -->
+              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen }"
+                :title="workDockOpen ? '收起工作区面板' : '工作区面板：更改 / 提交记录 / 工具活动 / 浏览 / 后台任务'"
+                @click="toggleWorkDock">
+                <PanelRight :size="18" />
               </button>
               <button class="icon-button" title="任务设置" :disabled="!activeThread" @click="openTaskSettings()">
                 <MoreHorizontal :size="18" />
-              </button>
-              <button class="icon-button" title="切换侧栏" @click="sidebarOpen = !sidebarOpen">
-                <PanelRight :size="18" />
               </button>
             </div>
           </header>
@@ -2303,7 +2307,8 @@ watch(theme, applyTheme)
             <Composer ref="composer" :busy="busy"
               :disabled="conversationLoading" :model="activeModel"
               :models="models" :mode="mode" :task-id="activeThread?.id" :supports-images="activeModelSupportsImages"
-              :reasoning-level="activeReasoningLevel" :network-enabled="activeThread?.networkEnabled ?? true"
+              :reasoning-level="activeReasoningLevel" :network-enabled="taskNetworkEnabled"
+              :global-network-enabled="globalNetworkEnabled"
               :optimize-prompt="optimizePrompt" :suggest-files="suggestWorkspaceFiles" @send="sendMessage" @stop="stopTurn" @change-model="changeModel"
               @slash-command="chatActions.slashCommand"
               @change-mode="changeMode" @change-reasoning-level="changeReasoningLevel"
@@ -2314,30 +2319,25 @@ watch(theme, applyTheme)
 
         <WorkDock v-show="activePage === 'main'" :open="workDockOpen" v-model:tab="workDockTab"
           :width="workDockWidth" :project="activeProject" :thread="activeThread" :diff-override="toolDiff"
-          @close="closeWorkDock" @resize="resizeWorkDock" @open-terminal="openProjectTerminal" />
+          @close="closeWorkDock" @resize="resizeWorkDock" @open-terminal="openProjectTerminal"
+          @open-session="openTaskSession" />
+
+        <!-- 1.4 导航模型统一：这些页面是右栏同级视图，左栏常驻（此前它们直接占满外壳，把左栏盖掉）。 -->
+        <SettingsDialog :open="activePage === 'settings' || activePage === 'extensions'"
+          :page="activePage === 'extensions' ? 'extensions' : 'settings'" :theme="theme"
+          :daemon-connected="daemonState.connected" :daemon-endpoint="daemonState.endpoint"
+          :workspace-path="runtimeWorkspacePath" :initial-section="activePage === 'settings' ? settingsSection : extensionsSection"
+          @close="closePage" @change-theme="applyTheme" @reconnect="reconnectDaemon" @open-rules-memory="openRulesMemory"
+          @start-expert="startExpertTask" @runtime-changed="refreshRuntimeState" />
+        <KnowledgeBaseDialog :open="activePage === 'knowledge'" @close="closePage" />
+        <RulesMemoryDialog :open="activePage === 'rules-memory'" @close="closePage" />
+        <ScheduledTasksDialog :open="activePage === 'scheduled'" :projects="projects" @close="closePage"
+          @open-session="openScheduledRunSession" />
+        <ArchivedTasksDialog :open="activePage === 'archived'" :projects="projects" :threads="threads" @close="closePage"
+          @select-thread="selectArchivedThread" @restore-task="restoreTask" @delete-task="deleteTask" @delete-all="deleteArchivedTasks" />
       </div>
     </div>
 
-
-    <SettingsDialog :open="activePage === 'settings' || activePage === 'extensions'"
-      :page="activePage === 'extensions' ? 'extensions' : 'settings'" :theme="theme"
-      :daemon-connected="daemonState.connected" :daemon-endpoint="daemonState.endpoint"
-      :workspace-path="runtimeWorkspacePath"
-      :initial-section="activePage === 'settings' ? settingsSection : extensionsSection" @close="closePage"
-      @change-theme="applyTheme" @reconnect="reconnectDaemon"
-      @open-rules-memory="openRulesMemory"
-      @start-expert="startExpertTask"
-      @runtime-changed="refreshRuntimeState" />
-
-    <KnowledgeBaseDialog :open="activePage === 'knowledge'" @close="closePage" />
-
-    <RulesMemoryDialog :open="activePage === 'rules-memory'" @close="closePage" />
-
-    <ScheduledTasksDialog :open="activePage === 'scheduled'" :projects="projects" @close="closePage" />
-
-    <ArchivedTasksDialog :open="activePage === 'archived'" :projects="projects" :threads="threads" @close="closePage"
-      @select-thread="selectArchivedThread" @restore-task="restoreTask" @delete-task="deleteTask"
-      @delete-all="deleteArchivedTasks" />
 
     <AboutDialog :open="aboutOpen" :app-info="appInfo" :protocol-version="daemonState.protocolVersion" @close="aboutOpen = false" />
 
@@ -2374,7 +2374,8 @@ watch(theme, applyTheme)
 
 
     <TaskSettingsDialog :open="Boolean(taskSettingsThreadId)" :thread="settingsThread" :project="settingsProject"
-      @close="taskSettingsThreadId = ''" @save-title="saveTaskTitle"
+      :model="activeModel" :mode="mode" @close="taskSettingsThreadId = ''" @save-title="saveTaskTitle"
+      @change-reasoning-level="changeReasoningLevel" @change-network="changeNetwork" @open-settings="openSettings('agent')"
       @archive="settingsThread && archiveTask(settingsThread)" @restore="settingsThread && restoreTask(settingsThread)"
       @delete="settingsThread && deleteTask(settingsThread)" />
 

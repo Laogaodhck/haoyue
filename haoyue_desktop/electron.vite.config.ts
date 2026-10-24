@@ -24,6 +24,10 @@ export default defineConfig({
         '@shared': resolve('src/shared')
       }
     },
-    plugins: [vue()]
+    plugins: [
+      // <webview> 是 Electron 的宿主自定义元素，不是 Vue 组件——不声明为自定义元素时
+      // 模板编译会把它当未解析组件处理（运行期告警且属性/事件绑定语义不同）。
+      vue({ template: { compilerOptions: { isCustomElement: (tag) => tag === 'webview' } } })
+    ]
   }
 })

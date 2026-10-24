@@ -229,6 +229,7 @@ public sealed class HaoyueDatabase
                 last_status TEXT NULL,
                 last_error TEXT NULL,
                 last_output TEXT NULL,
+                last_session_id TEXT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -360,6 +361,8 @@ public sealed class HaoyueDatabase
         EnsureColumn(connection, "sessions", "expert_id", "TEXT NULL");
 
         // 知识中心（笔记本 + 来源）：老库只加列不重建，回填在 KnowledgeStore 首次访问时进行。
+        EnsureColumn(connection, "scheduled_tasks", "last_session_id", "TEXT NULL");
+
         EnsureColumn(connection, "knowledge", "notebook_id", "INTEGER NULL");
         EnsureColumn(connection, "knowledge", "source_id", "INTEGER NULL");
         EnsureColumn(connection, "knowledge", "chunk_ordinal", "INTEGER NULL");

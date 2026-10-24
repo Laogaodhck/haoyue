@@ -25,6 +25,11 @@ export interface ModelDetailConfig {
   mmprojPath?: string
   /** 本地模型的加载配置（模型加载配置页）；null/缺省 = 全部「自动」。 */
   load?: LocalModelLoadSettings | null
+  /** 备用回退模型 id：主模型文件缺失/装不上时改用它。 */
+  fallbackModelId?: string
+  /** 定价（每百万 token）——费用预算与用量统计的口径来源。 */
+  inputPricePerMTok?: number
+  outputPricePerMTok?: number
 }
 
 const props = defineProps<{
@@ -44,7 +49,10 @@ const form = reactive<ModelDetailConfig>({
   alias: '',
   contextWindow: 1000000,
   maxOutput: 128000,
-  vision: false
+  vision: false,
+  fallbackModelId: '',
+  inputPricePerMTok: undefined,
+  outputPricePerMTok: undefined
 })
 
 const firstInput = ref<HTMLInputElement | null>(null)
@@ -80,7 +88,10 @@ function handleSave(): void {
     contextWindow: Number(form.contextWindow) || 1000000,
     maxOutput: Number(form.maxOutput) || 128000,
     vision: Boolean(form.vision),
-    localPath: form.localPath?.trim() || undefined
+    localPath: form.localPath?.trim() || undefined,
+    fallbackModelId: form.fallbackModelId?.trim() || undefined,
+    inputPricePerMTok: Number(form.inputPricePerMTok) > 0 ? Number(form.inputPricePerMTok) : undefined,
+    outputPricePerMTok: Number(form.outputPricePerMTok) > 0 ? Number(form.outputPricePerMTok) : undefined
   })
 }
 
@@ -104,6 +115,9 @@ watch(() => props.open, (open) => {
     form.maxOutput = props.model.maxOutput || 128000
     form.vision = Boolean(props.model.vision)
     form.localPath = props.model.localPath ?? ''
+    form.fallbackModelId = props.model.fallbackModelId ?? ''
+    form.inputPricePerMTok = props.model.inputPricePerMTok || undefined
+    form.outputPricePerMTok = props.model.outputPricePerMTok || undefined
   }
   document.addEventListener('keydown', handleKeydown)
   void nextTick(() => firstInput.value?.focus())
@@ -228,6 +242,31 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                 <span class="toggle-switch" aria-hidden="true"><span /></span>
               </label>
             </section>
+
+            <section class="model-form-section">
+              <div class="model-section-heading">
+                <strong>回退与定价</strong>
+              </div>
+              <label class="form-field full-width">
+                <FieldLabel en="Fallback Model" zh="备用回退模型 id"
+                  help="主模型文件缺失或加载失败时改用它；留空表示不回退。同一个提供商内的模型 id，例如 gemma-4-E4B-it-Q4_K_M。" />
+                <input v-model="form.fallbackModelId" class="form-input" placeholder="留空 = 不回退" spellcheck="false" />
+              </label>
+              <div class="model-price-row">
+                <label class="form-field">
+                  <FieldLabel en="Input Price" zh="输入价（每百万 token）"
+                    help="用于单回合费用预算与用量统计折算；0/留空 = 该模型不计费（本地模型保持 0）。" />
+                  <input v-model.number="form.inputPricePerMTok" class="form-input" type="number" min="0" step="0.01"
+                    placeholder="0" />
+                </label>
+                <label class="form-field">
+                  <FieldLabel en="Output Price" zh="输出价（每百万 token）"
+                    help="同上，用于输出 token 的费用折算。" />
+                  <input v-model.number="form.outputPricePerMTok" class="form-input" type="number" min="0" step="0.01"
+                    placeholder="0" />
+                </label>
+              </div>
+            </section>
           </div>
 
           <div v-if="validationError" class="model-config-error" role="alert">{{ validationError }}</div>
@@ -257,6 +296,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
   padding: 20px;
   background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(8px);
+}
+
+.model-price-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .model-config-dialog {

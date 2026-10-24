@@ -125,6 +125,21 @@ export interface RevertDiffsResult {
   failed: Array<{ filePath: string; reason: string }>
 }
 
+/** 可视化浏览器导航前的白名单校验结果（主进程 web:check-url）。 */
+export interface WebNavigationCheck {
+  ok: boolean
+  /** ok 为 true 时回填的规范化地址（补全 scheme 后的完整 URL）。 */
+  url?: string
+  /** ok 为 false 时的拒绝原因，直接展示给用户。 */
+  reason?: string
+}
+
+/** 被主进程拦下的导航（页面内链接 / window.open 命中白名单外站点）。 */
+export interface WebBlockedNotice {
+  url: string
+  reason?: string
+}
+
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>
   selectWorkspace(): Promise<string | null>
@@ -146,6 +161,13 @@ export interface DesktopApi {
     gitOverview(path: string): Promise<GitOverview>
     gitHistory(path: string): Promise<GitHistory>
     revertFileDiffs(workspace: string, patches: RevertDiffItem[]): Promise<RevertDiffsResult>
+  }
+  web: {
+    /** 校验并规范化地址栏输入；拒绝原因直接可展示。 */
+    checkUrl(url: string): Promise<WebNavigationCheck>
+    /** 在系统默认浏览器中打开（webview 内的 target=_blank 一律不弹新窗口）。 */
+    openExternal(url: string): Promise<void>
+    onBlocked(listener: (notice: WebBlockedNotice) => void): () => void
   }
   daemon: {
     connect(): Promise<DaemonState>

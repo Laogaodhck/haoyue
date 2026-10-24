@@ -9,7 +9,7 @@ public interface IScheduleStore
     ScheduledTask? Get(string id);
     ScheduledTask Upsert(string? id, string name, string? workspace, string prompt, string cron, bool enabled);
     ScheduledTask SetEnabled(string id, bool enabled);
-    ScheduledTask RecordRun(string id, string status, string? error = null, string? output = null);
+    ScheduledTask RecordRun(string id, string status, string? error = null, string? output = null, string? sessionId = null);
     void Remove(string id);
 }
 
@@ -18,7 +18,7 @@ public sealed class ScheduleStore(HaoyueDatabase database) : IScheduleStore
 {
     private const string SelectColumns =
         "id, name, workspace, prompt, cron, enabled, " +
-        "last_run_at, next_run_at, last_status, last_error, last_output, " +
+        "last_run_at, next_run_at, last_status, last_error, last_output, last_session_id, " +
         "created_at, updated_at";
 
     public IReadOnlyList<ScheduledTask> List()
@@ -99,7 +99,7 @@ public sealed class ScheduleStore(HaoyueDatabase database) : IScheduleStore
         return Upsert(task.Id, task.Name, task.Workspace, task.Prompt, task.Cron, enabled);
     }
 
-    public ScheduledTask RecordRun(string id, string status, string? error = null, string? output = null)
+    public ScheduledTask RecordRun(string id, string status, string? error = null, string? output = null, string? sessionId = null)
     {
         if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Task id is required.", nameof(id));
         var task = Get(id) ?? throw new InvalidOperationException($"Scheduled task not found: {id}");
@@ -109,7 +109,8 @@ public sealed class ScheduleStore(HaoyueDatabase database) : IScheduleStore
         command.CommandText = """
             UPDATE scheduled_tasks
             SET last_run_at = $lastRunAt, last_status = $status, last_error = $error,
-                last_output = $output, next_run_at = $nextRunAt, updated_at = $updatedAt
+                last_output = $output, last_session_id = $lastSessionId,
+                next_run_at = $nextRunAt, updated_at = $updatedAt
             WHERE id = $id;
             """;
         command.Parameters.AddWithValue("$id", id.Trim());
@@ -117,6 +118,7 @@ public sealed class ScheduleStore(HaoyueDatabase database) : IScheduleStore
         command.Parameters.AddWithValue("$status", status);
         command.Parameters.AddWithValue("$error", Nullable(string.IsNullOrWhiteSpace(error) ? null : error));
         command.Parameters.AddWithValue("$output", Nullable(string.IsNullOrWhiteSpace(output) ? null : Truncate(output)));
+        command.Parameters.AddWithValue("$lastSessionId", Nullable(string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim()));
         command.Parameters.AddWithValue("$nextRunAt", Nullable(task.Enabled ? ScheduleCron.NextOccurrence(task.Cron, now)?.ToString("O") : null));
         command.Parameters.AddWithValue("$updatedAt", now.ToString("O"));
         command.ExecuteNonQuery();
@@ -152,8 +154,9 @@ public sealed class ScheduleStore(HaoyueDatabase database) : IScheduleStore
             LastStatus = Text(reader.GetValue(8)),
             LastError = Text(reader.GetValue(9)),
             LastOutput = Text(reader.GetValue(10)),
-            CreatedAt = DateTimeOffset.Parse(reader.GetString(11)),
-            UpdatedAt = DateTimeOffset.Parse(reader.GetString(12)),
+            LastSessionId = Text(reader.GetValue(11)),
+            CreatedAt = DateTimeOffset.Parse(reader.GetString(12)),
+            UpdatedAt = DateTimeOffset.Parse(reader.GetString(13)),
         };
     }
 

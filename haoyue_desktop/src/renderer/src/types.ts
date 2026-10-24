@@ -5,8 +5,8 @@ export interface ProjectItem {
   loaded?: boolean
 }
 
-/** 右侧统一工作区面板（WorkDock）的页签：Git 更改 / 提交记录 / 工具活动。 */
-export type WorkDockTab = 'changes' | 'history' | 'tools'
+/** 右侧统一工作区面板（WorkDock）的页签：Git 更改 / 提交记录 / 工具活动 / 内置浏览器。 */
+export type WorkDockTab = 'changes' | 'history' | 'tools' | 'browser' | 'tasks'
 
 /** Provider-neutral reasoning depth. Runtime wire clients perform API-specific mapping. */
 export enum ReasoningLevel {
@@ -107,6 +107,8 @@ export interface ScheduledTaskInfo {
   lastStatus?: string
   lastError?: string
   lastOutput?: string
+  /** 上次运行所在会话，供「打开本次会话」跳转。 */
+  lastSessionId?: string
   createdAt: string
   updatedAt: string
 }

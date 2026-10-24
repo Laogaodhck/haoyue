@@ -141,35 +141,15 @@ internal sealed partial class DaemonAdminApi(
         }.ToJsonString();
     }
 
-    public string GetRoutingConfig() => new JsonObject
-    {
-        ["failoverEnabled"] = runtime.ConfigStore.Config.Routing.FailoverEnabled,
-        ["deepSeekOptimizationEnabled"] = runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled,
-        // 2.7 本地→云故障转移（默认关：防 surprise billing）。
-        ["localFailoverToCloud"] = runtime.ConfigStore.Config.Routing.LocalFailoverToCloud,
-    }.ToJsonString();
+    /// <summary>路由与容灾全字段（回退链 / 负载均衡 / 重试与熔断），见 DaemonAdminApi.Settings.cs。</summary>
+    public string GetRoutingConfig() => RoutingJson().ToJsonString();
 
-    /// <summary>Agent behavior config shown on the desktop 智能体 settings page.</summary>
-    public string GetAgentConfig() => new JsonObject
-    {
-        ["networkEnabled"] = runtime.ConfigStore.Config.Agent.NetworkEnabled,
-        ["delegationEnabled"] = runtime.ConfigStore.Config.Agent.DelegationEnabled,
-        ["visionModel"] = runtime.ConfigStore.Config.Agent.VisionModel ?? "",
-        ["autoVerify"] = runtime.ConfigStore.Config.Agent.AutoVerify,
-        ["turnTokenBudget"] = runtime.ConfigStore.Config.Agent.TurnTokenBudget,
-        ["turnCostBudget"] = runtime.ConfigStore.Config.Agent.TurnCostBudget,
-        ["turnWallClockSeconds"] = runtime.ConfigStore.Config.Agent.TurnWallClockSeconds,
-        ["compactionTailRatio"] = runtime.ConfigStore.Config.Agent.CompactionTailRatio,
-        // 5.6 工具执行策略 + Bash 沙箱：安全配置零手改 config.json。
-        ["toolPolicy"] = SerializeToolPolicy(runtime.ConfigStore.Config.Agent.ToolPolicy),
-        ["bashSandbox"] = new JsonObject
-        {
-            ["enabled"] = runtime.ConfigStore.Config.Agent.BashSandbox.Enabled,
-            ["memoryLimitMb"] = runtime.ConfigStore.Config.Agent.BashSandbox.MemoryLimitMb,
-            ["maxProcesses"] = runtime.ConfigStore.Config.Agent.BashSandbox.MaxProcesses,
-            ["uiRestrictions"] = runtime.ConfigStore.Config.Agent.BashSandbox.UiRestrictions,
-        },
-    }.ToJsonString();
+    /// <summary>
+    /// Agent behavior config shown on the desktop 智能体 settings page. Includes the
+    /// 「专家参数」subset (steps / thinking budget / retention / readable roots …) that
+    /// used to be config.json-only; see DaemonAdminApi.Settings.cs.
+    /// </summary>
+    public string GetAgentConfig() => AgentJson().ToJsonString();
 
     private static JsonArray SerializeRules(IEnumerable<ToolPolicyRule> rules) => new(rules.Select(rule => (JsonNode)new JsonObject
     {
@@ -288,6 +268,9 @@ internal sealed partial class DaemonAdminApi(
             sandbox.MemoryLimitMb = OptionalInt(sandboxPatch, "memoryLimitMb", sandbox.MemoryLimitMb, 0, 65536);
             sandbox.MaxProcesses = OptionalInt(sandboxPatch, "maxProcesses", sandbox.MaxProcesses, 0, 4096);
         }
+
+        // 专家参数（步数/思考预算/工具输出上限/委派配额/保留期…）：此前只能手改 config.json。
+        ApplyAgentSurface(parameters);
 
         runtime.ConfigStore.Save();
         return GetAgentConfig();
@@ -441,30 +424,11 @@ internal sealed partial class DaemonAdminApi(
 
     public string SetRoutingConfig(JsonObject parameters)
     {
-        if (parameters["failoverEnabled"] is not JsonValue value
-            || !value.TryGetValue<bool>(out var failoverEnabled))
+        // 契约声明 failoverEnabled 必填：缺省键按客户端 bug 处理，而不是静默「保持原值」，
+        // 否则「关闭故障转移」可能看起来成功却什么都没改。
+        if (parameters["failoverEnabled"] is not JsonValue value || !value.TryGetValue<bool>(out _))
             throw new DaemonRequestException("params.failoverEnabled (boolean) is required");
-
-        var deepSeekOptimizationEnabled = parameters["deepSeekOptimizationEnabled"] is JsonValue deepSeekValue
-            && deepSeekValue.TryGetValue<bool>(out var enabled)
-                ? enabled
-                : runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled;
-        // 2.7：缺省键保持现值；只允许显式置 true/false。
-        var localFailoverToCloud = parameters["localFailoverToCloud"] is JsonValue localValue
-            && localValue.TryGetValue<bool>(out var localEnabled)
-                ? localEnabled
-                : runtime.ConfigStore.Config.Routing.LocalFailoverToCloud;
-
-        runtime.ConfigStore.Config.Routing.FailoverEnabled = failoverEnabled;
-        runtime.ConfigStore.Config.Routing.DeepSeekOptimizationEnabled = deepSeekOptimizationEnabled;
-        runtime.ConfigStore.Config.Routing.LocalFailoverToCloud = localFailoverToCloud;
-        runtime.ConfigStore.Save();
-        return new JsonObject
-        {
-            ["failoverEnabled"] = failoverEnabled,
-            ["deepSeekOptimizationEnabled"] = deepSeekOptimizationEnabled,
-            ["localFailoverToCloud"] = localFailoverToCloud,
-        }.ToJsonString();
+        return ApplyRoutingJson(parameters);
     }
 
     public async Task<string> SetAdvancedConfigAsync(JsonObject parameters, CancellationToken ct)
@@ -729,6 +693,7 @@ internal sealed partial class DaemonAdminApi(
         if (parameters.ContainsKey("modelsDirectory"))
             provider.ModelsDirectory = OptionalString(parameters, "modelsDirectory");
         provider.PromptCaching = parameters["promptCaching"]?.GetValue<bool?>() ?? provider.PromptCaching;
+        ApplyProviderAdvanced(parameters, provider);
 
         if (parameters["clearApiKey"]?.GetValue<bool>() == true)
             provider.ApiKey = null;
@@ -775,6 +740,7 @@ internal sealed partial class DaemonAdminApi(
                         model.Load = LocalModelSettings.FromJson(loadNode);
                     else if (node.ContainsKey("load") && node["load"] is null)
                         model.Load = null; // 显式传 null：清除加载配置，回到「自动」
+                    ApplyModelAdvanced(node, model);
                     return model;
                 })
                 .ToList();
@@ -957,6 +923,10 @@ internal sealed partial class DaemonAdminApi(
                     ["tools"] = model.Capabilities.ToolCalling,
                     ["thinking"] = model.Capabilities.Thinking,
                     ["vision"] = model.Capabilities.Vision,
+                    // 图像生成与嵌入能力此前没进目录：界面上「图像生成模型」「语义检索模型」
+                    // 两个选择器因此只能让用户手填 ref，选错要到调用时才失败。
+                    ["image"] = model.Capabilities.Image,
+                    ["embedding"] = model.Capabilities.Embedding,
                     ["reasoning"] = model.Capabilities.Reasoning,
                     ["maxReasoningLevel"] = model.Capabilities.MaxReasoningLevel.ToWireValue(),
                     ["mcp"] = model.Capabilities.Mcp,
@@ -3100,6 +3070,9 @@ internal sealed partial class DaemonAdminApi(
             ["mmprojPath"] = m.MmprojPath,
             // 加载配置页的全量设置；null = 从未自定义（前端渲染为「自动」）。
             ["load"] = m.Load?.ToJson(),
+            ["fallbackModelId"] = m.FallbackModelId ?? "",
+            ["inputPricePerMTok"] = m.InputPricePerMTok,
+            ["outputPricePerMTok"] = m.OutputPricePerMTok,
         }).ToArray()),
         ["enabled"] = provider.Enabled,
         ["priority"] = provider.Priority,
@@ -3108,6 +3081,12 @@ internal sealed partial class DaemonAdminApi(
         ["modelsDirectory"] = provider.ModelsDirectory,
         ["defaultModelsDirectory"] = LocalModels.ResolveDirectory(provider.ModelsDirectory),
         ["promptCaching"] = provider.PromptCaching,
+        ["organization"] = provider.Organization,
+        ["threads"] = provider.Threads,
+        ["localPrefixReuse"] = provider.LocalPrefixReuse,
+        // 密钥类头的值不回传（空串 = 已配置但不可见，保存时留空即保持原值）。
+        ["headers"] = RedactedHeaders(provider.Headers),
+        ["reasoningEffortMap"] = StringMapJson(provider.ReasoningEffortMap),
         ["proxy"] = provider.Proxy,
         ["active"] = active,
     };

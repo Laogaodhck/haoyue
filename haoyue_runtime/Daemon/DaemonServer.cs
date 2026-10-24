@@ -1322,10 +1322,14 @@ public sealed class DaemonServer : IAsyncDisposable
                         await _adminGate.WaitAsync(context.ConnectionCt).ConfigureAwait(false);
                         try
                         {
-                            _runtime.ConfigStore.ApplyPatch(fields);
-                            _fileLog.Info($"config patch applied by CLI delegate: {string.Join(", ", fields.Select(field => field.Key))}");
+                            // params.workspace 存在时写的是 <ws>/.haoyue/config.json（项目级覆盖），
+                            // 否则写全局配置。两条分支同属「单写者」，都必须持 _adminGate。
+                            var scoped = request["params"]?["workspace"] is not null;
+                            var written = scoped
+                                ? _admin.SaveWorkspaceConfig(Params(request), fields)
+                                : SaveGlobalPatch(fields);
                             await WriteAsync(context.Writer, context.WriterGate, id, "result",
-                                "saved", context.ConnectionCt).ConfigureAwait(false);
+                                written, context.ConnectionCt).ConfigureAwait(false);
                         }
                         finally
                         {
@@ -1333,6 +1337,11 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
                         break;
                     }
+
+                    case "config.get":
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            _admin.GetConfig(Params(request)), context.ConnectionCt).ConfigureAwait(false);
+                        break;
 
                     case "config.status":
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", _admin.GetConfigStatus(), context.ConnectionCt).ConfigureAwait(false);
@@ -2922,6 +2931,19 @@ public sealed class DaemonServer : IAsyncDisposable
         {
             // Journal is an optimization; never fail the turn over it.
         }
+    }
+
+    /// <summary>
+    /// 全局 ~/.haoyue/config.json 的字段补丁（深合并）：CLI 委派与桌面端「专家参数」
+    /// 共用同一通道，因此只有一处写盘入口。调用方必须已持有 _adminGate。
+    /// </summary>
+    private string SaveGlobalPatch(JsonObject fields)
+    {
+        _runtime.ConfigStore.ApplyPatch(fields);
+        // 日志口径保持不变（DaemonServerTests 钉住这行）：桌面端与 CLI 都是把补丁「委托」
+        // 给 daemon 这个唯一写者，措辞不必区分来源。
+        _fileLog.Info($"config patch applied by CLI delegate: {string.Join(", ", fields.Select(field => field.Key))}");
+        return "saved";
     }
 
     private string CurrentMode() =>

@@ -14,6 +14,7 @@ import type { DaemonMessage, DaemonRequestOptions, RevertDiffItem } from '../sha
 import { DaemonClient } from './daemon-client.js'
 import { openDaemonLogSink, readDaemonLogTail } from './daemon-log.js'
 import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
+import { attachWebviewGuard, checkBrowserUrl } from './web-guard.js'
 import {
   destroyComputerOverlay,
   hideComputerOverlay,
@@ -327,7 +328,10 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.cjs'),
       sandbox: true,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // 右侧工作区「浏览」页签用 <webview> 承载页面；附件的安全约束与白名单
+      // 边界由 attachWebviewGuard 的 will-attach-webview / will-navigate 收口。
+      webviewTag: true
     }
   })
 
@@ -373,6 +377,7 @@ function createWindow(): void {
     event.preventDefault()
     if (url.startsWith('https://') || url.startsWith('http://')) void shell.openExternal(url)
   })
+  attachWebviewGuard(mainWindow, daemon)
 
   if (is.dev && process.env.ELECTRON_RENDERER_URL)
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -513,6 +518,13 @@ function registerIpc(): void {
   ipcMain.handle('project:revert-file-diffs', (_event, workspace: string, patches: RevertDiffItem[]) =>
     revertFileDiffs(workspace, patches)
   )
+
+  // 可视化浏览器：导航前校验白名单（与无头 browser 工具同一份 config.web.allowedSites）。
+  ipcMain.handle('web:check-url', (_event, url: string) => checkBrowserUrl(daemon, url))
+  ipcMain.handle('web:open-external', (_event, url: string) => {
+    if (!url.startsWith('https://') && !url.startsWith('http://')) return undefined
+    return shell.openExternal(url)
+  })
 
   ipcMain.handle('daemon:connect', () => daemon.connect())
   ipcMain.handle(

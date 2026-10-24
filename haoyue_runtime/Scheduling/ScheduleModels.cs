@@ -28,6 +28,11 @@ public sealed class ScheduledTask
     public string? LastStatus { get; set; }
     public string? LastError { get; set; }
     public string? LastOutput { get; set; }
+    /// <summary>
+    /// 上次运行所在的会话 id。计划任务跑完只留下一段文字，没有会话链接时用户点不回原文，
+    /// 也无法在那个上下文里继续追问——所以把它持久化，界面才能给「打开本次会话」。
+    /// </summary>
+    public string? LastSessionId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 

@@ -110,6 +110,7 @@ export const DAEMON_METHODS = [
   'agent.mode.get',
   'agent.mode.switch',
   'config.save',
+  'config.get',
   'config.status',
   'config.rebuild',
   'routing.get',

@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { Braces, History, RefreshCw, TerminalSquare, Wrench, X } from '@lucide/vue'
+import { Braces, Globe2, History, ListChecks, RefreshCw, TerminalSquare, Wrench, X } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { ProjectItem, ThreadItem, WorkDockTab } from '../types'
 import { collectActivities } from '../tools-activity'
+import BackgroundTasksPanel from './BackgroundTasksPanel.vue'
+import BrowserPanel from './BrowserPanel.vue'
 import GitWorkspacePanel from './GitWorkspacePanel.vue'
 import ToolsPanel from './ToolsPanel.vue'
 
 /**
  * 右侧统一工作区面板（WorkBuddy 式）：对话区永远至多让出一列宽度，
- * Git 更改 / 提交记录 / 工具活动 以页签切换，互不叠开。两个内容组件
- * 以 embedded 模式宿主在此，只渲染主体；外壳（手柄/头部/页签）由本
+ * Git 更改 / 提交记录 / 工具活动 / 内置浏览器 / 后台任务 以页签切换，互不叠开。五个内容
+ * 组件以 embedded 模式宿主在此，只渲染主体；外壳（手柄/头部/页签）由本
  * 组件统一提供，宽度与关闭动作也统一收口。
  */
 const props = withDefaults(defineProps<{
@@ -28,6 +30,7 @@ const emit = defineEmits<{
   resize: [width: number]
   'update:tab': [tab: WorkDockTab]
   openTerminal: []
+  openSession: [payload: { sessionId: string; workspace?: string }]
 }>()
 
 const MIN_PANEL_WIDTH = 300
@@ -120,6 +123,12 @@ onBeforeUnmount(stopResize)
             <Wrench :size="15" />工具活动
             <span v-if="runningCount > 0" class="work-dock-tab-badge">{{ runningCount }}</span>
           </button>
+          <button :class="{ active: tab === 'browser' }" role="tab" @click="selectTab('browser')">
+            <Globe2 :size="15" />浏览
+          </button>
+          <button :class="{ active: tab === 'tasks' }" role="tab" @click="selectTab('tasks')">
+            <ListChecks :size="15" />后台任务
+          </button>
         </div>
         <div class="work-dock-actions">
           <button v-if="isGitTab && !diffOverride" class="icon-button" title="刷新"
@@ -141,6 +150,13 @@ onBeforeUnmount(stopResize)
         </div>
         <div v-show="tab === 'tools'" class="work-dock-pane">
           <ToolsPanel :open="open && tab === 'tools'" :thread="thread" embedded />
+        </div>
+        <div v-show="tab === 'browser'" class="work-dock-pane">
+          <BrowserPanel :open="open && tab === 'browser'" />
+        </div>
+        <div v-show="tab === 'tasks'" class="work-dock-pane">
+          <BackgroundTasksPanel :open="open && tab === 'tasks'" :workspace-path="project?.path"
+            @open-session="(sessionId) => emit('openSession', { sessionId, workspace: project?.path })" />
         </div>
       </div>
     </aside>

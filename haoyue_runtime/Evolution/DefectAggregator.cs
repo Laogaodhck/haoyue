@@ -204,6 +204,9 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     // the same session stays distinct; reflection reads the transcript.
                     if (TryDeserialize<UserFeedbackEvent>(persisted.Payload) is not { } feedback) break;
                     if (!string.Equals(feedback.Kind, "negative", StringComparison.OrdinalIgnoreCase)) break;
+                    // 反自喂养：反馈自带 SessionId，直接按 id 比对，不依赖 TurnStarted/Completed
+                    // 括号法（并发回合交错时它会串号），保证反思回合自己的反馈不会变成新缺陷。
+                    if (excludeSessions?.Contains(feedback.SessionId) == true) break;
                     feedbackReports.Add(new DefectReport(
                         Fingerprint(DefectKind.UserNegativeFeedback, feedback.SessionId,
                             persisted.Timestamp),

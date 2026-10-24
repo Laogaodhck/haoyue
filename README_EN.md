@@ -182,10 +182,10 @@ flowchart LR
     F -->|Discard| H[Fingerprint Closed<br/>archived]
 ```
 
-- **Four signal types**: the same (tool, error) failing ≥3 times within 30 minutes; a verify chain failing ≥3 times in a row (including a barely-passing recovery); a `declare_skill` capability gap (reported on a single occurrence); user thumbs-down feedback (each one becomes its own report)
-- **Reflection turn**: triggered by cron or manually, it analyzes defect reports in an isolated runtime and produces `new-skill` / `revise-skill` conclusions
+- **Eight signal types**: the same (tool, error) failing ≥3 times within 30 minutes; a verify chain failing ≥3 times in a row (including a barely-passing recovery); a `declare_skill` capability gap (reported on a single occurrence); user thumbs-down feedback (each one becomes its own report); the same model retried ≥3 times within a short window; ≥3 consecutive steers in one session; ≥2 cancelled turns in one session; ≥2 zero-hit retrievals of the same query
+- **Reflection turn**: triggered by cron or manually, it analyzes defect reports in an isolated runtime and produces `new-skill` / `revise-skill` conclusions; its workspace root is pinned to `labs`, so an out-of-bounds write is rejected by the file-tool layer rather than by model self-restraint
 - **labs sandbox**: drafts must be written under `~/.haoyue/labs/`; after validation they are promoted to `~/.haoyue/skills-candidates/` — a directory outside the skill scan roots, **inert by nature**, never effective until approved
-- **Anti-self-feeding**: a defect fingerprint is processed only once (decision-ledger idempotency); the reflection turn's own events are excluded by the aggregator — reflection never reflects on its own reflections
+- **Anti-self-feeding**: a defect fingerprint is processed only once (decision-ledger idempotency); the reflection turn's own events are excluded by the aggregator (negative feedback is matched by session id directly, not through the turn-bracketing heuristic) — reflection never reflects on its own reflections
 - **Safety red line**: the LLM may only produce skill-layer data assets (`skill.yaml` / `prompt.txt`); modifying runtime code or core prompts is forbidden — code evolution follows the human process
 
 Related RPCs: `evolution.inspect` (view defect reports), `evolution.reflect` (trigger reflection), `evolution.pending-list` / `evolution.decide` (approval), `feedback.turn` (negative feedback).
@@ -217,7 +217,7 @@ flowchart TD
             MCP[McpManager<br/>stdio / SSE · quotas]
         end
         subgraph Evolution[Evolution Engine]
-            DA[DefectAggregator<br/>four signal types]
+            DA[DefectAggregator<br/>eight signal types]
             ES[EvolutionStore<br/>decision ledger]
             RR[ReflectionRunner<br/>reflection · labs · approval]
         end
@@ -288,7 +288,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (1190 cases, coverage gates: line ≥70% / branch ≥55%)
+├── haoyue_tests/         # Runtime unit tests (1191 cases, coverage gates: line ≥70% / branch ≥55%)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -480,7 +480,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1190 / haoyue_cli_tests 18 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1191 / haoyue_cli_tests 18 cases)
 
 # Desktop (requires pnpm install first)
 cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 314 cases across 30 files
@@ -556,7 +556,7 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
 - Local GGUF load & quantization optimization report (per-layer KV-head parsing fix for hybrid architectures + Flash Attention everywhere + measured Q4/Q5/Q8 comparison: nemotron decode +22%, long-context +45%, requantization buys no quality; reproducible via benchmarks/model-opt) (in Chinese)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1190+18+314, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1191+18+314, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review
 

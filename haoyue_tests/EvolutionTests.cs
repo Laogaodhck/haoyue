@@ -6,6 +6,8 @@ using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Evolution;
 using Haoyue.Runtime.Providers;
+using Haoyue.Runtime.Tools;
+using Haoyue.Runtime.Workspaces;
 using Microsoft.Data.Sqlite;
 
 namespace Haoyue.Tests;
@@ -129,6 +131,48 @@ public sealed class EvolutionTests : IDisposable
         Assert.Contains(_labs.Replace("\\", "/"), prompt);
         Assert.Contains("always-listed: false", prompt);
         Assert.Contains("\"action\":\"new-skill\"", prompt);
+    }
+
+    /// <summary>
+    /// 回归：反思回合真正拿到的工作区（RunCoreAsync 传给 turn 的那个）其写入边界必须恰好等于 labs。
+    /// 此前用 Workspaces.CreateGlobal()：文件工具的写入边界对 global 工作区会回落到守护进程 CWD
+    /// （PathGuard.WorkspaceRoot），而 labs 在 ~/.haoyue 下、不在 CWD 之内——草稿写入必被文件工具
+    /// 拒绝，等于整个进化引擎产不出候选；更糟的是 CWD（开发态即仓库根）反被整体放开。
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ReflectionTurnWorkspace_ConfinesWritesToLabs()
+    {
+        SeedBashFailureCluster();
+        WorkspaceInfo? turnWorkspace = null;
+        var runner = NewRunner(NewStore(), (workspace, session, prompt, ct) =>
+        {
+            turnWorkspace = workspace;
+            var draft = Path.Combine(_labs, "fix-bash-retry");
+            Directory.CreateDirectory(draft);
+            File.WriteAllText(Path.Combine(draft, "skill.yaml"),
+                "name: fix-bash-retry\ndescription: \"避免 bash 重试死循环\"\ntriggers:\n  - \"bash 失败\"\n");
+            File.WriteAllText(Path.Combine(draft, "prompt.txt"), "遇到命令失败时先检查退出码……");
+            return Task.FromResult(new AgentTurnResult(
+                "```json\n{\"action\":\"new-skill\",\"skillName\":\"fix-bash-retry\",\"summary\":\"新增重试技能\"}\n```",
+                false, null));
+        });
+
+        await runner.RunAsync("manual", CancellationToken.None);
+
+        Assert.NotNull(turnWorkspace);
+        var context = new ToolContext
+        {
+            Workspace = turnWorkspace!,
+            Events = _runtime.Events,
+            Agent = _runtime.ConfigStore.Config.Agent,
+        };
+
+        Assert.True(
+            context.TryResolveWritablePath(Path.Combine(_labs, "fix-bash-retry", "skill.yaml"), out _, out var error),
+            error);
+        Assert.False(context.TryResolveWritablePath(Path.Combine(_dir, "escape.txt"), out _, out _));
+        Assert.False(context.TryResolveWritablePath(
+            Path.Combine(HaoyuePaths.Home, "skills", "sneaky", "skill.yaml"), out _, out _));
     }
 
     // ---------------------------------------------------------------- reflection flow

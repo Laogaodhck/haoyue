@@ -31,8 +31,10 @@ public sealed record ReflectionRunResult(
 /// Evolution engine stages E2+E3: turns aggregated defect reports into candidate
 /// skill drafts through a dedicated reflection turn. The turn runs in an isolated
 /// runtime (same pattern as scheduled turns, sharing the daemon's HTTP pool and
-/// file locks) and is contractually confined to the labs directory; TurnScope
-/// bookkeeping already active in every turn rolls back anything that strays.
+/// file locks). Its workspace root is pinned to the labs directory, so the file
+/// tools' PathGuard boundary — not the model's self-restraint — is what rejects
+/// any write outside labs. (The isolated runtime has its own TurnUndoRegistry and
+/// the turn never triggers agent.undo, so the ledger is not a rollback guarantee.)
 /// Anti-self-feeding: fingerprints already in the decision log are skipped, and
 /// the reflection session id is recorded so the aggregator excludes its events.
 /// Safety red line: reflection may only produce skill-layer data assets
@@ -125,7 +127,7 @@ public sealed class ReflectionRunner
             return new ReflectionRunResult(0, 0, 0, skipped, 0, null, null);
 
         ResetLabs();
-        var workspace = _runtime.Workspaces.CreateGlobal();
+        var workspace = CreateReflectionWorkspace();
         var session = _runtime.Sessions.Create(
             workspace,
             reasoningLevel: _runtime.ConfigStore.Config.Agent.ReasoningLevel,
@@ -330,6 +332,21 @@ public sealed class ReflectionRunner
 
         return _store.Decide(fingerprint, decision == "adopt" ? EvolutionStatus.Adopted : EvolutionStatus.Rejected)!;
     }
+
+    /// <summary>
+    /// 反思回合的沙箱工作区：根就是 labs 草稿目录本身。
+    /// 文件工具的写入边界是 <c>PathGuard.WorkspaceRoot</c>，它对 global 工作区会回落到进程 CWD；
+    /// 因此这里不能用 <c>CreateGlobal()</c>——labs 位于 ~/.haoyue 下、不在守护进程 CWD 之内，
+    /// 草稿写入必被拒（同时 CWD 整个目录反被放开，包括运行时代码）。把非 global 工作区的根
+    /// 钉在 labs 上，工具层强制的边界就与提示词契约「只允许在 labs 内写文件」完全一致，越界由
+    /// 工具层拒绝，而不是依赖模型自律。
+    /// </summary>
+    internal WorkspaceInfo CreateReflectionWorkspace() => new()
+    {
+        Root = Path.GetFullPath(_labsRoot),
+        ProjectKinds = [],
+        IsGlobal = false,
+    };
 
     /// <summary>Default turn host: an isolated runtime sharing daemon infrastructure.</summary>
     private async Task<AgentTurnResult> RunIsolatedTurnAsync(

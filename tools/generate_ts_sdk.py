@@ -70,7 +70,7 @@ def render_contract_ts(contract: dict) -> str:
         f"export const CONTRACT_VERSION = {json.dumps(contract['contractVersion'])};",
         f"export const PROTOCOL_VERSION = {json.dumps(contract['protocolVersion'])};",
         "",
-        "/** 契约声明的全部 RPC 方法名（114 个）。 */",
+        f"/** 契约声明的全部 RPC 方法名（{len(methods)} 个）。 */",
         "export type MethodName =",
     ]
     names = [m["name"] for m in methods]
@@ -414,7 +414,7 @@ export { METHODS, PROTOCOL_VERSION, CONTRACT_VERSION, type MethodName, type Meth
 PACKAGE_JSON = {
     "name": "@haoyue/daemon-client",
     "version": "1.0.0",
-    "description": "haoyue daemon 的类型化 TypeScript 客户端（契约驱动生成，114 个 RPC 方法全覆盖）",
+    "description": "haoyue daemon 的类型化 TypeScript 客户端（契约驱动生成，{{METHOD_COUNT}} 个 RPC 方法全覆盖）",
     "type": "module",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -472,7 +472,7 @@ client.close();
 
 ## 类型化方法桩
 
-契约中的 114 个方法按类别生成为实例属性（100% 覆盖，CI 有护栏校验）：
+契约中的 {{METHOD_COUNT}} 个方法按类别生成为实例属性（100% 覆盖，CI 有护栏校验）：
 
 ```ts
 await client.knowledge_search({ query: "部署口径" });
@@ -509,14 +509,20 @@ python tools/generate_ts_sdk.py --check  # CI 校验：产物与契约一致
 
 
 def generate(contract: dict) -> dict[str, str]:
+    # 方法数一律从契约现场推导再注入文案：写死数字必然随契约演进漂移
+    # （此前 package.json / README / contract.ts 三处硬编码 114，契约到 125 后仍显示旧值）。
+    count = str(len(contract["methods"]))
+    package_json = json.loads(
+        json.dumps(PACKAGE_JSON, ensure_ascii=False).replace("{{METHOD_COUNT}}", count)
+    )
     return {
         "src/contract.ts": render_contract_ts(contract),
         "src/client.ts": render_client_ts(contract),
         "src/index.ts": INDEX_TS,
-        "package.json": json.dumps(PACKAGE_JSON, ensure_ascii=False, indent=2) + "\n",
+        "package.json": json.dumps(package_json, ensure_ascii=False, indent=2) + "\n",
         "tsconfig.json": json.dumps(TSCONFIG_JSON, indent=2) + "\n",
         "examples/hello.ts": EXAMPLE_TS,
-        "README.md": README_MD,
+        "README.md": README_MD.replace("{{METHOD_COUNT}}", count),
     }
 
 

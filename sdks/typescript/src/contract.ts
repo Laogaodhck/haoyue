@@ -7,39 +7,40 @@
 export const CONTRACT_VERSION = "1.0";
 export const PROTOCOL_VERSION = "2.2";
 
-/** 契约声明的全部 RPC 方法名（114 个）。 */
+/** 契约声明的全部 RPC 方法名（125 个）。 */
 export type MethodName =
   "ping" | "protocol.info" | "contract.export" | "events.recent"
   | "shutdown" | "chat" | "agent.runTurn" | "agent.steer"
   | "agent.respondApproval" | "agent.cancel" | "agent.undo" | "agent.interrupted"
   | "feedback.turn" | "workspace.get" | "workspace.open" | "workspace.files"
   | "workspace.init" | "agent.mode.get" | "agent.mode.switch" | "config.save"
-  | "config.status" | "config.rebuild" | "routing.get" | "routing.set"
-  | "advanced.get" | "advanced.set" | "web.allowedGet" | "web.allowedSet"
-  | "agent.config.get" | "agent.config.set" | "prompt.optimize" | "provider.list"
-  | "provider.upsert" | "provider.use" | "provider.remove" | "provider.test"
-  | "provider.models.fetch" | "local.models" | "model.list" | "model.catalog"
-  | "model.switch" | "model.test" | "model.status" | "model.preload"
-  | "model.unload" | "model.config.get" | "model.update" | "model.benchmark"
-  | "schedule.list" | "schedule.create" | "schedule.update" | "schedule.toggle"
-  | "schedule.delete" | "schedule.run" | "task.start" | "task.get"
-  | "task.list" | "task.cancel" | "mcp.list" | "mcp.upsert"
-  | "mcp.remove" | "mcp.reload" | "connectors.list" | "connectors.install"
-  | "connectors.uninstall" | "skill.list" | "skill.import" | "skill.toggle"
-  | "skill.official.list" | "skill.official.install" | "expert.list" | "knowledge.list"
-  | "knowledge.search" | "knowledge.save" | "knowledge.delete" | "knowledge.import"
-  | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save"
-  | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add"
-  | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh"
-  | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get"
-  | "memory.save" | "rules.list" | "rules.save" | "rules.delete"
-  | "usage.get" | "usage.timeline" | "session.list" | "session.search"
-  | "session.get" | "session.image" | "session.truncate" | "session.fork"
-  | "session.update" | "session.archive" | "session.delete" | "session.resume"
-  | "session.new" | "project.list" | "project.upsert" | "project.remove"
-  | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list" | "evolution.decide"
-  | "evolution.history" | "evolution.stats" | "evolution.config.get" | "evolution.config.set"
-  | "doctor" | "doctor.run" | "lock.list" | "factory.reset"
+  | "config.get" | "config.status" | "config.rebuild" | "routing.get"
+  | "routing.set" | "advanced.get" | "advanced.set" | "web.allowedGet"
+  | "web.allowedSet" | "agent.config.get" | "agent.config.set" | "prompt.optimize"
+  | "provider.list" | "provider.upsert" | "provider.use" | "provider.remove"
+  | "provider.test" | "provider.models.fetch" | "local.models" | "model.list"
+  | "model.catalog" | "model.switch" | "model.test" | "model.status"
+  | "model.preload" | "model.unload" | "model.config.get" | "model.update"
+  | "model.benchmark" | "schedule.list" | "schedule.create" | "schedule.update"
+  | "schedule.toggle" | "schedule.delete" | "schedule.run" | "task.start"
+  | "task.get" | "task.list" | "task.cancel" | "mcp.list"
+  | "mcp.upsert" | "mcp.remove" | "mcp.reload" | "connectors.list"
+  | "connectors.install" | "connectors.uninstall" | "skill.list" | "skill.import"
+  | "skill.toggle" | "skill.official.list" | "skill.official.install" | "expert.list"
+  | "knowledge.list" | "knowledge.search" | "knowledge.save" | "knowledge.delete"
+  | "knowledge.import" | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get"
+  | "knowledge.synonyms.save" | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete"
+  | "knowledge.source.add" | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete"
+  | "knowledge.source.refresh" | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build"
+  | "memory.get" | "memory.save" | "rules.list" | "rules.save"
+  | "rules.delete" | "usage.get" | "usage.timeline" | "session.list"
+  | "session.search" | "session.get" | "session.image" | "session.truncate"
+  | "session.fork" | "session.update" | "session.archive" | "session.delete"
+  | "session.resume" | "session.new" | "project.list" | "project.upsert"
+  | "project.remove" | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list"
+  | "evolution.decide" | "evolution.history" | "evolution.stats" | "evolution.config.get"
+  | "evolution.config.set" | "doctor" | "doctor.run" | "lock.list"
+  | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -187,8 +188,15 @@ export const METHODS: readonly MethodInfo[] = [
   {
     name: "config.save",
     category: "config",
-    description: "\u914d\u7f6e\u5b57\u6bb5\u7ea7\u8865\u4e01\uff08\u591a\u7aef\u5355\u5199\u8005\u6536\u655b\uff09",
-    paramsSchema: {"properties": {"fields": {"description": "递归字段补丁对象", "type": "string"}}, "required": ["fields"], "type": "object"},
+    description: "\u914d\u7f6e\u5b57\u6bb5\u7ea7\u8865\u4e01\uff08\u591a\u7aef\u5355\u5199\u8005\u6536\u655b\uff1b\u5e26 workspace \u65f6\u5199\u8be5\u9879\u76ee .haoyue/config.json\uff09",
+    paramsSchema: {"properties": {"fields": {"description": "递归字段补丁对象", "type": "string"}, "workspace": {"description": "目标工作区绝对路径；留空写全局配置", "type": "string"}}, "required": ["fields"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "config.get",
+    category: "config",
+    description: "\u8bfb\u53d6\u914d\u7f6e\u6587\u6863\uff08\u5bc6\u94a5\u4e0d\u56de\u4f20\uff09\uff1b\u5e26 workspace \u65f6\u8bfb\u8be5\u9879\u76ee .haoyue/config.json",
+    paramsSchema: {"properties": {"workspace": {"description": "目标工作区绝对路径；留空读全局配置", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -216,7 +224,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "routing.set",
     category: "config",
     description: "\u66f4\u65b0\u667a\u80fd\u8def\u7531\u914d\u7f6e",
-    paramsSchema: {"properties": {"deepSeekOptimizationEnabled": {"description": "DeepSeek 优化开关", "type": "boolean"}, "failoverEnabled": {"description": "故障转移开关", "type": "boolean"}}, "required": ["failoverEnabled"], "type": "object"},
+    paramsSchema: {"properties": {"deepSeekOptimizationEnabled": {"description": "DeepSeek 优化开关", "type": "boolean"}, "failoverEnabled": {"description": "故障转移开关", "type": "boolean"}, "fallback": {"description": "全局回退链（有序）", "items": {"description": "模型 ref（providerId/modelId）", "type": "string"}, "type": "array"}, "loadBalance": {"description": "负载均衡策略", "enum": ["priority", "roundRobin", "leastUsed", "lowestCost", "fastest", "sticky"], "type": "string"}, "localFailoverToCloud": {"description": "本地→云故障转移（默认关：防意外计费）", "type": "boolean"}, "retry": {"properties": {"baseDelaySeconds": {"description": "首次重试退避（秒）", "type": "number"}, "chainBudgetSeconds": {"description": "整条回退链墙钟预算（秒）", "type": "number"}, "circuitBreakThreshold": {"description": "熔断阈值（连续失败次数）", "type": "integer"}, "circuitCooldownSeconds": {"description": "熔断冷却（秒）", "type": "number"}, "fallbackRetryAttempts": {"description": "每个回退候选额外尝试次数（0-5）", "type": "integer"}, "maxAttempts": {"description": "激活模型的最大尝试次数（1-10）", "type": "integer"}, "maxDelaySeconds": {"description": "退避上限（秒）", "type": "number"}}, "type": "object"}}, "required": ["failoverEnabled"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -258,7 +266,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "agent.config.set",
     category: "config",
     description: "\u90e8\u5206\u66f4\u65b0\u667a\u80fd\u4f53\u8bbe\u7f6e\uff08\u672a\u4f20\u5b57\u6bb5\u4fdd\u6301\u539f\u503c\uff09",
-    paramsSchema: {"properties": {"autoVerify": {"description": "自动验证与修复开关", "type": "boolean"}, "compactionTailRatio": {"description": "压缩保留最近对话的比例（0.1-0.9）", "type": "number"}, "delegationEnabled": {"description": "探索者智能体（delegate_task 委派）开关", "type": "boolean"}, "networkEnabled": {"description": "网页搜索（联网工具）开关", "type": "boolean"}, "turnCostBudget": {"description": "单回合费用上限（按模型定价折算）；0 为不限", "type": "number"}, "turnTokenBudget": {"description": "单回合 token 上限（输入+输出）；0 为不限", "type": "integer"}, "turnWallClockSeconds": {"description": "单回合墙钟上限（秒）；0 为不限", "type": "integer"}, "visionModel": {"description": "图像回合优先使用的模型 ref；空串恢复自动选择", "type": "string"}}, "type": "object"},
+    paramsSchema: {"properties": {"autoVerify": {"description": "自动验证与修复开关", "type": "boolean"}, "bashTimeoutSeconds": {"description": "bash 单次执行超时（秒）", "type": "integer"}, "compactionTailRatio": {"description": "压缩保留最近对话的比例（0.1-0.9）", "type": "number"}, "delegationEnabled": {"description": "探索者智能体（delegate_task 委派）开关", "type": "boolean"}, "delegationMaxDepth": {"description": "子代理嵌套深度上限（1-4）", "type": "integer"}, "delegationMaxPerTurn": {"description": "每回合子任务配额（1-64）", "type": "integer"}, "enableContextCompaction": {"description": "上下文压缩总开关", "type": "boolean"}, "extraReadableRoots": {"description": "工作区之外额外授权读取的绝对路径（整组替换）", "items": {"description": "绝对路径", "type": "string"}, "type": "array"}, "factsInjectTopK": {"description": "每回合注入的项目事实条数上限（0-100）", "type": "integer"}, "localModelConcurrency": {"description": "本地推理并发槽（1-16）", "type": "integer"}, "localModelIdleUnloadMinutes": {"description": "本地权重空闲回收（分钟，0 = 不回收）", "type": "integer"}, "localModelMaxResident": {"description": "本地权重同时驻留上限（1-16）", "type": "integer"}, "localModelPreload": {"description": "启动预热活跃本地模型", "type": "boolean"}, "maxOutputContinuations": {"description": "输出截断后的续写次数上限（0-50）", "type": "integer"}, "maxRepairAttempts": {"description": "自动验证失败后的修复次数上限（0-10）", "type": "integer"}, "maxSteps": {"description": "单回合最大步数（1-500）", "type": "integer"}, "maxToolOutputChars": {"description": "单次工具输出硬上限（字符）", "type": "integer"}, "memoryConsolidationEnabled": {"description": "记忆固化总开关", "type": "boolean"}, "memoryConsolidationLookbackDays": {"description": "记忆固化扫描窗口（天，1-30）", "type": "integer"}, "networkEnabled": {"description": "网页搜索（联网工具）开关", "type": "boolean"}, "personality": {"description": "人格提示词键", "enum": ["pragmatic", "friendly"], "type": "string"}, "scheduleWebhookUrl": {"description": "计划任务结果回调地址（http(s)；空串 = 关闭）", "type": "string"}, "scheduledTurnTimeoutSeconds": {"description": "计划任务回合墙钟上限（秒）", "type": "integer"}, "sessionRetentionDays": {"description": "会话保留天数（0 = 不自动归档）", "type": "integer"}, "systemPrompt": {"description": "主系统提示词键（如 system/default，不能为空）", "type": "string"}, "thinkingBudgetTokens": {"description": "本地思考预算（token，0 = 不思考）", "type": "integer"}, "turnCostBudget": {"description": "单回合费用上限（按模型定价折算）；0 为不限", "type": "number"}, "turnTokenBudget": {"description": "单回合 token 上限（输入+输出）；0 为不限", "type": "integer"}, "turnWallClockSeconds": {"description": "单回合墙钟上限（秒）；0 为不限", "type": "integer"}, "visionModel": {"description": "图像回合优先使用的模型 ref；空串恢复自动选择", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -279,7 +287,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "provider.upsert",
     category: "provider",
     description: "\u521b\u5efa\u6216\u66f4\u65b0\u63d0\u4f9b\u5546",
-    paramsSchema: {"properties": {"apiKey": {"description": "API Key（留空保持已存值；响应不回传明文）", "type": "string"}, "baseUrl": {"description": "API 基础地址", "type": "string"}, "clearApiKey": {"description": "清除已存 API Key", "type": "boolean"}, "enabled": {"description": "是否启用", "type": "boolean"}, "id": {"description": "提供商标识", "type": "string"}, "kind": {"description": "提供商类型", "enum": ["openai", "anthropic", "local"], "type": "string"}, "modelDetails": {"description": "模型明细列表", "items": {"properties": {"alias": {"description": "显示别名", "type": "string"}, "contextWindow": {"description": "上下文窗口", "type": "integer"}, "id": {"description": "模型 id", "type": "string"}, "maxOutput": {"description": "最大输出 token", "type": "integer"}, "vision": {"description": "是否支持视觉", "type": "boolean"}}, "required": ["id"], "type": "object"}, "type": "array"}, "modelListUrl": {"description": "模型列表地址", "type": "string"}, "modelsDirectory": {"description": "本地模型目录", "type": "string"}, "name": {"description": "显示名", "type": "string"}, "priority": {"description": "路由优先级", "type": "integer"}, "promptCaching": {"description": "提示缓存开关", "type": "boolean"}, "proxy": {"description": "代理地址", "type": "string"}, "timeoutSeconds": {"description": "请求超时（秒）", "type": "integer"}}, "required": ["id"], "type": "object"},
+    paramsSchema: {"properties": {"apiKey": {"description": "API Key（留空保持已存值；响应不回传明文）", "type": "string"}, "baseUrl": {"description": "API 基础地址", "type": "string"}, "clearApiKey": {"description": "清除已存 API Key", "type": "boolean"}, "enabled": {"description": "是否启用", "type": "boolean"}, "headers": {"additionalProperties": {"type": "string"}, "description": "自定义请求头；值为空串表示保持已存值", "type": "object"}, "id": {"description": "提供商标识", "type": "string"}, "kind": {"description": "提供商类型", "enum": ["openai", "anthropic", "local"], "type": "string"}, "localPrefixReuse": {"description": "本地模型复用 KV 前缀", "type": "boolean"}, "modelDetails": {"description": "模型明细列表", "items": {"properties": {"alias": {"description": "显示别名", "type": "string"}, "contextWindow": {"description": "上下文窗口", "type": "integer"}, "fallbackModelId": {"description": "备用回退模型 id", "type": "string"}, "id": {"description": "模型 id", "type": "string"}, "inputPricePerMTok": {"description": "输入价（每百万 token）", "type": "number"}, "maxOutput": {"description": "最大输出 token", "type": "integer"}, "outputPricePerMTok": {"description": "输出价（每百万 token）", "type": "number"}, "vision": {"description": "是否支持视觉", "type": "boolean"}}, "required": ["id"], "type": "object"}, "type": "array"}, "modelListUrl": {"description": "模型列表地址", "type": "string"}, "modelsDirectory": {"description": "本地模型目录", "type": "string"}, "name": {"description": "显示名", "type": "string"}, "organization": {"description": "组织标识（OpenAI organization 头）", "type": "string"}, "priority": {"description": "路由优先级", "type": "integer"}, "promptCaching": {"description": "提示缓存开关", "type": "boolean"}, "proxy": {"description": "代理地址", "type": "string"}, "reasoningEffortMap": {"additionalProperties": {"type": "string"}, "description": "思考档位 → 供应商 wire 值的映射", "type": "object"}, "threads": {"description": "本地推理线程数；0/缺省 = 自动", "type": "integer"}, "timeoutSeconds": {"description": "请求超时（秒）", "type": "integer"}}, "required": ["id"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

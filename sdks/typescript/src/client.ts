@@ -241,11 +241,17 @@ export class DaemonClient {
   /** config 类别方法。 */
   readonly config = {
     /**
-     * 配置字段级补丁（多端单写者收敛）
+     * 配置字段级补丁（多端单写者收敛；带 workspace 时写该项目 .haoyue/config.json）
      * 终态事件：result, error
      */
     configSave: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("config.save", params),
+    /**
+     * 读取配置文档（密钥不回传）；带 workspace 时读该项目 .haoyue/config.json
+     * 终态事件：result, error
+     */
+    configGet: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("config.get", params),
     /**
      * 配置一致性诊断
      * 终态事件：result, error

@@ -98,8 +98,8 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 
 ### 📋 Background Task Queue
 
-- **Long tasks in the background**: the daemon RPC `task.start` submits a full agent turn for background execution (concurrency cap 4, hard timeout protection); `task.get` / `task.list` / `task.cancel` manage tasks; terminal states broadcast via `task.updated`, sessions persist, and progress replays through `events.recent` — frontend disconnects never lose progress
-- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 124 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (wired into the CI dotnet job) — see [SDK README](sdks/typescript/README.md)
+- **Long tasks in the background**: the daemon RPC `task.start` submits a full agent turn for background execution (concurrency cap 4, hard timeout protection); `task.get` / `task.list` / `task.cancel` manage tasks; terminal states broadcast via `task.updated`, sessions persist, and progress replays through `events.recent` — frontend disconnects never lose progress; the desktop's right-pane "Background Tasks" tab is the full UI for this chain (dispatch / progress / cancel / jump back to the session)
+- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 125 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (wired into the CI dotnet job) — see [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use
 
@@ -113,15 +113,21 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 
 ### 🖥️ Desktop App
 
+- **Three-Column Information Architecture**: a persistent left rail (sessions / projects / timeline, with the primary entry labeled by scope — "current project" vs "global"), a center conversation stream, and a right-hand workspace (changes, background tasks, built-in browser, scheduled tasks); settings, knowledge base, extensions, scheduled tasks, and archive are sibling views inside the right pane rather than full-page takeovers, and back / forward run on a browser-style history stack
 - **Modern UI**: Electron + Vue 3 + TypeScript, streaming Markdown, image preview, reasoning depth control
 - **Expert System**: built-in domain expert catalog with one-click role presets
-- **Visual Configuration**: providers, models, profiles, MCP servers, and local inference acceleration — all GUI-managed; the "Models & Providers" page shows the active model's parameters (context window / max output), capability badges (streaming / tools / thinking / vision / reasoning), and the full model catalog; local models gain a "Load Settings" page — six sections (context & performance, generation, thinking, memory, speculative decoding, advanced) with view/edit/save wired into the load pipeline
-- **Scheduled Tasks**: cron-driven scheduling turns with instant desktop notifications on failure and Webhook callbacks
+- **Visual Configuration**: providers, models, profiles, and MCP servers — all GUI-managed; the "Models & Providers" page shows the active model's parameters (context window / max output), capability badges (streaming / tools / thinking / vision / reasoning), and the full model catalog; providers accept Organization, Threads, KV prefix reuse, custom headers, and reasoning-effort maps (secret header values are never echoed back — leave blank to keep), models accept a fallback model and input / output pricing; local models gain a "Load Settings" page — six sections (context & performance, generation, thinking, memory, speculative decoding, advanced) with view/edit/save wired into the load pipeline
+- **Local Inference Dashboard**: the "Inference Acceleration" page shows, per local model, the **effective parameters + provenance layer (model-level / provider-level / adaptive tier) + measured throughput**, with an explicit warning when model-level settings shadow provider-level ones, and a single write path ("Load Settings"); warm-up, unload, benchmark (TTFT / decode / prefill / cache hits), and VRAM governance (max resident models, concurrency, idle unload) are all visible
+- **Routing & Failover Visualization**: failover toggle, local→cloud fallback (with a red-boxed cost warning), fallback-chain ordering / append / removal, load-balancing mode, retries and circuit breaking (including the chain budget)
+- **Background Task Panel**: a right-pane "Background Tasks" tab surfaces `task.start/list/get/cancel` — dispatch a background turn, watch live `task.updated` progress, cancel, and jump back to the owning session
+- **Scheduled Tasks**: cron-driven scheduling turns that show the last run's status / time / error and an output excerpt inline, with one-click opening of that run's session; instant desktop notifications on failure and Webhook callbacks
+- **Workspace-Level Configuration**: project properties gain an "Agent" tab — model, provider, temperature, agent mode, language, personality, verify commands (multi-line, fail-fast), and system prompt can be set as project defaults, written to `<workspace>/.haoyue/config.json` with changed leaves only
 - **Turn Undo & Feedback**: one-click revert of file changes; thumbs-down any assistant answer with a reason — the feedback feeds straight into the evolution signals
 - **"Allow Once" Approval Chain**: a built-in guard hit is no longer a dead end — a dialog shows the tool name, an argument summary, and the block reason, and the user can reject or "allow once" for a single pass (`approval_request` stream event + `agent.respondApproval` RPC, with the wait timing out as a rejection); blocks and grants stay visible throughout
 - **Cross-Session Full-Text Search**: typing in the sidebar searches local tasks immediately and, at ≥2 characters, automatically fans out across every workspace (FTS5 trigram with a LIKE fallback, including projects that are not loaded and archived sessions); hits open directly and duplicates of already-loaded sessions are hidden
 - **Readable Process**: tool rows expand an argument summary and show duration; the streaming region is announced via aria-live; Esc stops the active turn; the conversation header shows context-window occupancy
 - **Drafts Survive**: unsent input (text + attachments) persists locally, so switching tasks or restarting loses nothing
+- **Findable Settings**: the settings page supports search by section name and keyword; when the daemon is offline the page turns read-only with an explicit "an empty list ≠ nothing configured" notice; global and per-task switches are scope-labeled (global / this task), and a switch suppressed by a global toggle explains why with a jump link instead of silently doing nothing
 - **Diagnostics Entry Points**: the settings page links straight to daemon.log and diagnostic-bundle export; the About page has a built-in check-for-updates link
 
 ### 💻 Modern Terminal Experience
@@ -483,7 +489,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1191 / haoyue_cli_tests 18 cases)
 
 # Desktop (requires pnpm install first)
-cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 314 cases across 30 files
+cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 322 cases across 31 files
 ```
 
 The gates apply to the `haoyue_runtime` assembly (`coverage.runsettings` only `Include`s runtime — CLI and desktop are unchecked): line coverage ≥70%, branch coverage ≥55% (measured baseline 56.9%). Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), and giant-class line budgets are all enforced by guard tests. The desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job; the three `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning, `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph).
@@ -556,7 +562,8 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
 - Local GGUF load & quantization optimization report (per-layer KV-head parsing fix for hybrid architectures + Flash Attention everywhere + measured Q4/Q5/Q8 comparison: nemotron decode +22%, long-context +45%, requantization buys no quality; reproducible via benchmarks/model-opt) (in Chinese)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1191+18+314, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1191+18+322, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Desktop UI review — three-column layout & key bindings (22 findings across layout responsibility / dead keys / duplicate entries / capability gaps, ranked P1-P3, plus 14 batched recommendations and an item-by-item fix reconciliation: background task panel, local inference dashboard, routing & failover, workspace config, agent expert settings, settings search and offline read-only)
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review
 

@@ -97,8 +97,8 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 
 ### 📋 后台任务队列
 
-- **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度
-- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），124 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
+- **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度；桌面端右栏「后台任务」页签是该链路的完整界面（派发 / 进度 / 取消 / 跳回会话）
+- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），125 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use（电脑操作智能体）
 
@@ -112,15 +112,21 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 
 ### 🖥️ 桌面应用
 
+- **三栏信息架构**：左栏常驻（会话 / 项目 / 时间视图，主入口标明「当前项目 / 全局」作用域），中栏对话流，右栏工作区（变更、后台任务、内置浏览器、计划任务）；设置、知识库、扩展、计划任务、归档均为右栏同级视图而非独立整页，前进 / 后退走浏览器式历史栈
 - **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown、图片预览、推理深度调节
 - **专家系统**：内置领域专家库，一键切换角色预设
-- **图形化配置**：Provider、模型、Profile、MCP 服务器、本地推理加速全程可视化；「模型与提供商」页展示活动模型参数（上下文窗口/最大输出）与能力徽章（流式/工具/思考/视觉/推理）及全模型目录；本地模型附「加载配置」页——上下文与性能、生成采样、思考、内存、推测解码、高级六分区查看/编辑/保存，与加载流程实时对接
-- **定时任务**：cron 驱动的调度回合，失败即时桌面通知，支持 Webhook 回调
+- **图形化配置**：Provider、模型、Profile、MCP 服务器全程可视化；「模型与提供商」页展示活动模型参数（上下文窗口/最大输出）与能力徽章（流式/工具/思考/视觉/推理）及全模型目录；提供商可配 Organization、Threads、KV 前缀复用、自定义请求头与思考档位映射（密钥类头的值不回传、留空即保持），模型可配回退模型与输入/输出单价；本地模型另有「加载配置」页——上下文与性能、生成采样、思考、内存、推测解码、高级六分区查看/编辑/保存，与加载流程实时对接
+- **本地推理看板**：「推理加速」页对每个本地模型显示**最终生效参数 + 来源层级（模型级 / 提供商级 / 自适应档位）+ 实测吞吐**，模型级覆盖提供商级时给出显式警告，写入口只保留「加载配置」一处；预热、卸载、基准测试（TTFT / decode / prefill / 缓存命中）与显存治理（最大驻留模型数、并发、空闲卸载）全部可视
+- **路由与容灾可视化**：故障转移开关、本地→云回退（带红框费用警告）、回退链排序 / 追加 / 删除、负载均衡模式、重试与熔断（含链式预算）
+- **后台任务面板**：右栏「后台任务」页签把 `task.start/list/get/cancel` 接到界面——派发后台回合、实时接收 `task.updated` 进度、取消任务、一键跳回对应会话
+- **定时任务**：cron 驱动的调度回合，行内展示上次运行状态 / 时间 / 错误与输出摘要，可就地打开本次运行会话；失败即时桌面通知，支持 Webhook 回调
+- **工作区级配置**：项目属性新增「智能体」页签——模型、提供商、温度、Agent 模式、语言、人格、验证命令（多行 fail-fast）与系统提示词可设为项目级默认，写入 `<workspace>/.haoyue/config.json` 且只提交变更字段
 - **回合撤销与负反馈**：文件变更一键回滚；每条助手回答可点踩并附原因，反馈直接进入进化信号
 - **「本次允许」审批链路**：内置高危守卫拦截后不再只有静态拒绝——弹窗展示工具名、参数摘要与拦截原因，用户可「拒绝」或「本次允许」一次性放行（`approval_request` 流式事件 + `agent.respondApproval` RPC，等待超时按拒绝处理），拦截与放行全程可见
 - **跨会话全文检索**：侧栏搜索框键入即搜本地任务，≥2 字自动跨全部工作区补搜（FTS5 trigram + LIKE 兜底，含未加载项目与归档会话），命中可直接打开；本地已有会话自动去重
 - **过程可读**：工具行展开参数摘要并显示耗时；流式区域 aria-live 播报；Esc 停止当前回合；会话头部显示上下文占用比例
 - **草稿不丢**：未发送的输入（文字 + 附件）持久化到本地，切任务 / 重启不丢
+- **设置可达性**：设置页支持按分区名与关键词搜索；daemon 离线时整页只读并明确提示「空列表 ≠ 未配置」；全局开关与任务级开关带作用域标签（全局 / 本任务），被全局压制时给出可点跳转的说明而非静默失效
 - **诊断入口**：设置页直达 daemon.log 与诊断包导出；关于页内置检查更新入口
 
 ### 💻 现代化终端体验
@@ -482,7 +488,7 @@ parameters:          # 提示末尾追加参数收集说明
 dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1191 / haoyue_cli_tests 18 用例）
 
 # 桌面端（需先 pnpm install）
-cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest 314 用例（30 个文件）
+cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest 322 用例（31 个文件）
 ```
 
 门槛作用于 `haoyue_runtime` 程序集（`coverage.runsettings` 的 `Include` 只含 runtime，CLI/桌面不在检）：行覆盖 ≥70%、分支覆盖 ≥55%（实测基线 56.9%）。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算均有护栏测试强制。桌面 vitest 与 `pnpm typecheck && pnpm build` 在 CI 的 desktop job 中执行；`benchmarks/*` 三个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）。
@@ -555,7 +561,8 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
 - 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1191+18+314、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1191+18+322、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 桌面端 UI 审查——三栏布局与按键绑定（布局职责 / 死键 / 重复入口 / 零入口能力面 22 项发现按 P1-P3 排序，附 14 条分批建议与逐条修复对账：后台任务面板、本地推理看板、路由容灾、工作区配置、专家参数、设置搜索与离线只读）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）
 - ProviderManager 并发与参数审查
 

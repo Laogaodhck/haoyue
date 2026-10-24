@@ -47,21 +47,33 @@ build.cmd --skip-install
 
 Distribute the whole `publish\Haoyue-win-x64` folder. Packaging downloads Electron binaries; the script configures download mirrors and retries transient packaging failures.
 
+## Layout and the right-hand work dock
+
+The main window is a fixed three-column layout:
+
+- The **left rail** is always present and carries the tasks / projects / timeline views plus the search box. The “New task” entry states whether it creates a **project task** or a **global task**, and hovering shows the landing spot. The project section stays available in the timeline view (collapsed by default).
+- The **center column** is the conversation stream.
+- The **right-hand work dock** switches between tabs: **Changes** (this turn's file diff), **History** (Git commits), **Tools** (calls in this session), **Browser** (built-in browser), and **Background Tasks**. It is resizable by dragging and becomes an overlay in narrow windows.
+
+Settings, the Knowledge Center, Extensions (connectors / skills / experts), Scheduled Tasks, and Archive are sibling views inside the right pane rather than full-page takeovers — switching them keeps the left rail and top navigation in place. The back / forward buttons in the title bar walk a browser-style history stack.
+
 ## Project and global tasks
 
 Desktop supports two task scopes:
 
 - A **project task** is bound to a local directory and can use file, terminal, Git changes, and Git history features.
-- A **global task** has no project directory and is intended for general conversation; local file, terminal, and Git tools are unavailable.
+- A **global task** has no project directory and is intended for general conversation; it still has local file, terminal, and Git tools, it simply does not show the project-level entry points.
 
 Creating a task does not immediately create a Runtime Session. Desktop creates and persists the session when the first message is sent. The “Global tasks” entry expands the global task list instead of forcing a switch to a particular task.
 
 Titles are derived from the first prompt. Tasks can be archived, restored, or deleted, including bulk operations within a project or the global scope. Archived tasks are read-only. Deleting a project permanently deletes every Session under that project, including archived Sessions, but does not delete local project files.
 
+Project properties gain an **Agent tab**: model, provider, temperature, agent mode, language, personality, verify commands (multi-line, fail-fast), and the system prompt can be set as that project's own defaults, written to `<project root>/.haoyue/config.json`. Only changed fields are submitted, so nothing you wrote by hand or through the CLI gets overwritten.
+
 ## Start a conversation
 
 1. Select “New task,” then choose a project or use the directory-free global scope.
-2. Select an Agent mode and `provider/model` in the composer.
+2. Select an Agent mode and `provider/model` in the composer. The Agent mode is **global** (the dropdown carries a “global” marker) and writes to the current workspace's `.haoyue/config.json`; to pin a mode per project, set it as a project default in project properties → Agent tab.
 3. Enter a request and send it, or click a starter-prompt card. A card fills the composer but **does not send automatically**.
 4. Follow streaming text, reasoning status, tool activity, and complete error details.
 
@@ -75,7 +87,9 @@ Each task keeps its own draft — text, unsent images, and file attachments are 
 
 You can keep typing while the Agent is streaming. Pressing “Send” adds the message to a queue; queued messages are sent in order after the current turn finishes, and can be stacked or removed. Pressing “Steer” sends a queued message as additional guidance to the active turn without cancelling its in-flight request.
 
-Project tasks show the complete workspace path and shortcuts for opening the directory, terminal, Git changes, Git history, and task settings. Global tasks omit the path and project-only tools.
+The network (globe) toggle in the composer is gated twice: by the current task's network switch and by the global one under Settings → Agent → Web search. When the global switch is off the icon is dimmed and its tooltip says where to turn it on — never a silent no-op.
+
+Project tasks show the complete workspace path and shortcuts for opening the directory, terminal, Git changes, Git history, and task settings. The task settings dialog separates scopes: **reasoning depth** and **network** apply to this task only, while **model** and **agent mode** are global and are labeled as such. Global tasks omit the path and project-only tools.
 
 ## Follow the execution
 
@@ -86,6 +100,12 @@ Each tool call is a collapsed row (tool, summary, duration); expand it for argum
 When a built-in guard intercepts a high-risk call, Desktop asks for confirmation and names the tool, an argument summary, and the reason. “Allow once” permits that call only; “Deny” or no answer within 120 seconds skips it. Both decisions land in `.haoyue/audit/tools.jsonl`.
 
 A stopped turn reads “Stopped by you; the reply may be incomplete” and writes a `>>> [turn interrupted]` marker into the Session. After a reconnect Desktop replays turns that finished while it was offline, and a turn left incomplete by an abnormal Daemon exit is classified as interrupted rather than staying “Running”.
+
+## Background tasks and scheduled tasks
+
+The **Background Tasks** tab in the right dock exposes the daemon's whole background-task chain: dispatch a full agent turn for background execution (concurrency cap 4), watch live status and progress, cancel it, and jump back to the owning session. Closing the window or reconnecting loses nothing — progress replays from the event ledger.
+
+**Scheduled Tasks** is a right-pane sibling view of Settings and Archive for cron-driven turns: each row shows the last run's status, time, error, and an output excerpt; “View output” expands the full text and “Open this session” jumps to the session that run produced. Failures raise a desktop notification, and when you need an external callback, the page points to Settings → Agent → Expert parameters for the Webhook URL.
 
 ## History and search
 
@@ -101,6 +121,10 @@ Open “Settings → Models & Providers” to:
 - view and edit API keys stored in the configuration (resolved for display, encrypted at rest);
 - store and manage the API key in the configuration;
 - manage models, Base URL, proxy, timeout, and priority;
+- configure advanced provider fields: organization and project, concurrency threads (local inference), KV prefix reuse (local inference), custom request headers (secret header values are never echoed — leave blank to keep), and reasoning-effort maps;
+- set a fallback model and input / output pricing per model (used to price usage reports);
+- pick the vision sub-agent model (automatic or a specific vision-capable model);
+- **Routing & failover**: failover toggle, local→cloud fallback (red-boxed cost warning when enabled), fallback-chain ordering and add/remove, load-balancing mode, retries and circuit breaking (including the chain budget);
 - create Profiles and switch the active model or routing strategy;
 - local models (GGUF) gain a "Load Settings" panel — six sections (context & performance, generation, thinking, memory, speculative decoding, advanced) with view/edit/save, "Load & Verify", and load reports (see [Providers, Models, and Smart Routing](/en/doc/providers)).
 
@@ -122,11 +146,15 @@ The sidebar "Extensions" entry opens a Qoder-style hub with three categories:
 
 The settings workbench also provides:
 
-- **Agent**: centralize model selection and behavior boundaries — root model, vision sub-agent model (automatic or a specific vision-capable model), web search, the explorer agent (delegate_task delegation toggle), and auto-verify & repair;
+- **Agent**: behavior boundaries — web search, the explorer agent (delegate_task delegation toggle), auto-verify & repair, plus the full expert-parameter set (max steps, thinking budget, tool-output cap, Bash timeout, session retention, memory consolidation, extra readable directories, personality and system prompt);
+- **Inference Acceleration**: per local model, the **effective parameters + provenance layer** (model-level / provider-level / adaptive tier) and measured throughput, with an explicit warning when model-level settings shadow provider-level ones; warm-up, unload, benchmark (TTFT / decode / prefill / cache hits), and VRAM governance (resident models, concurrency, idle unload). Parameters are written in exactly one place (“Models & Providers → Load Settings”); this page only edits provider-level defaults;
 - **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
 - **Evolution**: defect signals at a glance, manual or scheduled reflection, adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
 - **Knowledge Center**: browse and revise what the agent saves as notebooks → sources → entries — attribution badges, cross-notebook search, tag filtering, Markdown export and the synonym editor — see the [Knowledge Center](/en/doc/knowledge);
-- **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry.
+- **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry;
+- **Advanced**: extra readable-directory allowlist, Computer Use and network-operation switches, a JSON editor for the global configuration (redacted on read, submitting only changed fields), and a factory-reset danger zone at the bottom.
+
+The settings page has a search box that jumps to a switch by section name or keyword. While the daemon is disconnected the whole page turns read-only with an explanation (an empty list then means “could not read”, not “nothing configured”), and notices dismiss themselves after four seconds.
 
 ![Configure an MCP Server in Desktop](/screenshots/desktop/mcp-servers.png)
 

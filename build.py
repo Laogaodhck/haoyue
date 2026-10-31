@@ -861,6 +861,28 @@ def require_command(name: str) -> str:
     return command
 
 
+RUNTIME_CONTENT_DIRS = ("prompts", "connectors", "doc_toolkit")
+
+
+def verify_runtime_stage(stage: Path, rid: str) -> None:
+    """校验 staging 内的 Runtime 自带原生推理后端与内容目录。
+
+    electron-builder 只做目录拷贝，缺件不会报错；缺原生库时症状是 Desktop 侧
+    doctor 调用抛出 LLama.Native 的 TypeInitializationException，排查成本很高。
+    """
+    executable = stage / ("haoyue.exe" if rid.startswith("win") else "haoyue")
+    if not executable.is_file():
+        raise BuildError(f"Runtime executable is missing from staging: {executable}")
+    native_dir = stage / "runtimes" / rid / "native"
+    if not native_dir.is_dir() or not any(native_dir.iterdir()):
+        raise BuildError(f"Runtime native backends are missing from staging: {native_dir}")
+    missing = [name for name in RUNTIME_CONTENT_DIRS if not (stage / name).is_dir()]
+    if missing:
+        raise BuildError(
+            f"Runtime content directories are missing from staging ({', '.join(missing)}): {stage}"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # packages.lock.json 漂移保护
 # --------------------------------------------------------------------------- #
@@ -1670,6 +1692,7 @@ def main() -> int:
         }
 
     start_time = time.time()
+    build_succeeded = False
     dotnet = require_command("dotnet")
     pnpm = require_command("pnpm")
 
@@ -1776,6 +1799,7 @@ def main() -> int:
                     for entry in runtimes_dir.iterdir():
                         if entry.name != rid:
                             remove_directory(entry)
+                verify_runtime_stage(runtime_stage, rid)
             console.print(f"[bold green]✓[/bold green] .NET 自包含 Runtime ({cur_platform} {rid}) 编译完成")
 
         # 4b. 还原 GPU/RID 发布重写的锁文件：仓库基准是「无 RID + 默认 CPU 后端」，
@@ -1940,6 +1964,7 @@ def main() -> int:
 
         target_label = " / ".join(target_labels)
         version_committed = True
+        build_succeeded = True
         elapsed = time.time() - start_time
 
         # 渲染最终构建结果摘要表格
@@ -1976,7 +2001,10 @@ def main() -> int:
                 f"\n[bold yellow]已将全部版本源恢复为 {previous_version}（因为构建未能正常完成）。[/bold yellow]"
             )
         if not args.keep_output:
-            remove_directory(DESKTOP_DIR / "runtime")
+            # 成功时保留 staging：它同时是 `pnpm dev` 的 Runtime 来源，清掉后开发态只能
+            # 回退到 Debug 产物，原生后端不一致会让 doctor 初始化失败。
+            if not build_succeeded:
+                remove_directory(DESKTOP_DIR / "runtime")
             remove_directory(BUILDER_OUTPUT)
 
 

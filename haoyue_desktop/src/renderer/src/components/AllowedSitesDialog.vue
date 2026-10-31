@@ -97,7 +97,8 @@ function removeSite(entry: string): void {
           <p class="dialog-desc">
             Agent 的网页抓取 (web_fetch) 只能访问列表中的网站。使用 https://*.example.com
             允许访问子域名，并单独添加 https://example.com。localhost / 127.x / ::1
-            始终可以访问。列表为空时不限制外部访问。
+            始终可以访问。列表为空时 web_fetch 不限制外部访问；右侧「浏览」页签默认只允许本地主机，
+            外部站点需在此显式添加。
           </p>
 
           <form class="allowed-sites-input-row" @submit.prevent="addSite">
@@ -120,7 +121,7 @@ function removeSite(entry: string): void {
             </li>
           </ul>
           <p v-else-if="!loading" class="allowed-sites-empty">
-            列表为空：当前不限制外部网站访问。添加条目后，仅列表中的站点与本地主机可用。
+            列表为空：web_fetch 不限制外部访问，内置浏览器仅允许本地主机。
           </p>
 
           <p class="allowed-sites-note">

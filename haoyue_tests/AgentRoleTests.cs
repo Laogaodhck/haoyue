@@ -71,7 +71,7 @@ public sealed class AgentRoleTests : IDisposable
             NewContext(), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Equal(0, delegator.Calls.Count);
+        Assert.Empty(delegator.Calls);
     }
 
     [Fact]

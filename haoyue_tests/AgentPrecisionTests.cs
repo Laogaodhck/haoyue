@@ -618,21 +618,20 @@ public sealed class AgentPrecisionTests
     }
 
     private sealed class AgentHarness(
-        ConfigStore store, HaoyueRuntime runtime, AgentSession session, WorkspaceInfo workspace,
-        ScriptedClientFactory factory) : IDisposable
+        ConfigStore store, HaoyueRuntime runtime, AgentSession session, WorkspaceInfo workspace) : IDisposable
     {
         public ConfigStore Store { get; } = store;
         public AgentSession Session { get; } = session;
         public WorkspaceInfo Workspace { get; } = workspace;
 
         public async Task<AgentTurnResult> RunAsync(string input) =>
-            await runtime.Agent.RunTurnAsync(Session, workspace, input, CancellationToken.None);
+            await runtime.Agent.RunTurnAsync(Session, Workspace, input, CancellationToken.None);
 
         public void Dispose()
         {
             runtime.Dispose();
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (Directory.Exists(workspace.Root)) Directory.Delete(workspace.Root, true);
+            if (Directory.Exists(Workspace.Root)) Directory.Delete(Workspace.Root, true);
         }
 
         public static async Task<AgentHarness> CreateAsync(
@@ -665,7 +664,7 @@ public sealed class AgentPrecisionTests
             });
             var session = runtime.Sessions.Create(workspace, networkEnabled: false);
             await Task.CompletedTask;
-            return new AgentHarness(store, runtime, session, workspace, capture);
+            return new AgentHarness(store, runtime, session, workspace);
         }
     }
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   checkBrowserUrl,
   evaluateUrl,
+  isBrowserPermissionAllowed,
   parseRule,
   withScheme,
   type AllowlistSource,
@@ -45,8 +46,17 @@ describe('parseRule', () => {
 })
 
 describe('evaluateUrl', () => {
-  it('allows everything while the allowlist is empty', () => {
-    expect(evaluateUrl('https://anywhere.example/x', []).allowed).toBe(true)
+  it('only allows local hosts while the allowlist is empty', () => {
+    const external = evaluateUrl('https://anywhere.example/x', [])
+    expect(external.allowed).toBe(false)
+    expect(external.reason).toContain('本地主机')
+    expect(evaluateUrl('http://127.0.0.1:8080/', []).allowed).toBe(true)
+    expect(evaluateUrl('http://localhost:5173/', []).allowed).toBe(true)
+  })
+
+  it('rejects non-http schemes even for local hosts', () => {
+    expect(evaluateUrl('file:///etc/passwd', []).allowed).toBe(false)
+    expect(evaluateUrl('file:///etc/passwd', rules(['https://example.com'])).allowed).toBe(false)
   })
 
   it('always allows localhost but denies unlisted external origins', () => {
@@ -76,15 +86,42 @@ describe('checkBrowserUrl', () => {
     expect(denied.reason).toContain('白名单限制')
   })
 
-  it('rejects non-http schemes and falls back to unrestricted when the daemon is unreachable', async () => {
+  it('denies external sites on an empty allowlist and when the daemon is unreachable', async () => {
     const source = sourceWith([])
     const raw = await checkBrowserUrl(source, 'file:///etc/passwd')
     expect(raw.ok).toBe(false)
+
+    const external = await checkBrowserUrl(source, 'https://example.com')
+    expect(external.ok).toBe(false)
 
     const offline: AllowlistSource = { request: () => Promise.reject(new Error('daemon down')) }
     await expect(checkBrowserUrl(offline, 'localhost:3000')).resolves.toEqual({
       ok: true,
       url: 'http://localhost:3000/'
     })
+    const offlineExternal = await checkBrowserUrl(offline, 'https://example.com')
+    expect(offlineExternal.ok).toBe(false)
+  })
+})
+
+describe('isBrowserPermissionAllowed', () => {
+  it('keeps only harmless permissions for the embedded browser session', () => {
+    expect(isBrowserPermissionAllowed('fullscreen')).toBe(true)
+    expect(isBrowserPermissionAllowed('clipboard-sanitized-write')).toBe(true)
+    for (const denied of [
+      'media',
+      'display-capture',
+      'geolocation',
+      'notifications',
+      'openExternal',
+      'usb',
+      'serial',
+      'hid',
+      'midi',
+      'pointerLock',
+      'clipboard-read'
+    ]) {
+      expect(isBrowserPermissionAllowed(denied), denied).toBe(false)
+    }
   })
 })

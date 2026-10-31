@@ -58,7 +58,6 @@ const newPathInput = ref<HTMLInputElement | null>(null)
 const deleting = ref(false)
 
 const isRules = computed(() => tab.value === 'rules')
-const isGlobal = computed(() => !isRules.value && scope.value === 'global')
 const dirty = computed(() => content.value !== baseline.value)
 
 /** 保存成功提示的自动消失定时器。 */

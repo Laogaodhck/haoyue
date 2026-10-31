@@ -10,6 +10,7 @@
 - **路径围栏按真实路径判定**：`PathGuard` 对符号链接 / Windows junction 逐段解析后再做边界与凭证判定；链接链无法解析时按越界拒绝，而不是信任逻辑拼写。
 - **Unix socket 权限收紧**：POSIX 上 `~/.haoyue` 与 socket 目录设为 `0700`、socket 文件设为 `0600`，同机其他用户无法连接 daemon。
 - **发布产物签名入口**：Windows 安装包与便携版支持 Authenticode 签名（`WINDOWS_CSC_LINK` / `WINDOWS_CSC_KEY_PASSWORD`）；未配置时保持未签名并在文档中如实标注。
+- **内置浏览器权限收口与空白名单收紧**：桌面端 webview 的空白名单不再「全部放行」——默认只允许 localhost（127.x / ::1），外网站点必须显式加入「允许的网站」；guest 会话权限只保留全屏与剪贴板写入，摄像头、麦克风、屏幕共享、定位、通知、USB / 串口 / HID 一律拒绝。`web_fetch` 的空白名单语义保持不变（视为未启用白名单）。
 
 ### 修复
 
@@ -17,6 +18,9 @@
 - **桌面 IPC 错误可判定**：`daemon:request` 返回结构化信封，`code` / `method` 不再被 Electron 压成字符串，渲染层可按错误码分支。
 - **TS SDK 握手按真实终态收包**：握手等待 `result` 而非不存在的 `ready`，并补充真实 daemon 集成测试。
 - **webserver 迁移可重放**：改用 EF Core 迁移替代 `EnsureCreated`，并新增 API 集成测试。
+- **PDF 导入桥参数不再被引号拆开**：doc_toolkit 提取改用 `ArgumentList` 逐项传参，路径含空格 / 引号时不会拼成另一条命令行；超过 10 分钟的超时改为终止整棵 python 进程并明确报错，不再留下占 CPU 的提取进程。
+- **daemon 请求行有硬上限**：握手与常规请求统一经 `BoundedLineReader` 读取，超长行在读取阶段即被截停（上限覆盖 40MB 图像的 base64 体积），不再把整行读进内存。
+- **同步阻塞点异步化**：知识库 URL 抓取、Linux 浏览器主页修复、`HaoyueRuntime.Dispose()` 不再 `sync-over-async` 阻塞线程池，避免宿主带同步上下文时死锁。
 
 ### 工程护栏
 
@@ -30,8 +34,15 @@
 - **依赖升级**：Electron 43 → 45；Markdig 统一为 1.3.2（CLI 与 webserver 共用同一版本）；桌面端按审计结论收紧 `markdown-it`（14.3.3）与 `dompurify` / `undici` 下限，`pnpm audit --prod` 高危归零。
 - **平台无关的失败路径测试**：不可写日志位置改用「父路径是普通文件」，不再依赖 Windows 保留设备名或非管理员账户语义。
 - **文档事实对齐**：README / 文档索引 / SDK 说明中的用例数、RPC 方法数由源码现场推导，护栏测试强制。
+- **测试工程同样零告警**：`haoyue_tests` 开启 `TreatWarningsAsErrors`，xUnit 分析器与可空性告警全部清零；异步测试改用 `ReadAsync` / `WaitAsync`，不再同步阻塞。
+- **前端 lint 与组件预算**：桌面端接入 ESLint 9（TS + Vue）与 Prettier，`pnpm lint` 进入 CI；新增 `guard:components` 行数预算脚本，`App.vue` 与设置对话框拆分后纳入护栏。
+- **webserver 安全头与静态资源清单**：响应统一附带 CSP、`X-Content-Type-Options`、`X-Frame-Options: DENY`、Referrer-Policy 与 Permissions-Policy，API 与 HTML 页面均有集成测试；`wwwroot/lib` 的前端库新增 `manifest.json`，VendoredLibTests 校验哈希、版本下限与引用覆盖。
+- **覆盖率按模块可见**：在 runtime 70/55 总门槛之外，新增 CLI（15/15）与 webserver（45/15）独立门槛，低位模块不再靠总阈值掩盖。
+- **CI 动作升级**：工作流统一升级到 actions/checkout@v7、setup-dotnet@v6、upload-artifact@v7 等当前主版本，Ubuntu 运行器固定为 `ubuntu-24.04`，避免隐式漂移。
+- **回合主循环拆分**：`RunTurnAsync` 的回合状态与工具结果处理抽到 `Agent.Turn.cs`，主循环只保留编排；行为不变，巨型方法不再继续膨胀。
 
 ### 桌面
 
 - 未受信工作区显示信任提示与放行入口；项目属性中的工作区配置写入同样以受信为前提。
 - macOS 桌面端不再声明为发布目标（CLI 仍提供 macOS 自包含二进制），避免产出缺少自管 runtime 的残缺包。
+- **新版本提示**：打包版启动时静默检查 GitHub Releases 最新正式版，有新版本才弹原生对话框并提供「前往下载」；「关于」窗口新增「检查更新」按钮，可显示「已是最新 / 发现新版本 / 暂时无法检查」（离线、限流、超时均静默降级，不阻塞启动）。检查只读取版本信息，不下载、不执行远端代码。

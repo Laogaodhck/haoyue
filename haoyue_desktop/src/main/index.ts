@@ -10,11 +10,18 @@ import iconIco from '../../resources/favicon.ico?asset'
 // Windows 任务栏/托盘必须用多分辨率 .ico（16-256 全套）：256px 单尺寸 PNG 在部分 DPI
 // 缩放配置下会被系统解析失败，表现为任务栏图标空白或回退默认图标。
 const appIcon = process.platform === 'win32' ? iconIco : iconPng
-import type { DaemonMessage, DaemonRequestOptions, DaemonRpcResult, RevertDiffItem } from '../shared/ipc.js'
+import type {
+  DaemonMessage,
+  DaemonRequestOptions,
+  DaemonRpcResult,
+  RevertDiffItem,
+  UpdateCheckResult
+} from '../shared/ipc.js'
 import { toDaemonRpcError } from '../shared/ipc.js'
 import { DaemonClient } from './daemon-client.js'
 import { openDaemonLogSink, readDaemonLogTail } from './daemon-log.js'
 import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
+import { checkForUpdate } from './update-check.js'
 import { attachWebviewGuard, checkBrowserUrl } from './web-guard.js'
 import {
   destroyComputerOverlay,
@@ -52,6 +59,37 @@ const imageMediaTypes: Record<string, string> = {
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
 
+// 新版本检查：同一进程内 10 分钟内复用结果，失败不缓存（手动重试应真正重试）。
+let updateCache: { at: number; result: UpdateCheckResult } | null = null
+
+async function queryLatestVersion(): Promise<UpdateCheckResult> {
+  if (updateCache && Date.now() - updateCache.at < 10 * 60_000) return updateCache.result
+  const result = await checkForUpdate({ currentVersion: app.getVersion() })
+  if (result.status !== 'unavailable') updateCache = { at: Date.now(), result }
+  return result
+}
+
+/** 打包版启动时静默检查一次：有新版本才弹原生对话框，其余情况不打扰。 */
+async function promptForUpdates(): Promise<void> {
+  if (!app.isPackaged) return
+  const result = await queryLatestVersion()
+  if (result.status !== 'update' || !result.url) return
+  const options: Electron.MessageBoxOptions = {
+    type: 'info',
+    title: '发现新版本',
+    message: `Haoyue v${result.version} 已发布`,
+    detail: `当前版本 v${app.getVersion()}。可在发布页查看更新说明并下载安装包。`,
+    buttons: ['前往下载', '稍后'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  }
+  const { response } = mainWindow
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options)
+  if (response === 0) await shell.openExternal(result.url)
+}
+
 function resolveRuntimeExecutable(): string | null {
   const executable = process.platform === 'win32' ? 'haoyue.exe' : 'haoyue'
   const configured = process.env.HAOYUE_RUNTIME_EXECUTABLE?.trim()
@@ -78,7 +116,7 @@ function resolveRuntimeExecutable(): string | null {
       if ((stat.mode & 0o111) === 0) {
         chmodSync(found, 0o755)
       }
-    } catch {}
+    } catch { /* read-only filesystems keep their mode */ }
   }
   return found
 }
@@ -513,6 +551,8 @@ function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('app:check-update', () => queryLatestVersion())
+
   ipcMain.handle('project:open-terminal', (_event, path: string) => openProjectTerminal(path))
   ipcMain.handle('project:git-overview', (_event, path: string) => getGitOverview(path))
   ipcMain.handle('project:git-history', (_event, path: string) => getGitHistory(path))
@@ -598,6 +638,8 @@ if (!hasSingleInstanceLock) {
     })
     createWindow()
     nativeTheme.on('updated', syncNativeWindowTheme)
+    // 不阻塞启动：网络慢/离线时检查自然降级为静默。
+    void promptForUpdates().catch(() => undefined)
 
     app.on('activate', () => {
       showMainWindow()

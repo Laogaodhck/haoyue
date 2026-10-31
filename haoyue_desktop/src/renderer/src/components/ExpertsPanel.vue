@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { daemonRequest } from '../daemon-rpc'
-import { ArrowLeft, Check, Copy, LoaderCircle, RefreshCw, Search, Sparkles, Users } from '@lucide/vue'
+import { ArrowLeft, Check, Copy, RefreshCw, Search, Sparkles, Users } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 /** 专家条目，由 daemon 的 expert.list 接口返回（runtime 内置专家目录）。 */

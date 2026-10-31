@@ -21,13 +21,13 @@ concurrency:
 jobs:
   deploy:
     name: Build & deploy docs to GitHub Pages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -44,8 +44,8 @@ jobs:
       # 技能市场（纯静态，零构建）并入部署产物：/haoyue/marketplace/
       - name: Bundle skill marketplace
         run: cp -r marketplace haoyue_website/.vitepress/dist/marketplace
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: haoyue_website/.vitepress/dist
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

@@ -94,7 +94,7 @@ public sealed class SharedBlackboardTests : IDisposable
         {
             barrier.SignalAndWait();
             results[writer] = _scope.WriteBlackboard($"k{writer % 16}", $"v{writer}", "w") is null;
-        }))).ConfigureAwait(false);
+        })));
 
         // 16 个键 × 2 次写全部成功（同键覆盖不拒绝）；总量不超上限。
         Assert.All(results, Assert.True);

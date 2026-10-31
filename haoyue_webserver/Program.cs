@@ -9,6 +9,7 @@ using haoyue_webserver.Auth;
 using haoyue_webserver.Components;
 using haoyue_webserver.Data;
 using haoyue_webserver.Models;
+using haoyue_webserver.Security;
 using haoyue_webserver.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -105,6 +106,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+app.UseSecurityHeaders();
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
 app.UseRateLimiter();

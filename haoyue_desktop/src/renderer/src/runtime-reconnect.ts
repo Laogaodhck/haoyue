@@ -1,4 +1,6 @@
+import type { Ref } from 'vue'
 import type { DaemonState } from '../../shared/ipc'
+import type { ThreadItem } from './types'
 
 export const RUNTIME_RECONNECT_ATTEMPTS = 5
 
@@ -37,4 +39,126 @@ export async function retryRuntimeConnection(
   }
 
   return lastState
+}
+
+export interface RuntimeReconnectDeps {
+  daemonState: Ref<DaemonState>
+  reconnecting: Ref<boolean>
+  reconnectAttempt: Ref<number>
+  reconnectPrompt: Ref<{ startup: boolean; error?: string } | null>
+  conversationLoading: Ref<boolean>
+  conversationLoadError: Ref<string>
+  threads: Ref<ThreadItem[]>
+  loadRuntimeState: () => Promise<void>
+  connect?: () => Promise<DaemonState>
+  notify?: (title: string, body: string) => void
+}
+
+/**
+ * Owns the reconnect state machine for the app shell: one in-flight cycle,
+ * a pause flag once the user cancels, and the reconnect prompt shown when a
+ * startup or manual cycle exhausts its attempts.
+ */
+export function createRuntimeReconnect(deps: RuntimeReconnectDeps) {
+  const connect = deps.connect ?? (() => window.haoyue.daemon.connect())
+  const notify = deps.notify ?? ((title: string, body: string) => { void window.haoyue?.notify?.(title, body) })
+  let reconnectTask: Promise<boolean> | null = null
+  let automaticReconnectPaused = false
+  let appReadyForRecovery = false
+  // H24: reconnect success deserves its own feedback — previously the UI just silently
+  // returned to normal and users could not tell whether their running tasks survived.
+  let hasBeenConnected = false
+
+  function handleDaemonState(state: DaemonState): void {
+    const wasConnected = deps.daemonState.value.connected
+    deps.daemonState.value = state
+    if (state.connected) {
+      automaticReconnectPaused = false
+      deps.reconnectPrompt.value = null
+      if (wasConnected === false && hasBeenConnected) {
+        const runningCount = deps.threads.value.filter((thread) => thread.running).length
+        notify('已重新连接',
+          runningCount > 0 ? `连接已恢复，${runningCount} 个运行中的任务已恢复跟踪。` : '连接已恢复。')
+      }
+      hasBeenConnected = true
+      return
+    }
+    if (deps.conversationLoading.value) {
+      deps.conversationLoading.value = false
+      deps.conversationLoadError.value = '已与 Haoyue Runtime 断开连接，正在尝试重连…'
+    }
+    if (!appReadyForRecovery || deps.reconnecting.value || reconnectTask
+      || automaticReconnectPaused || deps.reconnectPrompt.value) return
+    void runReconnectCycle(false)
+  }
+
+  async function runReconnectCycle(startup: boolean): Promise<boolean> {
+    if (reconnectTask) return reconnectTask
+    reconnectTask = (async () => {
+      deps.reconnecting.value = true
+      deps.reconnectPrompt.value = null
+      const state = await retryRuntimeConnection(
+        connect,
+        { onAttempt: (attempt) => { deps.reconnectAttempt.value = attempt } })
+      deps.daemonState.value = state
+      if (state.connected) {
+        automaticReconnectPaused = false
+        await deps.loadRuntimeState()
+        return true
+      }
+      deps.reconnectPrompt.value = { startup, error: state.error }
+      return false
+    })().finally(() => {
+      deps.reconnecting.value = false
+      deps.reconnectAttempt.value = 0
+      reconnectTask = null
+    })
+    return reconnectTask
+  }
+
+  async function reconnectDaemon(): Promise<void> {
+    automaticReconnectPaused = false
+    deps.reconnectPrompt.value = null
+    if (deps.daemonState.value.connected) {
+      await deps.loadRuntimeState()
+      return
+    }
+    await runReconnectCycle(false)
+  }
+
+  async function refreshRuntimeState(): Promise<void> {
+    if (deps.daemonState.value.connected) await deps.loadRuntimeState()
+    else await reconnectDaemon()
+  }
+
+  function continueRuntimeReconnect(): void {
+    const startup = deps.reconnectPrompt.value?.startup ?? false
+    deps.reconnectPrompt.value = null
+    automaticReconnectPaused = false
+    void runReconnectCycle(startup)
+  }
+
+  function cancelRuntimeReconnect(): void {
+    if (deps.reconnectPrompt.value?.startup) {
+      void window.haoyue.closeApp()
+      return
+    }
+    deps.reconnectPrompt.value = null
+    automaticReconnectPaused = true
+  }
+
+  /** The shell only auto-reconnects after mount and before unmount. */
+  function setAppReady(ready: boolean): void {
+    appReadyForRecovery = ready
+  }
+
+  return {
+    handleDaemonState,
+    runReconnectCycle,
+    reconnectDaemon,
+    refreshRuntimeState,
+    continueRuntimeReconnect,
+    cancelRuntimeReconnect,
+    setAppReady
+  }
 }

@@ -65,20 +65,25 @@ public class BashProcessTreeTests : IDisposable
     {
         if (!HasPosixShell()) return;
         var marker = Path.Combine(_dir, "orphan-marker.txt");
+        var signal = Path.Combine(_dir, "signal.txt");
         var tool = new BashTool(new FilePromptProvider());
-        // 后台孙子进程在父命令被超时终止后仍会写标记文件：旧行为（只杀父进程）下标记
-        // 会出现；进程树治理后整棵树被终止，标记永不出现。
+        // 后台孙子进程睡眠到「信号文件出现」再写标记：信号只在 ExecuteAsync 返回
+        // （此时进程树已终止）之后创建，因此不再靠墙钟竞速——无论取消回调被线程池
+        // 饥饿推迟多久，只要树被杀掉，孙子进程就永远看不到信号；反之它一旦存活，
+        // 1.5s 内必然写出标记。旧写法（固定延时后落盘）在覆盖插桩 + 全量并行下
+        // 会把「杀得晚」误判成「没杀」。
         var result = await tool.ExecuteAsync(
             new JsonObject
             {
-                ["command"] = $"(sleep 4; echo alive > \"{marker.Replace('\\', '/')}\") & sleep 30",
+                ["command"] = $"( while [ ! -f \"{signal.Replace('\\', '/')}\" ]; do sleep 0.2; done; " +
+                              $"echo alive > \"{marker.Replace('\\', '/')}\" ) & sleep 30",
                 ["timeout_seconds"] = 1,
             },
             NewContext(_dir), CancellationToken.None);
 
         Assert.False(result.Success);
-        // 给潜在孤儿 6 秒作案窗口；被正确终止则标记不会出现。
-        await Task.Delay(6000);
+        await File.WriteAllTextAsync(signal, "go");
+        await Task.Delay(1500);
         Assert.False(File.Exists(marker),
             "orphaned grandchild survived the timeout — the process tree was not terminated");
     }

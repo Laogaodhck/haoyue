@@ -282,7 +282,7 @@ public class McpOAuthTests
     [Fact]
     public async Task AuthorizeAsync_RegistersClientOpensBrowserAndExchangesTheCode()
     {
-        McpOAuthFlow.CallbackTimeout = TimeSpan.FromSeconds(10);
+        McpOAuthFlow.CallbackTimeout = TimeSpan.FromSeconds(30);
         try
         {
             string? registrationBody = null;

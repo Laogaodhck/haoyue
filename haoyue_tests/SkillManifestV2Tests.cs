@@ -270,7 +270,7 @@ public sealed class SkillManifestV2Tests : IDisposable
     }
 
     [Fact]
-    public void SkillsContribution_InjectionFollowsUserMessageVariable()
+    public async Task SkillsContribution_InjectionFollowsUserMessageVariable()
     {
         WriteSkill("deploy", "name: deploy\ntriggers:\n  - 部署\n", prompt: "部署内容");
         WriteSkill("always", "name: always\n", prompt: "常驻内容");
@@ -280,30 +280,30 @@ public sealed class SkillManifestV2Tests : IDisposable
         var contribution = registry.All.Single(c => c.Id == "skill-bodies");
         var catalog = registry.All.Single(c => c.Id == "skill-catalog");
 
-        var hit = contribution.Resolver(new PromptRenderContext
+        var hit = await contribution.Resolver(new PromptRenderContext
         {
             Variables = new Dictionary<string, string> { ["user_message"] = "请部署" },
             WorkspaceRoot = Workspace.Root,
-        }, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        }, CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains("部署内容", hit);
         Assert.Contains("常驻内容", hit);
 
-        var miss = contribution.Resolver(new PromptRenderContext
+        var miss = await contribution.Resolver(new PromptRenderContext
         {
             Variables = new Dictionary<string, string> { ["user_message"] = "无关" },
             WorkspaceRoot = Workspace.Root,
-        }, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        }, CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains("常驻内容", miss);
         Assert.DoesNotContain("部署内容", miss);
 
         // The catalog is a separate, low-degrade-rank contribution so discovery survives
         // budget enforcement that drops skill bodies. It lists trigger-gated always-listed
         // skills only; the "always" skill has no triggers so it is injected unconditionally.
-        var catalogText = catalog.Resolver(new PromptRenderContext
+        var catalogText = await catalog.Resolver(new PromptRenderContext
         {
             Variables = new Dictionary<string, string>(),
             WorkspaceRoot = Workspace.Root,
-        }, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        }, CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains("deploy", catalogText);
         Assert.DoesNotContain("常驻内容", catalogText);
     }
@@ -342,7 +342,7 @@ public sealed class SkillManifestV2Tests : IDisposable
     }
 
     [Fact]
-    public void DeclareForTurn_InjectsListedSkill_AndRejectsUnknownOrHidden()
+    public async Task DeclareForTurn_InjectsListedSkill_AndRejectsUnknownOrHidden()
     {
         WriteSkill("deploy", """
             name: deploy
@@ -363,16 +363,16 @@ public sealed class SkillManifestV2Tests : IDisposable
 
         // 关键词未命中时 deploy 不注入。
         var contribution = registry.All.Single(c => c.Id == "skill-bodies");
-        string? Resolve(string userMessage) => contribution.Resolver(new PromptRenderContext
+        Task<string?> Resolve(string userMessage) => contribution.Resolver(new PromptRenderContext
         {
             Variables = new Dictionary<string, string> { ["user_message"] = userMessage },
             WorkspaceRoot = Workspace.Root,
-        }, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        Assert.DoesNotContain("部署内容", Resolve("帮我看看这个报错"));
+        }, CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.DoesNotContain("部署内容", await Resolve("帮我看看这个报错"));
 
         // 模型声明后注入（下一 step 生效），并进入工具权威。
         Assert.True(manager.DeclareForTurn(Workspace, "deploy"));
-        Assert.Contains("部署内容", Resolve("帮我看看这个报错"));
+        Assert.Contains("部署内容", await Resolve("帮我看看这个报错"));
         // Agent 的系统提示缓存键必须能观察到这次声明——否则同回合后续 step 继续复用
         // 声明前合成的 prompt，declare_skill 形同无效。
         Assert.Equal(["deploy"], manager.TurnDeclaredSkills());
@@ -385,6 +385,6 @@ public sealed class SkillManifestV2Tests : IDisposable
         // 回合边界：重置后声明集合清空。
         manager.ResetTurnDeclarations();
         Assert.Empty(manager.TurnDeclaredSkills());
-        Assert.DoesNotContain("部署内容", Resolve("帮我看看这个报错"));
+        Assert.DoesNotContain("部署内容", await Resolve("帮我看看这个报错"));
     }
 }

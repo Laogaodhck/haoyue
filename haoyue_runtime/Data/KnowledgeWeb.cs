@@ -25,16 +25,22 @@ public static class KnowledgeWeb
 
     private static readonly HttpClient Client = CreateClient();
 
-    public static (string Title, string Text) Fetch(Uri url, Func<Uri, (bool Ok, string? Reason)>? validate = null) =>
-        FetchCore(url, validate, Client);
+    public static Task<(string Title, string Text)> FetchAsync(
+        Uri url,
+        Func<Uri, (bool Ok, string? Reason)>? validate = null,
+        CancellationToken ct = default) =>
+        FetchCoreAsync(url, validate, Client, ct);
 
     /// <summary>测试缝：注入 HttpMessageHandler 验证重定向逐跳校验，不走真实网络。</summary>
-    internal static (string Title, string Text) Fetch(
-        Uri url, Func<Uri, (bool Ok, string? Reason)>? validate, HttpMessageHandler handler) =>
-        FetchCore(url, validate, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) });
+    internal static Task<(string Title, string Text)> FetchAsync(
+        Uri url,
+        Func<Uri, (bool Ok, string? Reason)>? validate,
+        HttpMessageHandler handler,
+        CancellationToken ct = default) =>
+        FetchCoreAsync(url, validate, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) }, ct);
 
-    private static (string Title, string Text) FetchCore(
-        Uri url, Func<Uri, (bool Ok, string? Reason)>? validate, HttpClient client)
+    private static async Task<(string Title, string Text)> FetchCoreAsync(
+        Uri url, Func<Uri, (bool Ok, string? Reason)>? validate, HttpClient client, CancellationToken ct)
     {
         // 默认策略 = scheme + 公网主机（无白名单规则时）；daemon 传入带白名单的校验器。
         validate ??= static u => KnowledgeUrlPolicy.Check(u, null);
@@ -48,7 +54,11 @@ public static class KnowledgeWeb
             HttpResponseMessage response;
             try
             {
-                response = client.GetAsync(current).ConfigureAwait(false).GetAwaiter().GetResult();
+                response = await client.GetAsync(current, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
             {
@@ -72,7 +82,11 @@ public static class KnowledgeWeb
                 byte[] body;
                 try
                 {
-                    body = response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                    body = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
                 {

@@ -63,7 +63,7 @@ public sealed class EventJournalTests : IDisposable
     }
 
     [Fact]
-    public void JournaledEventBus_PersistsKeyEvents_AndForwardsEverything()
+    public async Task JournaledEventBus_PersistsKeyEvents_AndForwardsEverything()
     {
         var bus = new JournaledEventBus(new EventBus(), _database);
         using var subscription = bus.Subscribe();
@@ -81,12 +81,12 @@ public sealed class EventJournalTests : IDisposable
         // Subscribers still see every event, including non-persistent ones.
         var seen = new List<string>();
         for (var i = 0; i < 3; i++)
-            seen.Add(subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult().GetType().Name);
+            seen.Add((await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5))).GetType().Name);
         Assert.Equal(["StatusEvent", "TurnCompletedEvent", "ErrorEvent"], seen);
     }
 
     [Fact]
-    public void JournaledEventBus_SurvivesStorageFailures_AndStillDelivers()
+    public async Task JournaledEventBus_SurvivesStorageFailures_AndStillDelivers()
     {
         var locked = new HaoyueDatabase(Path.Combine(_tempDir, "broken.db"));
         // Corrupt the database file after initialization (and drop pooled handles)
@@ -98,7 +98,7 @@ public sealed class EventJournalTests : IDisposable
         using var subscription = bus.Subscribe();
 
         bus.Publish(new ErrorEvent("before failure"));
-        var delivered = subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
+        var delivered = await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.IsType<ErrorEvent>(delivered);
     }
 

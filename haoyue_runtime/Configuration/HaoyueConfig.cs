@@ -401,12 +401,15 @@ public sealed class DocRenderConfig
     public string PythonPath { get; set; } = "";
 }
 
-/// <summary>外部网站访问白名单（web_fetch）。空列表 = 不限制；localhost / 127.x / ::1 始终允许。</summary>
+/// <summary>
+/// 外部网站访问白名单（web_fetch 与桌面端内置浏览器共用）。localhost / 127.x / ::1 始终允许。
+/// 空列表语义两端不同：web_fetch 视为功能未启用（不限制）；内置浏览器只放行本地主机。
+/// </summary>
 public sealed class WebConfig
 {
     /// <summary>
     /// 允许的网站规则，形式 scheme://host（host 可为 "*.example.com" 以允许子域；
-    /// 根域 example.com 需单独添加）。仅 http/https。空列表 = 不限制外部访问。
+    /// 根域 example.com 需单独添加）。仅 http/https。空列表 = web_fetch 不限制外部访问。
     /// 变更立即生效（工具每次执行时读取，无缓存）。
     /// </summary>
     public List<string> AllowedSites { get; set; } = [];

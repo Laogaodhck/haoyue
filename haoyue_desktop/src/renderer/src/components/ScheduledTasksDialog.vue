@@ -7,7 +7,6 @@ import {
   Pencil,
   Play,
   Plus,
-  Power,
   Save,
   Trash2,
   X
@@ -171,7 +170,7 @@ async function saveTask(): Promise<void> {
   }
   beginAction('schedule.save')
   try {
-    const task = await requestJson<ScheduledTaskInfo>(editingId.value ? 'schedule.update' : 'schedule.create', {
+    await requestJson<ScheduledTaskInfo>(editingId.value ? 'schedule.update' : 'schedule.create', {
       id: editingId.value ?? undefined,
       name: form.name.trim(),
       workspace: form.workspace || undefined,

@@ -11,7 +11,6 @@ import {
   FolderOpen,
   Gauge,
   GripVertical,
-  History,
   KeyRound,
   LoaderCircle,
   Moon,
@@ -19,7 +18,6 @@ import {
   Plug,
   Plus,
   RefreshCw,
-  RotateCcw,
   Save,
   Search,
   Settings2,
@@ -45,7 +43,6 @@ import type { ModelDetailConfig } from './ModelConfigModal.vue'
 import FieldLabel from './FieldLabel.vue'
 import OfficialSkillsPanel from './OfficialSkillsPanel.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
-import AllowedSitesDialog from './AllowedSitesDialog.vue'
 import SelectMenu from './SelectMenu.vue'
 import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
@@ -58,34 +55,9 @@ import SettingsRoutingPanel from './SettingsRoutingPanel.vue'
 import SettingsInferencePanel from './SettingsInferencePanel.vue'
 import SettingsAgentExpertPanel from './SettingsAgentExpertPanel.vue'
 import SettingsIntegrationsPanel from './SettingsIntegrationsPanel.vue'
-import ConfigJsonEditor from './ConfigJsonEditor.vue'
+import SettingsEvolutionPanel from './SettingsEvolutionPanel.vue'
+import SettingsAdvancedPanel from './SettingsAdvancedPanel.vue'
 import { useEscapeClose } from '../use-escape-close'
-import {
-  EVOLUTION_INTERVAL_OPTIONS,
-  TREND_KEY_LABELS,
-  TREND_KEYS,
-  clampIntervalMinutes,
-  clampThresholdSignals,
-  defectKindLabel,
-  formatDateOnly,
-  formatInterval,
-  relativeTime,
-  reflectionOutcomeText,
-  severityClass,
-  severityLabel,
-  triggerLabel,
-  trendMax,
-  trendTitle,
-  trendTotal,
-  type EvolutionCandidate,
-  type EvolutionCandidateFile,
-  type EvolutionConfigValue,
-  type EvolutionDefectReport,
-  type EvolutionHealth,
-  type EvolutionRun,
-  type EvolutionStats,
-  type EvolutionTrendPoint
-} from '../evolution-form'
 
 type SettingsSection = 'general' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
 
@@ -203,15 +175,9 @@ const emit = defineEmits<{
 }>()
 
 const section = ref<SettingsSection>('general')
+const evolutionPanel = ref<InstanceType<typeof SettingsEvolutionPanel> | null>(null)
 const loading = ref(false)
 const networkEnabled = ref(true)
-const computerUseEnabled = ref(false)
-const computerUseDriver = ref('auto')
-const networkOpsEnabled = ref(false)
-const networkOpsAllowMutating = ref(true)
-/** 允许的网站（外部网站访问白名单）：卡片计数与管理弹窗。 */
-const allowedSitesOpen = ref(false)
-const allowedSitesCount = ref<number | null>(null)
 const replyLanguage = ref<'auto' | 'zh' | 'en'>('auto')
 // 1.5 发送键偏好：localStorage 持久化，Composer 每次按键直读（改完立即生效）。
 const sendKey = ref<'enter' | 'ctrl-enter'>(readSendKeyPreference())
@@ -221,25 +187,6 @@ function setSendKey(key: 'enter' | 'ctrl-enter'): void {
 }
 const rulesEnabled = ref(true)
 const memoryMode = ref<'auto' | 'manual'>('auto')
-
-/** 进化引擎：自动反思配置、健康概览、缺陷信号、反思历史、待审草稿与效果统计。 */
-const evolutionAutoReflect = ref(false)
-const evolutionIntervalMinutes = ref(360)
-const evolutionThresholdEnabled = ref(false)
-const evolutionThresholdSignals = ref(5)
-const evolutionDefects = ref<EvolutionDefectReport[]>([])
-const evolutionScanned = ref(0)
-const evolutionHealth = ref<EvolutionHealth | null>(null)
-const evolutionTrend = ref<EvolutionTrendPoint[]>([])
-const evolutionByKind = ref<Record<string, number>>({})
-const evolutionCandidates = ref<EvolutionCandidate[]>([])
-const evolutionHistory = ref<EvolutionRun[]>([])
-const evolutionStats = ref<EvolutionStats | null>(null)
-/** 展开的草稿工作台（单选）；promptDraft 承载采纳前的提示词改写文本。 */
-const expandedCandidateFingerprint = ref<string | null>(null)
-const candidateActiveFile = ref<Record<string, string>>({})
-const promptDraft = ref('')
-const promptDirty = ref(false)
 
 const action = ref('')
 const error = ref('')
@@ -445,6 +392,15 @@ function fail(reason: unknown): void {
   error.value = reason instanceof Error ? reason.message : String(reason)
 }
 
+function onPanelNotice(message: string): void {
+  error.value = ''
+  notice.value = message
+}
+
+function onPanelError(message: string): void {
+  error.value = message
+}
+
 function showPath(path: string): void {
   void window.haoyue.showItemInFolder(path)
 }
@@ -461,9 +417,7 @@ async function loadCurrentSection(): Promise<void> {
     if (section.value === 'agent') await loadAgent()
     if (section.value === 'skills') skills.value = await requestJson<SkillInfo[]>('skill.list')
     if (section.value === 'rules-memory') await loadRulesMemory()
-    if (section.value === 'evolution') await loadEvolution()
     if (section.value === 'diagnostics') await loadDiagnostics()
-    if (section.value === 'inference' || section.value === 'advanced') await loadAdvanced()
   } catch (reason) {
     fail(reason)
   } finally {
@@ -533,312 +487,6 @@ async function setRulesMemory(payload: { rulesEnabled?: boolean; memoryMode?: 'a
   } catch (reason) {
     rulesEnabled.value = previousRules
     memoryMode.value = previousMode
-    fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
-type EvolutionInspect = {
-  scanned: number
-  reports: EvolutionDefectReport[]
-  health?: EvolutionHealth
-  trend?: EvolutionTrendPoint[]
-  distribution?: { byKind: Record<string, number> }
-}
-
-function applyInspect(inspect: EvolutionInspect): void {
-  evolutionDefects.value = inspect.reports
-  evolutionScanned.value = inspect.scanned
-  evolutionHealth.value = inspect.health ?? null
-  evolutionTrend.value = inspect.trend ?? []
-  evolutionByKind.value = inspect.distribution?.byKind ?? {}
-}
-
-async function loadEvolution(): Promise<void> {
-  const [config, inspect, pending, history, stats] = await Promise.all([
-    requestJson<EvolutionConfigValue>('evolution.config.get'),
-    requestJson<EvolutionInspect>('evolution.inspect'),
-    requestJson<EvolutionCandidate[]>('evolution.pending-list'),
-    requestJson<EvolutionRun[]>('evolution.history', { limit: 20 }),
-    requestJson<EvolutionStats>('evolution.stats')
-  ])
-  evolutionAutoReflect.value = config.autoReflect
-  evolutionIntervalMinutes.value = clampIntervalMinutes(config.intervalMinutes)
-  evolutionThresholdEnabled.value = config.thresholdEnabled ?? false
-  evolutionThresholdSignals.value = clampThresholdSignals(config.thresholdSignals ?? 5)
-  applyInspect(inspect)
-  evolutionCandidates.value = pending
-  evolutionHistory.value = history
-  evolutionStats.value = stats
-}
-
-async function setEvolutionConfig(payload: {
-  autoReflect?: boolean
-  intervalMinutes?: number
-  thresholdEnabled?: boolean
-  thresholdSignals?: number
-}): Promise<void> {
-  const previous = {
-    autoReflect: evolutionAutoReflect.value,
-    intervalMinutes: evolutionIntervalMinutes.value,
-    thresholdEnabled: evolutionThresholdEnabled.value,
-    thresholdSignals: evolutionThresholdSignals.value
-  }
-  if (payload.autoReflect !== undefined) evolutionAutoReflect.value = payload.autoReflect
-  if (payload.intervalMinutes !== undefined)
-    evolutionIntervalMinutes.value = clampIntervalMinutes(payload.intervalMinutes)
-  if (payload.thresholdEnabled !== undefined) evolutionThresholdEnabled.value = payload.thresholdEnabled
-  if (payload.thresholdSignals !== undefined)
-    evolutionThresholdSignals.value = clampThresholdSignals(payload.thresholdSignals)
-  beginAction('evolution.config')
-  try {
-    const config = await requestJson<EvolutionConfigValue>('evolution.config.set', {
-      autoReflect: evolutionAutoReflect.value,
-      intervalMinutes: evolutionIntervalMinutes.value,
-      thresholdEnabled: evolutionThresholdEnabled.value,
-      thresholdSignals: evolutionThresholdSignals.value
-    })
-    evolutionAutoReflect.value = config.autoReflect
-    evolutionIntervalMinutes.value = clampIntervalMinutes(config.intervalMinutes)
-    evolutionThresholdEnabled.value = config.thresholdEnabled ?? false
-    evolutionThresholdSignals.value = clampThresholdSignals(config.thresholdSignals ?? 5)
-    const parts: string[] = []
-    if (evolutionAutoReflect.value)
-      parts.push(`每 ${formatInterval(evolutionIntervalMinutes.value)} 复盘一次`)
-    if (evolutionThresholdEnabled.value)
-      parts.push(`缺陷累计 ${evolutionThresholdSignals.value} 条即提前复盘`)
-    notice.value = parts.length > 0
-      ? `自动反思已开启：${parts.join('，或')}；技能草稿始终等待人工审阅`
-      : '自动反思已关闭：仅手动触发反思回合'
-  } catch (reason) {
-    evolutionAutoReflect.value = previous.autoReflect
-    evolutionIntervalMinutes.value = previous.intervalMinutes
-    evolutionThresholdEnabled.value = previous.thresholdEnabled
-    evolutionThresholdSignals.value = previous.thresholdSignals
-    fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
-async function runReflection(): Promise<void> {
-  beginAction('evolution.reflect')
-  try {
-    await requestJson<{ started: boolean }>('evolution.reflect')
-    notice.value = '反思回合已启动：正在后台复盘缺陷信号，完成后本页自动刷新'
-  } catch (reason) {
-    fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
-/**
- * Applies a human decision. Adopt (optionally with a rewritten prompt) installs
- * the draft as a live skill; defer parks it; reject discards it permanently, so
- * only reject asks for confirmation.
- */
-async function decideEvolutionCandidate(
-  candidate: EvolutionCandidate,
-  decision: 'adopt' | 'reject' | 'defer',
-  promptOverride?: string
-): Promise<void> {
-  if (decision === 'reject') {
-    const confirmed = await confirmAction({
-      title: '丢弃该候选技能？',
-      message: `「${candidate.skillName}」的草稿将被永久删除，同一缺陷不会再生成候选。`,
-      confirmLabel: '丢弃',
-      danger: true
-    })
-    if (!confirmed) return
-  }
-  beginAction(`evolution.decide:${candidate.fingerprint}`)
-  try {
-    await requestJson('evolution.decide', {
-      fingerprint: candidate.fingerprint,
-      decision,
-      ...(promptOverride !== undefined ? { prompt: promptOverride } : {})
-    })
-    evolutionCandidates.value = await requestJson<EvolutionCandidate[]>('evolution.pending-list')
-    notice.value =
-      decision === 'adopt'
-        ? `已采纳「${candidate.skillName}」：技能进入正式目录，下一次扫描即生效`
-        : decision === 'defer'
-          ? `已暂缓「${candidate.skillName}」：草稿保留在待审清单，随时可以继续审阅`
-          : `已丢弃「${candidate.skillName}」`
-    collapseDraftWorkbench()
-  } catch (reason) {
-    fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
-// ------------------------------------------------ draft workbench (preview + rewrite)
-
-function expandDraftWorkbench(candidate: EvolutionCandidate): void {
-  expandedCandidateFingerprint.value = candidate.fingerprint
-  const files = candidate.files ?? []
-  if (!candidateActiveFile.value[candidate.fingerprint]) {
-    candidateActiveFile.value[candidate.fingerprint] = files[0]?.name ?? ''
-  }
-  promptDraft.value = files.find((file) => file.name === 'prompt.txt')?.content ?? ''
-  promptDirty.value = false
-}
-
-function collapseDraftWorkbench(): void {
-  expandedCandidateFingerprint.value = null
-  promptDirty.value = false
-}
-
-function activeDraftFile(candidate: EvolutionCandidate): EvolutionCandidateFile | null {
-  const active = candidateActiveFile.value[candidate.fingerprint]
-  return candidate.files?.find((file) => file.name === active) ?? candidate.files?.[0] ?? null
-}
-
-function selectDraftFile(candidate: EvolutionCandidate, name: string): void {
-  candidateActiveFile.value[candidate.fingerprint] = name
-}
-
-/** Only an edited, non-blank prompt is sent as the adopt-time rewrite. */
-function promptOverrideFor(): string | undefined {
-  if (!promptDirty.value) return undefined
-  return promptDraft.value.trim().length > 0 ? promptDraft.value : undefined
-}
-
-/** Reflection finished (manual or unattended): refresh the open page and surface the outcome. */
-async function refreshEvolutionAfterReflect(details: Record<string, unknown>): Promise<void> {
-  if (!props.open || section.value !== 'evolution' || action.value.startsWith('evolution.')) return
-  try {
-    evolutionCandidates.value = await requestJson<EvolutionCandidate[]>('evolution.pending-list')
-    applyInspect(await requestJson<EvolutionInspect>('evolution.inspect'))
-    evolutionHistory.value = await requestJson<EvolutionRun[]>('evolution.history', { limit: 20 })
-    evolutionStats.value = await requestJson<EvolutionStats>('evolution.stats')
-  } catch {
-    return
-  }
-  const num = (key: string): number | undefined =>
-    typeof details[key] === 'number' ? (details[key] as number) : undefined
-  notice.value = reflectionOutcomeText({
-    processed: num('processed'),
-    candidates: num('candidates'),
-    noAction: num('noAction'),
-    skipped: num('skipped'),
-    error: typeof details.error === 'string' ? details.error : undefined
-  })
-}
-
-async function loadAdvanced(): Promise<void> {
-  const config = await requestJson<{
-    networkEnabled: boolean
-    computerUseEnabled?: boolean
-    computerUseDriver?: string
-    networkOpsEnabled?: boolean
-    networkOpsAllowMutating?: boolean
-  }>('advanced.get')
-  networkEnabled.value = config.networkEnabled
-  computerUseEnabled.value = config.computerUseEnabled ?? false
-  computerUseDriver.value = config.computerUseDriver ?? 'auto'
-  networkOpsEnabled.value = config.networkOpsEnabled ?? false
-  networkOpsAllowMutating.value = config.networkOpsAllowMutating ?? true
-  try {
-    const web = await requestJson<{ allowedSites: string[] }>('web.allowedGet')
-    allowedSitesCount.value = web.allowedSites?.length ?? 0
-  } catch {
-    allowedSitesCount.value = null // daemon 版本较旧时静默隐藏计数
-  }
-}
-
-async function toggleComputerUse(): Promise<void> {
-  beginAction('advanced.set:computerUse')
-  try {
-    const config = await requestJson<{
-      networkEnabled: boolean
-      computerUseEnabled: boolean
-      computerUseDriver: string
-    }>('advanced.set', {
-      networkEnabled: networkEnabled.value,
-      computerUseEnabled: computerUseEnabled.value,
-      computerUseDriver: computerUseDriver.value
-    })
-    computerUseEnabled.value = config.computerUseEnabled
-    notice.value = computerUseEnabled.value
-      ? '已启用电脑操作智能体 (Computer Use)，Agent 获得直接操作桌面能力'
-      : '已禁用电脑操作智能体，所有相关驱动与工具已注销并保持零开销'
-  } catch (reason) {
-    fail(reason)
-    try {
-      const config = await requestJson<{ computerUseEnabled: boolean }>('advanced.get')
-      computerUseEnabled.value = config.computerUseEnabled ?? false
-    } catch { /* keep last known state */ }
-  } finally {
-    endAction()
-  }
-}
-
-async function toggleNetworkOps(): Promise<void> {
-  beginAction('advanced.set:networkOps')
-  try {
-    const config = await requestJson<{ networkOpsEnabled: boolean }>('advanced.set', {
-      networkOpsEnabled: networkOpsEnabled.value
-    })
-    networkOpsEnabled.value = config.networkOpsEnabled
-    notice.value = networkOpsEnabled.value
-      ? '已启用网络运维插件，Agent 获得网络诊断与运维命令能力'
-      : '已禁用网络运维插件，相关工具已注销'
-  } catch (reason) {
-    fail(reason)
-    try {
-      const config = await requestJson<{ networkOpsEnabled: boolean }>('advanced.get')
-      networkOpsEnabled.value = config.networkOpsEnabled ?? false
-    } catch { /* keep last known state */ }
-  } finally {
-    endAction()
-  }
-}
-
-async function toggleNetworkOpsMutating(): Promise<void> {
-  const previous = networkOpsAllowMutating.value
-  networkOpsAllowMutating.value = !previous
-  beginAction('advanced.set:networkOpsMutating')
-  try {
-    const config = await requestJson<{ networkOpsAllowMutating: boolean }>('advanced.set', {
-      networkOpsAllowMutating: networkOpsAllowMutating.value
-    })
-    networkOpsAllowMutating.value = config.networkOpsAllowMutating
-    notice.value = networkOpsAllowMutating.value
-      ? '网络运维已允许变更类命令（route、netsh set、DNS 缓存刷新等）'
-      : '网络运维已限制为只读查询，变更类命令将被拒绝'
-  } catch (reason) {
-    networkOpsAllowMutating.value = previous
-    fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
-async function factoryReset(): Promise<void> {
-  if (!props.daemonConnected) return
-  if (!await confirmAction({
-    title: '恢复出厂设置',
-    message: '将删除全局配置、会话、计划任务、项目记录、用量日志、日志、全局技能与提示词，并重建数据库。项目源码文件不会删除，此操作无法撤销。',
-    confirmLabel: '继续',
-    danger: true
-  })) return
-  if (!await confirmAction({
-    title: '再次确认恢复出厂设置',
-    message: '这是最后一次确认。确认后将清空 Haoyue 的全部用户数据，并恢复默认设置。',
-    confirmLabel: '恢复出厂设置',
-    danger: true
-  })) return
-
-  beginAction('factory.reset')
-  try {
-    await requestJson<{ ok: boolean; home: string }>('factory.reset')
-    emit('runtimeChanged')
-    emit('close')
-  } catch (reason) {
     fail(reason)
   } finally {
     endAction()
@@ -1267,21 +915,6 @@ async function switchModel(): Promise<void> {
   }
 }
 
-async function testModel(): Promise<void> {
-  if (!selectedModel.value) return
-  beginAction('model.test')
-  try {
-    const result = await requestJson<{ success: boolean; detail: string; latencyMs: number }>('model.test', { model: selectedModel.value })
-    const message = `${result.success ? '模型可用' : '模型不可用'} · ${Math.round(result.latencyMs)} ms · ${result.detail}`
-    if (result.success) notice.value = message
-    else error.value = message
-  } catch (reason) {
-    fail(reason)
-  } finally {
-    endAction()
-  }
-}
-
 // ---------------------------------------------------------------- local model load flow
 
 interface ModelTestState {
@@ -1411,8 +1044,8 @@ useEscapeClose(() => props.open, () => emit('close'))
 
 onMounted(() => {
   unsubscribeDaemonEvents = window.haoyue.daemon.onEvent((message) => {
-    if (message.event === 'evolution.reflected') {
-      void refreshEvolutionAfterReflect(message.details ?? {})
+    if (message.event === 'evolution.reflected' && section.value === 'evolution') {
+      void evolutionPanel.value?.refreshAfterReflect(message.details ?? {})
     }
   })
 })
@@ -1835,234 +1468,7 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-else-if="section === 'evolution'">
-          <div class="settings-section-heading">
-            <div>
-              <h3>进化</h3>
-              <p>从失败信号中沉淀技能：缺陷聚合 → 反思回合 → 技能草稿 → 人工审阅后生效</p>
-            </div>
-            <div class="row-actions">
-              <button class="icon-button" title="刷新" @click="loadCurrentSection">
-                <RefreshCw :size="17" />
-              </button>
-              <button class="secondary-button" :disabled="action === 'evolution.reflect'" @click="runReflection">
-                <LoaderCircle v-if="action === 'evolution.reflect'" class="spin" :size="15" />
-                <Telescope v-else :size="15" />立即反思
-              </button>
-            </div>
-          </div>
-
-          <section class="settings-group">
-            <div class="settings-row">
-              <div>
-                <strong>健康概览</strong>
-                <small>缺陷信号折算成健康分（0-100）：负反馈与工具反复失败扣分最重，分数越低越值得安排一次反思</small>
-              </div>
-              <div v-if="evolutionHealth" class="health-summary">
-                <span class="health-score"
-                  :class="evolutionHealth.score >= 90 ? 'good' : evolutionHealth.score >= 60 ? 'fair' : 'poor'">
-                  {{ evolutionHealth.score }}
-                </span>
-                <span class="health-grade">{{ evolutionHealth.grade }}</span>
-              </div>
-            </div>
-            <div v-if="evolutionTrend.length > 0" class="trend-bars">
-              <div v-for="point in evolutionTrend" :key="point.date" class="trend-bar-item" :title="trendTitle(point)">
-                <div class="trend-bar" :class="{ empty: trendTotal(point) === 0 }"
-                  :style="{ height: `${Math.max(4, Math.round((trendTotal(point) / trendMax(evolutionTrend)) * 56))}px` }" />
-                <span class="trend-bar-label">{{ point.date.slice(5) }}</span>
-              </div>
-            </div>
-            <div v-if="Object.keys(evolutionByKind).length > 0" class="kind-chips">
-              <span v-for="(count, kind) in evolutionByKind" :key="kind" class="inline-badge">
-                {{ defectKindLabel(String(kind)) }} · {{ count }}
-              </span>
-            </div>
-          </section>
-
-          <section class="settings-group">
-            <label class="provider-enabled-row">
-              <span>
-                <strong>定时反思</strong>
-                <small>按固定间隔在后台运行反思回合：复盘最近的失败信号并起草技能。技能草稿始终等待人工采纳，不会自动生效。</small>
-              </span>
-              <input v-model="evolutionAutoReflect" class="sr-only" type="checkbox"
-                :disabled="action === 'evolution.config'"
-                @change="setEvolutionConfig({ autoReflect: evolutionAutoReflect })" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
-            <div class="settings-row">
-              <div>
-                <strong>反思间隔</strong>
-                <small>定时反思的触发周期，当前每 {{ formatInterval(evolutionIntervalMinutes) }} 复盘一次</small>
-              </div>
-              <div class="segmented-control">
-                <button v-for="option in EVOLUTION_INTERVAL_OPTIONS" :key="option.value"
-                  :class="{ active: evolutionIntervalMinutes === option.value }"
-                  :disabled="action === 'evolution.config'"
-                  @click="setEvolutionConfig({ intervalMinutes: option.value })">{{ option.label }}</button>
-              </div>
-            </div>
-            <label class="provider-enabled-row">
-              <span>
-                <strong>阈值反思</strong>
-                <small>与定时反思并存：待处理的缺陷信号达到阈值即提前触发反思回合（两次自动反思至少间隔 30 分钟），适合故障频发时加快进化节奏。</small>
-              </span>
-              <input v-model="evolutionThresholdEnabled" class="sr-only" type="checkbox"
-                :disabled="action === 'evolution.config'"
-                @change="setEvolutionConfig({ thresholdEnabled: evolutionThresholdEnabled })" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
-            <div v-if="evolutionThresholdEnabled" class="settings-row">
-              <div>
-                <strong>触发阈值</strong>
-                <small>待处理的缺陷信号达到 {{ evolutionThresholdSignals }} 条即自动反思</small>
-              </div>
-              <input class="text-input threshold-input" type="number" min="1" max="50"
-                :value="evolutionThresholdSignals" :disabled="action === 'evolution.config'"
-                @change="setEvolutionConfig({ thresholdSignals: Number(($event.target as HTMLInputElement).value) })" />
-            </div>
-          </section>
-
-          <section class="settings-group">
-            <div class="settings-row">
-              <div>
-                <strong>缺陷信号（{{ evolutionDefects.length }}）</strong>
-                <small>最近 {{ evolutionScanned }} 条运行事件聚合出的可改进点；「高」严重度的信号值得优先关注</small>
-              </div>
-            </div>
-            <div v-if="evolutionDefects.length === 0" class="empty-settings">暂无缺陷信号——保持这样很好</div>
-            <div v-for="report in evolutionDefects" :key="report.fingerprint" class="settings-list-row">
-              <Wrench :size="17" />
-              <div class="list-main">
-                <div>
-                  <strong>{{ defectKindLabel(report.kind) }}</strong>
-                  <span class="inline-badge" :class="severityClass(report.severity)">{{ severityLabel(report.severity) }}</span>
-                  <span v-if="report.occurrences > 1" class="inline-badge">{{ report.occurrences }} 次</span>
-                </div>
-                <small :title="report.errorSummary ?? ''">{{ report.errorSummary || report.toolName || report.fingerprint }}</small>
-              </div>
-              <span class="version-text" :title="report.lastSeen">{{ relativeTime(report.lastSeen) }}</span>
-            </div>
-          </section>
-
-          <section class="settings-group">
-            <div class="settings-row">
-              <div>
-                <strong>待审技能草稿（{{ evolutionCandidates.length }}）</strong>
-                <small>反思回合产出的候选技能等待人工裁决：可预览草稿文件、采纳前改写提示词，或暂缓 / 丢弃</small>
-              </div>
-            </div>
-            <div v-if="evolutionCandidates.length === 0" class="empty-settings">没有待审的技能草稿</div>
-            <div v-for="candidate in evolutionCandidates" :key="candidate.fingerprint" class="candidate-block">
-              <div class="settings-list-row">
-                <Telescope :size="17" />
-                <div class="list-main">
-                  <div>
-                    <strong :title="candidate.skillName">{{ candidate.skillName }}</strong>
-                    <span v-if="candidate.status === 'deferred'" class="inline-badge">暂缓</span>
-                  </div>
-                  <small :title="candidate.summary ?? ''">{{ candidate.summary || '反思产出候选技能' }}</small>
-                </div>
-                <div class="row-controls">
-                  <button class="secondary-button" :disabled="action.startsWith('evolution.decide')"
-                    @click="expandedCandidateFingerprint === candidate.fingerprint
-                      ? collapseDraftWorkbench()
-                      : expandDraftWorkbench(candidate)">
-                    {{ expandedCandidateFingerprint === candidate.fingerprint ? '收起' : '查看草稿' }}
-                  </button>
-                  <button v-if="candidate.status !== 'deferred'" class="icon-button compact" title="暂缓：保留草稿稍后审阅"
-                    :disabled="action.startsWith('evolution.decide')"
-                    @click="decideEvolutionCandidate(candidate, 'defer')">
-                    <Clock :size="15" />
-                  </button>
-                  <button class="icon-button compact" title="丢弃该草稿"
-                    :disabled="action.startsWith('evolution.decide')"
-                    @click="decideEvolutionCandidate(candidate, 'reject')">
-                    <X :size="15" />
-                  </button>
-                </div>
-              </div>
-              <div v-if="expandedCandidateFingerprint === candidate.fingerprint" class="draft-workbench">
-                <div v-if="(candidate.files?.length ?? 0) > 0" class="draft-file-tabs" role="tablist">
-                  <button v-for="file in candidate.files" :key="file.name" role="tab"
-                    :class="{ active: activeDraftFile(candidate)?.name === file.name }"
-                    @click="selectDraftFile(candidate, file.name)">{{ file.name }}</button>
-                </div>
-                <pre v-if="activeDraftFile(candidate)" class="draft-file-preview">{{ activeDraftFile(candidate)?.content }}</pre>
-                <div class="draft-prompt-editor">
-                  <label class="field-label" for="draft-prompt-rewrite">提示词改写（可选）</label>
-                  <textarea id="draft-prompt-rewrite" v-model="promptDraft" class="text-input" rows="5"
-                    :placeholder="candidate.files?.some((file) => file.name === 'prompt.txt')
-                      ? '修改后点「保存并采纳」，改写内容会替换草稿的 prompt.txt'
-                      : '该草稿没有 prompt.txt 文件'"
-                    @input="promptDirty = true" />
-                </div>
-                <div class="draft-workbench-actions">
-                  <button class="primary-button" :disabled="action.startsWith('evolution.decide')"
-                    @click="decideEvolutionCandidate(candidate, 'adopt', promptOverrideFor())">
-                    <Check :size="14" /> {{ promptDirty ? '保存并采纳' : '采纳' }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="settings-group">
-            <div class="settings-row">
-              <div>
-                <strong>反思历史</strong>
-                <small>每次反思回合的触发方式与处理结果：手动、定时或缺陷阈值触发</small>
-              </div>
-            </div>
-            <div v-if="evolutionHistory.length === 0" class="empty-settings">还没有反思回合记录</div>
-            <div v-for="run in evolutionHistory" :key="run.id" class="settings-list-row">
-              <History :size="17" />
-              <div class="list-main">
-                <div>
-                  <strong>{{ triggerLabel(run.trigger) }}</strong>
-                  <span class="inline-badge">处理 {{ run.processed }}</span>
-                  <span v-if="run.candidates > 0" class="inline-badge">产出 {{ run.candidates }}</span>
-                  <span v-if="run.failed > 0" class="inline-badge severity-high">失败 {{ run.failed }}</span>
-                </div>
-                <small v-if="run.error">{{ run.error }}</small>
-              </div>
-              <span class="version-text" :title="run.createdAt">{{ relativeTime(run.createdAt) }}</span>
-            </div>
-          </section>
-
-          <section class="settings-group">
-            <div class="settings-row">
-              <div>
-                <strong>效果追踪</strong>
-                <small>已采纳技能的实际使用次数，以及对应缺陷是否复发——衡量进化是否真正解决了问题</small>
-              </div>
-            </div>
-            <div v-if="!evolutionStats" class="empty-settings">暂无统计数据</div>
-            <template v-else>
-              <div class="stats-summary">
-                <span class="inline-badge">反思 {{ evolutionStats.runs }}</span>
-                <span class="inline-badge">草稿 {{ evolutionStats.candidatesProduced }}</span>
-                <span class="inline-badge">采纳 {{ evolutionStats.adopted }}</span>
-                <span class="inline-badge">拒绝 {{ evolutionStats.rejected }}</span>
-                <span class="inline-badge">暂缓 {{ evolutionStats.deferred }}</span>
-                <span class="inline-badge">采纳率 {{ evolutionStats.adoptionRate }}%</span>
-              </div>
-              <div v-if="evolutionStats.skills.length === 0" class="empty-settings">还没有已采纳的进化技能</div>
-              <div v-for="skill in evolutionStats.skills" :key="skill.fingerprint" class="settings-list-row">
-                <Zap :size="17" />
-                <div class="list-main">
-                  <div>
-                    <strong>{{ skill.skillName }}</strong>
-                    <span class="inline-badge">使用 {{ skill.usageCount }} 次</span>
-                  </div>
-                  <small>缺陷类型：{{ defectKindLabel(skill.kind) }} · 采纳于 {{ formatDateOnly(skill.adoptedAt) }}</small>
-                </div>
-                <span class="version-text" :class="{ unresolved: !skill.resolved }">
-                  {{ skill.resolved ? '缺陷未复发' : '缺陷有复发' }}
-                </span>
-              </div>
-            </template>
-          </section>
+          <SettingsEvolutionPanel ref="evolutionPanel" @notice="onPanelNotice" @error="onPanelError" />
         </template>
 
         <template v-else-if="section === 'diagnostics'">
@@ -2367,93 +1773,9 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-else-if="section === 'advanced'">
-          <div class="settings-section-heading">
-            <div>
-              <h3>高级设置</h3>
-              <p>网络与桌面权限、路由容灾、专家参数与原始配置文档</p>
-            </div>
-          </div>
-
-          <section class="settings-group">
-            <!-- 2.7：这里原本是「全局网络访问」的第二个写入口。同一开关两处可改，
-                 且这一处保存时会连带把 failover/deepSeek 的本地副本一起回写，
-                 在别处改过那两个值后就会互相覆盖。现在只读回显 + 跳转唯一入口。 -->
-            <div class="provider-enabled-row">
-              <span>
-                <strong>全局网络访问（联网搜索与抓取）</strong>
-                <small v-if="networkEnabled">已开启：所有任务与项目都可用 web_search / web_fetch。开关只有一个写入口，在「智能体 → 网页搜索」。</small>
-                <small v-else>已关闭：所有项目和任务强制离线，网络工具被剥离。要开启请到「智能体 → 网页搜索」。</small>
-              </span>
-              <button class="secondary-button" type="button" @click="section = 'agent'">
-                <Sparkles :size="15" /> 去「智能体」管理
-              </button>
-            </div>
-            <div class="provider-enabled-row">
-              <span>
-                <strong>允许的网站（外部网站访问）</strong>
-                <small v-if="allowedSitesCount && allowedSitesCount > 0">已允许 {{ allowedSitesCount }} 个网站。仍可浏览本地主机。web_fetch 将按白名单拦截列表外的站点。</small>
-                <small v-else>未设置白名单：当前不限制外部网站访问。添加条目后，仅列表中的站点与本地主机可访问。</small>
-              </span>
-              <button class="secondary-button" type="button" @click="allowedSitesOpen = true">管理…</button>
-            </div>
-          </section>
-
-          <section class="settings-group">
-            <label class="provider-enabled-row">
-              <span>
-                <strong>电脑操作智能体 (Computer Use)</strong>
-                <small>允许 Agent 获得跨平台桌面直接操作能力（点击、输入、移动、滚动、快捷键与原生窗口UI元素解析）。内置双层故障沙盒与熔断防护，安全解耦，零残留。</small>
-              </span>
-              <input v-model="computerUseEnabled" class="sr-only" type="checkbox"
-                :disabled="action === 'advanced.set:computerUse'" @change="toggleComputerUse" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
-          </section>
-
-          <section class="settings-group">
-            <label class="provider-enabled-row">
-              <span>
-                <strong>网络运维插件 (Network Ops)</strong>
-                <small>允许 Agent 运行网络诊断与运维命令：一键诊断（接口 / 路由 / 连接 / ARP / DNS）、ping、traceroute、netstat、nslookup、netsh、ip 等全命令集（Windows 与 Linux 自动映射）。命令经白名单目录执行，参数不经 Shell，杜绝注入。</small>
-              </span>
-              <input v-model="networkOpsEnabled" class="sr-only" type="checkbox"
-                :disabled="action === 'advanced.set:networkOps'" @change="toggleNetworkOps" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
-            <label v-if="networkOpsEnabled" class="provider-enabled-row">
-              <span>
-                <strong>允许变更类网络命令</strong>
-                <small>关闭后仅允许只读查询（ping、netstat、nslookup 等）；route add、netsh set、DNS 缓存刷新等变更命令将被拒绝。</small>
-              </span>
-              <input v-model="networkOpsAllowMutating" class="sr-only" type="checkbox"
-                :disabled="action === 'advanced.set:networkOpsMutating'" @change="toggleNetworkOpsMutating" />
-              <span class="toggle-switch" aria-hidden="true"><span /></span>
-            </label>
-          </section>
-
-
-
-          <section class="settings-group">
-            <div class="settings-group-title">
-              <strong>专家参数（直接编辑配置文档）</strong>
-              <small>上面没有覆盖到的字段都在这里：只提交你实际改动的叶子节点，没动过的配置不会被写回。</small>
-            </div>
-            <ConfigJsonEditor :connected="daemonConnected" />
-          </section>
-
-          <!-- 危险区永远放最后：恢复出厂是唯一会摧毁数据的按钮，不该待在「常规」首屏。 -->
-          <section class="settings-group danger-zone">
-            <div class="provider-enabled-row">
-              <span>
-                <strong>恢复出厂设置</strong>
-                <small>清空全局配置、会话数据并重建数据库；不会删除项目源码文件。此操作无法撤销。</small>
-              </span>
-              <button class="danger-button" :disabled="action === 'factory.reset'" @click="factoryReset">
-                <LoaderCircle v-if="action === 'factory.reset'" class="spin" :size="15" />
-                <RotateCcw v-else :size="15" /> 恢复出厂设置
-              </button>
-            </div>
-          </section>
+          <SettingsAdvancedPanel :daemon-connected="daemonConnected" :network-enabled="networkEnabled"
+            @notice="onPanelNotice" @error="onPanelError" @navigate-agent="section = 'agent'"
+            @runtime-changed="emit('runtimeChanged')" @close="emit('close')" />
         </template>
 
       </div>
@@ -2476,5 +1798,4 @@ onBeforeUnmount(() => {
     :saving="action === 'provider.save'" :error="providerEditorOpen ? error : ''"
     :default-models-directory="providers.find((provider) => provider.kind === 'local')?.defaultModelsDirectory"
     @close="providerEditorOpen = false" @save="saveProvider" />
-  <AllowedSitesDialog :open="allowedSitesOpen" @close="() => { allowedSitesOpen = false; if (section === 'advanced') void loadCurrentSection() }" />
 </template>

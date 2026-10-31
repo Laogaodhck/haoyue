@@ -78,7 +78,7 @@ export class DaemonClient extends EventEmitter {
         timer = null
         try {
           socket.destroy()
-        } catch {}
+        } catch { /* the socket may already be closed */ }
         finish({ connected: false, endpoint: this.endpoint, error: 'Connection timed out' })
       }, 2500)
 

@@ -4,10 +4,12 @@ import type { WebNavigationCheck } from '../shared/ipc.js'
 /**
  * 可视化浏览器（右侧工作区「浏览」页签）的访问边界。
  *
- * 白名单语义与 haoyue_runtime/Tools/WebSiteAllowlist.cs 完全一致（同一份
- * config.web.allowedSites）：空列表 = 不限制；localhost / 127.x / ::1 始终放行；
- * 规则形如 scheme://host[:port]，host 支持前导 "*." 通配（根域需单独添加）；
- * 仅 http/https 参与匹配的协议。
+ * 白名单条目与 haoyue_runtime/Tools/WebSiteAllowlist.cs 一致（同一份
+ * config.web.allowedSites）：localhost / 127.x / ::1 始终放行；规则形如
+ * scheme://host[:port]，host 支持前导 "*." 通配（根域需单独添加）；仅 http/https
+ * 参与匹配的协议。与 web_fetch 的唯一差异是空列表默认值：web_fetch 视为「功能未启用」
+ * 全部放行，而内置浏览器承载任意站点脚本，空列表时只允许本地主机——外网站点需显式加入
+ * 白名单才能打开。
  *
  * 本模块不含任何 electron 运行时依赖（只 import type），因此可以被 vitest 直接覆盖。
  */
@@ -86,10 +88,8 @@ export function parseRule(entry: string): WebRule | null {
   return { scheme, host, port }
 }
 
-/** 单条 URL 的白名单裁决；rules 为空表示白名单未启用（全部放行）。 */
+/** 单条 URL 的白名单裁决；rules 为空时只放行本地主机（见文件头说明）。 */
 export function evaluateUrl(rawUrl: string, rules: WebRule[]): { allowed: boolean; reason?: string } {
-  if (rules.length === 0) return { allowed: true }
-
   let uri: URL
   try {
     uri = new URL(rawUrl)
@@ -102,6 +102,11 @@ export function evaluateUrl(rawUrl: string, rules: WebRule[]): { allowed: boolea
     return { allowed: false, reason: `仅允许 http/https 访问（收到 ${uri.protocol.replace(':', '')}）。` }
 
   if (isLocalHost(uri.hostname)) return { allowed: true }
+  if (rules.length === 0)
+    return {
+      allowed: false,
+      reason: `内置浏览器默认只允许本地主机：${uri.origin} 需要先在「设置 → 允许的网站」中加入白名单。`
+    }
 
   const host = uri.hostname.toLowerCase()
   const port = uri.port || null
@@ -134,8 +139,8 @@ export async function fetchRules(source: AllowlistSource): Promise<WebRule[]> {
 
 /**
  * 地址栏提交前的校验：补 scheme → 校验协议 → 对照白名单，回填规范化地址。
- * 白名单读取失败（daemon 尚未就绪）时按「未配置」放行：这与 web.allowedSites
- * 空列表的既有语义一致，也避免启动瞬间把本地预览整体锁死。
+ * 白名单读取失败（daemon 尚未就绪）时按「空列表」处理：只放行本地主机，
+ * 既保住启动瞬间的本地预览，也不会因为读不到配置而对外网敞开。
  */
 export async function checkBrowserUrl(
   source: AllowlistSource,
@@ -163,6 +168,16 @@ export async function checkBrowserUrl(
 
   const verdict = evaluateUrl(uri.href, rules)
   return verdict.allowed ? { ok: true, url: uri.href } : { ok: false, reason: verdict.reason }
+}
+
+/**
+ * guest 会话的权限收口：<webview> 承载的是任意白名单站点，默认只保留
+ * 全屏与「复制到剪贴板」——两者不越过本机隐私边界，且网页编辑器/文档站常用。
+ * 摄像头、麦克风、屏幕共享、定位、通知、USB/串口/HID、外部协议唤起等一律拒绝：
+ * 主窗口用的是独立 session，这里收紧不会影响应用自身的剪贴板行为。
+ */
+export function isBrowserPermissionAllowed(permission: string): boolean {
+  return permission === 'fullscreen' || permission === 'clipboard-sanitized-write'
 }
 
 /** 最近一次读到的白名单快照，供 will-navigate / window.open 同步裁决。 */
@@ -193,6 +208,12 @@ export function attachWebviewGuard(win: BrowserWindow, source: AllowlistSource):
   })
 
   win.webContents.on('did-attach-webview', (_event, contents) => {
+    const session = contents.session
+    session.setPermissionRequestHandler((_wc, permission, callback) => {
+      callback(isBrowserPermissionAllowed(permission))
+    })
+    session.setPermissionCheckHandler((_wc, permission) => isBrowserPermissionAllowed(permission))
+
     // allowpopups 只是为了不把 target=_blank 静默丢弃；这里一律 deny，
     // 放行的目标改为在同一视图内加载（仍受白名单与后续 will-navigate 约束）。
     contents.setWindowOpenHandler(({ url }) => {

@@ -257,9 +257,12 @@ public static class McpOAuthFlow
                 listener.Start();
                 return $"http://127.0.0.1:{port}/callback";
             }
-            catch (HttpListenerException) when (attempt < 4)
+            catch (HttpListenerException) when (attempt < 19)
             {
+                // 满载机器上并发测试/进程会反复抢走刚探测到的端口，多试几次并让出
+                // 一个调度片，避免把端口竞争暴露成「授权连接失败」。
                 listener.Prefixes.Clear();
+                Thread.Sleep(20);
             }
         }
     }

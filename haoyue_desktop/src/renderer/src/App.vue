@@ -2,11 +2,11 @@
 import { daemonRequest } from './daemon-rpc'
 import {
   ArrowDown, Check, ChevronDown, ChevronUp, Circle, CornerDownLeft,
-  Folder, FolderOpen, History, LoaderCircle, MoreHorizontal, PanelRight,
+  FolderOpen, History, LoaderCircle, MoreHorizontal, PanelRight,
   RefreshCw, Search, ShieldAlert, Telescope, TerminalSquare, Trash2, Sparkles, Undo2, X
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
-import type { AppearanceTheme, AppInfo, DaemonMessage, DaemonState } from '../../shared/ipc'
+import type { AppearanceTheme, AppInfo, DaemonState } from '../../shared/ipc'
 import AppTitleBar from './components/AppTitleBar.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import ArchivedTasksDialog from './components/ArchivedTasksDialog.vue'
@@ -29,21 +29,20 @@ import WelcomeEmpty from './components/WelcomeEmpty.vue'
 import { computeTurnTaskSteps, type TaskStep } from './task-planner'
 import { confirmAction } from './confirmation'
 import { createWorkspaceFileSuggester } from './workspace-files'
-import { DeletionUndoBuffer, finalizeAssistantBubbles, markThreadInterrupted, preserveTruncatedVersions, restoreAssistantVersion } from './conversation-state'
-import { journalCursor, openTurnsOf, recoverTurns, type JournalRow, type RecoveredTurn } from './turn-recovery'
+import { finalizeAssistantBubbles, preserveTruncatedVersions } from './conversation-state'
 import { isForbiddenProjectPath } from './project-paths'
-import { retryRuntimeConnection, RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
+import { RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
 import { ReasoningLevel } from './types'
-import type { ChatMessage, EvolutionCandidate, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, ThreadStats, ToolActivity, WorkDockTab } from './types'
+import type { ChatMessage, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, WorkDockTab } from './types'
 import {
   cancelParams, formatContextRatio, formatInferenceFootnote,
   formatPreloadLabel, formatPromptWithFiles, formatTurnFailure,
-  hydrateMessages, makeId, messageMatches, normalizePath, normalizeReasoningLevel,
-  pathName, phaseLabel, plainImages, queuedImageUrl, queuedMessagePreview,
+  hydrateMessages, makeId, messageMatches, normalizeReasoningLevel,
+  pathName, plainImages, queuedImageUrl, queuedMessagePreview,
   samePath, sessionScope, sessionStats, updateThreadTitle,
 } from './app-helpers'
 import { createChatActions } from './app-actions'
-import { clearScrollPositions, readScrollPosition, saveScrollPosition } from './scroll-memory'
+import { readScrollPosition, saveScrollPosition } from './scroll-memory'
 import { loadDrafts, persistDrafts as persistDraftsToStorage } from './thread-drafts'
 import { createViewHistory } from './view-history'
 import { createConversationSearch } from './conversation-search'
@@ -51,17 +50,18 @@ import { openBackgroundTaskSession, openSessionHit, type SessionOpenerDeps } fro
 import type { RuntimeModelCatalogItem, RuntimeProject, RuntimeSession, RuntimeWorkspace } from './app-helpers'
 import {
   imageSourceKey, loadEarlierMessages as loadEarlierMessagesFromStore,
-  refreshAllProjectSessions as refreshAllProjectSessionsFromStore,
-  refreshGlobalSessions as refreshGlobalSessionsFromStore,
-  refreshProjectSessions as refreshProjectSessionsFromStore,
   reloadThreadSession as reloadThreadSessionFromStore,
   requestSessionImageBytes, SESSION_PAGE_SIZE, sessionImageSources
 } from './session-sync'
 import { createThreadActions } from './thread-actions'
 import { createDaemonEventHandler } from './daemon-event-handler'
+import { createEvolutionController } from './evolution-controller'
+import { createMessageEditing } from './message-editing'
+import { createProjectStore } from './project-store'
+import { createWorkDockController } from './work-dock'
+import { createRuntimeReconnect } from './runtime-reconnect'
+import { createRuntimeRecovery, type ConfigAnomaly } from './runtime-recovery'
 
-const PROJECTS_STORAGE_KEY = 'haoyue-projects-v2'
-const IMPLICIT_DOCUMENTS_MIGRATION_KEY = 'haoyue-projects-remove-implicit-documents-v2'
 // The daemon starts a chat turn within milliseconds of receiving the request,
 // so a request that produces no event at all within this window is stuck (for
 // example the payload never reached the daemon). Reject it instead of leaving
@@ -105,12 +105,7 @@ const daemonState = ref<DaemonState>({ connected: false, endpoint: '' })
 const reconnecting = ref(false)
 const reconnectAttempt = ref(0)
 const reconnectPrompt = ref<{ startup: boolean; error?: string } | null>(null)
-const configAnomaly = ref<{
-  hasAnomaly: boolean
-  detail?: string
-  configFile?: string
-  backupFile?: string
-} | null>(null)
+const configAnomaly = ref<ConfigAnomaly | null>(null)
 // 凭据存储告警（明文 API Key 无法加密迁移）。可关闭，但每次重连都会重新拉取，
 // 因为只要告警仍在，配置文件里就还有一个未加密的密钥。
 const secretWarnings = ref<string[]>([])
@@ -227,6 +222,24 @@ function saveComposerDraft(threadId?: string): void {
 const conversationSelectionToken = { value: 0 }
 
 const activeThread = computed(() => threads.value.find((thread) => thread.id === activeThreadId.value))
+
+const {
+  candidates: evolutionCandidates,
+  inFlight: evolutionInFlight,
+  refresh: refreshEvolutionCandidates,
+  onReflected: handleEvolutionReflected,
+  decide: decideEvolution,
+  feedbackNegative
+} = createEvolutionController(() => activeThread.value?.sessionId)
+
+const {
+  editingUserMessage,
+  editMessageModifiedFiles,
+  editMessageDialogOpen,
+  onEditUserMessage,
+  handleEditConfirm
+} = createMessageEditing({ activeThread, projects, appInfo, composer })
+
 const activeReasoningLevel = computed(() => activeThread.value?.reasoningLevel ?? ReasoningLevel.High)
 const activeModelSupportsImages = computed(() =>
   modelCatalog.value.find((model) => model.ref === activeModel.value)?.capabilities?.vision === true)
@@ -295,6 +308,36 @@ const runtimeConnectionLabel = computed(() => {
 })
 
 const sessionSyncContext = { daemonState, threads }
+const {
+  loadStoredProjects,
+  ensureProject,
+  saveProject,
+  migrateStoredProjects,
+  removeInvalidProjectRows,
+  refreshProjectSessions,
+  refreshAllProjectSessions,
+  migrateImplicitDocumentsProject
+} = createProjectStore({
+  projects,
+  threads,
+  selectedProjectId,
+  activeThreadId,
+  activeThread,
+  appInfo,
+  sessionSyncContext
+})
+
+const {
+  showActiveProject,
+  openWorkDock,
+  toggleWorkDock,
+  openDevTools,
+  openToolDiff,
+  closeWorkDock,
+  resizeWorkDock,
+  openProjectTerminal
+} = createWorkDockController({ activeProject, workDockOpen, workDockTab, workDockWidth, toolDiff })
+
 
 // 历史消息的图片只有元数据进入渲染端（session.get 不内联 base64）：这里按当前任务
 // 可见的图片排队按需取回，同一张图并发只会发一次 RPC。
@@ -308,156 +351,6 @@ watchEffect(() => {
 
 let unsubscribeEvent: (() => void) | undefined
 let unsubscribeState: (() => void) | undefined
-let reconnectTask: Promise<boolean> | null = null
-let automaticReconnectPaused = false
-let appReadyForRecovery = false
-
-function loadStoredProjects(): ProjectItem[] {
-  try {
-    const saved = JSON.parse(localStorage.getItem(PROJECTS_STORAGE_KEY) ?? '[]') as ProjectItem[]
-    return saved.filter((project) => project?.id && project?.path).map((project) => ({
-      id: project.id,
-      name: project.name || pathName(project.path),
-      path: project.path,
-      loaded: false
-    }))
-  } catch {
-    return []
-  }
-}
-
-function ensureProject(path: string, name?: string): ProjectItem {
-  const existing = projects.value.find((project) => samePath(project.path, path))
-  if (existing) {
-    if (name) existing.name = name
-    return existing
-  }
-  const project: ProjectItem = { id: makeId(), name: name || pathName(path), path, loaded: false }
-  projects.value.push(project)
-  return project
-}
-
-async function saveProject(project: ProjectItem): Promise<ProjectItem> {
-  const oldId = project.id
-  const response = await daemonRequest('project.upsert', {
-    id: project.id,
-    path: project.path,
-    name: project.name
-  })
-  const saved = JSON.parse(response.data) as RuntimeProject
-  const duplicate = projects.value.find((item) => item !== project && item.id === saved.id)
-  if (duplicate) {
-    duplicate.path = saved.path
-    duplicate.name = saved.name
-    threads.value.forEach((thread) => {
-      if (thread.projectId === oldId) thread.projectId = duplicate.id
-    })
-    if (selectedProjectId.value === oldId) selectedProjectId.value = duplicate.id
-    projects.value = projects.value.filter((item) => item !== project)
-    return duplicate
-  }
-  project.id = saved.id
-  project.path = saved.path
-  project.name = saved.name
-  if (oldId !== saved.id) {
-    threads.value.forEach((thread) => {
-      if (thread.projectId === oldId) thread.projectId = saved.id
-    })
-    if (selectedProjectId.value === oldId) selectedProjectId.value = saved.id
-  }
-  return project
-}
-
-async function migrateStoredProjects(): Promise<void> {
-  if (localStorage.getItem(PROJECTS_STORAGE_KEY) === null) return
-  const stored = loadStoredProjects()
-  for (const project of stored) {
-    if (isForbiddenProjectPath(project.path, appInfo.value.userProfilePath)) continue
-    await daemonRequest('project.upsert', {
-      id: project.id,
-      path: project.path,
-      name: project.name
-    })
-  }
-  localStorage.removeItem(PROJECTS_STORAGE_KEY)
-}
-
-async function removeInvalidProjectRows(): Promise<void> {
-  // Older builds could register the user profile (or ~/.haoyue) as a project, which
-  // made every plain folder under the profile share one session scope. Drop those rows
-  // now; sessions are preserved in the database instead of being deleted with them.
-  const invalid = projects.value.filter((project) =>
-    isForbiddenProjectPath(project.path, appInfo.value.userProfilePath))
-  for (const project of invalid) {
-    try {
-      await daemonRequest('project.remove', { id: project.id, keepSessions: true })
-    } catch {
-      continue // leave the row in place; the next launch retries the cleanup
-    }
-    projects.value = projects.value.filter((item) => item.id !== project.id)
-    if (selectedProjectId.value === project.id) selectedProjectId.value = ''
-  }
-}
-
-function showActiveProject(): void {
-  if (activeProject.value) void window.haoyue.showItemInFolder(activeProject.value.path)
-}
-
-/** 打开工作区面板的指定页签；再次点击已激活页签视为关闭（WorkBuddy 式切换语义）。 */
-function openWorkDock(tab: WorkDockTab): void {
-  if (needsProject(tab) && !activeProject.value) {
-    // 旧实现是静默 return：标题栏菜单和 header 按钮看起来都能点，实际毫无反应。
-    void window.haoyue.notify?.('需要先绑定项目',
-      '代码更改与提交记录只对绑定了项目的任务可用。请在欢迎页绑定项目，或从左侧项目里新建任务。')
-    return
-  }
-  if (tab !== 'tools' && tab !== 'browser') toolDiff.value = null
-  workDockOpen.value = !(workDockOpen.value && workDockTab.value === tab)
-  workDockTab.value = tab
-}
-
-/** Git 两类页签依赖工作区路径；工具活动 / 浏览 / 后台任务与会话无关。 */
-function needsProject(tab: WorkDockTab): boolean {
-  return tab === 'changes' || tab === 'history'
-}
-
-/**
- * header 的单一「面板」开关：header 不再为每个页签各放一个按钮（那与面板自己的页签重复），
- * 只保留一个开关。记住的页签不可用时退回「工具活动」，避免点了没用。
- */
-function toggleWorkDock(): void {
-  if (workDockOpen.value) {
-    closeWorkDock()
-    return
-  }
-  openWorkDock(needsProject(workDockTab.value) && !activeProject.value ? 'tools' : workDockTab.value)
-}
-
-function openDevTools(): void {
-  void window.haoyue.openDevTools()
-}
-
-function openToolDiff(path: string, diff: string): void {
-  toolDiff.value = { path, diff }
-  workDockTab.value = 'changes'
-  workDockOpen.value = true
-}
-
-function closeWorkDock(): void {
-  workDockOpen.value = false
-  toolDiff.value = null
-}
-
-function resizeWorkDock(width: number): void {
-  if (!Number.isFinite(width)) return
-  const maxWidth = Math.min(720, Math.max(280, Math.floor(window.innerWidth * 0.66)))
-  workDockWidth.value = Math.min(maxWidth, Math.max(280, Math.round(width)))
-}
-
-async function openProjectTerminal(): Promise<void> {
-  if (!activeProject.value) return
-  await window.haoyue.project.openTerminal(activeProject.value.path)
-}
 
 function applyTheme(value: AppearanceTheme): void {
   theme.value = value
@@ -490,45 +383,6 @@ async function scrollToBottom(smooth = false, force = false): Promise<void> {
 async function handleScheduleUpdated(): Promise<void> {
   if (!daemonState.value.connected) return
   await refreshAllProjectSessions().catch(() => undefined)
-}
-
-async function refreshProjectSessions(project: ProjectItem): Promise<void> {
-  await refreshProjectSessionsFromStore(sessionSyncContext, project)
-}
-
-async function refreshGlobalSessions(): Promise<void> {
-  await refreshGlobalSessionsFromStore(sessionSyncContext)
-}
-
-async function refreshAllProjectSessions(): Promise<void> {
-  await refreshAllProjectSessionsFromStore(sessionSyncContext, projects.value)
-}
-
-async function migrateImplicitDocumentsProject(): Promise<void> {
-  if (localStorage.getItem(IMPLICIT_DOCUMENTS_MIGRATION_KEY) === '1') return
-  if (!appInfo.value.documentsPath) return
-
-  const project = projects.value.find((item) => samePath(item.path, appInfo.value.documentsPath))
-  if (!project) {
-    localStorage.setItem(IMPLICIT_DOCUMENTS_MIGRATION_KEY, '1')
-    return
-  }
-
-  // Only remove the legacy entry after the Runtime has confirmed that it owns no sessions.
-  // A failed request leaves the migration pending so a later reconnect can retry safely.
-  try {
-    await refreshProjectSessions(project)
-  } catch {
-    return
-  }
-
-  if (!threads.value.some((thread) => thread.projectId === project.id)) {
-    await daemonRequest('project.remove', { id: project.id })
-    projects.value = projects.value.filter((item) => item.id !== project.id)
-    if (selectedProjectId.value === project.id) selectedProjectId.value = ''
-    if (activeThread.value?.projectId === project.id) activeThreadId.value = ''
-  }
-  localStorage.setItem(IMPLICIT_DOCUMENTS_MIGRATION_KEY, '1')
 }
 
 async function loadRuntimeState(): Promise<void> {
@@ -612,185 +466,41 @@ async function loadRuntimeState(): Promise<void> {
   }
 }
 
-// N17: after a daemon crash + restart, the startup recovery appends interruption
-// notices and records the recovered session ids. The client may reconnect long
-// after that broadcast window, so it pulls the list via agent.interrupted and
-// clears the stale "running" state that would otherwise stick forever.
-async function reconcileInterruptedTurns(): Promise<void> {
-  if (!daemonState.value.connected) return
-  let sessionIds: string[] = []
-  try {
-    const response = await daemonRequest('agent.interrupted')
-    sessionIds = JSON.parse(response.data) as string[]
-  } catch {
-    return
-  }
-  if (!Array.isArray(sessionIds) || sessionIds.length === 0) return
-  const interruptedIds = new Set(sessionIds)
-  const hits = threads.value.filter((thread) => thread.sessionId && interruptedIds.has(thread.sessionId))
-  if (hits.length === 0) return
-  for (const thread of hits) markThreadInterrupted(thread)
-  void window.haoyue?.notify?.(
-    '回合被中断',
-    hits.length === 1
-      ? `「${hits[0]!.title}」的回合因 Runtime 重启而中断，可重新发送消息继续。`
-      : `${hits.length} 个任务的回合因 Runtime 重启而中断，可重新发送消息继续。`)
-  const active = activeThread.value
-  if (active?.sessionId && interruptedIds.has(active.sessionId)) {
-    await selectThread(active.id)
-  }
-}
+const {
+  reconcileInterruptedTurns,
+  replayMissedTerminals,
+  handleRebuildConfig
+} = createRuntimeRecovery({
+  daemonState,
+  threads,
+  activeThread,
+  projects,
+  selectThread,
+  reloadThreadSession,
+  scheduleQueuedDrain,
+  configAnomaly,
+  rebuildingConfig,
+  loadRuntimeState
+})
 
-// 断线期间结束的回合收不到实时终态帧：帧带的是请求 id，重连后那条请求已经不存在了。
-// 台账行是唯一线索，于是带上「见过的最大行号」只补播缺的那几行；否则任务会永远卡在运行中，
-// 队列也不会继续下发。
-let lastJournalId = 0
-
-async function replayMissedTerminals(): Promise<void> {
-  if (!daemonState.value.connected) return
-  const opens = openTurnsOf(threads.value)
-  if (opens.length === 0) return
-  let rows: JournalRow[] = []
-  try {
-    const response = await daemonRequest('events.recent', { limit: 500, after: lastJournalId })
-    const parsed = JSON.parse(response.data) as JournalRow[]
-    if (Array.isArray(parsed)) rows = parsed
-  } catch {
-    return
-  }
-  lastJournalId = journalCursor(rows, lastJournalId)
-  const recovered = recoverTurns(rows, opens)
-  for (const item of recovered) {
-    const thread = threads.value.find((candidate) => candidate.id === item.threadId)
-    if (thread) await applyRecoveredTurn(thread, item)
-  }
-  if (recovered.length === 0) return
-  const titles = recovered
-    .map((item) => threads.value.find((candidate) => candidate.id === item.threadId)?.title ?? '任务')
-  void window.haoyue?.notify?.(
-    '已补回断线期间的结果',
-    recovered.length === 1
-      ? `「${titles[0]}」在连接中断期间已经结束，结果与失败原因已补回。`
-      : `${recovered.length} 个任务（${titles.join('、')}）在连接中断期间已经结束，结果已补回。`)
-}
-
-/** 台账行没有回答正文，先回会话存储整体重载，再补终态标记——顺序反了会被水合覆盖掉。 */
-async function applyRecoveredTurn(thread: ThreadItem, recovered: RecoveredTurn): Promise<void> {
-  thread.running = false
-  thread.requestId = undefined
-  thread.assistantId = undefined
-  thread.phase = undefined
-  thread.activeTurnToken = undefined
-  thread.pendingGuidance = 0
-  finalizeAssistantBubbles(thread.messages, recovered.outcome === 'error' ? 'error' : 'done')
-  thread.undoableFiles = recovered.undoableFiles
-  await reloadThreadSession(thread, projects.value.find((project) => project.id === thread.projectId))
-  const bubble = thread.messages.findLast((item) => item.role === 'assistant')
-  if (bubble) {
-    if (recovered.finishReason) bubble.finishReason = recovered.finishReason
-    if (recovered.outcome === 'cancelled') bubble.interrupted = true
-    if (recovered.outcome === 'error') {
-      bubble.state = 'error'
-      bubble.errorDetail = recovered.error ?? bubble.errorDetail
-      if (!bubble.content) bubble.content = formatTurnFailure(recovered.error ?? '').content
-    }
-  }
-  scheduleQueuedDrain(thread)
-}
-
-async function handleRebuildConfig(): Promise<void> {
-  rebuildingConfig.value = true
-  try {
-    await daemonRequest('config.rebuild')
-    configAnomaly.value = null
-    await loadRuntimeState()
-  } catch (err) {
-    console.error('Failed to rebuild config:', err)
-  } finally {
-    rebuildingConfig.value = false
-  }
-}
-
-// H24: reconnect success deserves its own feedback — previously the UI just silently
-// returned to normal and users could not tell whether their running tasks survived.
-let hasBeenConnected = false
-function handleDaemonState(state: DaemonState): void {
-  const wasConnected = daemonState.value.connected
-  daemonState.value = state
-  if (state.connected) {
-    automaticReconnectPaused = false
-    reconnectPrompt.value = null
-    if (wasConnected === false && hasBeenConnected) {
-      const runningCount = threads.value.filter((thread) => thread.running).length
-      void window.haoyue?.notify?.(
-        '已重新连接',
-        runningCount > 0 ? `连接已恢复，${runningCount} 个运行中的任务已恢复跟踪。` : '连接已恢复。')
-    }
-    hasBeenConnected = true
-    return
-  }
-  if (conversationLoading.value) {
-    conversationLoading.value = false
-    conversationLoadError.value = '已与 Haoyue Runtime 断开连接，正在尝试重连…'
-  }
-  if (!appReadyForRecovery || reconnecting.value || reconnectTask || automaticReconnectPaused || reconnectPrompt.value) return
-  void runReconnectCycle(false)
-}
-
-async function runReconnectCycle(startup: boolean): Promise<boolean> {
-  if (reconnectTask) return reconnectTask
-  reconnectTask = (async () => {
-    reconnecting.value = true
-    reconnectPrompt.value = null
-    const state = await retryRuntimeConnection(
-      () => window.haoyue.daemon.connect(),
-      { onAttempt: (attempt) => { reconnectAttempt.value = attempt } })
-    daemonState.value = state
-    if (state.connected) {
-      automaticReconnectPaused = false
-      await loadRuntimeState()
-      return true
-    }
-    reconnectPrompt.value = { startup, error: state.error }
-    return false
-  })().finally(() => {
-    reconnecting.value = false
-    reconnectAttempt.value = 0
-    reconnectTask = null
-  })
-  return reconnectTask
-}
-
-async function reconnectDaemon(): Promise<void> {
-  automaticReconnectPaused = false
-  reconnectPrompt.value = null
-  if (daemonState.value.connected) {
-    await loadRuntimeState()
-    return
-  }
-  await runReconnectCycle(false)
-}
-
-async function refreshRuntimeState(): Promise<void> {
-  if (daemonState.value.connected) await loadRuntimeState()
-  else await reconnectDaemon()
-}
-
-function continueRuntimeReconnect(): void {
-  const startup = reconnectPrompt.value?.startup ?? false
-  reconnectPrompt.value = null
-  automaticReconnectPaused = false
-  void runReconnectCycle(startup)
-}
-
-function cancelRuntimeReconnect(): void {
-  if (reconnectPrompt.value?.startup) {
-    void window.haoyue.closeApp()
-    return
-  }
-  reconnectPrompt.value = null
-  automaticReconnectPaused = true
-}
+const {
+  handleDaemonState,
+  runReconnectCycle,
+  reconnectDaemon,
+  refreshRuntimeState,
+  continueRuntimeReconnect,
+  cancelRuntimeReconnect,
+  setAppReady
+} = createRuntimeReconnect({
+  daemonState,
+  reconnecting,
+  reconnectAttempt,
+  reconnectPrompt,
+  conversationLoading,
+  conversationLoadError,
+  threads,
+  loadRuntimeState
+})
 
 async function openWorkspace(): Promise<void> {
   const path = await window.haoyue.selectWorkspace()
@@ -1019,117 +729,6 @@ async function branchFromMessage(message: ChatMessage): Promise<void> {
   threads.value.unshift(newThread)
   await selectThread(newThread.id)
   void nextTick(() => composer.value?.focus())
-}
-
-const editingUserMessage = ref<ChatMessage | null>(null)
-const editMessageModifiedFiles = ref<string[]>([])
-const editMessagePatches = ref<Array<{ filePath: string; diff: string }>>([])
-const editMessageDialogOpen = ref(false)
-
-function onEditUserMessage(message: ChatMessage): void {
-  const thread = activeThread.value
-  if (!thread || thread.archived) return
-  if (thread.running || thread.queueDraining) {
-    void window.haoyue?.notify?.('无法编辑', '当前回合正在执行，请先等待或停止生成后再进行编辑。')
-    return
-  }
-
-  const promptIndex = thread.messages.findIndex((item) => item.id === message.id)
-  if (promptIndex < 0) return
-
-  // Collect subsequent file patches & modified files
-  const patches: Array<{ filePath: string; diff: string }> = []
-  const filesSet = new Set<string>()
-
-  for (let i = promptIndex + 1; i < thread.messages.length; i++) {
-    const msg = thread.messages[i]
-    if (!msg) continue
-    for (const tool of msg.tools ?? []) {
-      if (tool.filePath && tool.diff) {
-        patches.push({ filePath: tool.filePath, diff: tool.diff })
-        filesSet.add(tool.filePath)
-      }
-    }
-  }
-
-  editingUserMessage.value = message
-  editMessageModifiedFiles.value = Array.from(filesSet)
-  editMessagePatches.value = patches
-  editMessageDialogOpen.value = true
-}
-
-async function handleEditConfirm(revertFiles: boolean): Promise<void> {
-  const thread = activeThread.value
-  const message = editingUserMessage.value
-  const patches = editMessagePatches.value
-  editMessageDialogOpen.value = false
-  if (!thread || !message) return
-
-  const promptIndex = thread.messages.findIndex((item) => item.id === message.id)
-  if (promptIndex < 0) return
-
-  const project = projects.value.find((item) => item.id === thread.projectId)
-  const workspace = project?.path || appInfo.value.defaultWorkspace
-
-  // Step 1: If reverting file modifications, apply diffs in reverse
-  if (revertFiles && patches.length > 0) {
-    try {
-      const res = await window.haoyue.project.revertFileDiffs(workspace, patches)
-      if (res.failed.length > 0) {
-        const failedSummary = res.failed
-          .map((f) => `• ${f.filePath} (${f.reason})`)
-          .join('\n')
-        await confirmAction({
-          title: '部分文件撤销失败',
-          message: `以下文件未能成功自动撤回（可能已被外部修改或存在冲突），建议您手动检查：\n${failedSummary}`,
-          confirmLabel: '我知道了',
-          danger: true
-        })
-      }
-    } catch (err) {
-      await confirmAction({
-        title: '撤销文件修改失败',
-        message: `撤回文件修改时出错：${err instanceof Error ? err.message : String(err)}`,
-        confirmLabel: '我知道了',
-        danger: true
-      })
-    }
-  }
-
-  // Step 2: Truncate backend session in SQLite
-  if (thread.sessionId) {
-    const match = message.id ? /^.*:(\d+)$/.exec(message.id) : null
-    if (!match?.[1]) {
-      // 无持久化行号时禁止用本地索引猜测后端行号（tool 行合并会导致错位）。
-      void window.haoyue?.notify?.('无法编辑', '该消息尚未与后端会话同步，请等待会话加载完成后重试。')
-      return
-    }
-    try {
-      await daemonRequest('session.truncate', {
-        id: thread.sessionId,
-        ...sessionScope(thread, project),
-        keepCount: parseInt(match[1], 10)
-      })
-    } catch (err) {
-      // 截断失败必须中止：否则前端删了消息、后端还在，下次 reload 全部复活。
-      void window.haoyue?.notify?.('无法编辑', `会话截断失败：${err instanceof Error ? err.message : String(err)}`)
-      return
-    }
-  }
-
-  // Step 3: Truncate frontend messages（1.2：截断前把被替换的整段历史压入版本链）
-  preserveTruncatedVersions(thread, promptIndex, 'edit')
-  thread.messages = thread.messages.slice(0, promptIndex)
-  thread.phase = undefined
-  thread.assistantId = undefined
-
-  // Step 4: Populate Composer and focus
-  if (typeof composer.value?.populate === 'function') {
-    composer.value.populate(message.content || '', message.images, message.files)
-  } else {
-    composer.value?.setValue(message.content || '')
-    composer.value?.focus()
-  }
 }
 
 async function ensureRuntimeProject(project: ProjectItem): Promise<void> {
@@ -1713,21 +1312,22 @@ async function runMessageTurn(
   } finally {
     // A terminal event may already have started the next queued turn. Do not let
     // this older request clear that newer turn's state.
-    if (thread.activeTurnToken !== turnToken) return
-    // Belt-and-braces: finalize every leftover "..." placeholder when this turn
-    // settles. The captured assistant can be a stale bubble (a mid-turn steer
-    // created a fresh one) and the terminal event itself may have been dropped
-    // by the finished-request guard, so walk all messages instead of one.
-    finalizeAssistantBubbles(thread.messages, terminalAssistant.state === 'error' ? 'error' : 'done')
-    thread.activeTurnToken = undefined
-    thread.running = false
-    thread.requestId = undefined
-    thread.assistantId = undefined
-    if (thread.sessionId && terminalAssistant.state !== 'error') {
-      await reloadThreadSession(thread, project).catch(() => undefined)
+    if (thread.activeTurnToken === turnToken) {
+      // Belt-and-braces: finalize every leftover "..." placeholder when this turn
+      // settles. The captured assistant can be a stale bubble (a mid-turn steer
+      // created a fresh one) and the terminal event itself may have been dropped
+      // by the finished-request guard, so walk all messages instead of one.
+      finalizeAssistantBubbles(thread.messages, terminalAssistant.state === 'error' ? 'error' : 'done')
+      thread.activeTurnToken = undefined
+      thread.running = false
+      thread.requestId = undefined
+      thread.assistantId = undefined
+      if (thread.sessionId && terminalAssistant.state !== 'error') {
+        await reloadThreadSession(thread, project).catch(() => undefined)
+      }
+      if (thread.id === activeThreadId.value) await scrollToBottom(true)
+      scheduleQueuedDrain(thread)
     }
-    if (thread.id === activeThreadId.value) await scrollToBottom(true)
-    scheduleQueuedDrain(thread)
   }
 }
 
@@ -1788,7 +1388,6 @@ async function renameTaskInline(thread: ThreadItem, title: string): Promise<void
 }
 
 const {
-  chooseAfterRemoval,
   archiveTask,
   restoreTask,
   archiveProjectTasks,
@@ -1845,65 +1444,6 @@ const handleDaemonEvent = createDaemonEventHandler({
   scheduleQueuedDrain,
   reloadBackgroundThreadIfIdle
 })
-
-// ---------------------------------------------------------------- evolution engine (P3/P4)
-// 进化引擎：候选技能审批横幅 + 回合负反馈。候选产生于后台反思 turn，
-// 通过 evolution.reflected 广播或启动时 pending-list 恢复横幅状态。
-
-const evolutionCandidates = ref<EvolutionCandidate[]>([])
-const evolutionInFlight = ref(false)
-
-async function refreshEvolutionCandidates(): Promise<void> {
-  try {
-    const list = await daemonRequest('evolution.pending-list')
-    evolutionCandidates.value = Array.isArray(list)
-      ? list.filter((item): item is EvolutionCandidate =>
-        Boolean(item && typeof item.fingerprint === 'string' && typeof item.skillName === 'string'))
-      : []
-  } catch {
-    // daemon offline / old runtime without evolution support — banner stays hidden
-  }
-}
-
-async function handleEvolutionReflected(): Promise<void> {
-  await refreshEvolutionCandidates()
-  if (evolutionCandidates.value.length > 0) {
-    void window.haoyue.notify(
-      '进化引擎',
-      `反思完成：${evolutionCandidates.value.length} 个技能候选待审批`)
-  }
-}
-
-async function decideEvolution(candidate: EvolutionCandidate, adopt: boolean): Promise<void> {
-  if (evolutionInFlight.value) return
-  evolutionInFlight.value = true
-  try {
-    await daemonRequest('evolution.decide', {
-      fingerprint: candidate.fingerprint,
-      decision: adopt ? 'adopt' : 'reject'
-    })
-    evolutionCandidates.value = evolutionCandidates.value.filter(
-      (item) => item.fingerprint !== candidate.fingerprint)
-  } catch (reason) {
-    await window.haoyue.notify(
-      '候选审批失败',
-      reason instanceof Error ? reason.message : String(reason))
-    await refreshEvolutionCandidates()
-  } finally {
-    evolutionInFlight.value = false
-  }
-}
-
-/** P4: explicit negative feedback on a finished turn; journaled as a defect signal. */
-async function feedbackNegative(): Promise<void> {
-  const thread = activeThread.value
-  if (!thread?.sessionId) return
-  try {
-    await daemonRequest('feedback.turn', { sessionId: thread.sessionId, kind: 'negative' })
-  } catch {
-    // feedback is best-effort; never disturb the user over a failed journal write
-  }
-}
 
 async function stopTurn(): Promise<void> {
   const thread = activeThread.value
@@ -1997,7 +1537,7 @@ onMounted(async () => {
   projects.value = loadStoredProjects()
   unsubscribeEvent = window.haoyue.daemon.onEvent(handleDaemonEvent)
   unsubscribeState = window.haoyue.daemon.onState(handleDaemonState)
-  appReadyForRecovery = true
+  setAppReady(true)
   await runReconnectCycle(true)
   measureConversationViewport()
   window.addEventListener('resize', measureConversationViewport)
@@ -2007,7 +1547,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  appReadyForRecovery = false
+  setAppReady(false)
   window.removeEventListener('resize', measureConversationViewport)
   window.removeEventListener('keydown', handleGlobalShortcuts)
   if (phaseTimer) clearInterval(phaseTimer)
@@ -2345,7 +1885,7 @@ watch(theme, applyTheme)
          用户选择经 agent.respondApproval 回传，超时（120s）按拒绝处理。 -->
     <Teleport to="body">
       <Transition name="modal-fade">
-        <div v-if="activeThread?.pendingApproval" class="modal-backdrop" @mousedown.self>
+        <div v-if="activeThread?.pendingApproval" class="modal-backdrop">
           <section class="approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="approval-title">
             <header class="approval-header">
               <h2 id="approval-title">高危操作需要你的确认</h2>

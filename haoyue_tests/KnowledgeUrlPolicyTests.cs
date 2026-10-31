@@ -116,7 +116,7 @@ public class KnowledgeUrlPolicyTests
     // ─────────────────────────── 重定向逐跳校验 ───────────────────────────
 
     [Fact]
-    public void Fetch_RedirectToPrivateTarget_RejectedBeforeSecondHop()
+    public async Task Fetch_RedirectToPrivateTarget_RejectedBeforeSecondHop()
     {
         // 公网 URL 一条 302 指向云元数据地址：第二跳的策略校验必须先拦下。
         var handler = new RouteHandler(request =>
@@ -127,13 +127,13 @@ public class KnowledgeUrlPolicyTests
                     Content = new StringContent("secret", System.Text.Encoding.UTF8, "text/plain"),
                 });
 
-        var ex = Assert.Throws<KnowledgeWebException>(() =>
-            KnowledgeWeb.Fetch(new Uri("http://8.8.8.8/start"), null, handler));
+        var ex = await Assert.ThrowsAsync<KnowledgeWebException>(() =>
+            KnowledgeWeb.FetchAsync(new Uri("http://8.8.8.8/start"), null, handler));
         Assert.Contains("非公网", ex.Message);
     }
 
     [Fact]
-    public void Fetch_RedirectToPublicTarget_Followed()
+    public async Task Fetch_RedirectToPublicTarget_Followed()
     {
         var handler = new RouteHandler(request =>
             request.RequestUri!.Host == "8.8.8.8"
@@ -144,26 +144,26 @@ public class KnowledgeUrlPolicyTests
                         System.Text.Encoding.UTF8, "text/html"),
                 });
 
-        var (title, text) = KnowledgeWeb.Fetch(new Uri("http://8.8.8.8/start"), null, handler);
+        var (title, text) = await KnowledgeWeb.FetchAsync(new Uri("http://8.8.8.8/start"), null, handler);
         Assert.Equal("终点", title);
         Assert.Contains("正文", text);
     }
 
     [Fact]
-    public void Fetch_RedirectLoopBeyondCap_Rejected()
+    public async Task Fetch_RedirectLoopBeyondCap_Rejected()
     {
         var handler = new RouteHandler(_ => Redirect("http://8.8.8.8/loop"));
-        var ex = Assert.Throws<KnowledgeWebException>(() =>
-            KnowledgeWeb.Fetch(new Uri("http://8.8.8.8/loop"), null, handler));
+        var ex = await Assert.ThrowsAsync<KnowledgeWebException>(() =>
+            KnowledgeWeb.FetchAsync(new Uri("http://8.8.8.8/loop"), null, handler));
         Assert.Contains("重定向次数超过", ex.Message);
     }
 
     [Fact]
-    public void Fetch_RedirectWithoutLocation_TreatedAsError()
+    public async Task Fetch_RedirectWithoutLocation_TreatedAsError()
     {
         var handler = new RouteHandler(_ => new HttpResponseMessage(HttpStatusCode.Found));
-        Assert.Throws<KnowledgeWebException>(() =>
-            KnowledgeWeb.Fetch(new Uri("http://8.8.8.8/"), null, handler));
+        await Assert.ThrowsAsync<KnowledgeWebException>(() =>
+            KnowledgeWeb.FetchAsync(new Uri("http://8.8.8.8/"), null, handler));
     }
 
     private static HttpResponseMessage Redirect(string location) =>

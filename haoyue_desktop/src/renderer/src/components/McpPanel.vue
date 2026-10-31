@@ -44,7 +44,6 @@ import {
   normalizeConnection,
   parseCredentialRows,
   parseMcpJsonConfig,
-  transportLabel,
   type CredentialRow,
   type McpFormValue,
   type McpPreset,
@@ -265,7 +264,7 @@ function presetIconForServer(server: McpServerSummary): unknown {
 function describeServer(server: McpServerSummary): string {
   const preset = MCP_PRESETS.find((entry) => entry.createForm({ workspacePath: props.workspacePath }).name === server.name)
   if (preset) return preset.description
-  return remote
+  return isRemoteTransport(server.transport)
     ? '远程 MCP 服务器，通过 HTTP 与 Agent 共享工具。'
     : '本地 MCP 服务器，通过子进程与 Agent 共享工具。'
 }

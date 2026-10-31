@@ -19,7 +19,7 @@ public sealed class UsageTelemetryTests : IDisposable
     }
 
     [Fact]
-    public void Record_WithLocalPerf_PersistsFields_AndPublishesEvent()
+    public async Task Record_WithLocalPerf_PersistsFields_AndPublishesEvent()
     {
         var bus = new EventBus();
         using var subscription = bus.Subscribe();
@@ -41,7 +41,7 @@ public sealed class UsageTelemetryTests : IDisposable
         });
 
         var published = Assert.IsType<UsageRecordedEvent>(
-            subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult());
+            await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.NotNull(published.Performance);
         Assert.Equal(1200, published.Performance!.TtftMs);
         Assert.Equal(300, published.Performance.LoadWaitMs);
@@ -55,7 +55,7 @@ public sealed class UsageTelemetryTests : IDisposable
     }
 
     [Fact]
-    public void Record_WithoutPerf_EventCarriesNullPerformance()
+    public async Task Record_WithoutPerf_EventCarriesNullPerformance()
     {
         var bus = new EventBus();
         using var subscription = bus.Subscribe();
@@ -65,7 +65,7 @@ public sealed class UsageTelemetryTests : IDisposable
         });
 
         var published = Assert.IsType<UsageRecordedEvent>(
-            subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult());
+            await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Null(published.Performance);
         Assert.Null(new UsageTracker(new EventBus(), _file).ReadAll().Single().TtftMs);
     }

@@ -30,6 +30,9 @@ const api: DesktopApi = {
   openDevTools: () => ipcRenderer.invoke('app:open-devtools'),
   setTheme: (theme) => ipcRenderer.invoke('app:set-theme', theme),
   notify: (title, body) => ipcRenderer.invoke('app:notify', title, body),
+  updates: {
+    check: () => ipcRenderer.invoke('app:check-update')
+  },
   project: {
     openTerminal: (path) => ipcRenderer.invoke('project:open-terminal', path),
     gitOverview: (path) => ipcRenderer.invoke('project:git-overview', path),

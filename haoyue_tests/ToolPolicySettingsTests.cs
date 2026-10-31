@@ -114,7 +114,7 @@ public sealed class ToolPolicySettingsTests : IDisposable
         var deny = Assert.Single(policy.Deny);
         Assert.Equal("禁止递归强删根目录", deny.Reason);
         // 回显一致（UI 据此刷新表格）。
-        Assert.Equal(1, updated["toolPolicy"]!["allow"]!.AsArray().Count);
+        Assert.Single(updated["toolPolicy"]!["allow"]!.AsArray());
     }
 
     [Fact]

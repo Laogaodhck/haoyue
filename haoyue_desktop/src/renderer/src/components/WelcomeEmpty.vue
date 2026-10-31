@@ -9,7 +9,7 @@ import WorkspaceOverview from './WorkspaceOverview.vue'
 /// 工作区速览卡片 + 推荐提示卡片。从 App.vue 拆出，以守住巨类行数预算
 /// （ADR-20261015-giant-class-budget.md），欢迎页语义内聚于此。
 
-const props = defineProps<{
+defineProps<{
   project?: ProjectItem
   thread?: ThreadItem
   /** 当前是未绑定项目的全局任务：显示「绑定工作目录」主按钮。 */

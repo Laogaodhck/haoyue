@@ -114,7 +114,7 @@ public class HybridRetrievalEvaluationTests : IDisposable
         foreach (var (group, query, expected) in KnowledgeEvalData.Scenarios.Where(s => s.ExpectedTitles.Length > 0))
         {
             var outcome = await _index.SearchHybridAsync(
-                Scope, entries, query, 3, client, ModelKey + "-perquery", CancellationToken.None).ConfigureAwait(false);
+                Scope, entries, query, 3, client, ModelKey + "-perquery", CancellationToken.None);
             var titles = outcome.Entries.Select(e => e.Title).ToList();
             if (!expected.Any(titles.Contains))
                 failures.Add($"[{group}] \"{query}\" 期望 {string.Join("/", expected)}，实际 [{string.Join(", ", titles)}]");

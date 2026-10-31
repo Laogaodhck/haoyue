@@ -1281,7 +1281,7 @@ public sealed class ProviderTests : IDisposable
         }
 
         public IAsyncEnumerable<LlmStreamEvent> StreamAsync(
-            LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
+            LlmRequest request, CancellationToken ct)
             => throw new NotSupportedException();
     }
 
@@ -1481,9 +1481,11 @@ public sealed class ProviderTests : IDisposable
     private static async IAsyncEnumerable<LlmStreamEvent> ThrowingStream(string message)
     {
         await Task.Yield();
-        throw new LlmException(message, retryable: false);
-        yield break; // 不可达：仅为满足 async-iterator 语法
+        yield return ThrowingEvent(message);
     }
+
+    private static LlmStreamEvent ThrowingEvent(string message) =>
+        throw new LlmException(message, retryable: false);
 
     [Fact]
     public async Task ProbeToolCalling_RemoteProvider_IsUnknownWithoutProbeTraffic()

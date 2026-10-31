@@ -157,7 +157,7 @@ internal sealed partial class DaemonAdminApi
     /// is chunked into 「标题 · 第N/M部分」 entries; re-adding the same url/file
     /// refreshes instead of duplicating.
     /// </summary>
-    public string AddKnowledgeSource(JsonObject parameters)
+    public async Task<string> AddKnowledgeSource(JsonObject parameters, CancellationToken ct = default)
     {
         var workspace = SessionWorkspace(parameters);
         var scope = HaoyueDatabase.ScopeKey(workspace);
@@ -188,7 +188,7 @@ internal sealed partial class DaemonAdminApi
             string title, text;
             // 与 web_fetch 同一套白名单，另叠加私网/链路本地硬拦截（白名单关闭时也生效），
             // 重定向逐跳校验——否则「允许的网站」对知识库导入形同虚设。
-            try { (title, text) = KnowledgeWeb.Fetch(uri, KnowledgeUrlValidator()); }
+            try { (title, text) = await KnowledgeWeb.FetchAsync(uri, KnowledgeUrlValidator(), ct).ConfigureAwait(false); }
             catch (KnowledgeWebException ex) { throw new DaemonRequestException(ex.Message); }
             var chunks = KnowledgeImport.SplitChunks(text);
             if (chunks.Count == 0)
@@ -286,7 +286,7 @@ internal sealed partial class DaemonAdminApi
     /// Re-extracts a source: files are re-read from disk, URLs re-fetched, text
     /// re-chunked — then the chunk entries are rebuilt in place.
     /// </summary>
-    public string RefreshKnowledgeSource(JsonObject parameters)
+    public async Task<string> RefreshKnowledgeSource(JsonObject parameters, CancellationToken ct = default)
     {
         var workspace = SessionWorkspace(parameters);
         var scope = HaoyueDatabase.ScopeKey(workspace);
@@ -312,7 +312,7 @@ internal sealed partial class DaemonAdminApi
                     throw new DaemonRequestException($"来源链接无效：{source.Locator}");
                 string title, text;
                 // 刷新与新增同一套校验：白名单事后收紧 / 私网拦截不能只卡首次导入。
-                try { (title, text) = KnowledgeWeb.Fetch(uri, KnowledgeUrlValidator()); }
+                try { (title, text) = await KnowledgeWeb.FetchAsync(uri, KnowledgeUrlValidator(), ct).ConfigureAwait(false); }
                 catch (KnowledgeWebException ex) { throw new DaemonRequestException(ex.Message); }
                 var urlChunks = KnowledgeImport.SplitChunks(text);
                 if (urlChunks.Count == 0)

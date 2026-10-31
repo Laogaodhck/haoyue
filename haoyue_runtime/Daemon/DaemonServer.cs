@@ -46,6 +46,12 @@ public sealed partial class DaemonServer : IAsyncDisposable
     private const int HandshakeTimeoutSeconds = 15;
     /// <summary>Upper bound for the handshake line so an unauthenticated peer cannot stream unbounded data.</summary>
     private const int MaxHandshakeLineLength = 4096;
+    /// <summary>
+    /// 单条请求行上限。图像随回合在 JSON 行内以 base64 传输，所以上限必须覆盖
+    /// 「总图像字节 40MB → base64 ≈ 53MB」再加 JSON 外壳；同时它仍是一道硬边界，
+    /// 超长行在读取阶段即被截停（见 BoundedLineReader），不会把整行读进内存。
+    /// </summary>
+    private const int MaxRequestLineLength = MaxTotalImageBytes / 3 * 4 + 8 * 1024 * 1024;
     private static readonly HashSet<string> SupportedImageTypes =
         ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
@@ -498,6 +504,8 @@ public sealed partial class DaemonServer : IAsyncDisposable
     internal async Task HandleConnectionAsync(Stream stream, CancellationToken ct)
     {
         using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+        // 握手与常规请求共用同一个读取器：它内部会预读，拆成两个实例会丢字符。
+        var lines = new BoundedLineReader(reader);
         await using var writer = new StreamWriter(stream, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: true)
         {
             AutoFlush = true,
@@ -508,7 +516,7 @@ public sealed partial class DaemonServer : IAsyncDisposable
         // authenticate. Unauthenticated connections never receive broadcasts and
         // cannot dispatch any method; failures drop the link immediately.
         if (_handshakeToken is not null
-            && !await AuthenticateConnectionAsync(reader, writer, writerGate, ct).ConfigureAwait(false))
+            && !await AuthenticateConnectionAsync(lines, writer, writerGate, ct).ConfigureAwait(false))
         {
             return;
         }
@@ -519,8 +527,20 @@ public sealed partial class DaemonServer : IAsyncDisposable
 
         try
         {
-            while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
+            while (true)
             {
+                var read = await lines.ReadLineAsync(MaxRequestLineLength, ct).ConfigureAwait(false);
+                if (read.Line is not { } line)
+                {
+                    if (read.TooLong)
+                    {
+                        await WriteAsync(writer, writerGate, 0, "error",
+                            $"Request exceeds the {MaxRequestLineLength / 1024 / 1024} MB line limit",
+                            ct, code: DaemonErrorCode.InvalidRequest).ConfigureAwait(false);
+                    }
+                    break;
+                }
+
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
                 JsonObject? request;
@@ -597,7 +617,7 @@ public sealed partial class DaemonServer : IAsyncDisposable
     /// message or a timeout the client is told why and the link is dropped.
     /// </summary>
     private async Task<bool> AuthenticateConnectionAsync(
-        StreamReader reader,
+        BoundedLineReader lines,
         StreamWriter writer,
         SemaphoreSlim writerGate,
         CancellationToken ct)
@@ -606,8 +626,11 @@ public sealed partial class DaemonServer : IAsyncDisposable
         timeout.CancelAfter(TimeSpan.FromSeconds(HandshakeTimeoutSeconds));
         try
         {
-            var line = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(line) || line.Length > MaxHandshakeLineLength)
+            var read = await lines.ReadLineAsync(MaxHandshakeLineLength, timeout.Token).ConfigureAwait(false);
+            // 超长握手行在读取时就被截停（TooLong）：未认证连接不值得再回包。
+            if (read.TooLong) return false;
+            var line = read.Line;
+            if (string.IsNullOrWhiteSpace(line))
                 return false;
 
             JsonObject? request;
@@ -1749,7 +1772,7 @@ public sealed partial class DaemonServer : IAsyncDisposable
 
                     case "knowledge.source.add":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
-                            _ => Task.FromResult(_admin.AddKnowledgeSource(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                            ct => _admin.AddKnowledgeSource(Params(request), ct), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
                     case "knowledge.source.list":
@@ -1769,7 +1792,7 @@ public sealed partial class DaemonServer : IAsyncDisposable
 
                     case "knowledge.source.refresh":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
-                            _ => Task.FromResult(_admin.RefreshKnowledgeSource(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                            ct => _admin.RefreshKnowledgeSource(Params(request), ct), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
                     case "knowledge.retrieve":

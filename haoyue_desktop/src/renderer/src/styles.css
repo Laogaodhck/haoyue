@@ -6472,6 +6472,59 @@ select:focus-visible {
   border-color: var(--border-strong);
 }
 
+.about-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.about-update-button {
+  padding: 2px 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.about-update-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.about-update-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.about-update-status {
+  margin: 0;
+  padding: 12px 21px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.about-update-available {
+  color: var(--accent);
+}
+
+.about-update-link {
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.about-update-link:hover {
+  text-decoration: none;
+}
+
 .about-footer {
   padding: 12px 21px 16px;
   color: var(--text-muted);

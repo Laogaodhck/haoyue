@@ -172,15 +172,15 @@ ps -eo pid,ppid,user,pcpu,pmem,comm --sort=-pcpu 2>/dev/null | head -120
         return Task.FromResult(new BrowserScanReport("Linux", Supported: true, findings));
     }
 
-    public Task<BrowserRepairOutcome> RepairBrowserHomepageAsync(string targetHomepage, string backupDirectory, CancellationToken ct)
+    public async Task<BrowserRepairOutcome> RepairBrowserHomepageAsync(string targetHomepage, string backupDirectory, CancellationToken ct)
     {
-        var scan = DetectBrowserHijackAsync(ct).GetAwaiter().GetResult();
+        var scan = await DetectBrowserHijackAsync(ct).ConfigureAwait(false);
         if (scan.Findings.Count == 0)
-            return Task.FromResult(new BrowserRepairOutcome(true, ["未发现主页劫持项，无需修复"], [], null, 0));
+            return new BrowserRepairOutcome(true, ["未发现主页劫持项，无需修复"], [], null, 0);
 
         var backupPath = BrowserPreferenceFiles.WriteBackup(backupDirectory, scan.Findings);
         if (backupPath is null)
-            return Task.FromResult(new BrowserRepairOutcome(false, [], ["备份写入失败，已中止修复（保证可回滚）"], null, 0));
+            return new BrowserRepairOutcome(false, [], ["备份写入失败，已中止修复（保证可回滚）"], null, 0);
 
         var actions = new List<string>();
         var errors = new List<string>();
@@ -224,7 +224,7 @@ ps -eo pid,ppid,user,pcpu,pmem,comm --sort=-pcpu 2>/dev/null | head -120
             }
         }
 
-        return Task.FromResult(new BrowserRepairOutcome(errors.Count == 0, actions, errors, backupPath, actions.Count));
+        return new BrowserRepairOutcome(errors.Count == 0, actions, errors, backupPath, actions.Count);
     }
 
     private static void InspectPolicyDirectory(string dir, List<BrowserFinding> findings)

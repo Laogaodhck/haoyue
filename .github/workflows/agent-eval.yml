@@ -39,9 +39,9 @@ jobs:
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.gate.outputs.enabled == 'true'
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         if: steps.gate.outputs.enabled == 'true'
       - name: Seed provider config from secrets
         if: steps.gate.outputs.enabled == 'true'
@@ -75,7 +75,7 @@ jobs:
           dotnet run --project benchmarks/agent-eval -c Release --
           --provider haoyue-eval --model ${{ secrets.HAOYUE_EVAL_MODEL }}
       - name: Upload eval report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always() && steps.gate.outputs.enabled == 'true'
         with:
           name: agent-eval-results

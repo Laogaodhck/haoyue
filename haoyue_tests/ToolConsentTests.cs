@@ -195,7 +195,7 @@ public sealed class ToolConsentTests : IDisposable
             if (approvals is not null) services.AddSingleton(approvals);
         });
         var session = runtime.Sessions.Create(workspace, networkEnabled: false);
-        return new ConsentHarness(store, runtime, session, workspace, capture);
+        return new ConsentHarness(runtime, session, workspace);
     }
 
     private static LlmCompletion ToolCall(string id, string tool) => new()
@@ -212,8 +212,7 @@ public sealed class ToolConsentTests : IDisposable
     }
 
     private sealed class ConsentHarness(
-        ConfigStore store, HaoyueRuntime runtime, AgentSession session, WorkspaceInfo workspace,
-        ScriptedClientFactory factory) : IDisposable
+        HaoyueRuntime runtime, AgentSession session, WorkspaceInfo workspace) : IDisposable
     {
         public HaoyueRuntime Runtime { get; } = runtime;
         public List<RuntimeEvent> Events { get; } = [];

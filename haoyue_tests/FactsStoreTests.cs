@@ -225,7 +225,7 @@ public sealed class FactsStoreTests : IDisposable
     {
         var file = FactsStore.FactsFileForRoot(_dir);
         var rows = JsonNode.Parse(File.ReadAllText(file)!)!.AsArray();
-        rows.Single(f => f!["id"]!.GetValue<string>() == id)[field] = value is null ? null : JsonValue.Create(value);
+        rows.Single(f => f!["id"]!.GetValue<string>() == id)![field] = value is null ? null : JsonValue.Create(value);
         File.WriteAllText(file, rows.ToJsonString());
     }
 

@@ -59,7 +59,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **Connector Ecosystem**: a connector package spec (`connectors/schema/connector.schema.json`) plus the first 11 official connectors — browser (Playwright), Git, GitHub, email (IMAP/SMTP), calendar ICS, RSS, clipboard, Notion, SQLite, a generic HTTP-API tool, and system notifications; the last six are served by single-file local MCP servers shipped alongside (pure Python standard library, zero external dependencies) and their secret fields are encrypted at rest. `haoyue connectors list / install / uninstall` takes you from "discovered" to "usable" in two steps — spec in [connectors/README.md](connectors/README.md). Installed connectors keep working after the package moves: when a bundled local server path goes stale, the connection re-resolves and persists it before connecting (self-healing), with no manual reinstall needed
 - **Skill System**: directory-based skills (`skill.yaml` + `prompt.txt`); manifest v2 supports trigger keywords, tool whitelists, and parameter collection; skills hot-reload on change, no restart needed; **30 official skills** ship with the catalog (deep research, weekly report, data cleaning, screenshot-OCR-to-knowledge-base, dependency audit, competitor scan, the document trio, etc.) and install in one click from the desktop skill marketplace
 - **Multimodal Output**: `image_generate` image generation (OpenAI-compatible images/generations endpoint, b64/url channels); artifacts land in `.haoyue/outputs/images/` and can be fed back into the visual verification chain; the tool hides itself automatically when no image model is configured (local diffusion models are outside in-process inference scope — plug in a ComfyUI/SD-compatible gateway instead, see the [Deployment & Isolation Runbook](haoyue_doc/runbooks/deployment-isolation.md))
-- **Allowed websites (external-access allowlist)**: once `web.allowedSites` is configured, `web_fetch` can only reach listed origins plus localhost (127.x / ::1 always allowed); `https://*.example.com` allows subdomains while the apex example.com must be added separately; enforced at runtime and re-read per call, managed visually in the desktop "设置 → 允许的网站" card (RPC `web.allowedGet` / `web.allowedSet`) — changes take effect immediately, no restart needed
+- **Allowed websites (external-access allowlist)**: once `web.allowedSites` is configured, `web_fetch` can only reach listed origins plus localhost (127.x / ::1 always allowed); `https://*.example.com` allows subdomains while the apex example.com must be added separately; enforced at runtime and re-read per call, managed visually in the desktop "设置 → 允许的网站" card (RPC `web.allowedGet` / `web.allowedSet`) — changes take effect immediately, no restart needed. **When left blank, `web_fetch` treats the allowlist as not configured (external sites unrestricted), while the desktop embedded browser only allows localhost** — a webview running arbitrary site scripts never falls open to the internet, so external sites must be added explicitly
 
 ### 🧠 Knowledge Base & Memory
 
@@ -130,7 +130,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **Readable Process**: tool rows expand an argument summary and show duration; the streaming region is announced via aria-live; Esc stops the active turn; the conversation header shows context-window occupancy
 - **Drafts Survive**: unsent input (text + attachments) persists locally, so switching tasks or restarting loses nothing
 - **Findable Settings**: the settings page supports search by section name and keyword; when the daemon is offline the page turns read-only with an explicit "an empty list ≠ nothing configured" notice; global and per-task switches are scope-labeled (global / this task), and a switch suppressed by a global toggle explains why with a jump link instead of silently doing nothing
-- **Diagnostics Entry Points**: the settings page links straight to daemon.log and diagnostic-bundle export; the About page has a built-in check-for-updates link
+- **Diagnostics Entry Points**: the settings page links straight to daemon.log and diagnostic-bundle export; packaged builds silently check for a new release at startup (a native prompt appears only when one exists), and the About page offers a manual "check for updates" with a link to the release page
 
 ### 💻 Modern Terminal Experience
 
@@ -296,7 +296,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (1216 cases, coverage gates: line ≥70% / branch ≥55%)
+├── haoyue_tests/         # Runtime unit tests (1228 cases, coverage gates: line ≥70% / branch ≥55%)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -488,13 +488,13 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1216 / haoyue_cli_tests 18 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1228 / haoyue_cli_tests 18 cases)
 
 # Desktop (requires pnpm install first)
-cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 325 cases across 31 files
+cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest: 338 cases across 32 files
 ```
 
-The gates apply to the `haoyue_runtime` assembly (CI filters via coverlet.msbuild `Include`/`Exclude` — CLI and desktop are unchecked): line coverage ≥70%, branch coverage ≥55%; `dotnet test` fails when either gate is missed. Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), and giant-class line budgets are all enforced by guard tests. The desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job; the three `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning (failures now break the build), `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph). A Linux job covers Unix sockets, symlink resolution, Python connectors, and the TS SDK integration test. The runtime build enables `TreatWarningsAsErrors` plus the AOT / trim analyzers, and all JSON serialization goes through source-generated contexts.
+Gates: `haoyue_runtime` line ≥70% / branch ≥55%; CLI (`haoyue_cli`) line ≥15% / branch ≥15%; webserver line ≥45% / branch ≥15% — each runs on its own and `dotnet test` fails when a gate is missed. Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), giant-class line budgets, and the `wwwroot/lib` vendored-lib manifest (hashes / version floor / reference coverage) are all enforced by guard tests. The desktop app runs `pnpm lint`, a component line budget, `pnpm test`, and `pnpm typecheck && pnpm build` in CI's desktop job; the three `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning (failures now break the build), `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph). A Linux job covers Unix sockets, symlink resolution, Python connectors, and the TS SDK integration test. Both the runtime and the test project build with `TreatWarningsAsErrors`; the runtime also enables the AOT / trim analyzers, and all JSON serialization goes through source-generated contexts.
 
 ## 📊 Local Model Benchmarks
 
@@ -565,7 +565,7 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
 - Local GGUF load & quantization optimization report (per-layer KV-head parsing fix for hybrid architectures + Flash Attention everywhere + measured Q4/Q5/Q8 comparison: nemotron decode +22%, long-context +45%, requantization buys no quality; reproducible via benchmarks/model-opt) (in Chinese)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1216+18+325, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1228+18+338, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Desktop UI review — three-column layout & key bindings (22 findings across layout responsibility / dead keys / duplicate entries / capability gaps, ranked P1-P3, plus 14 batched recommendations and an item-by-item fix reconciliation: background task panel, local inference dashboard, routing & failover, workspace config, agent expert settings, settings search and offline read-only)
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review

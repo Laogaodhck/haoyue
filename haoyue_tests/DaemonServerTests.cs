@@ -153,7 +153,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
-    public void LocalModelConcurrencyAboveOne_PublishesKvReuseWarning_OncePerValue()
+    public async Task LocalModelConcurrencyAboveOne_PublishesKvReuseWarning_OncePerValue()
     {
         // 并发 > 1 自动关闭 KV 前缀复用：启动装配与配置变更都必须可见，同一值只告警一次。
         var workspaceRoot = CreateWorkspace("concurrency-warning");
@@ -177,7 +177,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
         // 提到 2：告警一次；重复装配同一值不刷屏。
         configStore.Config.Agent.LocalModelConcurrency = 2;
         server.ConfigureLocalModelCache();
-        var first = Assert.IsType<WarningEvent>(events.Reader.ReadAsync().AsTask().GetAwaiter().GetResult());
+        var first = Assert.IsType<WarningEvent>(await events.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Contains("KV 前缀复用", first.Message, StringComparison.Ordinal);
         server.ConfigureLocalModelCache();
         Assert.False(events.Reader.TryRead(out _));
@@ -188,7 +188,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
         Assert.False(events.Reader.TryRead(out _));
         configStore.Config.Agent.LocalModelConcurrency = 4;
         server.ConfigureLocalModelCache();
-        var second = Assert.IsType<WarningEvent>(events.Reader.ReadAsync().AsTask().GetAwaiter().GetResult());
+        var second = Assert.IsType<WarningEvent>(await events.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Contains("4", second.Message, StringComparison.Ordinal);
     }
 
@@ -1744,7 +1744,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
             item => item!["title"]!.GetValue<string>() == "旧文档.txt"
                 && item["content"]!.GetValue<string>().Contains("pnpm build"));
         Assert.Contains(imported["entries"]!.AsArray(),
-            item => item["tags"]!.GetValue<string>() == "导入,txt");
+            item => item!["tags"]!.GetValue<string>() == "导入,txt");
 
         // Re-import upserts by title instead of duplicating.
         await connection.SendAsync(2, "knowledge.import", new JsonObject
@@ -1814,7 +1814,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
 
         // No rules yet — the list is empty and saving creates the root file.
         await connection.SendAsync(6, "rules.list", new JsonObject());
-        Assert.Equal(0, ParseData(await connection.ReadAsync())["files"]!.AsArray().Count);
+        Assert.Empty(ParseData(await connection.ReadAsync())["files"]!.AsArray());
 
         await connection.SendAsync(7, "rules.save", new JsonObject { ["content"] = "- 构建命令：pnpm build" });
         var ruleSaved = ParseData(await connection.ReadAsync());
@@ -1830,7 +1830,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
         await connection.SendAsync(9, "rules.list", new JsonObject());
         var listed = ParseData(await connection.ReadAsync());
         Assert.Equal(2, listed["files"]!.AsArray().Count);
-        var rootFile = listed["files"]!.AsArray().First(item => item!["isRoot"]!.GetValue<bool>());
+        var rootFile = listed["files"]!.AsArray().First(item => item!["isRoot"]!.GetValue<bool>())!;
         Assert.Equal("AGENTS.md", rootFile["path"]!.GetValue<string>());
         Assert.Contains(listed["files"]!.AsArray(),
             item => item!["path"]!.GetValue<string>() == "packages/app/AGENTS.md");
@@ -1978,6 +1978,20 @@ public sealed class DaemonServerTests : IAsyncDisposable
         Assert.Contains("authentication", rejected["data"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
 
         // The server closes the link right after the rejection.
+        await Assert.ThrowsAnyAsync<Exception>(() => connection.ReadAsync());
+    }
+
+    [Fact]
+    public async Task Handshake_WithOversizedLine_IsDroppedWithoutReadingItFully()
+    {
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            handshakeToken: new string('a', 64));
+
+        // 超过 MaxHandshakeLineLength（4096）的握手行在读取阶段就被截停，未认证连接直接断开。
+        var oversized = "{\"method\":\"handshake\",\"params\":{\"token\":\"" + new string('a', 5000) + "\"}}";
+        await connection.SendRawAsync(oversized);
+
         await Assert.ThrowsAnyAsync<Exception>(() => connection.ReadAsync());
     }
 
@@ -2568,10 +2582,10 @@ public sealed class DaemonServerTests : IAsyncDisposable
             if (OperatingSystem.IsWindows())
             {
                 var security = server.GetAccessControl();
-                var sids = security.GetAccessRules(true, false, typeof(System.Security.Principal.SecurityIdentifier))
-                    .Cast<System.IO.Pipes.PipeAccessRule>()
-                    .Select(rule => rule.IdentityReference.Value)
-                    .ToList();
+                var sids = new List<string>();
+                foreach (System.IO.Pipes.PipeAccessRule rule in
+                    security.GetAccessRules(true, false, typeof(System.Security.Principal.SecurityIdentifier)))
+                    sids.Add(rule.IdentityReference.Value);
                 // 当前用户与 SYSTEM 允许读写；Everyone (S-1-1-0) 不得出现。
                 Assert.Contains(System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value, sids);
                 Assert.DoesNotContain("S-1-1-0", sids);

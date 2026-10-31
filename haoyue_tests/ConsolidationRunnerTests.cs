@@ -298,8 +298,8 @@ public sealed class ConsolidationRunnerTests : IDisposable
 
         Assert.Equal(0, second.MemoryPromoted);
         Assert.Contains("已存在", second.MemoryNote);
-        Assert.Single((await File.ReadAllTextAsync(_runtime.Workspace.MemoryFile))
-            .Split('\n').Where(l => l.Contains("回复统一使用中文")));
+        Assert.Single((await File.ReadAllTextAsync(_runtime.Workspace.MemoryFile)).Split('\n'),
+            l => l.Contains("回复统一使用中文"));
     }
 
     [Fact]

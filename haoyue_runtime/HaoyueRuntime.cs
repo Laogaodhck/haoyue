@@ -379,7 +379,12 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     }
 
 
-    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+    /// <summary>
+    /// 同步宿主的兜底入口（仅测试与 using 语句在用；daemon 走 DisposeAsync）。
+    /// 释放全程在线程池执行：宿主带 SynchronizationContext 时同步阻塞等待会死锁，
+    /// 而这里释放的句柄没有线程亲和性，换线程是安全的。
+    /// </summary>
+    public void Dispose() => Task.Run(() => DisposeAsync().AsTask()).GetAwaiter().GetResult();
 }
 
 public static class RuntimeServiceCollectionExtensions

@@ -306,7 +306,7 @@ export function hideComputerOverlay(immediate = false): void {
     if (globalShortcut.isRegistered('Escape')) {
       globalShortcut.unregister('Escape')
     }
-  } catch {}
+  } catch { /* the shortcut may belong to another app */ }
 
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     if (isPageReady) {

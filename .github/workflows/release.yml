@@ -15,9 +15,9 @@ concurrency:
 jobs:
   validate:
     name: Validate version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check version consistency
         shell: bash
         run: |
@@ -34,10 +34,10 @@ jobs:
     env:
       HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 跟随 global.json 的精确 SDK 版本（锁文件含 SDK 隐式包版本，SDK 漂移即 NU1004）。
-      - uses: actions/setup-dotnet@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -49,7 +49,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: python publish_npm.py --rids win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64 --pack --publish --release-assets dist/cli
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cli
           path: dist/cli/*
@@ -83,13 +83,13 @@ jobs:
       CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 跟随 global.json 的精确 SDK 版本（锁文件含 SDK 隐式包版本，SDK 漂移即 NU1004）。
-      - uses: actions/setup-dotnet@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-dotnet@v6
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.33.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -119,7 +119,7 @@ jobs:
           if ($proc.HasExited) { Write-Error "desktop app exited within 30s of launch (exit code $($proc.ExitCode))" }
           Write-Host "desktop app alive after 30s (pid $($proc.Id)) — smoke passed"
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-windows
           path: dist/desktop-win/*
@@ -128,18 +128,18 @@ jobs:
   desktop-linux:
     name: Desktop Linux (deb + rpm + portable)
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
       ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 跟随 global.json 的精确 SDK 版本（锁文件含 SDK 隐式包版本，SDK 漂移即 NU1004）。
-      - uses: actions/setup-dotnet@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-dotnet@v6
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.33.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -153,7 +153,7 @@ jobs:
         run: |
           mkdir -p dist/desktop-linux
           cp publish/Haoyue-*.tar.gz publish/Haoyue-*.deb publish/Haoyue-*.rpm dist/desktop-linux/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-linux
           path: dist/desktop-linux/*
@@ -163,11 +163,11 @@ jobs:
     name: Publish GitHub Release
     if: github.ref_type == 'tag'
     needs: [cli, desktop-windows, desktop-linux]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

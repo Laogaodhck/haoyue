@@ -20,7 +20,7 @@ public sealed class TurnStampTests : IDisposable
     }
 
     [Fact]
-    public void Publish_InsideTurnScope_StampsEveryEvent()
+    public async Task Publish_InsideTurnScope_StampsEveryEvent()
     {
         var bus = new EventBus();
         using var subscription = bus.Subscribe();
@@ -31,16 +31,16 @@ public sealed class TurnStampTests : IDisposable
         }
         bus.Publish(new StatusEvent("after"));
 
-        var inside = subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
+        var inside = await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("req-42", inside.TurnId);
-        var inside2 = subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
+        var inside2 = await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("req-42", inside2.TurnId);
-        var after = subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
+        var after = await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Null(after.TurnId);
     }
 
     [Fact]
-    public void BeginScope_InsideOuterScope_IsNoOp_HostIdentityWins()
+    public async Task BeginScope_InsideOuterScope_IsNoOp_HostIdentityWins()
     {
         var bus = new EventBus();
         using var subscription = bus.Subscribe();
@@ -49,7 +49,7 @@ public sealed class TurnStampTests : IDisposable
             using (TurnStamp.BeginScope("inner")) // 子代理/内层不得覆盖宿主身份
                 bus.Publish(new StatusEvent("nested"));
         }
-        var seen = subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
+        var seen = await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("outer", seen.TurnId);
     }
 
@@ -95,7 +95,7 @@ public sealed class TurnStampTests : IDisposable
     }
 
     [Fact]
-    public void AsyncLocal_DoesNotLeakAcrossConcurrentFlows()
+    public async Task AsyncLocal_DoesNotLeakAcrossConcurrentFlows()
     {
         var bus = new EventBus();
         using var subscription = bus.Subscribe();
@@ -117,10 +117,10 @@ public sealed class TurnStampTests : IDisposable
                 bus.Publish(new StatusEvent("b"));
             }
         });
-        Task.WaitAll(a, b);
+        await Task.WhenAll(a, b);
 
-        var first = subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
-        var second = subscription.Reader.ReadAsync().AsTask().GetAwaiter().GetResult();
+        var first = await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var second = await subscription.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(["turn-a", "turn-b"], new[] { first.TurnId, second.TurnId }.OrderBy(t => t, StringComparer.Ordinal));
     }
 

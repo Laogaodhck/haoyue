@@ -342,7 +342,7 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
 
 const dropNotice = ref('')
 
-function handleDragEnter(event: DragEvent): void {
+function handleDragEnter(): void {
   if (props.disabled) return
   isDragOver.value = true
 }

@@ -14,15 +14,15 @@ jobs:
     name: .NET build & test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 不指定 dotnet-version：setup-dotnet 读仓库根的 global.json（精确版本 + rollForward: disable）。
       # 原因：锁文件记录了 SDK **隐式注入**的两个包版本（Microsoft.NET.ILLink.Tasks、
       # Microsoft.AspNetCore.App.Internal.Assets），它们跟 SDK 捆绑的运行时补丁号绑定
       # （SDK 10.0.401 → 运行时 10.0.12 → 这两个包也是 10.0.12）。CI 用 10.0.x 拉到更新补丁，
       # 它们会变成 10.0.13，--locked-mode 直接 NU1004。升级 SDK 的姿势见 RELEASING.md。
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
@@ -44,9 +44,12 @@ jobs:
       - name: Test with coverage gate
         # 覆盖率硬门槛（coverlet.msbuild）：XPlat collector 会静默忽略 Threshold，
         # 只有 msbuild 包会在阈值未达标时让 dotnet test 非零退出。
+        # 只跑 haoyue_tests：CLI 测试工程也引用了 coverlet.msbuild（独立门槛见下方
+        # 「Test CLI with coverage gate」），若对整个 slnx 插桩，它只覆盖到 runtime
+        # 的极小切片（~1%），会被 70/55 总门槛误判为不达标。
         # 列表分隔符用 %2C：PowerShell 会把参数里的裸逗号拆成数组，MSB1006。
         run: >
-          dotnet test Haoyue.slnx -c Release --no-build
+          dotnet test haoyue_tests/haoyue_tests.csproj -c Release --no-build
           /p:CollectCoverage=true
           /p:CoverletOutputFormat=cobertura
           /p:CoverletOutput="${{ github.workspace }}/coverage/coverage"
@@ -55,8 +58,31 @@ jobs:
           /p:Threshold=70%2C55
           /p:ThresholdType=line%2Cbranch
           /p:ThresholdStat=total
+      - name: Test CLI with coverage gate
+        # CLI 有独立测试工程，此前完全在覆盖统计之外。单独跑一遍并设低门槛，
+        # 只保证不回退；runtime 的 70/55 聚合口径保持不变。
+        run: >
+          dotnet test haoyue_cli_tests/haoyue_cli_tests.csproj -c Release --no-build
+          /p:CollectCoverage=true
+          /p:CoverletOutputFormat=cobertura
+          /p:CoverletOutput="${{ github.workspace }}/coverage/cli"
+          /p:Include=[haoyue]*
+          /p:Threshold=15%2C15
+          /p:ThresholdType=line%2Cbranch
+          /p:ThresholdStat=total
+      - name: Test web server with coverage gate
+        run: >
+          dotnet test haoyue_tests/haoyue_tests.csproj -c Release --no-build
+          --filter FullyQualifiedName~WebServer
+          /p:CollectCoverage=true
+          /p:CoverletOutputFormat=cobertura
+          /p:CoverletOutput="${{ github.workspace }}/coverage/webserver"
+          /p:Include=[haoyue_webserver]*
+          /p:Threshold=45%2C15
+          /p:ThresholdType=line%2Cbranch
+          /p:ThresholdStat=total
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotnet-coverage
           path: coverage/*.cobertura.xml
@@ -76,12 +102,12 @@ jobs:
     # 跨平台护栏：daemon 的 Unix socket 路径、PathGuard 符号链接解析、Python
     # 连接器运行时都只在 Linux 上才走到真正的分支，Windows-only CI 永远发现不了。
     name: Linux build & test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
@@ -94,7 +120,7 @@ jobs:
         run: dotnet build Haoyue.slnx -c Release --no-restore
       - name: Test
         run: dotnet test Haoyue.slnx -c Release --no-build
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: TS SDK integration test
@@ -107,8 +133,8 @@ jobs:
     name: Connector server tests (python)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Install pytest
@@ -129,11 +155,11 @@ jobs:
       run:
         working-directory: haoyue_desktop
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.33.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -143,6 +169,10 @@ jobs:
       - name: Audit production dependencies
         # 只对生产依赖设 high 门槛（dev 链的告警不阻塞），发现高危即 CI 失败。
         run: pnpm audit --prod --audit-level high
+      - name: Lint
+        run: pnpm lint
+      - name: Component size budget
+        run: pnpm guard:components
       - name: Test
         run: pnpm test
       - name: Typecheck & build
@@ -155,12 +185,12 @@ jobs:
     runs-on: windows-latest
     if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.33.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm

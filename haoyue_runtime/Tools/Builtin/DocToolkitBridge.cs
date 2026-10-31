@@ -38,7 +38,6 @@ public static class DocToolkitBridge
         var psi = new ProcessStartInfo
         {
             FileName = python.Install.Executable,
-            Arguments = $"-m doc_toolkit text \"{pdfPath}\" --ocr",
             WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(toolkit)),
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -47,6 +46,12 @@ public static class DocToolkitBridge
             StandardOutputEncoding = System.Text.Encoding.UTF8,
             StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
+        // 用 ArgumentList 逐项传参：路径含空格/引号时不会被拼接成另一条命令行。
+        psi.ArgumentList.Add("-m");
+        psi.ArgumentList.Add("doc_toolkit");
+        psi.ArgumentList.Add("text");
+        psi.ArgumentList.Add(Path.GetFullPath(pdfPath));
+        psi.ArgumentList.Add("--ocr");
         psi.Environment["PYTHONIOENCODING"] = "utf-8";
         psi.Environment["PYTHONPATH"] = Path.GetDirectoryName(Path.GetFullPath(toolkit));
 
@@ -63,7 +68,21 @@ public static class DocToolkitBridge
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
         // OCR 全文档可能要几分钟（逐页识别），给足窗口；调用方持有导入级的取消语义。
-        process.WaitForExit(TimeSpan.FromMinutes(10));
+        if (!process.WaitForExit(TimeSpan.FromMinutes(10)))
+        {
+            // 超时不能只抛异常：留着 python 进程会持续占 CPU、并把管道读任务吊死。
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                // 进程恰好自行退出时 Kill 会失败，按超时结果继续。
+            }
+            process.WaitForExit(TimeSpan.FromSeconds(5));
+            throw new InvalidOperationException(
+                $"PDF 提取超时（{Path.GetFileName(pdfPath)}）：超过 10 分钟仍未完成，已终止提取进程。");
+        }
 
         var stdout = stdoutTask.GetAwaiter().GetResult();
         var stderr = stderrTask.GetAwaiter().GetResult();

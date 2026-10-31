@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ExternalLink, X } from '@lucide/vue'
+import { ref, watch } from 'vue'
 import type { AppInfo } from '../../../shared/ipc'
 import logoUrl from '../../../../resources/logo.png?url'
 import { useEscapeClose } from '../use-escape-close'
@@ -26,6 +27,37 @@ function platformLabel(): string {
   const raw = props.appInfo?.platform
   return (raw && platformNames[raw]) || raw || '未知'
 }
+
+const updateState = ref<'idle' | 'checking' | 'update' | 'latest' | 'unavailable'>('idle')
+const updateVersion = ref('')
+const updateUrl = ref('')
+const updateError = ref('')
+
+watch(
+  () => props.open,
+  (open) => {
+    if (open) updateState.value = 'idle'
+  }
+)
+
+async function checkForUpdates(): Promise<void> {
+  if (updateState.value === 'checking') return
+  updateState.value = 'checking'
+  try {
+    const result = await window.haoyue.updates.check()
+    updateState.value = result.status
+    updateVersion.value = result.version ?? ''
+    updateUrl.value = result.url ?? ''
+    updateError.value = result.error ?? ''
+  } catch (error) {
+    updateState.value = 'unavailable'
+    updateError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+function openUpdatePage(): void {
+  if (updateUrl.value) void window.haoyue.web.openExternal(updateUrl.value)
+}
 </script>
 
 <template>
@@ -50,7 +82,17 @@ function platformLabel(): string {
         <dl class="about-meta">
           <div class="about-row">
             <dt>版本</dt>
-            <dd>v{{ appInfo?.version ?? '—' }}</dd>
+            <dd class="about-version">
+              v{{ appInfo?.version ?? '—' }}
+              <button
+                class="about-update-button"
+                type="button"
+                :disabled="updateState === 'checking'"
+                @click="checkForUpdates"
+              >
+                {{ updateState === 'checking' ? '检查中…' : '检查更新' }}
+              </button>
+            </dd>
           </div>
           <div class="about-row">
             <dt>平台</dt>
@@ -70,6 +112,18 @@ function platformLabel(): string {
           基于 .NET 构建的现代化、高性能 AI Agent，为 AI 驱动的编码助手提供完整平台。
         </p>
 
+        <p v-if="updateState === 'latest'" class="about-update-status">
+          已是最新版本<span v-if="updateVersion">（v{{ updateVersion }}）</span>。
+        </p>
+        <p v-else-if="updateState === 'update'" class="about-update-status about-update-available">
+          发现新版本 v{{ updateVersion }}。
+          <button type="button" class="about-update-link" @click="openUpdatePage">前往下载</button>
+        </p>
+        <p v-else-if="updateState === 'unavailable'" class="about-update-status">
+          暂时无法检查更新{{ updateError ? `（${updateError}）` : '' }}，可稍后重试或直接访问
+          <button type="button" class="about-update-link" @click="openUpdatePage">GitHub Releases</button>。
+        </p>
+
         <nav class="about-links" aria-label="Haoyue 相关链接">
           <a href="https://haoyue.hoilai.com" target="_blank" rel="noreferrer">
             官网 <ExternalLink :size="13" />
@@ -80,14 +134,10 @@ function platformLabel(): string {
           <a href="https://github.com/Laogaodhck/haoyue" target="_blank" rel="noreferrer">
             GitHub <ExternalLink :size="13" />
           </a>
-          <a href="https://github.com/Laogaodhck/haoyue/releases" target="_blank" rel="noreferrer">
-            检查更新 <ExternalLink :size="13" />
-          </a>
         </nav>
 
         <p class="about-description">
-          当前版本 v{{ appInfo?.version ?? '—' }}。检查更新会在浏览器打开 GitHub Releases 页面
-          （应用内自动更新尚在接入中，以发布页说明为准）。
+          新版本检查只读取 GitHub Releases 的最新正式版信息；下载安装仍以发布页说明为准。
         </p>
 
         <footer class="about-footer">MIT License · © 2026 Haoyue</footer>

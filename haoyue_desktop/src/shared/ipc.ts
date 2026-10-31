@@ -186,6 +186,17 @@ export interface WebBlockedNotice {
   reason?: string
 }
 
+/** 桌面端新版本检查结果：只读 GitHub Releases 最新正式版。 */
+export interface UpdateCheckResult {
+  status: 'update' | 'latest' | 'unavailable'
+  /** 远端最新版本号（去掉前缀 v）。 */
+  version?: string
+  /** 发布页地址（仅 github.com）。 */
+  url?: string
+  /** 离线、限流或响应异常时的原因，仅用于展示，不阻塞启动。 */
+  error?: string
+}
+
 export interface DesktopApi {
   getAppInfo(): Promise<AppInfo>
   selectWorkspace(): Promise<string | null>
@@ -202,6 +213,10 @@ export interface DesktopApi {
   openDevTools(): Promise<void>
   setTheme(theme: AppearanceTheme): Promise<void>
   notify(title: string, body: string): Promise<void>
+  updates: {
+    /** 查询 GitHub Releases 最新正式版；离线/限流时返回 unavailable 而不是抛错。 */
+    check(): Promise<UpdateCheckResult>
+  }
   project: {
     openTerminal(path: string): Promise<void>
     gitOverview(path: string): Promise<GitOverview>

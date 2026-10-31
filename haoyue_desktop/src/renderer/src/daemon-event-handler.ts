@@ -487,7 +487,7 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         // MCP 服务器状态变更由 McpPanel 自行订阅处理（面板打开时才关心）。
         break
       case 'done':
-
+        // falls through — done and cancelled share terminal handling
       case 'cancelled':
         if (message) {
           flushStream(message)

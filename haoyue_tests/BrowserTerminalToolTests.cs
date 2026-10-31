@@ -195,10 +195,11 @@ public class BrowserToolTests : IDisposable
     [Fact]
     public void Locate_ProbesPathDirectoriesBeforeGivingUp()
     {
+        const string expected = @"C:\tools\chromium.exe";
         var result = BrowserLocator.Locate(
-            path => path == Path.Combine("C:\\tools", "chromium.exe"),
-            _ => null, windows: true, pathValue: "C:\\tools");
-        Assert.Equal(Path.Combine("C:\\tools", "chromium.exe"), result);
+            path => path == expected,
+            _ => null, windows: true, pathValue: @"C:\tools");
+        Assert.Equal(expected, result);
     }
 
     [Fact]

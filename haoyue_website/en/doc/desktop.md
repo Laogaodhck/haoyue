@@ -2,7 +2,7 @@
 
 Haoyue Desktop is an Electron and Vue client for the same .NET Runtime used by the CLI. It connects through the local Daemon IPC protocol and provides a graphical workspace for projects, tasks, models, tools, and runtime health. Desktop and CLI share Provider, Profile, MCP, Skill, and session data.
 
-![Haoyue Desktop AI chat and project management](/screenshots/desktop/chat-and-projects.png)
+![Haoyue Desktop's IDE-style workbench: task and project sidebar, agent transcript, and bottom status bar](/screenshots/desktop/chat-and-projects.png)
 
 ## Install and launch
 
@@ -124,7 +124,7 @@ Open “Settings → Models & Providers” to:
 - store and manage the API key in the configuration;
 - manage models, Base URL, proxy, timeout, and priority;
 - configure advanced provider fields: organization and project, concurrency threads (local inference), KV prefix reuse (local inference), custom request headers (secret header values are never echoed — leave blank to keep), and reasoning-effort maps;
-- set a fallback model and input / output pricing per model (used to price usage reports);
+- set a fallback model and input / output pricing per model (the Runtime accumulates cost from usage records);
 - pick the vision sub-agent model (automatic or a specific vision-capable model);
 - **Routing & failover**: failover toggle, local→cloud fallback (red-boxed cost warning when enabled), fallback-chain ordering and add/remove, load-balancing mode, retries and circuit breaking (including the chain budget);
 - create Profiles and switch the active model or routing strategy;
@@ -154,7 +154,7 @@ The settings workbench also provides:
 - **Evolution**: defect signals at a glance, manual or scheduled reflection, adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
 - **Knowledge Center**: browse and revise what the agent saves as notebooks → sources → entries — attribution badges, cross-notebook search, tag filtering, Markdown export and the synonym editor — see the [Knowledge Center](/en/doc/knowledge);
 - **LAN connection**: switch between the local Runtime and a Runtime on another computer on the same network, or share this machine's Runtime with the LAN; the handshake uses a one-time nonce plus HMAC-SHA256, so the token never travels the wire (see “Runtime connection behavior” below);
-- **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry;
+- **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, cache hits, and latency over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry;
 - **Advanced**: extra readable-directory allowlist, Computer Use and network-operation switches, a JSON editor for the global configuration (redacted on read, submitting only changed fields), and a factory-reset danger zone at the bottom.
 
 The settings page has a search box that jumps to a switch by section name or keyword. While the daemon is disconnected the whole page turns read-only with an explanation (an empty list then means “could not read”, not “nothing configured”), and notices dismiss themselves after four seconds.

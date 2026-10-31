@@ -5,8 +5,8 @@
       <h2>{{ isEn ? 'The workspace where your Agent gets things done' : 'Desktop 是 Agent 的工作台' }}</h2>
       <p>
         {{ isEn
-          ? 'Start a task, connect the context it needs, and follow every action from one focused interface.'
-          : '发起任务、连接所需上下文，并在一个专注的界面中掌握 Agent 的每一步。'
+          ? 'Start a task in an IDE-style workbench, connect project context, and follow every step from the persistent status bar.'
+          : '在 IDE 式工作台中发起任务、连接项目上下文，并通过常驻状态栏掌握 Agent 的每一步。'
         }}
       </p>
     </div>
@@ -17,7 +17,7 @@
         <strong>Haoyue</strong>
       </div>
       <a href="/screenshots/desktop/chat-and-projects.png" :aria-label="isEn ? 'Open the Desktop screenshot' : '打开 Desktop 截图'">
-        <img src="/screenshots/desktop/chat-and-projects.png" :alt="isEn ? 'Haoyue Desktop Agent workspace' : 'Haoyue Desktop Agent 工作台'" loading="lazy" />
+        <img src="/screenshots/desktop/chat-and-projects.png" :alt="isEn ? 'Haoyue Desktop IDE-style workbench with task and project sidebar, agent transcript, and status bar' : 'Haoyue Desktop IDE 式工作台：任务与项目侧栏、Agent 转录与底部状态栏'" loading="lazy" />
       </a>
     </div>
 

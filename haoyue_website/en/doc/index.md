@@ -2,7 +2,7 @@
 
 Haoyue is a local-first, extensible general-purpose AI Agent Runtime built on **.NET 10** with a Runtime First, event-driven architecture. It can reason toward a goal and use local tools, the web, MCP, and Skills to finish real work. Windows Desktop and CLI share the same Runtime, configuration, tools, and session data.
 
-![Haoyue Desktop main window](/screenshots/desktop/chat-and-projects.png)
+![Haoyue Desktop's IDE-style workbench](/screenshots/desktop/chat-and-projects.png)
 
 ## What Haoyue provides today
 

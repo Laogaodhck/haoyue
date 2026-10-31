@@ -50,3 +50,5 @@
 | [ADR-20261007-config-schema-and-version.md](ADR-20261007-config-schema-and-version.md) | 统一配置源 Schema 管理器 + 版本契约 | 已接受 |
 | [ADR-20261012-connectors-over-mcp.md](ADR-20261012-connectors-over-mcp.md) | 连接器生态以 MCP 为分发格式：连接器包规范 + 随包单文件本地 MCP 服务器 | 已采纳（随 S5 落地） |
 | [ADR-20261015-giant-class-budget.md](ADR-20261015-giant-class-budget.md) | 巨型类行数预算护栏与触发式拆分策略（新代码禁入聚合文件） | 已采纳 |
+| [ADR-20261021-sqlcipher-static-encryption.md](ADR-20261021-sqlcipher-static-encryption.md) | SQLCipher 静态加密（步骤①验证通过，集成按触发延后） | 已采纳 |
+| [ADR-20261031-workspace-trust.md](ADR-20261031-workspace-trust.md) | 工作区信任门禁：默认不信任、显式放行，未受信时忽略工作区配置与 MCP 声明 | 已接受 |

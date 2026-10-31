@@ -21,6 +21,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 [功能特性](#-功能特性) •
 [架构设计](#️-架构设计) •
 [进化引擎](#-进化引擎) •
+[更新日志](CHANGELOG.md) •
 [English](README_EN.md)
 
 </div>
@@ -33,7 +34,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 
 - **清洁架构**：`haoyue_runtime` 为核心，CLI 与桌面端是它的两个前端，关注点严格分离
 - **常驻守护进程**：daemon 经 Named Pipe / Unix Socket 暴露 JSON-RPC，桌面端与 CLI 共享同一运行时、HTTP 连接池、熔断器与文件锁协调器
-- **广播与可观测**：14 个流式事件（含 `warning`、`approval_request`）、6 个终态事件、8 个广播事件（`task.updated`、`mcp.updated`、`schedule.updated` / `schedule.upcoming`、`evolution.reflected`、`memory.consolidated`、`turn.interrupted`、`model.load.progress`）；广播为每个连接复制一份 `details`，单个客户端写失败只记日志、不掀事件泵。桌面端把自管 Runtime 的全部输出与退出码落盘 `<userData>/logs/daemon.log`——「没有回复」先看这个文件，诊断链路见 [回合无输出诊断报告](haoyue_doc/本地模型回合无输出诊断与修复-2026-10-14.md)
+- **广播与可观测**：14 个流式事件（含 `warning`、`approval_request`）、6 个终态事件、8 个广播事件（`task.updated`、`mcp.updated`、`schedule.updated` / `schedule.upcoming`、`evolution.reflected`、`memory.consolidated`、`turn.interrupted`、`model.load.progress`）；广播为每个连接复制一份 `details`，单个客户端写失败只记日志、不掀事件泵。桌面端把自管 Runtime 的全部输出与退出码落盘 `<userData>/logs/daemon.log`——「没有回复」先看这个文件，诊断链路见 [回合无输出诊断报告](haoyue_doc/本地模型回合无输出诊断与修复-2026-10-14.md)；慢消费者不再丢失流式内容：订阅队列饱和时文本 / 思考增量就地合并、其余事件按序补齐，内存仍有上界
 - **回合结果诚实可判定**：流式中断（首 token 后无候选）、拒绝回答、连续空返回都不再误报「任务完成」——消息带 `finishReason`，半截回答在历史里与完整回答可区分；策略拒绝与内部告警（上下文压缩失败等）经 warning 事件入契约并直达桌面，「为什么被拦」用户看得见
 - **per-turn 预算闸门**：每个交互回合有墙钟与 token 双重预算（墙钟按 ReasoningLevel 映射），超限即收束；用量记录带真实成本估算
 - **工具调用能力零流量探测**：提供商未声明 `toolCalling` 能力、本地客户端或真实请求被 tools 相关错误拒绝时，当回合不再注入全量工具 schema（省 token 且避免本地模型空谈），拒绝记录进缓存后续回合直接跳过
@@ -79,7 +80,8 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 
 - **工具执行强制策略闸门**：每次工具调用在参数解析后、执行前经 `ToolExecutionPolicy` 强制评估（模型无法绕过）——用户 allow/deny 规则 + 内置 bash 高危守卫（根目录递归删除、磁盘擦除、fork 炸弹、curl|sh 远程执行、卷影删除等），命中即拒绝并落审计事件；`agent.toolPolicy` 配置
 - **凭证全链路不出明文**：provider API Key 解密后不再经 RPC 回传（只回「已配置」标记，保存按「未改动即不覆盖」语义）；凭证加密存储覆盖 Windows DPAPI、Linux keyring/文件回退与 **macOS 登录 Keychain**（Security framework 原生互操作），接不上 Keychain 时显式告警而非静默明文
-- **读工具同源边界**：read_file / grep / list / search 与写侧同一工作区围栏，越界读取需 `agent.extraReadableRoots` 显式放行；密钥材料名单（SSH 私钥、`.aws`/`.gnupg`/`.kube` 等凭证目录、`secrets.json`、`.netrc`、`.env*`、`.pem/.key` 等）与审计目录一律拒绝——凭证内容不会随工具结果静默进上下文
+- **读工具同源边界**：read_file / grep / list / search 与写侧同一工作区围栏，越界读取需 `agent.extraReadableRoots` 显式放行；密钥材料名单（SSH 私钥、`.aws`/`.gnupg`/`.kube` 等凭证目录、`secrets.json`、`.netrc`、`.env*`、`.pem/.key` 等）与审计目录一律拒绝——凭证内容不会随工具结果静默进上下文；围栏按真实路径判定，符号链接 / junction 逐段解析后再比较，链接链无法解析时按越界拒绝
+- **工作区信任门禁**：工作区的 `.haoyue/config.json` 与 `mcp/servers.json` 可携带自动执行命令（MCP stdio、verify），因此未受信工作区加载时整体忽略这两份配置——克隆来的仓库不能靠「打开一次」取得执行权；信任清单存于 `~/.haoyue/trusted-workspaces.json`，经 `workspace.trust` / `workspace.untrust` 显式放行或收回，清单损坏一律按「无受信工作区」处理（失败方向收紧）
 - **computer_exec 纳入守卫与审计**：内置高危守卫按「命令内容 + 执行类工具」判定（不再只匹配工具名 `bash`），`computer_exec` 落与 bash 同构的审计记录
 - **审计防清与脱敏**：审计命令入档前经统一 Redactor 脱敏（Authorization 头等凭证原文不进档），审计文件 8 MiB 水位自动轮转不再无限增长；审计目录对文件工具只读（bash 重定向仍绕得过，已如实标注）
 - **bash 命令审计**：每条执行的命令按内容前置风险分级（low/medium/high，含分级理由），完整记录（命令、目录、风险、结果、耗时）追加写入工作区 `.haoyue/audit/bash.jsonl`，永不轮转截断，可随时回溯追责
@@ -98,7 +100,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 📋 后台任务队列
 
 - **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度；桌面端右栏「后台任务」页签是该链路的完整界面（派发 / 进度 / 取消 / 跳回会话）
-- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），125 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
+- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），127 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use（电脑操作智能体）
 
@@ -170,7 +172,7 @@ dotnet run --project haoyue_cli -- --continue  # 继续上一个会话
 dotnet run --project haoyue_cli -- --model "openai/gpt-5.5"
 ```
 
-桌面应用：进入 `haoyue_desktop`，`pnpm install && pnpm dev`。
+桌面应用：进入 `haoyue_desktop`，`pnpm install && pnpm dev`。桌面端当前提供 **Windows x64**（安装包/便携版）与 **Linux x64**（deb/rpm/便携版）构建；macOS 桌面端不支持（macOS 用户请用 CLI + Runtime 的 osx 自包含二进制）。
 
 ## ⚡ 进化引擎
 
@@ -293,7 +295,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（1198 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
+├── haoyue_tests/         # 运行时单元测试（1216 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
@@ -485,13 +487,13 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1198 / haoyue_cli_tests 18 用例）
+dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1216 / haoyue_cli_tests 18 用例）
 
 # 桌面端（需先 pnpm install）
-cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest 322 用例（31 个文件）
+cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest 325 用例（31 个文件）
 ```
 
-门槛作用于 `haoyue_runtime` 程序集（`coverage.runsettings` 的 `Include` 只含 runtime，CLI/桌面不在检）：行覆盖 ≥70%、分支覆盖 ≥55%（实测基线 56.9%）。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算均有护栏测试强制。桌面 vitest 与 `pnpm typecheck && pnpm build` 在 CI 的 desktop job 中执行；`benchmarks/*` 三个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）。
+门槛作用于 `haoyue_runtime` 程序集（CI 用 coverlet.msbuild 的 `Include`/`Exclude` 过滤，CLI/桌面不在检）：行覆盖 ≥70%、分支覆盖 ≥55%，低于门槛 `dotnet test` 直接失败。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算均有护栏测试强制。桌面 vitest 与 `pnpm typecheck && pnpm build` 在 CI 的 desktop job 中执行；`benchmarks/*` 三个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描（发现即失败）、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）；另有 Linux 作业覆盖 Unix socket、符号链接解析、Python 连接器与 TS SDK 集成测试。runtime 构建开启 `TreatWarningsAsErrors` 与 AOT / 裁剪分析器，JSON 序列化统一走源生成上下文。
 
 ## 📊 本地模型评测
 
@@ -550,6 +552,7 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 
 架构评审、裁决与实施方案收录于 [`haoyue_doc/`](haoyue_doc/README.md)，包括：
 
+- 全面审查与修复报告（2026-10-31：工作区信任门禁、符号链接真实路径围栏、覆盖率硬门槛、SDK 握手与契约类型、Linux CI 与漏洞扫描阻断、巨型类拆分、IPC 错误信封、事件队列背压合并等 18 项，含验证基线与未覆盖边界）
 - 状态并发、上下文边界与原子性风险评审（含修复对账）
 - 工作流编排层架构裁决与 TurnScope 设计
 - 进化引擎设计蓝图评审与落地设计（E1-E4）
@@ -561,12 +564,12 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
 - 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1198+18+322、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1216+18+325、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - 桌面端 UI 审查——三栏布局与按键绑定（布局职责 / 死键 / 重复入口 / 零入口能力面 22 项发现按 P1-P3 排序，附 14 条分批建议与逐条修复对账：后台任务面板、本地推理看板、路由容灾、工作区配置、专家参数、设置搜索与离线只读）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）
 - ProviderManager 并发与参数审查
 
-重大技术选型以 [ADR（架构决策记录）](haoyue_doc/adr/README.md) 文档化（已回填 8 篇），每个内置工具与官方技能配有 [Runbook 操作手册](haoyue_doc/runbooks/README.md)（护栏测试强制）。
+重大技术选型以 [ADR（架构决策记录）](haoyue_doc/adr/README.md) 文档化（已回填 11 篇），每个内置工具与官方技能配有 [Runbook 操作手册](haoyue_doc/runbooks/README.md)（护栏测试强制）。
 
 ## 📄 许可证
 

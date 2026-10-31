@@ -58,6 +58,14 @@ dotnet restore Haoyue.slnx --locked-mode   # 必须 exit 0
 # 4. global.json 与锁文件一起提交（分两次提交会让 CI 必然红一次）
 ```
 
+## 更新日志（CHANGELOG.md）
+
+根目录 [CHANGELOG.md](CHANGELOG.md) 是用户可见变化与工程护栏调整的唯一汇总：
+
+- 日常改动写入 `## [未发布]`，按「安全 / 修复 / 工程护栏 / 桌面」分组；
+- 发版时把 `[未发布]` 改为 `[X.Y.Z] - YYYY-MM-DD`，并在顶部新开一个空的 `[未发布]`；
+- GitHub Release 正文直接引用该版本条目，不再手写第二份变更说明。
+
 ## 标准发版流程
 
 ```bash
@@ -65,30 +73,48 @@ dotnet restore Haoyue.slnx --locked-mode   # 必须 exit 0
 python version.py set 1.4.0
 python version.py check --tag v1.4.0
 
-# 2. 提交并打标签推送
+# 2. 更新 CHANGELOG：[未发布] → [1.4.0] - YYYY-MM-DD，并新开 [未发布]
+
+# 3. 提交并打标签推送
 git add -A
 git commit -m "chore: 发布 v1.4.0"
 git tag v1.4.0
 git push origin main --tags
 ```
 
-3. 观察 Actions → 「Release」流水线（约 15–25 分钟）：
+4. 观察 Actions → 「Release」流水线（约 15–25 分钟）：
 
    `validate`（版本校验）→ `cli`（6 平台 CLI 打包，配置了 NPM_TOKEN 则同步发布 npm）→ `desktop-windows` / `desktop-linux`（并行）→ `release`（创建 GitHub Release 并附全部产物与校验和）。
 
-4. 在 GitHub Releases 核对产物（见下表）。
+5. 在 GitHub Releases 核对产物（见下表）。
 
 ## 发布产物
 
 | 产物 | 说明 |
 | --- | --- |
 | `haoyue-cli-<版本>-<rid>.zip / .tar.gz` | CLI 自包含二进制 ×6（win/linux/macos × x64/arm64）；Windows 为 `.zip`，其余为 `.tar.gz` |
-| `Haoyue-Setup-<版本>-win-x64.exe` | Windows NSIS 安装包（未签名，安装时有 SmartScreen 提示） |
+| `Haoyue-Setup-<版本>-win-x64.exe` | Windows NSIS 安装包（配置签名证书后自动 Authenticode 签名；未配置则未签名，安装时有 SmartScreen 提示） |
 | `Haoyue-portable-<版本>-win-x64.zip` | Windows 免安装便携版 |
 | `Haoyue-portable-<版本>-linux-x64.tar.gz` | Linux 免安装便携版 |
 | `Haoyue-<版本>_amd64.deb` / `Haoyue-<版本>.x86_64.rpm` | Debian/Ubuntu 与 RHEL/Fedora 安装包 |
 | `SHA256SUMS` | 全部产物的 SHA-256 校验和（GNU coreutils 格式，`sha256sum -c SHA256SUMS` 核对） |
 | npm `haoyue-cli` 及平台子包 | 需配置 `NPM_TOKEN`，见下文 |
+
+## Windows 代码签名（可选，一次性配置）
+
+流水线会读取两个仓库 secret，交由 electron-builder 对安装包与便携版 exe 做 Authenticode 签名：
+
+| Secret | 内容 |
+| --- | --- |
+| `WINDOWS_CSC_LINK` | PFX 证书的 base64 文本、本地路径或 https URL（electron-builder 的 `CSC_LINK`） |
+| `WINDOWS_CSC_KEY_PASSWORD` | PFX 密码（`CSC_KEY_PASSWORD`） |
+
+未配置时两个变量为空串，electron-builder 自动跳过签名，产物保持可用但带 SmartScreen 提示。签名后再分发到用户手上可减少「未知发布者」警告；证书轮换时只需更新 secret，无需改流水线。
+
+## 平台支持范围
+
+- 桌面端（Electron）：**Windows x64**（NSIS 安装包 / 便携版）与 **Linux x64**（deb / rpm / 便携版）。
+- macOS 桌面端**不在支持范围**：仓库不构建、不发布 `.dmg`/`.app`，`electron-builder` 配置中也已移除 `mac` 目标，避免产出缺少自管 runtime 的残缺包。macOS 用户可用 CLI + Runtime 的 `osx-x64`/`osx-arm64` 自包含二进制。
 
 ## 启用 npm 自动发布（一次性）
 

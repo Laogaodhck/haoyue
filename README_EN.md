@@ -21,6 +21,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 [Features](#-features) •
 [Architecture](#️-architecture) •
 [Evolution Engine](#-evolution-engine) •
+[Changelog](CHANGELOG.md) •
 [中文](README.md)
 
 </div>
@@ -33,7 +34,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 
 - **Clean Architecture**: `haoyue_runtime` is the core; CLI and desktop are two of its frontends, with strict separation of concerns
 - **Resident Daemon**: the daemon exposes JSON-RPC over Named Pipe / Unix Socket; the desktop app and CLI share the same runtime, HTTP connection pool, circuit breaker, and file-lock coordinator
-- **Broadcasts & Observability**: 14 streaming events (including `warning` and `approval_request`), 6 terminal events, and 8 broadcast events (`task.updated`, `mcp.updated`, `schedule.updated` / `schedule.upcoming`, `evolution.reflected`, `memory.consolidated`, `turn.interrupted`, `model.load.progress`). A broadcast writes its own copy of `details` to every connection, so a client that cannot be written to costs one log line instead of ending the event pump. The desktop app persists everything the managed Runtime prints, plus its exit code, to `<userData>/logs/daemon.log` — read that file first when a turn seems to produce no reply; the full diagnosis is in [the no-output diagnosis report](haoyue_doc/本地模型回合无输出诊断与修复-2026-10-14.md) (in Chinese)
+- **Broadcasts & Observability**: 14 streaming events (including `warning` and `approval_request`), 6 terminal events, and 8 broadcast events (`task.updated`, `mcp.updated`, `schedule.updated` / `schedule.upcoming`, `evolution.reflected`, `memory.consolidated`, `turn.interrupted`, `model.load.progress`). A broadcast writes its own copy of `details` to every connection, so a client that cannot be written to costs one log line instead of ending the event pump. The desktop app persists everything the managed Runtime prints, plus its exit code, to `<userData>/logs/daemon.log` — read that file first when a turn seems to produce no reply; the full diagnosis is in [the no-output diagnosis report](haoyue_doc/本地模型回合无输出诊断与修复-2026-10-14.md) (in Chinese). A slow consumer no longer loses streamed content: when a subscription queue saturates, text/thinking deltas are coalesced in place and other events are delivered in order, with memory still bounded
 - **Honest, Classifiable Turn Results**: a mid-stream interruption (no more candidates after the first token), a refusal, or consecutive empty returns never report "task complete" again — messages carry `finishReason`, so a half-finished answer is distinguishable from a complete one in history. Policy rejections and internal warnings (e.g. context-compaction failures) enter the contract as warning events and reach the desktop, so "why was this blocked" is visible to the user
 - **Per-Turn Budget Gates**: every interactive turn carries a wall-clock and token budget (the wall clock maps from the ReasoningLevel); exceeding either folds the turn closed, and usage records carry a real cost estimate
 - **Zero-Traffic Tool-Calling Probe**: when a provider does not declare `toolCalling`, when the local client ignores tools, or when a real request is rejected with a tools-related error, the turn stops injecting the full tool schema (saving tokens and avoiding empty local-model chatter); the rejection is cached so later turns skip the injection outright
@@ -79,7 +80,8 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 
 - **Mandatory Tool Execution Policy Gate**: every tool call is evaluated by `ToolExecutionPolicy` after argument parsing and before execution (the model cannot bypass it) — user allow/deny regex rules plus built-in bash high-risk guards (recursive root deletion, disk wipe, fork bombs, curl|sh remote execution, shadow-copy deletion, etc.); a hit is rejected and journaled as an audit event; configured via `agent.toolPolicy`
 - **Credentials Never Travel in Plaintext**: decrypted provider API keys are no longer returned over RPC (only an "configured" flag; saves follow a "unchanged means untouched" semantic). Encrypted credential storage covers Windows DPAPI, the Linux keyring/file fallback, and the **macOS login Keychain** (native Security framework interop); when the Keychain is unreachable the runtime warns explicitly instead of silently storing plaintext
-- **Read Tools Share the Write-Side Boundary**: read_file / grep / list / search resolve inside the same workspace fence as writes — crossing it requires explicit opt-in via `agent.extraReadableRoots`; a credential denylist (SSH private keys, `.aws` / `.gnupg` / `.kube`-style credential directories, `secrets.json`, `.netrc`, `.env*`, `.pem` / `.key` and friends) plus the audit directory are always refused — credential contents never silently flow into context through tool results
+- **Read Tools Share the Write-Side Boundary**: read_file / grep / list / search resolve inside the same workspace fence as writes — crossing it requires explicit opt-in via `agent.extraReadableRoots`; a credential denylist (SSH private keys, `.aws` / `.gnupg` / `.kube`-style credential directories, `secrets.json`, `.netrc`, `.env*`, `.pem` / `.key` and friends) plus the audit directory are always refused — credential contents never silently flow into context through tool results. The fence compares real paths: symlinks / junctions are resolved segment by segment, and an unresolvable link chain is treated as out of bounds
+- **Workspace Trust Gate**: a workspace's `.haoyue/config.json` and `mcp/servers.json` can carry auto-executed commands (MCP stdio, verify), so both are ignored while loading an untrusted workspace — a cloned repository cannot gain execution rights by simply being opened once; trust lives in `~/.haoyue/trusted-workspaces.json` and is granted or revoked explicitly via `workspace.trust` / `workspace.untrust`; a corrupted trust file is treated as "no trusted workspaces" (fail closed)
 - **computer_exec Under Guard and Audit**: the built-in high-risk guard judges by "command content + execution-class tool" (no longer matching only the tool name `bash`), and `computer_exec` writes bash-shaped audit records
 - **Audit Anti-Tampering and Redaction**: commands are passed through a unified Redactor before landing in the audit log (Authorization headers and similar secrets never hit disk); audit files rotate at an 8 MiB watermark instead of growing without bound, and the audit directory is read-only to file tools (bash redirection can still bypass this — noted honestly in the docs)
 - **Bash Command Audit**: every executed command is pre-classified by content risk (low/medium/high, with rationale) and fully recorded (command, directory, risk, result, duration) appended to `.haoyue/audit/bash.jsonl` in the workspace — never rotated or truncated, always traceable
@@ -99,7 +101,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 ### 📋 Background Task Queue
 
 - **Long tasks in the background**: the daemon RPC `task.start` submits a full agent turn for background execution (concurrency cap 4, hard timeout protection); `task.get` / `task.list` / `task.cancel` manage tasks; terminal states broadcast via `task.updated`, sessions persist, and progress replays through `events.recent` — frontend disconnects never lose progress; the desktop's right-pane "Background Tasks" tab is the full UI for this chain (dispatch / progress / cancel / jump back to the session)
-- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 125 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (wired into the CI dotnet job) — see [SDK README](sdks/typescript/README.md)
+- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 127 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (wired into the CI dotnet job) — see [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use
 
@@ -171,7 +173,7 @@ dotnet run --project haoyue_cli -- --continue  # continue the last session
 dotnet run --project haoyue_cli -- --model "openai/gpt-5.5"
 ```
 
-Desktop app: enter `haoyue_desktop` and run `pnpm install && pnpm dev`.
+Desktop app: enter `haoyue_desktop` and run `pnpm install && pnpm dev`. Desktop builds currently ship for **Windows x64** (installer/portable) and **Linux x64** (deb/rpm/portable); the macOS desktop app is not supported (macOS users should use the CLI + Runtime osx self-contained binaries).
 
 ## ⚡ Evolution Engine
 
@@ -294,7 +296,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (1198 cases, coverage gates: line ≥70% / branch ≥55%)
+├── haoyue_tests/         # Runtime unit tests (1216 cases, coverage gates: line ≥70% / branch ≥55%)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -486,13 +488,13 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1198 / haoyue_cli_tests 18 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1216 / haoyue_cli_tests 18 cases)
 
 # Desktop (requires pnpm install first)
-cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 322 cases across 31 files
+cd haoyue_desktop && pnpm test && pnpm typecheck   # vitest: 325 cases across 31 files
 ```
 
-The gates apply to the `haoyue_runtime` assembly (`coverage.runsettings` only `Include`s runtime — CLI and desktop are unchecked): line coverage ≥70%, branch coverage ≥55% (measured baseline 56.9%). Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), and giant-class line budgets are all enforced by guard tests. The desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job; the three `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning, `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph).
+The gates apply to the `haoyue_runtime` assembly (CI filters via coverlet.msbuild `Include`/`Exclude` — CLI and desktop are unchecked): line coverage ≥70%, branch coverage ≥55%; `dotnet test` fails when either gate is missed. Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), and giant-class line budgets are all enforced by guard tests. The desktop `pnpm test` and `pnpm typecheck && pnpm build` run in CI's desktop job; the three `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning (failures now break the build), `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph). A Linux job covers Unix sockets, symlink resolution, Python connectors, and the TS SDK integration test. The runtime build enables `TreatWarningsAsErrors` plus the AOT / trim analyzers, and all JSON serialization goes through source-generated contexts.
 
 ## 📊 Local Model Benchmarks
 
@@ -551,6 +553,7 @@ kit.parse("scanned.pdf", ocr_fallback=True)         # scanned PDF via per-page O
 
 Architecture reviews, adjudications, and implementation plans are collected in [`haoyue_doc/`](haoyue_doc/README.md) (in Chinese), including:
 
+- Comprehensive review & fix report (2026-10-31: workspace trust gate, real-path symlink fence, enforced coverage gate, SDK handshake and contract types, Linux CI and vulnerability blocking, giant-class split, IPC error envelope, event-queue backpressure, and more — 18 items with verification and known boundaries) (in Chinese)
 - State concurrency, context boundaries, and atomicity risk review (with fix reconciliation)
 - Workflow orchestration adjudication & TurnScope design
 - Evolution engine blueprint review & landing design (E1-E4)
@@ -562,12 +565,12 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
 - Local GGUF load & quantization optimization report (per-layer KV-head parsing fix for hybrid architectures + Flash Attention everywhere + measured Q4/Q5/Q8 comparison: nemotron decode +22%, long-context +45%, requantization buys no quality; reproducible via benchmarks/model-opt) (in Chinese)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1198+18+322, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1216+18+325, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Desktop UI review — three-column layout & key bindings (22 findings across layout responsibility / dead keys / duplicate entries / capability gaps, ranked P1-P3, plus 14 batched recommendations and an item-by-item fix reconciliation: background task panel, local inference dashboard, routing & failover, workspace config, agent expert settings, settings search and offline read-only)
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review
 
-Major technical decisions are documented as [ADRs (Architecture Decision Records)](haoyue_doc/adr/README.md) (8 backfilled so far), and every built-in tool and official skill has a [Runbook](haoyue_doc/runbooks/README.md) (enforced by guard tests).
+Major technical decisions are documented as [ADRs (Architecture Decision Records)](haoyue_doc/adr/README.md) (11 backfilled so far), and every built-in tool and official skill has a [Runbook](haoyue_doc/runbooks/README.md) (enforced by guard tests).
 
 ## 📄 License
 

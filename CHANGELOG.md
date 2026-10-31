@@ -27,7 +27,8 @@
 - **零告警构建**：runtime 开启 `TreatWarningsAsErrors` 与 AOT / 裁剪分析器，JSON 序列化统一走源生成上下文。
 - **巨型类拆分**：`DaemonAdminApi` 拆出 Files / Knowledge / Models，`DaemonServer` 拆出事件转发与用量累计；行数预算护栏继续生效。
 - **测试并行污染修复**：修改进程环境变量的测试统一进入非并行集合，知识库同义词相关测试串行化。
-- **依赖升级**：Electron 43 → 45；Markdig 统一为 1.3.2（CLI 与 webserver 共用同一版本）。
+- **依赖升级**：Electron 43 → 45；Markdig 统一为 1.3.2（CLI 与 webserver 共用同一版本）；桌面端按审计结论收紧 `markdown-it`（14.3.3）与 `dompurify` / `undici` 下限，`pnpm audit --prod` 高危归零。
+- **平台无关的失败路径测试**：不可写日志位置改用「父路径是普通文件」，不再依赖 Windows 保留设备名或非管理员账户语义。
 - **文档事实对齐**：README / 文档索引 / SDK 说明中的用例数、RPC 方法数由源码现场推导，护栏测试强制。
 
 ### 桌面

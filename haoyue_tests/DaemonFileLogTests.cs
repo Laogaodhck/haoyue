@@ -86,11 +86,11 @@ public sealed class DaemonFileLogTests : IDisposable
     [Fact]
     public void Open_ToUnwritableLocation_ReturnsDisabledInstance_WithoutThrowing()
     {
-        // Windows 保留设备名无法作为文件创建：构造路径必然失败。
-        var path = OperatingSystem.IsWindows()
-            ? Path.Combine(_dir, "con", "daemon.log")
-            : Path.Combine(_dir, "\0invalid");
-        using var log = DaemonFileLog.Open(path);
+        // 父路径是普通文件：在其下创建目录/文件在所有平台都必然失败，
+        // 不依赖「非管理员」或保留设备名的平台语义（CI 管理员账户曾让 con 路径可写）。
+        var parentFile = Path.Combine(_dir, "not-a-directory");
+        File.WriteAllText(parentFile, "x");
+        using var log = DaemonFileLog.Open(Path.Combine(parentFile, "daemon.log"));
 
         Assert.False(log.IsEnabled);
         // 禁用实例的一切写入都是无操作，绝不抛异常。

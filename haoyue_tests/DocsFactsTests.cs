@@ -103,7 +103,7 @@ public class DocsFactsTests
     {
         var json = JsonDocument.Parse(ReadRepoFile("contracts", "daemon-contract.json"));
         var n = json.RootElement.GetProperty("methods").GetArrayLength();
-        Assert.Equal(127, n);
+        Assert.Equal(129, n);
         AssertReadmeMentions([$"{n} 个 RPC 方法"], [$"all {n} RPC methods"]);
     }
 

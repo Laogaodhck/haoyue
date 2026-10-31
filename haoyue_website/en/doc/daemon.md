@@ -6,6 +6,7 @@ The Haoyue Daemon exposes the Runtime to desktop clients, IDE plugins, and other
 
 - Windows Named Pipe: `\\.\pipe\haoyue-<username>` (named per current user; ACL restricted to that user and SYSTEM)
 - Linux / macOS Unix Socket: `~/.haoyue/daemon.sock`
+- **LAN TCP (optional, off by default)**: enabled via `daemon.lan.set`, default port 47615 and bind address `0.0.0.0`. The handshake is a one-time nonce plus HMAC-SHA256 challenge-response — the token never travels the wire and cannot be replayed across connections; concurrency is capped at 16 and failed authentication is delayed before disconnect. Traffic is plaintext TCP, so use it on trusted LANs only.
 
 Every request and response must end with a newline. A connection remains able to send control requests while an Agent turn is streaming.
 
@@ -112,6 +113,8 @@ The Desktop settings workbench uses structured methods to manage the same config
 | --- | --- |
 | `agent.config.get` | Returns the agent settings (`networkEnabled`, `delegationEnabled`, `visionModel`, `autoVerify`) |
 | `agent.config.set` | Partially updates agent settings (omitted keys keep their stored values); `visionModel` takes a model ref that must declare the vision capability, or an empty string to restore automatic selection |
+| `daemon.lan.get` | Returns LAN listener state: `enabled`, `running`, `bindAddress`, `port`, `addresses` (local IPv4s), and the last `error` |
+| `daemon.lan.set` | Takes `{ "enabled"?, "bindAddress"?, "port"? }` (port 1024–65535), applies the listener config live, and returns the same state; no restart needed |
 | `provider.list/upsert/use/remove/test` | Manages and probes providers |
 | `mcp.list/upsert/remove/reload` | Manages and reconnects MCP servers and tool registrations |
 | `skill.list/toggle` | Lists and enables or disables skills |

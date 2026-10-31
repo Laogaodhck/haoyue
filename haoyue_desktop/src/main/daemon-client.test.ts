@@ -1,10 +1,11 @@
 import { once } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createServer, type Server, type Socket } from 'node:net'
+import { createServer, type AddressInfo, type Server, type Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { DaemonMessage } from '../shared/ipc.js'
-import { DaemonClient } from './daemon-client.js'
+import { DAEMON_PROTOCOL_VERSION } from '../shared/daemon-contract.gen.js'
+import type { DaemonMessage, DaemonState } from '../shared/ipc.js'
+import { computeLanProof, DaemonClient } from './daemon-client.js'
 
 const servers: Server[] = []
 const clients: DaemonClient[] = []
@@ -208,5 +209,115 @@ describe('DaemonClient', () => {
 
     expect(state.connected).toBe(false)
     expect(state.error).toContain('authentication failed')
+  })
+})
+
+describe('DaemonClient LAN (challenge–response)', () => {
+  const nonce = 'a1b2c3'
+  const lanToken = 'lan-token-value'
+
+  it('answers the challenge with an HMAC proof instead of sending the token', async () => {
+    let received: ParsedRequest | null = null
+    const server = createServer((socket) => {
+      socket.setEncoding('utf8')
+      socket.write(`${JSON.stringify({ id: 0, event: 'challenge', data: nonce })}\n`)
+      socket.on('data', (chunk: string) => {
+        const request = JSON.parse(chunk.trim().split('\n')[0] ?? '') as ParsedRequest
+        received = request
+        socket.write(`${JSON.stringify({
+          id: request.id,
+          event: 'result',
+          data: JSON.stringify({ version: DAEMON_PROTOCOL_VERSION }),
+        })}\n`)
+      })
+    })
+    servers.push(server)
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const { port } = server.address() as AddressInfo
+
+    const client = new DaemonClient({
+      target: { host: '127.0.0.1', port },
+      auth: { kind: 'proof', token: lanToken },
+    })
+    clients.push(client)
+
+    const state = await client.connect()
+
+    expect(state.connected).toBe(true)
+    expect(state.endpoint).toBe(`127.0.0.1:${port}`)
+    expect(received).not.toBeNull()
+    expect(received!.method).toBe('handshake')
+    expect(received!.params.proof).toBe(computeLanProof(lanToken, nonce))
+    expect(JSON.stringify(received)).not.toContain(lanToken)
+  })
+
+  it('reports a rejected proof as a failed connection', async () => {
+    const server = createServer((socket) => {
+      socket.setEncoding('utf8')
+      socket.write(`${JSON.stringify({ id: 0, event: 'challenge', data: nonce })}\n`)
+      socket.on('data', () => {
+        socket.write(`${JSON.stringify({ id: 0, event: 'error', data: 'authentication failed: missing or invalid handshake proof' })}\n`)
+      })
+    })
+    servers.push(server)
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const { port } = server.address() as AddressInfo
+
+    const client = new DaemonClient({
+      target: { host: '127.0.0.1', port },
+      auth: { kind: 'proof', token: lanToken },
+    })
+    clients.push(client)
+
+    const state = await client.connect()
+    expect(state.connected).toBe(false)
+    expect(state.error).toContain('authentication failed')
+  })
+
+  it('fails fast when no LAN token is configured', async () => {
+    let received = ''
+    const server = createServer((socket) => {
+      socket.setEncoding('utf8')
+      socket.on('error', () => undefined)
+      socket.write(`${JSON.stringify({ id: 0, event: 'challenge', data: nonce })}
+`)
+      socket.on('data', (chunk: string) => { received += chunk })
+    })
+    servers.push(server)
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const { port } = server.address() as AddressInfo
+
+    const client = new DaemonClient({
+      target: { host: '127.0.0.1', port },
+      auth: { kind: 'proof', token: '' },
+    })
+    clients.push(client)
+
+    const state = await client.connect()
+    expect(state.connected).toBe(false)
+    expect(state.error).toContain('令牌')
+    expect(received).toBe('')
+  })
+
+  it('switches target on configure and reports the new endpoint', () => {
+    const client = new DaemonClient({
+      target: { host: '192.168.1.20', port: 47615 },
+      auth: { kind: 'proof', token: lanToken },
+    })
+    clients.push(client)
+    const states: DaemonState[] = []
+    client.on('state', (state: DaemonState) => states.push(state))
+    expect(client.endpoint).toBe('192.168.1.20:47615')
+
+    const localPath = process.platform === 'win32'
+      ? String.raw`\\.\pipe\haoyue-configure`
+      : join(tmpdir(), 'haoyue-configure.sock')
+    client.configure({ path: localPath }, { kind: 'local' })
+    expect(client.endpoint).toBe(localPath)
+    expect(client.isLocalTarget).toBe(true)
+    expect(states.at(-1)).toMatchObject({ connected: false, endpoint: localPath })
   })
 })

@@ -40,6 +40,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **工具调用能力零流量探测**：提供商未声明 `toolCalling` 能力、本地客户端或真实请求被 tools 相关错误拒绝时，当回合不再注入全量工具 schema（省 token 且避免本地模型空谈），拒绝记录进缓存后续回合直接跳过
 - **主动上下文压缩**：投影 token 接近窗口水位（85%）即提前压缩，不再等超限当回合抛错
 - **安全接入**：启动时生成随机握手 token（`~/.haoyue/daemon.token`，仅当前用户可读），客户端首条消息必须携带 token 认证，未认证连接立即拒绝
+- **局域网接入（可选）**：本机 Runtime 可在「设置 → 局域网连接」开启局域网监听（默认关闭，端口 47615），同网段另一台桌面可把 Runtime 目标切到这台机器；握手改走一次性 nonce + HMAC-SHA256 挑战应答，令牌不上线、不能跨连接重放。并发上限 16，认证失败延迟断开；`daemon.lan.get` / `daemon.lan.set` 热生效，改地址与端口无需重启。传输仍是明文 TCP（令牌除外），仅建议用于可信局域网。远程模式下工作区选择、附件与项目终端仍作用于本机，会话与工具运行在远端
 - **事件溯源**：关键事件（轮次、工具调用、用量、诊断、进化信号）写入 SQLite 事件日志（保留 5000 条），`events.recent` 可查询重放，重启不丢失
 - **四层扩展**：Tools、Skills、Prompts、MCP（Model Context Protocol）插件机制
 
@@ -100,7 +101,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 📋 后台任务队列
 
 - **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度；桌面端右栏「后台任务」页签是该链路的完整界面（派发 / 进度 / 取消 / 跳回会话）
-- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），127 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
+- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），129 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use（电脑操作智能体）
 
@@ -115,7 +116,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 🖥️ 桌面应用
 
 - **三栏信息架构**：左栏常驻（会话 / 项目 / 时间视图，主入口标明「当前项目 / 全局」作用域），中栏对话流，右栏工作区（变更、后台任务、内置浏览器、计划任务）；设置、知识库、扩展、计划任务、归档均为右栏同级视图而非独立整页，前进 / 后退走浏览器式历史栈
-- **现代界面**：Electron + Vue 3 + TypeScript，流式 Markdown、图片预览、推理深度调节
+- **IDE 式工作台界面**：Electron + Vue 3 + TypeScript，扁平细边三栏、紧凑行高与等宽元信息；对话采用 Agent 转录样式（消息顶部标注角色与模型，用户输入左对齐为指令块）；底部状态栏常驻 Runtime 连接与目标地址、当前模型、运行阶段耗时与运行中任务数，断线可点击重连；右栏为编辑器式页签，设置页采用 IDE 导航。支持流式 Markdown、图片预览与推理深度调节
 - **专家系统**：内置领域专家库，一键切换角色预设
 - **图形化配置**：Provider、模型、Profile、MCP 服务器全程可视化；「模型与提供商」页展示活动模型参数（上下文窗口/最大输出）与能力徽章（流式/工具/思考/视觉/推理）及全模型目录；提供商可配 Organization、Threads、KV 前缀复用、自定义请求头与思考档位映射（密钥类头的值不回传、留空即保持），模型可配回退模型与输入/输出单价；本地模型另有「加载配置」页——上下文与性能、生成采样、思考、内存、推测解码、高级六分区查看/编辑/保存，与加载流程实时对接
 - **本地推理看板**：「推理加速」页对每个本地模型显示**最终生效参数 + 来源层级（模型级 / 提供商级 / 自适应档位）+ 实测吞吐**，模型级覆盖提供商级时给出显式警告，写入口只保留「加载配置」一处；预热、卸载、基准测试（TTFT / decode / prefill / 缓存命中）与显存治理（最大驻留模型数、并发、空闲卸载）全部可视
@@ -295,7 +296,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（1228 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
+├── haoyue_tests/         # 运行时单元测试（1232 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
@@ -487,10 +488,10 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1228 / haoyue_cli_tests 18 用例）
+dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1232 / haoyue_cli_tests 18 用例）
 
 # 桌面端（需先 pnpm install）
-cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 338 用例（32 个文件）
+cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 350 用例（34 个文件）
 ```
 
 门槛：`haoyue_runtime` 行覆盖 ≥70% / 分支 ≥55%；CLI（`haoyue_cli`）行 ≥15% / 分支 ≥15%；webserver 行 ≥45% / 分支 ≥15%——三者各自单跑，低于门槛 `dotnet test` 直接失败。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算、`wwwroot/lib` vendor 清单（哈希 / 版本下限 / 引用覆盖）均有护栏测试强制。桌面端在 CI 的 desktop job 中执行 `pnpm lint`、组件行数预算、`pnpm test` 与 `pnpm typecheck && pnpm build`；`benchmarks/*` 三个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描（发现即失败）、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）；另有 Linux 作业覆盖 Unix socket、符号链接解析、Python 连接器与 TS SDK 集成测试。runtime 与测试工程构建均开启 `TreatWarningsAsErrors`，runtime 另开 AOT / 裁剪分析器，JSON 序列化统一走源生成上下文。
@@ -564,7 +565,7 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
 - 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1228+18+338、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1232+18+350、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - 桌面端 UI 审查——三栏布局与按键绑定（布局职责 / 死键 / 重复入口 / 零入口能力面 22 项发现按 P1-P3 排序，附 14 条分批建议与逐条修复对账：后台任务面板、本地推理看板、路由容灾、工作区配置、专家参数、设置搜索与离线只读）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）
 - ProviderManager 并发与参数审查

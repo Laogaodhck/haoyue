@@ -83,6 +83,8 @@ public sealed partial class DaemonServer : IAsyncDisposable
     private readonly SemaphoreSlim _reflectionGate = new(1, 1);
     private readonly IEventSubscription _runtimeEvents;
     private readonly Task _scheduleEventsTask;
+    // 局域网访问：默认关闭；开启后与本机管道 / socket 并行监听，认证走 HMAC 挑战应答。
+    private readonly LanAccessServer _lan;
     // Unattended auto-reflection (E2): a 5-minute poll armed from EvolutionConfig —
     // interval mode and pending-defect threshold mode coexist; disposed/rearmed on
     // config changes. The reflection turn itself stays human-gated for adoption.
@@ -248,6 +250,9 @@ public sealed partial class DaemonServer : IAsyncDisposable
             _sharedLocalModels);
         _runtimeEvents = _runtime.Events.Subscribe();
         _scheduleEventsTask = BroadcastHostEventsAsync(_runtimeEvents.Reader, _shutdown.Token);
+        _lan = new LanAccessServer(
+            runtime.ConfigStore, _fileLog, handshakeToken,
+            (stream, ct) => HandleConnectionAsync(stream, ct, authenticate: false));
         _admin = new DaemonAdminApi(runtime, globalWorkspace, _fileLocks, _scheduler, _shutdown.Token, _sharedLocalModels);
         _admin.McpStatusChanged += OnMcpStatusChanged;
         // 回合内的懒加载也走同一条进度通道（调用方不传 IProgress，旁路事件覆盖全部加载）。
@@ -279,6 +284,7 @@ public sealed partial class DaemonServer : IAsyncDisposable
         }
         _runtimeEvents.Dispose();
         await _scheduler.DisposeAsync().ConfigureAwait(false);
+        await _lan.DisposeAsync().ConfigureAwait(false);
         _backgroundTasks.Dispose();
         _sharedHttp.Dispose();
         _sharedLocalModels.Dispose();
@@ -321,6 +327,8 @@ public sealed partial class DaemonServer : IAsyncDisposable
                 _ => StartConsolidation(), null, TimeSpan.FromHours(6), TimeSpan.FromHours(6));
         }
         var schedulerTask = RunSchedulerAsync(runCt);
+        // 局域网监听与本机管道 / socket 并行；配置变更时由 daemon.lan.set 热重启。
+        var lanTask = Task.Run(() => _lan.RunAsync(runCt), runCt);
         _fileLog.Info(OperatingSystem.IsWindows()
             ? $"serving on named pipe {PipeName}"
             : $"serving on unix socket {SocketPath}");
@@ -354,6 +362,13 @@ public sealed partial class DaemonServer : IAsyncDisposable
             try
             {
                 await schedulerTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (runCt.IsCancellationRequested)
+            {
+            }
+            try
+            {
+                await lanTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (runCt.IsCancellationRequested)
             {
@@ -501,7 +516,7 @@ public sealed partial class DaemonServer : IAsyncDisposable
         public AgentSession? LegacySession;
     }
 
-    internal async Task HandleConnectionAsync(Stream stream, CancellationToken ct)
+    internal async Task HandleConnectionAsync(Stream stream, CancellationToken ct, bool authenticate = true)
     {
         using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
         // 握手与常规请求共用同一个读取器：它内部会预读，拆成两个实例会丢字符。
@@ -515,7 +530,9 @@ public sealed partial class DaemonServer : IAsyncDisposable
         // Handshake gate: when a token is configured, the very first message must
         // authenticate. Unauthenticated connections never receive broadcasts and
         // cannot dispatch any method; failures drop the link immediately.
-        if (_handshakeToken is not null
+        // 局域网连接在 LanAccessServer 里已完成 HMAC 挑战应答，这里不再重复令牌握手。
+        if (authenticate
+            && _handshakeToken is not null
             && !await AuthenticateConnectionAsync(lines, writer, writerGate, ct).ConfigureAwait(false))
         {
             return;
@@ -676,7 +693,7 @@ public sealed partial class DaemonServer : IAsyncDisposable
                         timeout.Token, code: DaemonErrorCode.VersionMismatch).ConfigureAwait(false);
                     return false;
                 }
-                await WriteAsync(writer, writerGate, id, "result", ProtocolInfoJson(versionWarning), timeout.Token).ConfigureAwait(false);
+                await WriteAsync(writer, writerGate, id, "result", DaemonProtocol.Info(versionWarning), timeout.Token).ConfigureAwait(false);
                 return true;
             }
 
@@ -700,7 +717,19 @@ public sealed partial class DaemonServer : IAsyncDisposable
                         break;
 
                     case "protocol.info":
-                        await WriteAsync(context.Writer, context.WriterGate, id, "result", ProtocolInfoJson(), context.ConnectionCt).ConfigureAwait(false);
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result", DaemonProtocol.Info(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "daemon.lan.get":
+                        await WriteAsync(context.Writer, context.WriterGate, id, "result",
+                            _lan.Status().ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "daemon.lan.set":
+                        // 配置写与监听重启都在管理闸门内：并发 set 不能互相覆盖端口，
+                        // 也不该出现「旧配置上的 listener 还在接受连接」的窗口。
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_lan.Apply(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
                     case "events.recent":
@@ -2937,23 +2966,6 @@ public sealed partial class DaemonServer : IAsyncDisposable
             ["hasWorkspaceConfig"] = workspace.HasWorkspaceConfig,
             ["hasWorkspaceMcp"] = workspace.HasWorkspaceMcp,
         }.ToJsonString();
-    }
-
-    // 方法清单的唯一事实源是 DaemonContract.Methods（Contract First）；
-    // 此处只做投影，禁止手工增删方法名。
-    private static string ProtocolInfoJson(string? versionWarning = null)
-    {
-        var info = new JsonObject
-        {
-            ["version"] = ProtocolVersion,
-            ["transport"] = "jsonl",
-            ["capabilities"] = new JsonArray(
-                "chat", "image-input", "concurrent-turns", "reasoning-level", "agent.steer", "agent.cancel", "agent.mode", "workspace", "provider",
-                "model", "mcp", "skill", "usage", "project", "session", "global-session", "doctor", "file-locks", "routing", "schedule", "factory-reset", "prompt-optimize", "config-status", "config-rebuild", "contract"),
-            ["methods"] = new JsonArray(DaemonContract.MethodNames.Select(name => (JsonNode)name).ToArray()),
-        };
-        if (versionWarning is not null) info["versionWarning"] = versionWarning;
-        return info.ToJsonString();
     }
 
     /// <summary>

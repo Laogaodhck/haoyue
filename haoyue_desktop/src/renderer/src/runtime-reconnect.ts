@@ -52,6 +52,8 @@ export interface RuntimeReconnectDeps {
   loadRuntimeState: () => Promise<void>
   connect?: () => Promise<DaemonState>
   notify?: (title: string, body: string) => void
+  /** 连接目标切换（本机 ⇄ 局域网）：旧 Runtime 的会话状态必须由调用方丢弃。 */
+  onTargetChanged?: (endpoint: string, previous: string) => void
 }
 
 /**
@@ -68,18 +70,28 @@ export function createRuntimeReconnect(deps: RuntimeReconnectDeps) {
   // H24: reconnect success deserves its own feedback — previously the UI just silently
   // returned to normal and users could not tell whether their running tasks survived.
   let hasBeenConnected = false
+  // 目标切换（本机 ⇄ 局域网）不是「断线恢复」：旧 Runtime 的会话状态已失效，
+  // 调用方要清空本地列表，重连提示也不该再报「N 个运行中的任务已恢复跟踪」。
+  let lastEndpoint = ''
+  let targetSwitched = false
 
   function handleDaemonState(state: DaemonState): void {
     const wasConnected = deps.daemonState.value.connected
+    if (lastEndpoint && lastEndpoint !== state.endpoint) {
+      deps.onTargetChanged?.(state.endpoint, lastEndpoint)
+      targetSwitched = true
+    }
+    lastEndpoint = state.endpoint
     deps.daemonState.value = state
     if (state.connected) {
       automaticReconnectPaused = false
       deps.reconnectPrompt.value = null
-      if (wasConnected === false && hasBeenConnected) {
+      if (wasConnected === false && hasBeenConnected && !targetSwitched) {
         const runningCount = deps.threads.value.filter((thread) => thread.running).length
         notify('已重新连接',
           runningCount > 0 ? `连接已恢复，${runningCount} 个运行中的任务已恢复跟踪。` : '连接已恢复。')
       }
+      targetSwitched = false
       hasBeenConnected = true
       return
     }

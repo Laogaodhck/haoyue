@@ -8,6 +8,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import type { AppearanceTheme, AppInfo, DaemonState } from '../../shared/ipc'
 import AppTitleBar from './components/AppTitleBar.vue'
+import AppStatusBar from './components/AppStatusBar.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import ArchivedTasksDialog from './components/ArchivedTasksDialog.vue'
 import ScheduledTasksDialog from './components/ScheduledTasksDialog.vue'
@@ -163,20 +164,6 @@ async function jumpToLatest(): Promise<void> {
   await scrollToBottom(true, true)
 }
 
-/** H19: long phases (compaction/verify) show elapsed seconds so they don't read as frozen. */
-const phaseStartedAt = ref(0)
-const phaseElapsedSeconds = ref(0)
-let phaseTimer: ReturnType<typeof setInterval> | undefined
-watch(() => activeThread.value?.phase, (phase) => {
-  if (phaseTimer) { clearInterval(phaseTimer); phaseTimer = undefined }
-  if (!phase) { phaseStartedAt.value = 0; phaseElapsedSeconds.value = 0; return }
-  phaseStartedAt.value = Date.now()
-  phaseElapsedSeconds.value = 0
-  phaseTimer = setInterval(() => {
-    phaseElapsedSeconds.value = Math.floor((Date.now() - phaseStartedAt.value) / 1000)
-  }, 1000)
-})
-
 /** H11: global keyboard flow — Ctrl+K task search, Ctrl+F conversation search, Ctrl+./Esc stop. */
 function handleGlobalShortcuts(event: KeyboardEvent): void {
   // 审批弹窗没人接 Esc：键盘用户只能拿鼠标点「拒绝」。这里补上同一路径——
@@ -222,6 +209,21 @@ function saveComposerDraft(threadId?: string): void {
 const conversationSelectionToken = { value: 0 }
 
 const activeThread = computed(() => threads.value.find((thread) => thread.id === activeThreadId.value))
+
+/** H19: long phases (compaction/verify) show elapsed seconds so they don't read as frozen.
+ *  必须在 activeThread 声明之后：watch 会在 setup 阶段立即求值 getter。 */
+const phaseStartedAt = ref(0)
+const phaseElapsedSeconds = ref(0)
+let phaseTimer: ReturnType<typeof setInterval> | undefined
+watch(() => activeThread.value?.phase, (phase) => {
+  if (phaseTimer) { clearInterval(phaseTimer); phaseTimer = undefined }
+  if (!phase) { phaseStartedAt.value = 0; phaseElapsedSeconds.value = 0; return }
+  phaseStartedAt.value = Date.now()
+  phaseElapsedSeconds.value = 0
+  phaseTimer = setInterval(() => {
+    phaseElapsedSeconds.value = Math.floor((Date.now() - phaseStartedAt.value) / 1000)
+  }, 1000)
+})
 
 const {
   candidates: evolutionCandidates,
@@ -499,7 +501,15 @@ const {
   conversationLoading,
   conversationLoadError,
   threads,
-  loadRuntimeState
+  loadRuntimeState,
+  // 切换 Runtime 目标（本机 / 局域网）后，旧机器的会话与项目列表不再有效；
+  // 清空后由随后的 loadRuntimeState 按新 Runtime 重新拉取。
+  onTargetChanged: () => {
+    threads.value = []
+    activeThreadId.value = ''
+    selectedProjectId.value = ''
+    taskSettingsThreadId.value = ''
+  }
 })
 
 async function openWorkspace(): Promise<void> {
@@ -1878,6 +1888,11 @@ watch(theme, applyTheme)
       </div>
     </div>
 
+    <AppStatusBar :connected="daemonState.connected" :endpoint="daemonState.endpoint"
+      :reconnecting="reconnecting" :model="activeModel"
+      :phase="activeThread?.running ? activeThread.phase : undefined"
+      :elapsed-seconds="phaseElapsedSeconds" :threads="threads" :version="appInfo.version"
+      @reconnect="reconnectDaemon" />
 
     <AboutDialog :open="aboutOpen" :app-info="appInfo" :protocol-version="daemonState.protocolVersion" @close="aboutOpen = false" />
 

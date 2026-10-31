@@ -6,6 +6,7 @@ Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放
 
 - Windows Named Pipe：`\\.\pipe\haoyue-<用户名>`（按当前用户命名，ACL 限定本人与 SYSTEM）
 - Linux / macOS Unix Socket：`~/.haoyue/daemon.sock`
+- 局域网 TCP（可选，默认关闭）：由 `daemon.lan.set` 开启，默认端口 47615、绑定地址 `0.0.0.0`；握手使用一次性 nonce + HMAC-SHA256 挑战应答，令牌不上线、跨连接不可重放，并发上限 16，认证失败延迟断开。传输为明文 TCP，仅建议用于可信局域网。
 
 请求和响应都必须以换行符结尾。一次连接可以在 Agent 输出过程中继续发送控制请求。
 
@@ -115,6 +116,8 @@ Desktop 设置中心通过结构化方法管理与 CLI 相同的配置，不直�
 | --- | --- |
 | `routing.get` | 返回 `{ "failoverEnabled": true }`，读取失败转移开关 |
 | `routing.set` | 参数 `{ "failoverEnabled": false }`，保存失败转移开关 |
+| `daemon.lan.get` | 返回局域网监听状态：`enabled`、`running`、`bindAddress`、`port`、`addresses`（本机 IPv4）与最近一次 `error` |
+| `daemon.lan.set` | 参数 `{ "enabled"?, "bindAddress"?, "port"? }`（端口 1024–65535），热更新监听配置并返回同一状态，无需重启 |
 | `agent.config.get` | 返回智能体设置（`networkEnabled`、`delegationEnabled`、`visionModel`、`autoVerify`） |
 | `agent.config.set` | 部分更新智能体设置（未传字段保持原值）；`visionModel` 传模型引用（须声明视觉能力，否则拒绝）或空串恢复自动选择 |
 | `schedule.list` | 列出全部计划任务（含下次运行时间与上次结果） |

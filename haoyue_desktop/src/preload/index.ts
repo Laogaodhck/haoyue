@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { toIpcPayload } from '../shared/ipc.js'
 import type {
+  ConnectionTestResult,
+  ConnectionUpdate,
   DaemonMessage,
   DaemonRpcResult,
   DaemonState,
@@ -66,6 +68,14 @@ const api: DesktopApi = {
       ipcRenderer.on('daemon:state', handler)
       return () => ipcRenderer.removeListener('daemon:state', handler)
     }
+  },
+  connection: {
+    get: () => ipcRenderer.invoke('connection:get'),
+    set: (update: ConnectionUpdate) => ipcRenderer.invoke('connection:set', toIpcPayload(update)),
+    test: (update: ConnectionUpdate): Promise<ConnectionTestResult> =>
+      ipcRenderer.invoke('connection:test', toIpcPayload(update)),
+    revealToken: () => ipcRenderer.invoke('connection:reveal-token'),
+    localToken: () => ipcRenderer.invoke('connection:local-token')
   }
 }
 

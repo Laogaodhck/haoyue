@@ -53,7 +53,9 @@ The main window is a fixed three-column layout:
 
 - The **left rail** is always present and carries the tasks / projects / timeline views plus the search box. The “New task” entry states whether it creates a **project task** or a **global task**, and hovering shows the landing spot. The project section stays available in the timeline view (collapsed by default).
 - The **center column** is the conversation stream.
-- The **right-hand work dock** switches between tabs: **Changes** (this turn's file diff), **History** (Git commits), **Tools** (calls in this session), **Browser** (built-in browser), and **Background Tasks**. It is resizable by dragging and becomes an overlay in narrow windows.
+- The **right-hand work dock** switches between editor-style tabs: **Changes** (this turn's file diff), **History** (Git commits), **Tools** (calls in this session), **Browser** (built-in browser), and **Background Tasks**. It is resizable by dragging and becomes an overlay in narrow windows.
+
+The whole window uses a flat IDE-style shell: thin dividers between the title bar, side rail, and main area, compact rows, and monospace metadata for paths, model names, and tool logs. The center column is not chat bubbles but an agent transcript: every message is labeled with its role (You / Haoyue) and model, and user input left-aligns as an instruction block. A persistent status bar at the bottom shows Runtime connectivity and target, the active model, the current phase with elapsed time, running task count, and the version; when Runtime disconnects, its left edge turns into a click-to-reconnect entry.
 
 Settings, the Knowledge Center, Extensions (connectors / skills / experts), Scheduled Tasks, and Archive are sibling views inside the right pane rather than full-page takeovers — switching them keeps the left rail and top navigation in place. The back / forward buttons in the title bar walk a browser-style history stack.
 
@@ -151,6 +153,7 @@ The settings workbench also provides:
 - **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
 - **Evolution**: defect signals at a glance, manual or scheduled reflection, adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
 - **Knowledge Center**: browse and revise what the agent saves as notebooks → sources → entries — attribution badges, cross-notebook search, tag filtering, Markdown export and the synonym editor — see the [Knowledge Center](/en/doc/knowledge);
+- **LAN connection**: switch between the local Runtime and a Runtime on another computer on the same network, or share this machine's Runtime with the LAN; the handshake uses a one-time nonce plus HMAC-SHA256, so the token never travels the wire (see “Runtime connection behavior” below);
 - **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry;
 - **Advanced**: extra readable-directory allowlist, Computer Use and network-operation switches, a JSON editor for the global configuration (redacted on read, submitting only changed fields), and a factory-reset danger zone at the bottom.
 
@@ -173,6 +176,19 @@ The Daemon is not running or the connection dropped (nothing was sent — press 
 ## Runtime connection behavior
 
 Desktop connects automatically on startup and performs a bounded reconnect sequence when the connection is lost. If reconnection still fails, it displays the concrete error and offers another retry or exit.
+
+### LAN connection
+
+“Settings → LAN connection” manages two directions:
+
+- **Which Runtime this desktop uses**: “Local Runtime” (named pipe / unix socket, started with Desktop) or “LAN Runtime” (TCP). The latter takes the peer's host address, port (default 47615), and handshake token, with “Test connection” available before saving. Switching tears down the current connection and reconnects to the new target; the previous Runtime's session list is cleared and reloaded from the new one.
+- **Whether this machine's Runtime is shared on the LAN**: off by default. When enabled, choose a listen address (`0.0.0.0` for all NICs or a specific NIC) and port; changes apply live with no restart. The panel lists copyable pairing addresses and the local token.
+
+Pairing: on the host, enable “Allow LAN access” and copy a pairing address plus the token; on the other desktop, choose “LAN Runtime” and fill in address, port, and token.
+
+Security boundary: the handshake is a one-time nonce plus HMAC-SHA256 challenge-response, so the token itself never travels the wire and cannot be replayed across connections; concurrency is capped at 16 and failed authentication is delayed before disconnect. The listener is still plaintext TCP — apart from the token, conversations and tool results can be captured, so enable it only on trusted LANs and wrap cross-network access in an encrypted channel such as an SSH tunnel.
+
+In remote mode, workspace selection, local attachments, and project terminals still act on the local filesystem; sessions, models, and tool execution run on the remote machine.
 
 Check the following first:
 

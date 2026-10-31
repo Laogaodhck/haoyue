@@ -40,6 +40,7 @@ function createHarness(connect: () => Promise<DaemonState>, initialThreads: Thre
   const threads = ref<ThreadItem[]>(initialThreads)
   const loadRuntimeState = vi.fn(async () => undefined)
   const notify = vi.fn()
+  const onTargetChanged = vi.fn()
   const controller = createRuntimeReconnect({
     daemonState,
     reconnecting,
@@ -50,9 +51,10 @@ function createHarness(connect: () => Promise<DaemonState>, initialThreads: Thre
     threads,
     loadRuntimeState,
     connect,
-    notify
+    notify,
+    onTargetChanged
   })
-  return { controller, daemonState, reconnectPrompt, reconnecting, loadRuntimeState, notify }
+  return { controller, daemonState, reconnectPrompt, reconnecting, loadRuntimeState, notify, onTargetChanged }
 }
 
 describe('createRuntimeReconnect', () => {
@@ -105,5 +107,21 @@ describe('createRuntimeReconnect', () => {
 
     expect(connect).not.toHaveBeenCalled()
     expect(harness.reconnectPrompt.value).toBeNull()
+  })
+
+  it('reports an endpoint switch once and skips the reconnect toast', () => {
+    const harness = createHarness(async () => online(), [{ id: 'a', running: true } as ThreadItem])
+    harness.controller.handleDaemonState(online())
+    harness.notify.mockClear()
+
+    harness.controller.handleDaemonState({ connected: false, endpoint: '192.168.1.20:47615' })
+    expect(harness.onTargetChanged).toHaveBeenCalledTimes(1)
+    expect(harness.onTargetChanged).toHaveBeenCalledWith('192.168.1.20:47615', 'test')
+    const state = harness.daemonState.value
+    expect(state.connected).toBe(false)
+
+    // 新目标连上后不应声称「运行中的任务已恢复跟踪」——那些任务属于旧 Runtime。
+    harness.controller.handleDaemonState({ connected: true, endpoint: '192.168.1.20:47615' })
+    expect(harness.notify).not.toHaveBeenCalled()
   })
 })

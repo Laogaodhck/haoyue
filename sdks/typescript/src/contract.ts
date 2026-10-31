@@ -7,40 +7,41 @@
 export const CONTRACT_VERSION = "1.0";
 export const PROTOCOL_VERSION = "2.2";
 
-/** 契约声明的全部 RPC 方法名（127 个）。 */
+/** 契约声明的全部 RPC 方法名（129 个）。 */
 export type MethodName =
-  "ping" | "protocol.info" | "contract.export" | "events.recent"
-  | "shutdown" | "chat" | "agent.runTurn" | "agent.steer"
-  | "agent.respondApproval" | "agent.cancel" | "agent.undo" | "agent.interrupted"
-  | "feedback.turn" | "workspace.get" | "workspace.open" | "workspace.trust"
-  | "workspace.untrust" | "workspace.files" | "workspace.init" | "agent.mode.get"
-  | "agent.mode.switch" | "config.save" | "config.get" | "config.status"
-  | "config.rebuild" | "routing.get" | "routing.set" | "advanced.get"
-  | "advanced.set" | "web.allowedGet" | "web.allowedSet" | "agent.config.get"
-  | "agent.config.set" | "prompt.optimize" | "provider.list" | "provider.upsert"
-  | "provider.use" | "provider.remove" | "provider.test" | "provider.models.fetch"
-  | "local.models" | "model.list" | "model.catalog" | "model.switch"
-  | "model.test" | "model.status" | "model.preload" | "model.unload"
-  | "model.config.get" | "model.update" | "model.benchmark" | "schedule.list"
-  | "schedule.create" | "schedule.update" | "schedule.toggle" | "schedule.delete"
-  | "schedule.run" | "task.start" | "task.get" | "task.list"
-  | "task.cancel" | "mcp.list" | "mcp.upsert" | "mcp.remove"
-  | "mcp.reload" | "connectors.list" | "connectors.install" | "connectors.uninstall"
-  | "skill.list" | "skill.import" | "skill.toggle" | "skill.official.list"
-  | "skill.official.install" | "expert.list" | "knowledge.list" | "knowledge.search"
-  | "knowledge.save" | "knowledge.delete" | "knowledge.import" | "knowledge.tags"
-  | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list"
-  | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list"
-  | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve"
-  | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get" | "memory.save"
-  | "rules.list" | "rules.save" | "rules.delete" | "usage.get"
-  | "usage.timeline" | "session.list" | "session.search" | "session.get"
-  | "session.image" | "session.truncate" | "session.fork" | "session.update"
-  | "session.archive" | "session.delete" | "session.resume" | "session.new"
-  | "project.list" | "project.upsert" | "project.remove" | "evolution.inspect"
-  | "evolution.reflect" | "evolution.pending-list" | "evolution.decide" | "evolution.history"
-  | "evolution.stats" | "evolution.config.get" | "evolution.config.set" | "doctor"
-  | "doctor.run" | "lock.list" | "factory.reset"
+  "ping" | "protocol.info" | "contract.export" | "daemon.lan.get"
+  | "daemon.lan.set" | "events.recent" | "shutdown" | "chat"
+  | "agent.runTurn" | "agent.steer" | "agent.respondApproval" | "agent.cancel"
+  | "agent.undo" | "agent.interrupted" | "feedback.turn" | "workspace.get"
+  | "workspace.open" | "workspace.trust" | "workspace.untrust" | "workspace.files"
+  | "workspace.init" | "agent.mode.get" | "agent.mode.switch" | "config.save"
+  | "config.get" | "config.status" | "config.rebuild" | "routing.get"
+  | "routing.set" | "advanced.get" | "advanced.set" | "web.allowedGet"
+  | "web.allowedSet" | "agent.config.get" | "agent.config.set" | "prompt.optimize"
+  | "provider.list" | "provider.upsert" | "provider.use" | "provider.remove"
+  | "provider.test" | "provider.models.fetch" | "local.models" | "model.list"
+  | "model.catalog" | "model.switch" | "model.test" | "model.status"
+  | "model.preload" | "model.unload" | "model.config.get" | "model.update"
+  | "model.benchmark" | "schedule.list" | "schedule.create" | "schedule.update"
+  | "schedule.toggle" | "schedule.delete" | "schedule.run" | "task.start"
+  | "task.get" | "task.list" | "task.cancel" | "mcp.list"
+  | "mcp.upsert" | "mcp.remove" | "mcp.reload" | "connectors.list"
+  | "connectors.install" | "connectors.uninstall" | "skill.list" | "skill.import"
+  | "skill.toggle" | "skill.official.list" | "skill.official.install" | "expert.list"
+  | "knowledge.list" | "knowledge.search" | "knowledge.save" | "knowledge.delete"
+  | "knowledge.import" | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get"
+  | "knowledge.synonyms.save" | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete"
+  | "knowledge.source.add" | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete"
+  | "knowledge.source.refresh" | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build"
+  | "memory.get" | "memory.save" | "rules.list" | "rules.save"
+  | "rules.delete" | "usage.get" | "usage.timeline" | "session.list"
+  | "session.search" | "session.get" | "session.image" | "session.truncate"
+  | "session.fork" | "session.update" | "session.archive" | "session.delete"
+  | "session.resume" | "session.new" | "project.list" | "project.upsert"
+  | "project.remove" | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list"
+  | "evolution.decide" | "evolution.history" | "evolution.stats" | "evolution.config.get"
+  | "evolution.config.set" | "doctor" | "doctor.run" | "lock.list"
+  | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -71,6 +72,20 @@ export const METHODS: readonly MethodInfo[] = [
     category: "core",
     description: "\u5bfc\u51fa\u5b8c\u6574\u5951\u7ea6\u6587\u6863\uff08JSON Schema\uff09",
     paramsSchema: {"properties": {}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "daemon.lan.get",
+    category: "core",
+    description: "\u67e5\u8be2\u5c40\u57df\u7f51\u8bbf\u95ee\u72b6\u6001\uff08\u76d1\u542c\u4e2d\u3001\u7ed1\u5b9a\u5730\u5740\u3001\u7aef\u53e3\u4e0e\u672c\u673a\u53ef\u8fbe\u5730\u5740\uff09",
+    paramsSchema: {"properties": {}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "daemon.lan.set",
+    category: "core",
+    description: "\u5f00\u542f/\u5173\u95ed\u5c40\u57df\u7f51\u8bbf\u95ee\u5e76\u7acb\u5373\u751f\u6548\uff08\u9700\u8981\u5df2\u914d\u7f6e\u63e1\u624b\u4ee4\u724c\uff09",
+    paramsSchema: {"properties": {"bindAddress": {"description": "绑定地址（0.0.0.0 / 127.0.0.1 / 本机网卡地址）", "type": "string"}, "enabled": {"description": "是否开启局域网访问", "type": "boolean"}, "port": {"description": "监听端口（1024–65535）", "type": "integer"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

@@ -224,6 +224,10 @@ function openFileLocation(path?: string): void {
         </div>
       </div>
       <div v-else class="user-message-stack">
+        <div class="message-meta user">
+          <span class="role-dot" aria-hidden="true" />
+          <span class="role-name">你</span>
+        </div>
         <div v-if="message.files?.length" class="user-files-grid">
           <button
             v-for="file in message.files"
@@ -294,6 +298,11 @@ function openFileLocation(path?: string): void {
     </template>
 
     <div v-else class="assistant-message">
+      <div class="message-meta agent">
+        <span class="role-dot" aria-hidden="true" />
+        <span class="role-name">Haoyue</span>
+        <span v-if="message.modelRef" class="role-model" :title="message.modelRef">{{ message.modelRef }}</span>
+      </div>
       <div v-if="message.viewedImages?.length" class="image-view-list" aria-label="AI 已查看的图片">
         <button v-for="image in message.viewedImages" :key="image.id" type="button" class="image-view-row"
           :class="{ previewable: Boolean(imageUrl(image.id)) }" :disabled="!imageUrl(image.id)"

@@ -109,6 +109,33 @@ export interface DaemonRequestOptions {
   timeoutMs?: number
 }
 
+/** 桌面端连哪台 Runtime：本机（管道 / socket）或局域网（TCP + 挑战应答）。 */
+export type ConnectionMode = 'local' | 'lan'
+
+export interface ConnectionSettingsView {
+  mode: ConnectionMode
+  host: string
+  port: number
+  /** 令牌只回报是否已保存，原文需显式调用 revealToken()。 */
+  hasToken: boolean
+}
+
+export interface ConnectionUpdate {
+  mode: ConnectionMode
+  host: string
+  port: number
+  /** 省略 = 保留已保存令牌；null = 清除；字符串 = 替换。 */
+  token?: string | null
+}
+
+export interface ConnectionTestResult {
+  ok: boolean
+  /** 实际尝试的连接目标（命名管道或 host:port），便于用户核对。 */
+  endpoint: string
+  error?: string
+  protocolVersion?: string
+}
+
 export interface AppInfo {
   version: string
   platform: 'aix' | 'darwin' | 'freebsd' | 'linux' | 'openbsd' | 'sunos' | 'win32' | 'android'
@@ -239,6 +266,17 @@ export interface DesktopApi {
     ): Promise<DaemonRpcResult>
     onEvent(listener: (message: DaemonMessage) => void): () => void
     onState(listener: (state: DaemonState) => void): () => void
+  }
+  connection: {
+    get(): Promise<ConnectionSettingsView>
+    /** 校验并持久化连接偏好；切换到本机模式时会确保本机 Runtime 已启动。 */
+    set(update: ConnectionUpdate): Promise<{ ok: boolean; error?: string }>
+    /** 用给定参数试连（不改动当前连接与已保存设置）。 */
+    test(update: ConnectionUpdate): Promise<ConnectionTestResult>
+    /** 已保存的局域网令牌原文（「显示/复制令牌」用）。 */
+    revealToken(): Promise<string | null>
+    /** 本机 daemon 的握手令牌：配对另一台桌面时粘贴到它的连接设置里。 */
+    localToken(): Promise<string | null>
   }
 }
 

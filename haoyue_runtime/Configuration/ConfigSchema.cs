@@ -159,6 +159,11 @@ public static class ConfigSchema
         New("networkOps.allowMutating", "bool", true),
         New("networkOps.timeoutSeconds", "int", 60, min: 1, max: 600),
 
+        // 局域网访问：默认关闭；开启后监听 TCP，令牌仍是唯一凭据。
+        New("daemon.lan.enabled", "bool", false),
+        New("daemon.lan.bindAddress", "string", "0.0.0.0"),
+        New("daemon.lan.port", "int", 47_615, min: 1_024, max: 65_535),
+
         // 按服务器名键控的字典：容器整体登记为用户数据，子项由 McpConfig 逐项容错。
         New("mcp.servers", "object", null),
     ];

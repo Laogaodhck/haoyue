@@ -29,6 +29,7 @@ import {
   Trash2,
   Upload,
   Users,
+  Wifi,
   Wrench,
   X,
   Zap
@@ -57,9 +58,10 @@ import SettingsAgentExpertPanel from './SettingsAgentExpertPanel.vue'
 import SettingsIntegrationsPanel from './SettingsIntegrationsPanel.vue'
 import SettingsEvolutionPanel from './SettingsEvolutionPanel.vue'
 import SettingsAdvancedPanel from './SettingsAdvancedPanel.vue'
+import SettingsNetworkPanel from './SettingsNetworkPanel.vue'
 import { useEscapeClose } from '../use-escape-close'
 
-type SettingsSection = 'general' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
+type SettingsSection = 'general' | 'network' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
 
 interface ProviderInfo {
   id: string
@@ -313,6 +315,7 @@ function cacheHitRate(item: UsageInfo): number {
 
 const sections: Array<{ id: SettingsSection; label: string; icon: typeof Settings2 }> = [
   { id: 'general', label: '常规', icon: Settings2 },
+  { id: 'network', label: '局域网连接', icon: Wifi },
   { id: 'models', label: '模型与提供商', icon: Bot },
   { id: 'agent', label: '智能体', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Blocks },
@@ -341,6 +344,7 @@ const visibleSections = computed(() =>
  */
 const SECTION_KEYWORDS: Record<SettingsSection, string> = {
   general: '外观 主题 语言 快捷键 发送 工具策略 权限 运行时 连接',
+  network: '局域网 远程 连接 lan 主机 端口 令牌 配对 共享 runtime',
   models: '模型 提供商 provider api key base url 上下文 定价 路由链 活动模型',
   agent: '智能体 网页搜索 联网 委派 子智能体 自动验证 回合预算 上下文压缩 视觉',
   mcp: 'mcp 连接器 服务器 connector 工具',
@@ -1110,12 +1114,14 @@ onBeforeUnmount(() => {
            这类空态被读成"配置丢了"，开关显示的还是 ref 初值。 -->
       <div v-if="!daemonConnected" class="settings-offline-banner" role="status">
         <Circle :size="8" fill="currentColor" />
-        <span>运行时离线：以下内容是上次读取到的旧值，修改已全部禁用；列表为空只代表读不到，不代表没有配置。</span>
+        <span v-if="section === 'network'">运行时离线：连接设置仍可修改；连上目标 Runtime 后，其余设置才会重新加载。</span>
+        <span v-else>运行时离线：以下内容是上次读取到的旧值，修改已全部禁用；列表为空只代表读不到，不代表没有配置。</span>
         <button class="secondary-button compact-button" type="button" @click="emit('reconnect')">
           <RefreshCw :size="13" /> 重新连接
         </button>
       </div>
-      <div class="settings-content" :class="{ 'is-offline': !daemonConnected }">
+      <!-- 局域网连接页不依赖 daemon（离线时正是要改连接目标），因此不受只读样式约束。 -->
+      <div class="settings-content" :class="{ 'is-offline': !daemonConnected && section !== 'network' }">
         <div v-if="loading" class="settings-loading">
           <LoaderCircle class="spin" :size="20" /> 正在加载
         </div>
@@ -1184,6 +1190,11 @@ onBeforeUnmount(() => {
             <ToolPolicyPanel />
           </section>
 
+        </template>
+
+        <template v-else-if="section === 'network'">
+          <SettingsNetworkPanel :daemon-connected="daemonConnected" :daemon-endpoint="daemonEndpoint"
+            @notice="onPanelNotice" @error="onPanelError" />
         </template>
 
         <template v-else-if="section === 'models'">

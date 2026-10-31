@@ -4,6 +4,10 @@
 
 ## [未发布]
 
+### 新增
+
+- **局域网连接**：桌面端「设置 → 局域网连接」可在「本机 Runtime」与同网段另一台电脑的 Runtime 之间切换。被连接方开启局域网监听（默认关闭，端口 47615，可改绑定地址），连接方填写地址、端口与令牌即可接入，支持测试连接与令牌查看/复制。局域网握手使用一次性 nonce + HMAC-SHA256 证明，令牌不上线、跨连接不可重放；并发上限 16，认证失败延迟断开。监听为明文 TCP（仅令牌不上线），仅建议用于可信局域网。新增 RPC `daemon.lan.get` / `daemon.lan.set`（热生效，无需重启），桌面连接偏好持久化于 `<userData>/connection.json`（POSIX 0600）；切换目标后会清空旧 Runtime 的会话列表并按新目标重新加载。
+
 ### 安全
 
 - **工作区信任门禁**：未受信工作区的 `.haoyue/config.json` 与 `mcp/servers.json` 不再参与加载，克隆来的仓库无法靠「打开一次」取得 MCP stdio / verify 的自动执行权。信任清单存于 `~/.haoyue/trusted-workspaces.json`，经 `workspace.trust` / `workspace.untrust` 显式放行或收回；清单损坏按「无受信工作区」处理（fail closed）。桌面端在未受信工作区顶部提示并可一键放行。
@@ -27,7 +31,7 @@
 - **覆盖率门槛真正生效**：改用 `coverlet.msbuild`（行 ≥70% / 分支 ≥55%），未达标时 `dotnet test` 直接失败；删除不会执行阈值的 `coverage.runsettings`，避免双源。
 - **供应链扫描阻断**：NuGet 漏洞报告经包装脚本转为非零退出；`pnpm audit` 对生产依赖 high 级别阻断。
 - **CI 跨平台**：新增 Linux 作业，覆盖 Unix socket、符号链接解析、Python 连接器与 TS SDK 集成测试。
-- **契约修正**：`config.save.fields`、`connectors.install.values` 建模为任意 JSON 对象，`mcp env` 改为字符串映射；新增 `workspace.trust` / `workspace.untrust` 与工作区信任字段（127 个 RPC 方法）。
+- **契约修正**：`config.save.fields`、`connectors.install.values` 建模为任意 JSON 对象，`mcp env` 改为字符串映射；新增 `workspace.trust` / `workspace.untrust` 与工作区信任字段（129 个 RPC 方法）。
 - **零告警构建**：runtime 开启 `TreatWarningsAsErrors` 与 AOT / 裁剪分析器，JSON 序列化统一走源生成上下文。
 - **巨型类拆分**：`DaemonAdminApi` 拆出 Files / Knowledge / Models，`DaemonServer` 拆出事件转发与用量累计；行数预算护栏继续生效。
 - **测试并行污染修复**：修改进程环境变量的测试统一进入非并行集合，知识库同义词相关测试串行化。
@@ -43,6 +47,7 @@
 
 ### 桌面
 
+- **界面重构为 IDE 工作台风格**：标题栏、侧栏与主区域改为扁平细边与紧凑行高；对话改成 Agent 转录样式——消息顶部标注角色与模型、用户输入左对齐为指令块、思考与工具日志使用等宽字体；新增底部状态栏，常驻显示 Runtime 连接与地址、当前模型、运行阶段与运行中任务数，离线时可点击重连；右栏改为编辑器式页签，设置页采用 IDE 导航与紧凑表单。
 - 未受信工作区显示信任提示与放行入口；项目属性中的工作区配置写入同样以受信为前提。
 - macOS 桌面端不再声明为发布目标（CLI 仍提供 macOS 自包含二进制），避免产出缺少自管 runtime 的残缺包。
 - **新版本提示**：打包版启动时静默检查 GitHub Releases 最新正式版，有新版本才弹原生对话框并提供「前往下载」；「关于」窗口新增「检查更新」按钮，可显示「已是最新 / 发现新版本 / 暂时无法检查」（离线、限流、超时均静默降级，不阻塞启动）。检查只读取版本信息，不下载、不执行远端代码。

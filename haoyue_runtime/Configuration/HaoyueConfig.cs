@@ -24,6 +24,7 @@ public sealed class HaoyueConfig
     public ImageGenConfig ImageGen { get; set; } = new();
     public DocRenderConfig DocRender { get; set; } = new();
     public WebConfig Web { get; set; } = new();
+    public DaemonConfig Daemon { get; set; } = new();
 
 
     public ProviderConfig? FindProvider(string id) =>

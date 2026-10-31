@@ -91,7 +91,7 @@ public sealed record DaemonMethodDoc(
 /// Daemon JSONL 协议的唯一契约源（Contract First）。
 /// 方法目录、错误码、事件名、信封结构均以此处为准：
 /// <list type="bullet">
-/// <item><see cref="DaemonServer.ProtocolInfoJson"/> 的 methods 数组由本目录派生，禁止手工维护第二份清单；</item>
+/// <item><see cref="DaemonProtocol.Info"/> 的 methods 数组由本目录派生，禁止手工维护第二份清单；</item>
 /// <item>新增方法 = 在 <see cref="Methods"/> 登记 + switch 分发 + 测试；</item>
 /// <item>TS 侧通过 contracts/daemon-contract.json 快照生成类型，不手抄结构。</item>
 /// </list>
@@ -306,6 +306,19 @@ public static class DaemonContract
     }
 
     // ---- 逐方法参数 Schema（均按 DaemonAdminApi / DaemonServer 实际 params[...] 读取核实） ----
+
+    private static readonly JsonObject LanStatus = RObject(
+        ("enabled", SBoolean("配置开关")),
+        ("running", SBoolean("是否正在监听")),
+        ("bindAddress", SString("绑定地址")),
+        ("port", SInteger("监听端口")),
+        ("addresses", SArray("本机局域网 IPv4 地址", SString("地址"))),
+        ("error", SString("最近一次监听失败原因")));
+
+    private static readonly JsonObject LanSetParams = SObject(
+        ("enabled", SBoolean("是否开启局域网访问"), false),
+        ("bindAddress", SString("绑定地址（0.0.0.0 / 127.0.0.1 / 本机网卡地址）"), false),
+        ("port", SInteger("监听端口（1024–65535）"), false));
 
     private static readonly JsonObject AdvancedSet = SObject(
         ("failoverEnabled", SBoolean("路由故障转移开关"), false),
@@ -1107,6 +1120,11 @@ public static class DaemonContract
             errors: E()),
         M("contract.export", "core", "导出完整契约文档（JSON Schema）", parameters: EmptyParams, result: RAnyObject,
             errors: E()),
+        M("daemon.lan.get", "core", "查询局域网访问状态（监听中、绑定地址、端口与本机可达地址）",
+            parameters: EmptyParams, result: LanStatus, errors: E()),
+        M("daemon.lan.set", "core", "开启/关闭局域网访问并立即生效（需要已配置握手令牌）",
+            parameters: LanSetParams, result: LanStatus,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.Conflict)),
         M("events.recent", "core", "查询事件溯源日志（重连补播：稳定事件名 + camelCase 载荷 + 会话归属）", parameters: SObject(
             ("limit", SInteger("返回条数，缺省 100"), false),
             ("after", SInteger("只返回 id 大于该值的行，即客户端见过的最后一条台账 id"), false)),

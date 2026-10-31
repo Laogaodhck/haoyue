@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection, type Socket } from 'node:net'
+import { createHmac } from 'node:crypto'
 import type { DaemonMessage, DaemonRequestOptions, DaemonState } from '../shared/ipc.js'
 import { DaemonError, errorCodeOf } from '../shared/ipc.js'
 import { DAEMON_PROTOCOL_VERSION } from '../shared/daemon-contract.gen.js'
@@ -20,6 +21,51 @@ export const TERMINAL_EVENTS = new Set(['pong', 'result', 'done', 'cancelled', '
 
 /** How long the daemon gets to answer the mandatory handshake. */
 const HANDSHAKE_TIMEOUT_MS = 5000
+
+/** 与 LanAccessServer.MacContext 对齐：证明只在「局域网握手」上下文里有效。 */
+const LAN_PROOF_CONTEXT = 'haoyue-lan-v1:'
+
+/**
+ * 局域网挑战应答证明：HMAC-SHA256(token, context + nonce)。
+ * 令牌本身不上线，抓包只能拿到 nonce 与一次性的证明。
+ */
+export function computeLanProof(token: string, nonce: string): string {
+  return createHmac('sha256', token).update(`${LAN_PROOF_CONTEXT}${nonce}`).digest('hex')
+}
+
+export type DaemonAuth =
+  /** 本机管道 / socket：直接出示 ~/.haoyue/daemon.token。 */
+  | { kind: 'local' }
+  /** 局域网 TCP：服务端下发 nonce，用证明完成握手。 */
+  | { kind: 'proof'; token: string }
+
+/** 连接目标：本机命名管道 / unix socket，或局域网 TCP 主机。 */
+export type DaemonTarget = { path: string } | { host: string; port: number }
+
+export interface DaemonClientConfig {
+  target: DaemonTarget
+  auth: DaemonAuth
+}
+
+/** 本机 daemon 端点（命名管道或 unix socket），与 DaemonServer 的监听约定一致。 */
+export function defaultLocalTarget(): DaemonTarget {
+  return process.platform === 'win32'
+    ? { path: String.raw`\\.\pipe\haoyue-${pipeUser}` }
+    : { path: join(homedir(), '.haoyue', 'daemon.sock') }
+}
+
+export function targetLabel(target: DaemonTarget): string {
+  return 'path' in target ? target.path : `${target.host}:${target.port}`
+}
+
+function handshakeLine(params: Record<string, unknown>): string {
+  return `${JSON.stringify({ id: 0, method: 'handshake', params })}\n`
+}
+
+/** 判断两套认证配置是否等价（避免无意义的断线重连）。 */
+function authKey(auth: DaemonAuth): string {
+  return auth.kind === 'local' ? 'local' : `proof:${auth.token}`
+}
 
 /**
  * The daemon requires a handshake token as the first message of every
@@ -54,15 +100,44 @@ export class DaemonClient extends EventEmitter {
   // longer adopt its socket after the handshake — previously disconnect() during
   // the connect window was silently overridden by a "connected" state.
   private generation = 0
+  private target: DaemonTarget
+  private auth: DaemonAuth
 
-  constructor(readonly endpoint = process.platform === 'win32'
-    ? String.raw`\\.\pipe\haoyue-${pipeUser}`
-    : join(homedir(), '.haoyue', 'daemon.sock')) {
+  /** 兼容旧用法：传字符串端点 = 本机端点 + 令牌握手；不传 = 默认本机端点。 */
+  constructor(config: DaemonClientConfig | string = { target: defaultLocalTarget(), auth: { kind: 'local' } }) {
     super()
+    this.target = typeof config === 'string' ? { path: config } : config.target
+    this.auth = typeof config === 'string' ? { kind: 'local' } : config.auth
+  }
+
+  /** 展示用端点标签（命名管道路径或 host:port）。 */
+  get endpoint(): string {
+    return targetLabel(this.target)
+  }
+
+  get isLocalTarget(): boolean {
+    return 'path' in this.target
   }
 
   get state(): DaemonState {
     return { connected: this.socket?.readyState === 'open', endpoint: this.endpoint }
+  }
+
+  /**
+   * 切换连接目标（本机 ⇄ 局域网）。有变化时立即断开旧连接并丢弃在途请求，
+   * 下一次 connect() 按新目标与新认证方式重连。
+   */
+  configure(target: DaemonTarget, auth: DaemonAuth): void {
+    if (targetLabel(target) === this.endpoint && authKey(auth) === authKey(this.auth)) return
+    this.generation++
+    this.socket?.destroy()
+    this.socket = null
+    this.bufferChunks = []
+    this.target = target
+    this.auth = auth
+    this.daemonProtocolVersion = undefined
+    this.rejectPending(new Error('Daemon connection reconfigured'))
+    this.emit('state', { connected: false, endpoint: this.endpoint } satisfies DaemonState)
   }
 
   async connect(): Promise<DaemonState> {
@@ -71,7 +146,10 @@ export class DaemonClient extends EventEmitter {
 
     this.connecting = new Promise<DaemonState>((resolve) => {
       const epoch = this.generation
-      const socket = createConnection(this.endpoint)
+      const socket = 'path' in this.target
+        ? createConnection(this.target.path)
+        : createConnection({ host: this.target.host, port: this.target.port })
+      const endpoint = this.endpoint
       let settled = false
 
       let timer: NodeJS.Timeout | null = setTimeout(() => {
@@ -79,7 +157,7 @@ export class DaemonClient extends EventEmitter {
         try {
           socket.destroy()
         } catch { /* the socket may already be closed */ }
-        finish({ connected: false, endpoint: this.endpoint, error: 'Connection timed out' })
+        finish({ connected: false, endpoint, error: 'Connection timed out' })
       }, 2500)
 
       const finish = (state: DaemonState): void => {
@@ -98,30 +176,30 @@ export class DaemonClient extends EventEmitter {
       socket.once('connect', async () => {
         if (epoch !== this.generation) {
           socket.destroy()
-          finish({ connected: false, endpoint: this.endpoint, error: 'Connection cancelled' })
+          finish({ connected: false, endpoint, error: 'Connection cancelled' })
           return
         }
         try {
           await this.authenticate(socket)
           if (epoch !== this.generation) {
             socket.destroy()
-            finish({ connected: false, endpoint: this.endpoint, error: 'Connection cancelled' })
+            finish({ connected: false, endpoint, error: 'Connection cancelled' })
             return
           }
           this.socket = socket
           this.bindSocket(socket)
-          finish({ connected: true, endpoint: this.endpoint, protocolVersion: this.daemonProtocolVersion })
+          finish({ connected: true, endpoint, protocolVersion: this.daemonProtocolVersion })
         } catch (error) {
           socket.destroy()
           finish({
             connected: false,
-            endpoint: this.endpoint,
+            endpoint,
             error: (error as Error).message
           })
         }
       })
       socket.once('error', (error) => {
-        finish({ connected: false, endpoint: this.endpoint, error: error.message })
+        finish({ connected: false, endpoint, error: error.message })
       })
     })
 
@@ -135,66 +213,107 @@ export class DaemonClient extends EventEmitter {
    * normal pipeline sees them in order.
    */
   private authenticate(socket: Socket): Promise<void> {
+    const auth = this.auth
     return new Promise((resolve, reject) => {
-      const token = readDaemonToken()
+      const token = auth.kind === 'local' ? readDaemonToken() : auth.token
+      if (auth.kind === 'proof' && !token) {
+        reject(new DaemonError('unauthorized', '未配置局域网连接令牌'))
+        return
+      }
+
       let buffer = ''
+      // 局域网先等服务端 challenge；本机管道直接出示令牌。
+      let awaitingChallenge = auth.kind === 'proof'
       let timer: NodeJS.Timeout | null = setTimeout(() => {
         timer = null
         socket.removeListener('data', onData)
         reject(new Error('Daemon handshake timed out'))
       }, HANDSHAKE_TIMEOUT_MS)
 
-      const onData = (chunk: string): void => {
-        buffer += chunk
-        const newline = buffer.indexOf('\n')
-        if (newline < 0) return
+      const settle = (): void => {
         if (timer) {
           clearTimeout(timer)
           timer = null
         }
         socket.removeListener('data', onData)
-        const rest = buffer.slice(newline + 1)
-        if (rest) socket.unshift(rest)
-        try {
-          const response = JSON.parse(buffer.slice(0, newline).trim()) as {
-            id: number
-            event: string
-            data: string
+      }
+
+      const onData = (chunk: string): void => {
+        buffer += chunk
+        let newline = buffer.indexOf('\n')
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline).trim()
+          buffer = buffer.slice(newline + 1)
+          newline = buffer.indexOf('\n')
+          if (!line) continue
+
+          let response: { id: number; event: string; data: string }
+          try {
+            response = JSON.parse(line) as typeof response
+          } catch {
+            settle()
+            reject(new Error('Invalid daemon handshake response'))
+            return
           }
-          if (response.id === 0 && response.event === 'result') {
-            // 版本契约：daemon 回报其协议版本，主版本不一致视为 Breaking Change，
-            // 客户端拒绝继续（daemon 侧也会对客户端声明做同样校验，此处是双保险）。
-            let info: { version?: string; versionWarning?: string } = {}
-            try {
-              info = JSON.parse(response.data) as typeof info
-            } catch { /* 版本信息缺失：旧 daemon，跳过校验 */ }
-            if (info.version) {
-              this.daemonProtocolVersion = info.version
-              const daemonMajor = info.version.split('.')[0]
-              const clientMajor = DAEMON_PROTOCOL_VERSION.split('.')[0]
-              if (daemonMajor !== clientMajor) {
-                reject(
-                  new DaemonError(
-                    'versionMismatch',
-                    `协议版本不兼容（Breaking Change）：daemon=${info.version}，desktop=${DAEMON_PROTOCOL_VERSION}。请升级 haoyue desktop 或 daemon。`,
-                  ),
-                )
-                return
-              }
-              if (info.versionWarning) console.warn(`[daemon] ${info.versionWarning}`)
+
+          if (awaitingChallenge) {
+            if (response.event !== 'challenge' || typeof response.data !== 'string') {
+              settle()
+              reject(new Error(`Invalid daemon challenge: ${response.data || 'missing nonce'}`))
+              return
             }
-            resolve()
-          } else {
-            reject(new DaemonError('unknown', `Daemon authentication failed: ${response.data || 'invalid token'}`))
+            awaitingChallenge = false
+            socket.write(handshakeLine({
+              proof: computeLanProof(token!, response.data),
+              protocolVersion: DAEMON_PROTOCOL_VERSION
+            }))
+            continue
           }
-        } catch {
-          reject(new Error('Invalid daemon handshake response'))
+
+          settle()
+          if (buffer) socket.unshift(buffer)
+          this.settleHandshake(response, resolve, reject)
+          return
         }
       }
 
       socket.on('data', onData)
-      socket.write(`${JSON.stringify({ id: 0, method: 'handshake', params: { token, protocolVersion: DAEMON_PROTOCOL_VERSION } })}\n`)
+      if (auth.kind === 'local') socket.write(handshakeLine({ token, protocolVersion: DAEMON_PROTOCOL_VERSION }))
     })
+  }
+
+  /** 解释握手回包：版本契约校验 + 认证结果。 */
+  private settleHandshake(
+    response: { id: number; event: string; data: string },
+    resolve: () => void,
+    reject: (error: Error) => void
+  ): void {
+    if (response.id !== 0 || response.event !== 'result') {
+      reject(new DaemonError('unknown', `Daemon authentication failed: ${response.data || 'invalid token'}`))
+      return
+    }
+    // 版本契约：daemon 回报其协议版本，主版本不一致视为 Breaking Change，
+    // 客户端拒绝继续（daemon 侧也会对客户端声明做同样校验，此处是双保险）。
+    let info: { version?: string; versionWarning?: string } = {}
+    try {
+      info = JSON.parse(response.data) as typeof info
+    } catch { /* 版本信息缺失：旧 daemon，跳过校验 */ }
+    if (info.version) {
+      this.daemonProtocolVersion = info.version
+      const daemonMajor = info.version.split('.')[0]
+      const clientMajor = DAEMON_PROTOCOL_VERSION.split('.')[0]
+      if (daemonMajor !== clientMajor) {
+        reject(
+          new DaemonError(
+            'versionMismatch',
+            `协议版本不兼容（Breaking Change）：daemon=${info.version}，desktop=${DAEMON_PROTOCOL_VERSION}。请升级 haoyue desktop 或 daemon。`,
+          ),
+        )
+        return
+      }
+      if (info.versionWarning) console.warn(`[daemon] ${info.versionWarning}`)
+    }
+    resolve()
   }
 
   disconnect(): void {

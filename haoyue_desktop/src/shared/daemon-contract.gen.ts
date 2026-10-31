@@ -93,6 +93,8 @@ export const DAEMON_METHODS = [
   'ping',
   'protocol.info',
   'contract.export',
+  'daemon.lan.get',
+  'daemon.lan.set',
   'events.recent',
   'shutdown',
   'chat',

@@ -363,6 +363,18 @@ export class DaemonClient {
     contractExport: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("contract.export", params),
     /**
+     * 查询局域网访问状态（监听中、绑定地址、端口与本机可达地址）
+     * 终态事件：result, error
+     */
+    daemonLanGet: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("daemon.lan.get", params),
+    /**
+     * 开启/关闭局域网访问并立即生效（需要已配置握手令牌）
+     * 终态事件：result, error
+     */
+    daemonLanSet: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("daemon.lan.set", params),
+    /**
      * 查询事件溯源日志（重连补播：稳定事件名 + camelCase 载荷 + 会话归属）
      * 终态事件：result, error
      */

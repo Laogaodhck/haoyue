@@ -11,6 +11,9 @@ import iconIco from '../../resources/favicon.ico?asset'
 // 缩放配置下会被系统解析失败，表现为任务栏图标空白或回退默认图标。
 const appIcon = process.platform === 'win32' ? iconIco : iconPng
 import type {
+  ConnectionSettingsView,
+  ConnectionTestResult,
+  ConnectionUpdate,
   DaemonMessage,
   DaemonRequestOptions,
   DaemonRpcResult,
@@ -18,7 +21,22 @@ import type {
   UpdateCheckResult
 } from '../shared/ipc.js'
 import { toDaemonRpcError } from '../shared/ipc.js'
-import { DaemonClient } from './daemon-client.js'
+import {
+  DaemonClient,
+  defaultLocalTarget,
+  readDaemonToken,
+  targetLabel,
+  type DaemonAuth,
+  type DaemonTarget
+} from './daemon-client.js'
+import {
+  DEFAULT_CONNECTION_SETTINGS,
+  connectionSettingsProblem,
+  normalizeConnectionSettings,
+  readConnectionSettings,
+  writeConnectionSettings,
+  type ConnectionSettings
+} from './connection-settings.js'
 import { openDaemonLogSink, readDaemonLogTail } from './daemon-log.js'
 import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
 import { checkForUpdate } from './update-check.js'
@@ -32,6 +50,37 @@ import {
 } from './computer-overlay.js'
 
 const daemon = new DaemonClient()
+// 连接偏好（本机 / 局域网）持久化在 userData/connection.json，与 daemon 自身配置无关。
+let connectionSettings: ConnectionSettings = { ...DEFAULT_CONNECTION_SETTINGS }
+
+const connectionFile = (): string => join(app.getPath('userData'), 'connection.json')
+
+function connectionTarget(settings: ConnectionSettings): { target: DaemonTarget; auth: DaemonAuth } {
+  return settings.mode === 'lan'
+    ? {
+        target: { host: settings.host, port: settings.port },
+        auth: { kind: 'proof', token: settings.token ?? '' }
+      }
+    : { target: defaultLocalTarget(), auth: { kind: 'local' } }
+}
+
+/** 应用连接偏好到唯一的 DaemonClient（有变化时由 configure 断开旧连接）。 */
+function applyConnectionSettings(settings: ConnectionSettings): void {
+  connectionSettings = settings
+  const { target, auth } = connectionTarget(settings)
+  daemon.configure(target, auth)
+}
+
+function mergedConnectionUpdate(update: ConnectionUpdate): ConnectionSettings {
+  return normalizeConnectionSettings({
+    ...connectionSettings,
+    mode: update.mode,
+    host: update.host,
+    port: update.port,
+    token: update.token === undefined ? connectionSettings.token : update.token
+  })
+}
+
 // H26: one-time "minimize to tray or quit" explanation, remembered via a flag file.
 const trayFlagPath = (): string => join(app.getPath('userData'), 'tray-close-explained')
 let mainWindow: BrowserWindow | null = null
@@ -171,6 +220,8 @@ async function ensureDaemonRunning(): Promise<void> {
       console.error(`Haoyue Runtime exited with code ${code}. Stderr: ${childStderr}`)
     }
     if (runtimeShutdownStarted || isQuitting) return
+    // 桌面已切到局域网模式：本机 Runtime 不再是被使用的一方，崩溃后不自动拉起。
+    if (connectionSettings.mode !== 'local') return
     // Crash supervision: restart with capped exponential backoff. A run that lasted
     // over 30s counts as healthy and resets the attempt budget.
     if (Date.now() - daemonStartedAt > 30_000) daemonRestartAttempts = 0
@@ -568,6 +619,59 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('daemon:connect', () => daemon.connect())
+
+  ipcMain.handle('connection:get', (): ConnectionSettingsView => ({
+    mode: connectionSettings.mode,
+    host: connectionSettings.host,
+    port: connectionSettings.port,
+    hasToken: Boolean(connectionSettings.token)
+  }))
+
+  ipcMain.handle('connection:set', async (_event, update: ConnectionUpdate): Promise<{ ok: boolean; error?: string }> => {
+    const candidate = mergedConnectionUpdate(update)
+    const problem = connectionSettingsProblem(candidate)
+    if (problem) return { ok: false, error: problem }
+    if (candidate.mode === 'lan' && !candidate.token) return { ok: false, error: '请填写局域网 Runtime 的握手令牌' }
+
+    writeConnectionSettings(connectionFile(), candidate)
+    applyConnectionSettings(candidate)
+    if (candidate.mode === 'lan') {
+      void daemon.connect().catch(() => undefined)
+      return { ok: true }
+    }
+    try {
+      await ensureDaemonRunning()
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // 试连使用独立的客户端实例：不能打断当前连接，也不改变已保存的设置。
+  ipcMain.handle('connection:test', async (_event, update: ConnectionUpdate): Promise<ConnectionTestResult> => {
+    const candidate = mergedConnectionUpdate(update)
+    const problem = connectionSettingsProblem(candidate)
+    if (problem) return { ok: false, endpoint: '', error: problem }
+    if (candidate.mode === 'lan' && !candidate.token) {
+      return { ok: false, endpoint: '', error: '请填写局域网 Runtime 的握手令牌' }
+    }
+    const { target, auth } = connectionTarget(candidate)
+    const endpoint = targetLabel(target)
+    const probe = new DaemonClient({ target, auth })
+    try {
+      const state = await probe.connect()
+      return state.connected
+        ? { ok: true, endpoint, protocolVersion: state.protocolVersion }
+        : { ok: false, endpoint, error: state.error ?? '无法连接' }
+    } catch (error) {
+      return { ok: false, endpoint, error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      probe.disconnect()
+    }
+  })
+
+  ipcMain.handle('connection:reveal-token', () => connectionSettings.token)
+  ipcMain.handle('connection:local-token', () => readDaemonToken())
   // 结构化回包：ipcMain.handle 的 reject 会把 Error 压成字符串，code/method 到不了渲染进程。
   ipcMain.handle(
     'daemon:request',
@@ -628,14 +732,21 @@ if (!hasSingleInstanceLock) {
     electronApp.setAppUserModelId(isInstalledCopy ? 'com.hoilai.haoyue' : process.execPath)
     app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
     createTray()
-    await ensureDaemonRunning().catch((error) => {
-      console.error('Unable to start Haoyue Runtime:', error)
-      // 启动失败必须让用户看到，而不是永远停留在笼统的「连接失败」。
-      dialog.showErrorBox(
-        'Haoyue Runtime 启动失败',
-        error instanceof Error ? error.message : String(error)
-      )
-    })
+    // 连接偏好必须在任何 daemon 访问之前应用：它决定 DaemonClient 连本机还是局域网。
+    applyConnectionSettings(readConnectionSettings(connectionFile()))
+    if (connectionSettings.mode === 'lan') {
+      // 远程模式：不拉起本机 Runtime，也不弹启动失败框；连不上由设置页与重连提示引导。
+      if (connectionSettings.host) void daemon.connect().catch(() => undefined)
+    } else {
+      await ensureDaemonRunning().catch((error) => {
+        console.error('Unable to start Haoyue Runtime:', error)
+        // 启动失败必须让用户看到，而不是永远停留在笼统的「连接失败」。
+        dialog.showErrorBox(
+          'Haoyue Runtime 启动失败',
+          error instanceof Error ? error.message : String(error)
+        )
+      })
+    }
     createWindow()
     nativeTheme.on('updated', syncNativeWindowTheme)
     // 不阻塞启动：网络慢/离线时检查自然降级为静默。

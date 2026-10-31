@@ -62,6 +62,20 @@ public sealed class TurnStampTests : IDisposable
     }
 
     [Fact]
+    public void SlowSubscriber_KeepsNewestEvents_InsteadOfGrowingUnbounded()
+    {
+        var bus = new EventBus();
+        using var subscription = bus.Subscribe(capacity: 4);
+        for (var i = 0; i < 10; i++) bus.Publish(new StatusEvent($"s{i}"));
+
+        var seen = new List<string>();
+        while (subscription.Reader.TryRead(out var evt))
+            seen.Add(((StatusEvent)evt).Status);
+
+        Assert.Equal(["s6", "s7", "s8", "s9"], seen);
+    }
+
+    [Fact]
     public void JournaledBus_RowsCarryTurnId_AndProjectSurfacesIt()
     {
         var bus = new JournaledEventBus(new EventBus(), _database);

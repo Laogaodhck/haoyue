@@ -153,5 +153,6 @@ public sealed class JournaledEventBus(IEventBus inner, HaoyueDatabase database) 
         inner.Publish(stamped);
     }
 
-    public IEventSubscription Subscribe() => inner.Subscribe();
+    public IEventSubscription Subscribe(int capacity = EventBus.DefaultCapacity) =>
+        inner.Subscribe(capacity);
 }

@@ -100,6 +100,25 @@ public sealed class ConfigTests : IDisposable
     }
 
     [Fact]
+    public void Save_MergesDifferentSubFieldsOfSameSection()
+    {
+        var storeA = NewStore();
+        var storeB = NewStore();
+        storeA.Config.Agent.Mode = "auto";
+        storeA.Save();
+
+        storeB.Reload(); // baseline = disk written by A
+        storeB.Config.Agent.MaxSteps = 77; // same section, different leaf
+        storeB.Save();
+
+        storeA.Save(); // A changed nothing new → B's MaxSteps must survive the section
+
+        var verifier = NewStore();
+        Assert.Equal("auto", verifier.Config.Agent.Mode);
+        Assert.Equal(77, verifier.Config.Agent.MaxSteps);
+    }
+
+    [Fact]
     public void Save_LocallyChangedFields_WinOverConcurrentWriter()
     {
         var storeA = NewStore();

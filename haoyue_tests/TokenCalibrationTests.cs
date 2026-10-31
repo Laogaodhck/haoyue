@@ -118,6 +118,37 @@ public sealed class TokenCalibrationTests : IDisposable
     }
 
     [Fact]
+    public void FitToWindow_ComparesRawEstimatesAgainstRawBudget()
+    {
+        var model = new ModelConfig { ContextWindow = 12_000, MaxOutput = 2_000 };
+        // 原始预算 = (12000-2000)/2 - 1 - 1500 = 3499；每条约 108 原始 token。
+        var messages = new List<ChatMessage>();
+        for (var i = 0; i < 20; i++)
+            messages.Add(i % 2 == 0 ? ChatMessage.User(new string('x', 400)) : ChatMessage.Assistant(new string('x', 400)));
+
+        var fitted = ContextPlanner.FitToWindow(messages, model, "sys", calibration: 2.0);
+
+        // 原始合计 2160 < 3499，必须原样保留；若总量误乘 calibration（4320）会误裁到 6 条。
+        Assert.Equal(messages.Count, fitted.Count);
+    }
+
+    [Fact]
+    public void SplitForCompaction_SizesTailInRawUnitsToo()
+    {
+        var model = new ModelConfig { ContextWindow = 12_000, MaxOutput = 2_000 };
+        var messages = new List<ChatMessage>();
+        for (var i = 0; i < 20; i++)
+            messages.Add(i % 2 == 0 ? ChatMessage.User(new string('x', 400)) : ChatMessage.Assistant(new string('x', 400)));
+
+        var (old, recent) = ContextPlanner.SplitForCompaction(
+            messages, model, "sys", calibration: 2.0, tailRatio: 0.5);
+
+        // 尾部预算 1749 原始 token → 16 条（16×108 = 1728）；按校准值只能放 8 条。
+        Assert.Equal(16, recent.Count);
+        Assert.Equal(4, old.Count);
+    }
+
+    [Fact]
     public async Task ClosedLoop_ActualUsageFeedsBackIntoStats()
     {
         // 端到端：脚本化客户端回传真实 usage → ProviderManager 记录 → ModelTokenStats

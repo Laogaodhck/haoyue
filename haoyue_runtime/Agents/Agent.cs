@@ -214,10 +214,11 @@ public sealed partial class Agent(
         // the final summary for the model's remaining output budget.
         var wrapUpRequested = false;
 
-        // H-D 回合级失败工具隔离：同签名失败达到换策略阈值后，该工具在本回合剩余时间内
-        // 被隔离（ExecuteToolAsync 直接拒绝执行）。策略提示是软的、模型可无视；隔离是
-        // 硬动作，把"摆烂重试 20 次同一命令"的最坏消耗从 MaxSteps 全烧压到阈值即刹车。
-        var quarantinedTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // H-D 回合级失败隔离：同一「工具 + 参数签名」连续失败达到换策略阈值后，该签名在
+        // 本回合剩余时间内被隔离（ExecuteToolAsync 直接拒绝执行）。策略提示是软的、模型
+        // 可无视；隔离是硬动作，把"摆烂重试 20 次同一命令"的最坏消耗从 MaxSteps 全烧压到
+        // 阈值即刹车。粒度是签名而非工具名：bash 的一条命令失败不该连坐本回合其它合法命令。
+        var quarantinedCalls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Planning hint: nudge complex-looking inputs toward a declared plan before the
         // first model step. Conservative heuristic (length + sequencing markers), only
@@ -286,11 +287,12 @@ public sealed partial class Agent(
                     $">>> [strategy pivot] 工具 {call.Name} 已用相同参数连续失败 {consecutiveFailures} 次，当前方法大概率不可行。请彻底改变思路：换用其他工具或方式完成这一步、先阅读相关文件与文档弄清上下文、或重新拆解问题，而不是继续微调同样的参数。"));
                 events.Publish(new WarningEvent(
                     $"工具 {call.Name} 连续失败 {consecutiveFailures} 次，已注入换策略提示。"));
-                // H-D 硬动作：提示之外把该工具加入回合级隔离名单——后续调用在执行前
-                // 直接被拒，模型无法用"再试一次同样的命令"烧完整个步数预算。
-                if (quarantinedTools.Add(call.Name))
+                // H-D 硬动作：提示之外把该调用签名加入回合级隔离名单——后续同参调用
+                // 在执行前直接被拒，模型无法用"再试一次同样的命令"烧完整个步数预算。
+                if (quarantinedCalls.Add(signature))
                     events.Publish(new WarningEvent(
-                        $"工具 {call.Name} 已加入本回合隔离名单：同签名连续失败 {consecutiveFailures} 次后停止执行该工具，请换用其他工具或思路。"));
+                        $"工具 {call.Name} 的这次调用（工具 + 相同参数）已加入本回合隔离名单："
+                        + $"同签名连续失败 {consecutiveFailures} 次后停止执行，换参数或换工具即可继续。"));
             }
         }
 
@@ -568,14 +570,14 @@ public sealed partial class Agent(
                             {
                                 foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
                                 var batchResults = await ExecuteReadOnlyBatchAsync(readOnlyBatch,
-                                    c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedTools)).ConfigureAwait(false);
+                                    c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedCalls)).ConfigureAwait(false);
                                 for (var i = 0; i < batchResults.Length; i++)
                                     HandleToolResult(readOnlyBatch[i], batchResults[i]);
                                 readOnlyBatch.Clear();
                             }
 
                             PublishWorkflow(step, "tool", call.Name);
-                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, turnScope, turnPlan, ct, quarantinedTools).ConfigureAwait(false));
+                            HandleToolResult(call, await ExecuteToolAsync(call, workspace, model, turnScope, turnPlan, ct, quarantinedCalls).ConfigureAwait(false));
                         }
                     }
 
@@ -585,7 +587,7 @@ public sealed partial class Agent(
                     {
                         foreach (var readOnly in readOnlyBatch) PublishWorkflow(step, "tool", readOnly.Name);
                         var batchResults = await ExecuteReadOnlyBatchAsync(readOnlyBatch,
-                            c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedTools)).ConfigureAwait(false);
+                            c => ExecuteToolAsync(c, workspace, model, turnScope, turnPlan, ct, quarantinedCalls)).ConfigureAwait(false);
                         for (var i = 0; i < batchResults.Length; i++)
                             HandleToolResult(readOnlyBatch[i], batchResults[i]);
                     }

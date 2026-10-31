@@ -49,7 +49,7 @@ public sealed partial class Agent
     private async Task<ToolExecution> ExecuteToolAsync(
         ToolCallRequest call, WorkspaceInfo workspace, ModelInfo model,
         TurnExecutionScope turnScope, TurnPlan turnPlan, CancellationToken ct,
-        HashSet<string>? quarantinedTools = null)
+        HashSet<string>? quarantinedCalls = null)
     {
         var tool = toolRegistry.Resolve(call.Name);
         var argsSummary = SummarizeArguments(call.ArgumentsJson);
@@ -66,13 +66,15 @@ public sealed partial class Agent
             return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
         }
 
-        // H-D 回合级隔离：同签名失败达到换策略阈值后，该工具在本回合剩余时间内直接
-        // 拒绝执行——比任何提示都硬，模型无法无视。
-        if (quarantinedTools is not null && quarantinedTools.Contains(tool.Name))
+        // H-D 回合级隔离：同一「工具 + 参数签名」失败达到换策略阈值后，该签名在本回合
+        // 剩余时间内直接拒绝执行——比任何提示都硬，模型无法无视。只封这次调用，不封
+        // 整个工具：bash 的一条失败命令不代表本回合其它命令不可执行。
+        var callSignature = $"{tool.Name}|{ToolArguments.Signature(call.ArgumentsJson)}";
+        if (quarantinedCalls is not null && quarantinedCalls.Contains(callSignature))
         {
-            var message = $"Tool '{tool.Name}' is quarantined for the rest of this turn: it failed "
-                + $"{StrategyPivotFailureThreshold} times in a row with identical arguments. Do not call it again this turn — "
-                + "switch to a different tool or approach, or finish with the results you already have.";
+            var message = $"This exact call to '{tool.Name}' is quarantined for the rest of this turn: it failed "
+                + $"{StrategyPivotFailureThreshold} times in a row with identical arguments. Do not repeat this call — "
+                + "change the arguments, switch to a different tool or approach, or finish with the results you already have.";
             events.Publish(new ToolCallCompletedEvent(call.Id, call.Name, false, message, TimeSpan.Zero));
             return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
         }

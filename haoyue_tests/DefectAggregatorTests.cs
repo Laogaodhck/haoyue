@@ -191,6 +191,51 @@ public sealed class DefectAggregatorTests : IDisposable
     public void RetrievalMissEvent_IsJournaled() =>
         Assert.True(EventJournal.IsPersistent(new RetrievalMissEvent("knowledge_search", "q")));
 
+    [Fact]
+    public void ConcurrentTurns_AreAttributedByTurnId_NotByBracket()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-5);
+        // 两个回合都先开、后交错：括号法会把全部失败都算到后开的 s2 头上。
+        Append(new TurnStartedEvent("s1", "任务一") { TurnId = "t1" }, start);
+        Append(new TurnStartedEvent("s2", "任务二") { TurnId = "t2" }, start.AddSeconds(1));
+        for (var i = 0; i < 3; i++)
+        {
+            Append(new ToolCallCompletedEvent($"a{i}", "bash", false, "error: alpha", TimeSpan.Zero)
+                { TurnId = "t1" }, start.AddMinutes(i));
+            Append(new ToolCallCompletedEvent($"b{i}", "bash", false, "error: beta", TimeSpan.Zero)
+                { TurnId = "t2" }, start.AddMinutes(i).AddSeconds(1));
+        }
+
+        var reports = new DefectAggregator(_database).Aggregate();
+
+        Assert.Equal(2, reports.Count);
+        Assert.Equal("s1", Assert.Single(reports, r => r.ErrorSummary == "error: alpha").SessionId);
+        Assert.Equal("s2", Assert.Single(reports, r => r.ErrorSummary == "error: beta").SessionId);
+
+        // 排除反思回合时同样按 TurnId 精确命中，不会连带误伤同一时段的其它回合。
+        var filtered = new DefectAggregator(_database).Aggregate(excludeSessions: ["s2"]);
+        Assert.Equal("error: alpha", Assert.Single(filtered).ErrorSummary);
+    }
+
+    [Fact]
+    public void VerificationStruggles_AreNotMergedAcrossInterleavedTurns()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-5);
+        for (var i = 0; i < 3; i++)
+        {
+            Append(new VerificationCompletedEvent(false, "build failed", i + 1) { TurnId = "t1" },
+                start.AddMinutes(i * 2));
+            Append(new VerificationCompletedEvent(false, "build failed", i + 1) { TurnId = "t2" },
+                start.AddMinutes(i * 2 + 1));
+        }
+
+        var reports = new DefectAggregator(_database).Aggregate();
+
+        // 每回合各 3 次失败 → 两条独立挣扎；混成一条（6 次）会夸大单个回合的问题。
+        Assert.Equal(2, reports.Count);
+        Assert.All(reports, r => Assert.Equal(3, r.Occurrences));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

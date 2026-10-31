@@ -179,14 +179,16 @@ public sealed class ConfigStore : IConfigStore
     }
 
     /// <summary>
-    /// Merges the in-memory value with the on-disk file before saving (field-level
-    /// conflict resolution against a second writer, e.g. CLI while the daemon runs).
-    /// Top-level properties this process did NOT change relative to the baseline are
-    /// taken from disk — preserving the other writer's concurrent update — while
-    /// changed properties keep the in-memory value. The merged result becomes the new
-    /// in-memory state so both sides converge instead of last-writer-wins per file.
-    /// Falls back to the in-memory value when there is no baseline or the disk file
-    /// is unreadable (first run, corruption, IO error) — identical to legacy behavior.
+    /// Merges the in-memory value with the on-disk file before saving. Conflicts are
+    /// resolved per leaf, not per top-level section: two writers editing different
+    /// sub-fields of one section (e.g. <c>agent.mode</c> vs <c>agent.maxSteps</c>) both
+    /// survive instead of the later save replacing the whole section. Leaves this process
+    /// did NOT change relative to the baseline are taken from disk — preserving the other
+    /// writer's concurrent update — while changed leaves keep the in-memory value. The
+    /// merged result becomes the new in-memory state so both sides converge instead of
+    /// last-writer-wins per file. Falls back to the in-memory value when there is no
+    /// baseline or the disk file is unreadable (first run, corruption, IO error) —
+    /// identical to legacy behavior.
     /// </summary>
     private static T MergeWithDisk<T>(string file, string? baselineJson, T current,
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo) where T : class
@@ -202,21 +204,69 @@ public sealed class ConfigStore : IConfigStore
             var currentObj = JsonNode.Parse(JsonSerializer.Serialize(current, typeInfo)) as JsonObject;
             if (baseline is null || disk is null || currentObj is null) return current;
 
-            foreach (var (name, value) in currentObj)
-            {
-                var baseVal = baseline.TryGetPropertyValue(name, out var bv) ? bv : null;
-                var locallyChanged = !JsonNode.DeepEquals(value, baseVal);
-                if (locallyChanged)
-                    disk[name] = value is null ? null : JsonNode.Parse(value.ToJsonString());
-                // Unchanged locally → leave the disk value so the other writer's
-                // concurrent update to this property survives.
-            }
-
+            MergeChangedLeaves(disk, currentObj, baseline);
             return disk.Deserialize(typeInfo) ?? current;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             return current;
+        }
+    }
+
+    /// <summary>Copies only locally changed leaves from <paramref name="current"/> onto
+    /// <paramref name="disk"/>; unchanged leaves keep the disk (other writer's) value.
+    /// Objects are descended so concurrent edits inside one section merge instead of the
+    /// whole section being replaced, and leaves deleted locally are removed from disk —
+    /// the serializer omits nulls, so "clear this field" appears as a vanished key and
+    /// would otherwise be silently merged back from the old disk value.</summary>
+    private static void MergeChangedLeaves(JsonObject disk, JsonObject current, JsonObject baseline)
+    {
+        foreach (var (name, value) in current)
+        {
+            var baseVal = baseline.TryGetPropertyValue(name, out var bv) ? bv : null;
+            if (JsonNode.DeepEquals(value, baseVal)) continue; // unchanged locally → keep disk
+            if (value is JsonObject currentObj && disk[name] is JsonObject diskObj)
+            {
+                // Section created on both sides without a baseline: descend with an empty
+                // baseline so leaves this writer did not set still survive from disk.
+                MergeChangedLeaves(diskObj, currentObj, baseVal as JsonObject ?? new JsonObject());
+                continue;
+            }
+            disk[name] = value is null ? null : JsonNode.Parse(value.ToJsonString());
+        }
+
+        foreach (var (name, baseVal) in baseline)
+        {
+            if (current.ContainsKey(name)) continue;
+            if (!disk.TryGetPropertyValue(name, out var diskVal)) continue;
+            if (baseVal is JsonObject baseObj && diskVal is JsonObject diskObj)
+            {
+                DeleteLeaves(diskObj, baseObj);
+                if (diskObj.Count == 0) disk.Remove(name);
+            }
+            else
+            {
+                disk.Remove(name);
+            }
+        }
+    }
+
+    /// <summary>Removes the baseline leaves of a section the local writer deleted.</summary>
+    private static void DeleteLeaves(JsonObject disk, JsonObject baseline)
+    {
+        foreach (var (name, baseVal) in baseline)
+        {
+            if (baseVal is JsonObject baseObj
+                && disk.TryGetPropertyValue(name, out var diskVal)
+                && diskVal is JsonObject diskObj)
+            {
+                DeleteLeaves(diskObj, baseObj);
+                if (diskObj.Count == 0) disk.Remove(name);
+            }
+            else
+            {
+                disk.Remove(name);
+            }
         }
     }
 

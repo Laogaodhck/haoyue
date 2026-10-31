@@ -54,6 +54,30 @@ public sealed class AgentHardMechanismTests
     }
 
     [Fact]
+    public async Task Quarantine_IsPerSignature_SoOtherCallsOfSameToolStillRun()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"haoyue-quarantine-missing-{Guid.NewGuid():N}.txt");
+        var badArgs = $$"""{"path":"{{missing.Replace("\\", "\\\\")}}"}""";
+        using var harness = await HardHarness.CreateAsync(ScriptedSteps(
+            ToolCall("c1", "read_file", badArgs),
+            ToolCall("c2", "read_file", badArgs),
+            ToolCall("c3", "read_file", badArgs),
+            ToolCall("c4", "read_file", badArgs),
+            ToolCall("c5", "read_file", badArgs),  // 同签名 → 隔离拒绝
+            ToolCall("c6", "read_file", """{"path":"."}"""), // 同工具、不同签名 → 必须真实执行
+            new LlmCompletion { Text = "换参数后继续" }));
+
+        var result = await harness.RunAsync("反复读取一个不存在的文件");
+
+        Assert.Equal("换参数后继续", result.Text);
+        Assert.Contains("quarantined", harness.Session.Messages.Single(m => m.ToolCallId == "c5").Text);
+        // 同一工具的另一个签名不受连坐：这是本风险的核心回归。
+        var otherCall = harness.Session.Messages.Single(m => m.ToolCallId == "c6");
+        Assert.DoesNotContain("quarantined", otherCall.Text);
+        Assert.Contains("File not found", otherCall.Text);
+    }
+
+    [Fact]
     public async Task SteeringAbort_StopsPendingMutatingCalls_InFlightBatch()
     {
         using var harness = await HardHarness.CreateAsync(ScriptedSteps(

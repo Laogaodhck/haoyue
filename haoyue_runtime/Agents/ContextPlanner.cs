@@ -225,7 +225,9 @@ public static class ContextPlanner
     /// <paramref name="calibration"/> is the per-model actual/estimated token ratio
     /// (<see cref="ModelTokenStats"/>): a ratio above 1 means the heuristic underestimates,
     /// so the budget shrinks accordingly. <paramref name="toolSchemaTokens"/> subtracts the
-    /// tool manifest, which the request pays on every step.</summary>
+    /// tool manifest, which the request pays on every step.
+    /// 返回值与 <c>EstimateTokens(text)</c>（未乘 calibration）同量纲：调用方比较时必须
+    /// 用原始估算，不能再乘一次系数，否则预算与用量会各按一种单位记账。</summary>
     public static int WindowBudget(ModelConfig model, string systemPrompt, int? windowCeiling = null,
         double calibration = 1.0, int toolSchemaTokens = 0)
     {
@@ -262,7 +264,8 @@ public static class ContextPlanner
         var total = 0;
         for (var i = messages.Count - 1; i >= 0; i--)
         {
-            var cost = EstimateTokens(messages[i], calibration);
+            // 与 WindowBudget 同单位：预算已是按 calibration 折算后的原始估算。
+            var cost = EstimateTokens(messages[i]);
             if (split < messages.Count && total + cost > tailBudget) break;
             split = i;
             total += cost;
@@ -299,7 +302,10 @@ public static class ContextPlanner
         messages = EnsureCompleteToolTurns(messages);
         var budget = WindowBudget(model, systemPrompt, windowCeiling, calibration, toolSchemaTokens);
 
-        var total = messages.Sum(m => EstimateTokens(m, calibration));
+        // 预算与逐条扣减必须同属「原始估算单位」：WindowBudget 已把窗口按 calibration
+        // 折算，这里再乘系数就让总量与预算各按一种单位记账——系数 >1 时总量被高估、
+        // 过度裁剪；系数 <1 时低估、裁剪不足；而且循环扣减始终是原始值，收支对不上。
+        var total = messages.Sum(m => EstimateTokens(m));
         if (total <= budget) return messages;
 
         var result = new List<ChatMessage>(messages);

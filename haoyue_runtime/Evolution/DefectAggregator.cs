@@ -83,9 +83,11 @@ public sealed class DefectAggregator(HaoyueDatabase database)
 
     /// <summary>Scans the most recent journal rows and returns aggregated defects, oldest first.
     /// <paramref name="excludeSessions"/> lists reflection-turn session ids (from the evolution
-    /// decision log) so the engine never aggregates its own failures. Note: session attribution
-    /// brackets events between TurnStarted/TurnCompleted, which is unreliable when concurrent
-    /// turns interleave their events — acceptable for defect aggregation purposes.</summary>
+    /// decision log) so the engine never aggregates its own failures. Session attribution is
+    /// exact whenever the row carries a <c>TurnId</c> (stamped by <see cref="TurnStamp"/>):
+    /// the turn is mapped to its session at TurnStarted/TurnCompleted, so concurrent turns
+    /// interleaving their events cannot cross-attribute. Rows written before TurnId stamping
+    /// fall back to the legacy TurnStarted/TurnCompleted bracket.</summary>
     public IReadOnlyList<DefectReport> Aggregate(
         int limit = DefaultScanLimit,
         IReadOnlyCollection<string>? excludeSessions = null)
@@ -93,10 +95,10 @@ public sealed class DefectAggregator(HaoyueDatabase database)
         var journal = database.RecentEvents(Math.Clamp(limit, 1, EventJournal.RetainedEvents));
 
         var currentSession = (string?)null;
-        var sessionExcluded = false;
+        var turnSessions = new Dictionary<string, string?>(StringComparer.Ordinal);
         var toolFailures = new Dictionary<ClusterKey, List<(DateTimeOffset Ts, string? Session)>>();
         var verificationRuns = new List<List<(DateTimeOffset Ts, VerificationCompletedEvent Event)>>();
-        var currentVerificationRun = new List<(DateTimeOffset Ts, VerificationCompletedEvent Event)>();
+        var openVerificationRuns = new Dictionary<string, List<(DateTimeOffset Ts, VerificationCompletedEvent Event)>>(StringComparer.Ordinal);
         var capabilityGaps = new Dictionary<string, List<(DateTimeOffset Ts, string? Session)>>();
         var providerRetries = new Dictionary<ClusterKey, List<DateTimeOffset>>();
         var corrections = new Dictionary<string, List<(DateTimeOffset Ts, string Instruction)>>();
@@ -105,6 +107,14 @@ public sealed class DefectAggregator(HaoyueDatabase database)
             List<(DateTimeOffset Ts, string? Session, int? Corpus, string? Reason)>>();
         var feedbackReports = new List<DefectReport>();
 
+        // TurnId 归属优先；没有盖章的旧行退回「当前回合」括号法。
+        string? SessionOf(RuntimeEvent evt) =>
+            evt.TurnId is { Length: > 0 } turnId && turnSessions.TryGetValue(turnId, out var mapped)
+                ? mapped
+                : currentSession;
+        bool Excluded(RuntimeEvent evt) =>
+            SessionOf(evt) is { } session && excludeSessions?.Contains(session) == true;
+
         foreach (var persisted in journal)
         {
             var ts = DateTimeOffset.Parse(persisted.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
@@ -112,44 +122,50 @@ public sealed class DefectAggregator(HaoyueDatabase database)
             switch (persisted.Type)
             {
                 case nameof(TurnStartedEvent):
-                    currentSession = TryDeserialize<TurnStartedEvent>(persisted.Payload)?.SessionId;
-                    sessionExcluded = currentSession is not null
-                        && excludeSessions?.Contains(currentSession) == true;
+                    if (TryDeserialize<TurnStartedEvent>(persisted.Payload) is { } started)
+                    {
+                        currentSession = started.SessionId;
+                        if (started.TurnId is { Length: > 0 } startedTurn)
+                            turnSessions[startedTurn] = started.SessionId;
+                    }
                     break;
 
                 case nameof(TurnCompletedEvent):
-                    if (TryDeserialize<TurnCompletedEvent>(persisted.Payload) is { } completed
-                        && completed.Cancelled
-                        && (completed.SessionId is null || excludeSessions?.Contains(completed.SessionId) != true))
+                    if (TryDeserialize<TurnCompletedEvent>(persisted.Payload) is { } completed)
                     {
-                        var cancelKey = completed.SessionId ?? "-";
-                        cancels.TryAdd(cancelKey, []);
-                        cancels[cancelKey].Add(ts);
+                        if (completed.TurnId is { Length: > 0 } completedTurn)
+                            turnSessions[completedTurn] = completed.SessionId;
+                        if (completed.Cancelled
+                            && (completed.SessionId is null || excludeSessions?.Contains(completed.SessionId) != true))
+                        {
+                            var cancelKey = completed.SessionId ?? "-";
+                            cancels.TryAdd(cancelKey, []);
+                            cancels[cancelKey].Add(ts);
+                        }
                     }
                     currentSession = null;
-                    sessionExcluded = false;
                     break;
 
                 case nameof(ProviderRetryEvent):
-                    if (sessionExcluded) break;
                     if (TryDeserialize<ProviderRetryEvent>(persisted.Payload) is not { } retry) break;
+                    if (Excluded(retry)) break;
                     var retryKey = new ClusterKey(retry.ModelRef, NormalizeError(retry.Reason));
                     providerRetries.TryAdd(retryKey, []);
                     providerRetries[retryKey].Add(ts);
                     break;
 
                 case nameof(UserSteerEvent):
-                    if (sessionExcluded) break;
                     if (TryDeserialize<UserSteerEvent>(persisted.Payload) is not { } steer) break;
-                    var correctionKey = currentSession ?? "-";
+                    if (Excluded(steer)) break;
+                    var correctionKey = SessionOf(steer) ?? "-";
                     corrections.TryAdd(correctionKey, []);
                     corrections[correctionKey].Add((ts, steer.Instruction));
                     break;
 
                 case nameof(ToolCallCompletedEvent):
-                    if (sessionExcluded) break;
                     var tool = TryDeserialize<ToolCallCompletedEvent>(persisted.Payload);
                     if (tool is null || tool.Success) break;
+                    if (Excluded(tool)) break;
                     var error = NormalizeError(tool.ResultSummary);
                     if (error.Length == 0) break;
 
@@ -165,36 +181,41 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                         toolFailures.TryAdd(key, []);
                         bucket = toolFailures[key];
                     }
-                    bucket.Add((ts, currentSession));
+                    bucket.Add((ts, SessionOf(tool)));
                     break;
 
                 case nameof(RetrievalMissEvent):
-                    if (sessionExcluded) break;
                     var miss = TryDeserialize<RetrievalMissEvent>(persisted.Payload);
                     if (miss is null || string.IsNullOrWhiteSpace(miss.Query)) break;
+                    if (Excluded(miss)) break;
                     var missKey = new ClusterKey(miss.ToolName, NormalizeQuery(miss.Query));
                     retrievalMisses.TryAdd(missKey, []);
-                    retrievalMisses[missKey].Add((ts, currentSession, miss.CorpusSize, miss.Reason));
+                    retrievalMisses[missKey].Add((ts, SessionOf(miss), miss.CorpusSize, miss.Reason));
                     break;
 
                 case nameof(VerificationCompletedEvent):
-                    if (sessionExcluded) break;
                     var verification = TryDeserialize<VerificationCompletedEvent>(persisted.Payload);
                     if (verification is null) break;
+                    if (Excluded(verification)) break;
+                    // 每个回合各自成链：并发回合的失败不得拼成同一次挣扎。
+                    var runKey = verification.TurnId is { Length: > 0 } verificationTurn
+                        ? verificationTurn
+                        : SessionOf(verification) ?? "-";
                     if (verification.Success)
                     {
-                        // A success closes the current failing run; "recovered after N
+                        // A success closes its turn's failing run; "recovered after N
                         // failures" is exactly the struggle signal worth reporting.
-                        if (currentVerificationRun.Count > 0)
+                        if (openVerificationRuns.Remove(runKey, out var finished) && finished.Count > 0)
                         {
-                            currentVerificationRun.Add((ts, verification));
-                            verificationRuns.Add(currentVerificationRun);
-                            currentVerificationRun = new List<(DateTimeOffset Ts, VerificationCompletedEvent Event)>();
+                            finished.Add((ts, verification));
+                            verificationRuns.Add(finished);
                         }
                     }
                     else
                     {
-                        currentVerificationRun.Add((ts, verification));
+                        if (!openVerificationRuns.TryGetValue(runKey, out var run))
+                            openVerificationRuns[runKey] = run = [];
+                        run.Add((ts, verification));
                     }
                     break;
 
@@ -224,9 +245,10 @@ public sealed class DefectAggregator(HaoyueDatabase database)
             }
         }
 
-        // A failing verification run still open at the end of the journal also counts.
-        if (currentVerificationRun.Count > 0)
-            verificationRuns.Add(currentVerificationRun);
+        // Failing verification runs still open at the end of the journal also count.
+        foreach (var run in openVerificationRuns.Values)
+            if (run.Count > 0)
+                verificationRuns.Add(run);
 
         var reports = new List<DefectReport>();
         reports.AddRange(BuildToolClusters(toolFailures));

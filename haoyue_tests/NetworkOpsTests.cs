@@ -210,8 +210,9 @@ public sealed class NetworkOpsTests : IAsyncDisposable
         }
         else
         {
+            // netsh 是 Windows 专有命令：Linux 适配器在可变性判定之前就按未知命令拒绝。
             Assert.False(result.Success);
-            Assert.Contains("不支持", result.Output);
+            Assert.Contains("未知命令", result.Output);
         }
     }
 

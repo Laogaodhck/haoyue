@@ -444,14 +444,18 @@ public sealed class AgentPrecisionTests
     [Fact]
     public async Task RedundantSuccessfulCalls_InjectsOnce()
     {
-        var existing = Path.Combine(Path.GetTempPath(), $"haoyue-existing-{Guid.NewGuid():N}.txt");
+        // 文件必须落在受信工作区内：Linux 的临时目录 /tmp 不属于用户主目录，
+        // 放在那里会被读边界拒绝，三次读取全部失败就触发不了冗余提示。
+        var dir = Path.Combine(Path.GetTempPath(), $"haoyue-precision-{Guid.NewGuid():N}");
+        var existing = Path.Combine(dir, "global", "existing.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(existing)!);
         await File.WriteAllTextAsync(existing, "content");
         var args = $$"""{"path":"{{existing.Replace("\\", "\\\\")}}"}""";
         using var harness = await AgentHarness.CreateAsync(ScriptedSteps(
             ToolCall("c1", "read_file", args),
             ToolCall("c2", "read_file", args),
             ToolCall("c3", "read_file", args),
-            new LlmCompletion { Text = "确认无误，完成" }));
+            new LlmCompletion { Text = "确认无误，完成" }), dir: dir);
 
         var result = await harness.RunAsync("反复确认同一个文件");
 

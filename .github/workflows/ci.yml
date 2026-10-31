@@ -44,15 +44,16 @@ jobs:
       - name: Test with coverage gate
         # 覆盖率硬门槛（coverlet.msbuild）：XPlat collector 会静默忽略 Threshold，
         # 只有 msbuild 包会在阈值未达标时让 dotnet test 非零退出。
+        # 列表分隔符用 %2C：PowerShell 会把参数里的裸逗号拆成数组，MSB1006。
         run: >
           dotnet test Haoyue.slnx -c Release --no-build
           /p:CollectCoverage=true
           /p:CoverletOutputFormat=cobertura
           /p:CoverletOutput="${{ github.workspace }}/coverage/coverage"
           /p:Include="[haoyue_runtime]*"
-          /p:Exclude="[haoyue_cli]*,[haoyue_webserver]*,[*test*]*"
-          /p:Threshold=70,55
-          /p:ThresholdType=line,branch
+          /p:Exclude=[haoyue_cli]*%2C[haoyue_webserver]*%2C[*test*]*
+          /p:Threshold=70%2C55
+          /p:ThresholdType=line%2Cbranch
           /p:ThresholdStat=total
       - name: Upload coverage
         uses: actions/upload-artifact@v4

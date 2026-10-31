@@ -27,12 +27,16 @@ internal static class BrowserLocator
             if (dir.Trim() is { Length: 0 }) continue;
             foreach (var name in names)
             {
-                var candidate = Path.Combine(dir.Trim(), name);
+                var candidate = windows ? Join(dir.Trim(), name) : Path.Combine(dir.Trim(), name);
                 if (exists(candidate)) return candidate;
             }
         }
         return null;
     }
+
+    // Separators follow the simulated platform, not the host: the Windows candidate
+    // list must look like a Windows path even when the tests run on Linux.
+    private static string Join(params string[] parts) => string.Join('\\', parts);
 
     private static IEnumerable<string> WindowsCandidates(Func<string, string?> env)
     {
@@ -43,12 +47,12 @@ internal static class BrowserLocator
         foreach (var root in new[] { programFiles, programFilesX86, localAppData })
         {
             if (root is not { Length: > 0 }) continue;
-            yield return Path.Combine(root, "Microsoft", "Edge", "Application", "msedge.exe");
+            yield return Join(root, "Microsoft", "Edge", "Application", "msedge.exe");
         }
         foreach (var root in new[] { programFiles, programFilesX86, localAppData })
         {
             if (root is not { Length: > 0 }) continue;
-            yield return Path.Combine(root, "Google", "Chrome", "Application", "chrome.exe");
+            yield return Join(root, "Google", "Chrome", "Application", "chrome.exe");
         }
     }
 

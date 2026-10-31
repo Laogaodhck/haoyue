@@ -26,7 +26,7 @@ namespace Haoyue.Runtime.Daemon;
 /// newline-delimited JSON messages. Responses keep the legacy event envelope:
 /// {"id":1,"event":"result","data":"..."}.
 /// </summary>
-public sealed class DaemonServer : IAsyncDisposable
+public sealed partial class DaemonServer : IAsyncDisposable
 {
     /// <summary>
     /// Per-user pipe name: two local accounts never compete for the same endpoint.
@@ -418,9 +418,11 @@ public sealed class DaemonServer : IAsyncDisposable
     private async Task ServeUnixSocketLoopAsync(CancellationToken ct)
     {
         var socketDir = Path.GetDirectoryName(SocketPath);
-        if (!string.IsNullOrEmpty(socketDir) && !Directory.Exists(socketDir))
+        if (!string.IsNullOrEmpty(socketDir))
         {
-            Directory.CreateDirectory(socketDir);
+            if (!Directory.Exists(socketDir)) Directory.CreateDirectory(socketDir);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(socketDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
 
         if (File.Exists(SocketPath))
@@ -430,6 +432,9 @@ public sealed class DaemonServer : IAsyncDisposable
 
         using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         listener.Bind(new UnixDomainSocketEndPoint(SocketPath));
+        // 0600：端点只允许当前用户连接（目录 0700 是第二道闸）。
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(SocketPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         listener.Listen(128);
 
         while (!ct.IsCancellationRequested)
@@ -682,7 +687,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var afterId = Params(request)["after"]?.GetValue<long>() ?? 0;
                         var journal = new JsonArray();
                         foreach (var persisted in _runtime.Database.RecentEvents(limit, afterId))
-                            journal.Add(EventJournal.Project(persisted));
+                            journal.Add((JsonNode)EventJournal.Project(persisted));
                         await WriteAsync(context.Writer, context.WriterGate, id, "result", journal.ToJsonString(), context.ConnectionCt).ConfigureAwait(false);
                         break;
                     }
@@ -697,7 +702,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var reportList = aggregator.Aggregate(limit, _evolution.ReflectionSessionIds());
                         var reports = new JsonArray();
                         foreach (var report in reportList)
-                            reports.Add(new JsonObject
+                            reports.Add((JsonNode)new JsonObject
                             {
                                 ["fingerprint"] = report.Fingerprint,
                                 ["kind"] = report.Kind.ToString(),
@@ -712,7 +717,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var health = EvolutionAnalytics.ComputeHealth(reportList);
                         var trend = new JsonArray();
                         foreach (var point in EvolutionAnalytics.ComputeTrend(_runtime.Database))
-                            trend.Add(new JsonObject
+                            trend.Add((JsonNode)new JsonObject
                             {
                                 ["date"] = point.Date,
                                 ["toolFailures"] = point.ToolFailures,
@@ -729,7 +734,7 @@ public sealed class DaemonServer : IAsyncDisposable
                             byKind[kind] = count;
                         var topTools = new JsonArray();
                         foreach (var (tool, count) in distribution.TopTools)
-                            topTools.Add(new JsonObject { ["tool"] = tool, ["count"] = count });
+                            topTools.Add((JsonNode)new JsonObject { ["tool"] = tool, ["count"] = count });
                         var result = new JsonObject
                         {
                             ["scanned"] = Math.Clamp(limit, 1, EventJournal.RetainedEvents),
@@ -778,8 +783,8 @@ public sealed class DaemonServer : IAsyncDisposable
                         {
                             var files = new JsonArray();
                             foreach (var file in candidate.Files ?? Array.Empty<ReflectionRunner.CandidateFile>())
-                                files.Add(new JsonObject { ["name"] = file.Name, ["content"] = file.Content });
-                            candidates.Add(new JsonObject
+                                files.Add((JsonNode)new JsonObject { ["name"] = file.Name, ["content"] = file.Content });
+                            candidates.Add((JsonNode)new JsonObject
                             {
                                 ["fingerprint"] = candidate.Fingerprint,
                                 ["kind"] = candidate.Kind,
@@ -840,7 +845,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var limit = Params(request)["limit"]?.GetValue<int>() ?? 20;
                         var runs = new JsonArray();
                         foreach (var run in _evolution.ListRuns(limit))
-                            runs.Add(new JsonObject
+                            runs.Add((JsonNode)new JsonObject
                             {
                                 ["id"] = run.Id,
                                 ["sessionId"] = run.SessionId,
@@ -866,7 +871,7 @@ public sealed class DaemonServer : IAsyncDisposable
                         var stats = EvolutionAnalytics.ComputeStats(_runtime.Database, _evolution, reportList);
                         var skills = new JsonArray();
                         foreach (var skill in stats.Skills)
-                            skills.Add(new JsonObject
+                            skills.Add((JsonNode)new JsonObject
                             {
                                 ["fingerprint"] = skill.Fingerprint,
                                 ["skillName"] = skill.SkillName,
@@ -1269,6 +1274,55 @@ public sealed class DaemonServer : IAsyncDisposable
                         }
 
                         // Background connect MCP without blocking the admin gate or connection!
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _runtime.ConnectMcpAsync(_shutdown.Token).ConfigureAwait(false);
+                            }
+                            catch { }
+                        }, _shutdown.Token);
+                        break;
+                    }
+
+                    case "workspace.trust":
+                    case "workspace.untrust":
+                    {
+                        var rawPath = request["params"]?["path"]?.GetValue<string>();
+                        var trusted = request["method"]?.GetValue<string>() == "workspace.trust";
+                        string trustPath;
+                        try
+                        {
+                            trustPath = string.IsNullOrWhiteSpace(rawPath)
+                                ? _runtime.Workspace.Root
+                                : Path.GetFullPath(rawPath);
+                        }
+                        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Invalid workspace path: {ex.Message}", context.ConnectionCt, code: DaemonErrorCode.InvalidParams).ConfigureAwait(false);
+                            break;
+                        }
+
+                        if (!Directory.Exists(trustPath))
+                        {
+                            await WriteAsync(context.Writer, context.WriterGate, id, "error", $"Workspace directory not found: {trustPath}", context.ConnectionCt, code: DaemonErrorCode.NotFound).ConfigureAwait(false);
+                            break;
+                        }
+
+                        await _adminGate.WaitAsync(context.ConnectionCt).ConfigureAwait(false);
+
+                        try
+                        {
+                            _runtime.ApplyWorkspaceTrust(trustPath, trusted);
+                            await WriteAsync(context.Writer, context.WriterGate, id, "result", WorkspaceJson(_runtime.Workspace), context.ConnectionCt).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            _adminGate.Release();
+                        }
+
+                        // Trust changes which workspace MCP servers are active, so reload them
+                        // without blocking the admin gate or the connection.
                         _ = Task.Run(async () =>
                         {
                             try
@@ -2577,157 +2631,7 @@ public sealed class DaemonServer : IAsyncDisposable
         }
     }
 
-    private static async Task ForwardEventsAsync(
-        IEventSubscription subscription,
-        StreamWriter writer,
-        SemaphoreSlim writerGate,
-        long id,
-        string sessionId,
-        CancellationToken ct,
-        SessionUsageAccumulator usage)
-    {
-        await foreach (var evt in subscription.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-        {
-            AccumulateSessionUsage(usage, evt);
-            // ErrorEvent is a runtime diagnostic, not a terminal protocol response. The turn
-            // result below sends the final `error` envelope with the provider's full detail.
-            // Forwarding this event as `error` would terminate desktop clients early and lose
-            // ErrorEvent.Detail (for example the HTTP status and API response message).
-            var payload = evt switch
-            {
-                AssistantTextDeltaEvent delta => (Name: (string?)"delta", Data: delta.Delta, Details: (JsonObject?)null),
-                ThinkingDeltaEvent thinking => (Name: (string?)"thinking", Data: thinking.Delta, Details: (JsonObject?)null),
-                ApprovalRequiredEvent approval => (
-                    Name: (string?)"approval_request",
-                    Data: approval.Summary,
-                    Details: (JsonObject?)new JsonObject
-                    {
-                        ["callId"] = approval.CallId,
-                        ["tool"] = approval.ToolName,
-                        ["reason"] = approval.Reason,
-                    }),
-                UserSteerEvent steer => (Name: (string?)"steer", Data: steer.Instruction, Details: (JsonObject?)null),
-                ImageViewedEvent image => (
-                    Name: (string?)"image_view",
-                    Data: image.Name,
-                    Details: new JsonObject
-                    {
-                        ["imageId"] = image.ImageId,
-                        ["mediaType"] = image.MediaType,
-                    }),
-                StatusEvent status => (Name: (string?)"status", Data: status.Status, Details: (JsonObject?)null),
-                // 内核告警必须走线：策略拒绝的原因、上下文压缩丢块、输出截断、空回答
-                // 都只发 WarningEvent，此前它不在契约三张名单里也没有转发分支，
-                // 用户看到的是「被拦了但不知道为什么」。
-                WarningEvent warning => (Name: (string?)"warning", Data: warning.Message, Details: (JsonObject?)null),
-                ToolCallStartedEvent tool => (
-                    Name: (string?)"tool_start",
-                    Data: tool.ToolName,
-                    Details: new JsonObject
-                    {
-                        ["callId"] = tool.CallId,
-                        ["summary"] = tool.ArgumentSummary,
-                    }),
-                ToolCallCompletedEvent tool => (
-                    Name: (string?)"tool_done",
-                    Data: tool.ResultSummary,
-                    Details: new JsonObject
-                    {
-                        ["callId"] = tool.CallId,
-                        ["success"] = tool.Success,
-                        ["durationMs"] = tool.Duration.TotalMilliseconds,
-                    }),
-                FileDiffEvent diff => (
-                    Name: (string?)"file_diff",
-                    Data: diff.FilePath,
-                    Details: new JsonObject
-                    {
-                        ["callId"] = diff.CallId,
-                        ["diff"] = diff.UnifiedDiff,
-                    }),
-                ModelInvocationStartedEvent model => (
-                    Name: (string?)"model_start",
-                    Data: $"{model.ProviderId}/{model.ModelId}",
-                    Details: new JsonObject
-                    {
-                        ["provider"] = model.ProviderId,
-                        ["model"] = model.ModelId,
-                        ["step"] = model.Step,
-                    }),
-                UsageRecordedEvent tokenEvent => (
-                    Name: (string?)"usage",
-                    Data: $"{tokenEvent.ProviderId}/{tokenEvent.ModelId}",
-                    Details: new JsonObject
-                    {
-                        ["provider"] = tokenEvent.ProviderId,
-                        ["model"] = tokenEvent.ModelId,
-                        ["inputTokens"] = tokenEvent.InputTokens,
-                        ["outputTokens"] = tokenEvent.OutputTokens,
-                        ["totalInputTokens"] = tokenEvent.TotalInputTokens,
-                        ["cachedInputTokens"] = tokenEvent.CachedInputTokens,
-                        ["elapsedMs"] = tokenEvent.Elapsed.TotalMilliseconds,
-                        // 本地推理遥测（InferenceMeter 实测）：桌面输入框读数直接消费。
-                        // 没有它，遥测只进 usage.jsonl，用户看不到预热 / KV 复用的真实效果。
-                        ["inference"] = tokenEvent.Performance is { } perf
-                            ? (JsonNode?)new JsonObject
-                            {
-                                ["ttftMs"] = Math.Round(perf.TtftMs, 1),
-                                ["loadWaitMs"] = Math.Round(perf.LoadWaitMs, 1),
-                                ["prefillTokensPerSecond"] = Math.Round(perf.PrefillTokensPerSecond, 1),
-                                ["decodeTokensPerSecond"] = Math.Round(perf.DecodeTokensPerSecond, 1),
-                                ["cacheHitRate"] = Math.Round(perf.CacheHitRate, 4),
-                                ["prefixReuse"] = perf.PrefixReuse,
-                            }
-                            : null,
-                    }),
-                WorkflowEvent workflow => (
-                    Name: (string?)"workflow",
-                    Data: workflow.Label,
-                    Details: new JsonObject
-                    {
-                        ["step"] = workflow.Step,
-                        ["kind"] = workflow.Kind,
-                        ["label"] = workflow.Label,
-                        ["detail"] = workflow.Detail,
-                    }),
-                PlanUpdatedEvent plan => (
-                    Name: (string?)"plan_update",
-                    Data: plan.StepsJson,
-                    Details: new JsonObject
-                    {
-                        ["steps"] = JsonNode.Parse(plan.StepsJson),
-                        ["explanation"] = plan.Explanation,
-                    }),
-                _ => (Name: (string?)null, Data: "", Details: (JsonObject?)null),
-            };
-            if (payload.Name is not null)
-                await WriteAsync(writer, writerGate, id, payload.Name, payload.Data, ct, sessionId, payload.Details).ConfigureAwait(false);
-        }
-    }
-
-    private static void AccumulateSessionUsage(SessionUsageAccumulator usage, RuntimeEvent evt)
-    {
-        switch (evt)
-        {
-            case ModelInvocationStartedEvent:
-                usage.LlmRounds++;
-                break;
-            case WorkflowEvent workflow:
-                if (workflow.Step > usage.LastWorkflowStep)
-                {
-                    usage.ExecutionSteps += workflow.Step - usage.LastWorkflowStep;
-                    usage.LastWorkflowStep = workflow.Step;
-                }
-                break;
-            case UsageRecordedEvent token:
-                usage.InputTokens += token.InputTokens;
-                usage.TotalInputTokens += token.TotalInputTokens;
-                usage.CachedInputTokens += token.CachedInputTokens;
-                usage.OutputTokens += token.OutputTokens;
-                usage.OutputElapsedMs += (long)token.Elapsed.TotalMilliseconds;
-                break;
-        }
-    }
+    // Event forwarding and usage accumulation live in DaemonServer.Forwarding.cs.
 
     private WorkspaceInfo ResolveWorkspace(JsonObject parameters)
     {
@@ -3006,6 +2910,9 @@ public sealed class DaemonServer : IAsyncDisposable
             ["name"] = workspace.Name,
             ["projectKinds"] = kinds,
             ["mode"] = CurrentMode(),
+            ["trusted"] = workspace.Trusted,
+            ["hasWorkspaceConfig"] = workspace.HasWorkspaceConfig,
+            ["hasWorkspaceMcp"] = workspace.HasWorkspaceMcp,
         }.ToJsonString();
     }
 

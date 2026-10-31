@@ -7298,6 +7298,77 @@ select:focus-visible {
   transform: rotate(180deg);
 }
 
+/* --- 工作区信任提示（速览卡片 / MCP 面板共用） --- */
+.workspace-trust-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0 14px 10px;
+  padding: 9px 11px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: 10px;
+}
+
+.workspace-trust-notice.is-untrusted {
+  background: color-mix(in srgb, var(--warning, #d97706) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #d97706) 32%, transparent);
+}
+
+.workspace-trust-notice.is-trusted {
+  color: var(--text-muted);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+}
+
+.workspace-trust-notice > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.workspace-trust-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.workspace-trust-body p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+}
+
+.workspace-trust-error {
+  color: var(--danger, #dc2626);
+}
+
+.workspace-trust-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  color: var(--on-accent, #fff);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--accent);
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.workspace-trust-action.subtle {
+  color: var(--text-muted);
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.workspace-trust-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .workspace-overview-error {
   margin: 0;
   padding: 4px 14px 10px;

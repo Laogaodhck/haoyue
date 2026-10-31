@@ -62,17 +62,23 @@ public sealed class TurnStampTests : IDisposable
     }
 
     [Fact]
-    public void SlowSubscriber_KeepsNewestEvents_InsteadOfGrowingUnbounded()
+    public async Task SlowSubscriber_DeliversEveryEventInOrder_WhileStayingBounded()
     {
+        // 有界队列饱和后不再丢弃最旧事件：非流式事件进入待发表按序补齐，
+        // 只有超过 MaxPendingEvents 才会丢弃最旧的待发项（内存仍有上界）。
         var bus = new EventBus();
         using var subscription = bus.Subscribe(capacity: 4);
         for (var i = 0; i < 10; i++) bus.Publish(new StatusEvent($"s{i}"));
 
         var seen = new List<string>();
-        while (subscription.Reader.TryRead(out var evt))
+        while (seen.Count < 10)
+        {
+            var evt = await subscription.Reader.ReadAsync().AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
             seen.Add(((StatusEvent)evt).Status);
+        }
 
-        Assert.Equal(["s6", "s7", "s8", "s9"], seen);
+        Assert.Equal(Enumerable.Range(0, 10).Select(i => $"s{i}"), seen);
     }
 
     [Fact]

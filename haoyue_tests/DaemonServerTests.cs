@@ -939,6 +939,13 @@ public sealed class DaemonServerTests : IAsyncDisposable
             (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
             workspaceA);
 
+        // 工作区配置只有在受信后才参与加载（P0-1 信任门禁），本用例断言的是可信工作区
+        // 的配置读写语义，因此先显式放行两个工作区。
+        await connection.SendAsync(100, "workspace.trust");
+        await connection.ReadAsync();
+        await connection.SendAsync(101, "workspace.trust", new JsonObject { ["path"] = workspaceB });
+        await connection.ReadAsync();
+
         await connection.SendAsync(1, "protocol.info");
         var protocol = ParseData(await connection.ReadAsync());
         Assert.Equal(DaemonServer.ProtocolVersion, protocol["version"]!.GetValue<string>());
@@ -970,6 +977,39 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task WorkspaceTrustMethods_ToggleTrustAndExposeWorkspaceFlags()
+    {
+        var workspace = CreateWorkspace("trust-workspace", "{\"mode\":\"edit\"}");
+        var connection = await StartServerAsync(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
+            workspace);
+
+        // 默认不受信：工作区配置文件存在，但其内容（含自动执行配置）不参与加载。
+        await connection.SendAsync(1, "workspace.get");
+        var initial = ParseData(await connection.ReadAsync());
+        Assert.False(initial["trusted"]!.GetValue<bool>());
+        Assert.True(initial["hasWorkspaceConfig"]!.GetValue<bool>());
+        Assert.False(initial["hasWorkspaceMcp"]!.GetValue<bool>());
+
+        await connection.SendAsync(2, "workspace.trust");
+        var trusted = ParseData(await connection.ReadAsync());
+        Assert.True(trusted["trusted"]!.GetValue<bool>());
+        Assert.Equal(Path.GetFullPath(workspace), trusted["path"]!.GetValue<string>());
+
+        await connection.SendAsync(3, "workspace.untrust");
+        var untrusted = ParseData(await connection.ReadAsync());
+        Assert.False(untrusted["trusted"]!.GetValue<bool>());
+
+        await connection.SendAsync(4, "workspace.trust", new JsonObject
+        {
+            ["path"] = Path.Combine(_tempDir, "missing-workspace"),
+        });
+        var missing = await connection.ReadAsync();
+        Assert.Equal("error", missing["event"]!.GetValue<string>());
+        Assert.Equal("notFound", missing["details"]!["code"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task AdministrativeMethods_ManageWorkspaceProvidersMcpSkillsAndDiagnostics()
     {
         var workspace = CreateWorkspace("admin-workspace", """
@@ -991,6 +1031,11 @@ public sealed class DaemonServerTests : IAsyncDisposable
         var connection = await StartServerAsync(
             (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
             workspace);
+
+        // 未受信工作区的 .haoyue/config.json 不参与加载；管理面写回工作区配置同样
+        // 以受信为前提，故先放开当前工作区。
+        await connection.SendAsync(9, "workspace.trust");
+        await connection.ReadAsync();
 
         await connection.SendAsync(10, "workspace.init");
         var initialized = ParseData(await connection.ReadAsync());
@@ -2198,7 +2243,8 @@ public sealed class DaemonServerTests : IAsyncDisposable
             workspace,
             configStore,
             Path.Combine(_tempDir, "haoyue.db"),
-            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
+            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)),
+            new WorkspaceTrustStore(Path.Combine(_tempDir, "trusted-workspaces.json")));
         var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-state"));
         var server = new DaemonServer(_runtime, runTurn, globalWorkspace, handshakeToken,
             daemonLogFile: Path.Combine(_tempDir, "daemon.log"));
@@ -2424,6 +2470,40 @@ public sealed class DaemonServerTests : IAsyncDisposable
             .ToList();
         Assert.True(unknown.Count == 0,
             "以下错误码不在 DaemonErrorCode 枚举中: " + string.Join(", ", unknown));
+    }
+
+    [Fact]
+    public void Contract_OpenEndedMaps_AreModeledAsAdditionalProperties()
+    {
+        // 递归补丁/环境变量/连接器取值都是键名不预设的映射。类型必须是 open object
+        // （additionalProperties），否则 TS 侧会生成无法赋值的封闭类型，调用方只能强转。
+        var methods = DaemonContract.ExportJson()["methods"]!.AsArray();
+        JsonObject Params(string name) => methods
+            .Single(m => m!["name"]!.GetValue<string>() == name)!["params"]!.AsObject();
+        JsonObject Result(string name) => methods
+            .Single(m => m!["name"]!.GetValue<string>() == name)!["result"]!.AsObject();
+
+        static JsonObject Property(JsonObject schema, string name) =>
+            schema["properties"]![name]!.AsObject();
+
+        var fields = Property(Params("config.save"), "fields");
+        Assert.Equal("object", fields["type"]!.GetValue<string>());
+        Assert.True(fields["additionalProperties"]!.GetValue<bool>());
+
+        var env = Property(Property(Params("mcp.upsert"), "server"), "env");
+        Assert.Equal("object", env["type"]!.GetValue<string>());
+        Assert.Equal("string", env["additionalProperties"]!["type"]!.GetValue<string>());
+
+        var values = Property(Params("connectors.install"), "values");
+        Assert.Equal("object", values["type"]!.GetValue<string>());
+        Assert.Equal("string", values["additionalProperties"]!["type"]!.GetValue<string>());
+
+        var workspace = Result("workspace.trust");
+        foreach (var flag in new[] { "trusted", "hasWorkspaceConfig", "hasWorkspaceMcp" })
+        {
+            var property = Property(workspace, flag);
+            Assert.Equal("boolean", property["type"]!.GetValue<string>());
+        }
     }
 
     [Fact]

@@ -157,8 +157,8 @@ public sealed class ConsolidationRunner
                 entries.Count, 0, 0, sessionId, result.Error ?? "固化 turn 被取消");
 
         var (facts, parseError) = ParseFacts(result.Text);
-        if (parseError is not null)
-            return new ConsolidationRunResult(entries.Count, 0, 0, sessionId, parseError);
+        if (facts is null || parseError is not null)
+            return new ConsolidationRunResult(entries.Count, 0, 0, sessionId, parseError ?? "固化输出缺少 facts 数组");
 
         var store = new FactsStore();
         var added = 0;

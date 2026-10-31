@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Haoyue.Runtime.Daemon;
@@ -47,13 +46,14 @@ internal sealed partial class DaemonAdminApi
             matches.Add((relative, score, modified));
         }
 
-        return JsonSerializer.Serialize(matches
+        return new JsonArray(matches
             .OrderBy(match => match.Score)
             .ThenByDescending(match => match.Modified)
             .ThenBy(match => match.Path, StringComparer.OrdinalIgnoreCase)
             .Take(limit)
-            .Select(match => match.Path)
-            .ToList());
+            .Select(match => (JsonNode?)match.Path)
+            .ToArray())
+            .ToJsonString();
     }
 
     /// <summary>

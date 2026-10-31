@@ -163,9 +163,9 @@ public static class ConfigSchema
         New("mcp.servers", "object", null),
     ];
 
-    private static ConfigField New(string path, string type, object? @default,
+    private static ConfigField New(string path, string type, JsonNode? @default,
         double? min = null, double? max = null, string[]? allowed = null, string view = ViewRuntime) =>
-        new(path, type, @default is null ? null : JsonValue.Create(@default), min, max, allowed, view);
+        new(path, type, @default, min, max, allowed, view);
 
     /// <summary>只读登记表快照（供文档导出与漂移测试使用）。</summary>
     public static IReadOnlyList<ConfigField> Fields => Registry;
@@ -327,7 +327,7 @@ public static class ConfigSchema
             if (field.Max is { } max) entry["max"] = max;
             if (field.AllowedValues is { } allowed)
                 entry["allowedValues"] = new JsonArray(allowed.Select(a => (JsonNode)a).ToArray());
-            fields.Add(entry);
+            fields.Add((JsonNode)entry);
         }
         return new JsonObject
         {

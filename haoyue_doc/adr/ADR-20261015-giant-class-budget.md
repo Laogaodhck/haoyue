@@ -12,6 +12,15 @@ DaemonServer 拆分路径见决策 3，预算再次触顶时执行）。
 allow/deny 规则整组替换与逐条校验，共 +77 行。RPC 面按既有模式扩表是最薄接法，
 partial 拆分（决策 3 的 providers 域拆分）留待预算再次触顶）。
 
+2026-10-31 执行决策 3 的域拆分并修正计量口径：
+- `DaemonAdminApi.cs` 3329 → 1726 行，providers/models 与 knowledge 两块（约 1600 行）
+  迁入 `DaemonAdminApi.Models.cs` / `DaemonAdminApi.Knowledge.cs`（纯搬迁，无行为变化）。
+- 护栏原先只读主文件，既有 `Files`/`Settings` 两个 partial 未被计入（拆分前聚合 3949 行），
+  拆分可绕过预算。现改为**按整个类计行**（`DaemonAdminApi*.cs` 前缀匹配全部 partial）。
+- 聚合口径下显式评审预算：`DaemonAdminApi` 3350 → **4050**（拆分后实测 3978，约 1.8% 余量）；
+  `DaemonServer` 3150 → **3250**（新增 `Forwarding` partial 后聚合 3210，约 1.2% 余量，
+  事件泵部分本已按决策 3 抽离）。
+
 ## 背景
 
 评估文档（haoyue_doc/Agent能力与工程缺口评估-2026-10-14.md）指出四个巨型文件已成为
@@ -34,12 +43,15 @@ partial 拆分（决策 3 的 providers 域拆分）留待预算再次触顶）�
    搬迁式重构的风险（契约漂移、缓存契约破坏、Electron 验证盲区）大于当前收益。
 2. **冻结增长：行数预算护栏**。四个文件各设行数上限，由
    `haoyue_tests/DocsFactsTests.cs` 的 `GiantClass_LineBudget_Maintained` 强制：
-   `DaemonAdminApi ≤ 3350`、`DaemonServer ≤ 3150`（2026-10-21 自 3100 上调，见状态行）、
+   `DaemonAdminApi ≤ 4050`（含全部 partial 文件的类级总量）、`DaemonServer ≤ 3250`（同口径；
+   2026-10-21 自 3100 上调、2026-10-31 改聚合口径后上调，见状态行）、
    `SettingsDialog.vue ≤ 2700`、`App.vue ≤ 2400`。超额即测试失败——这是刻意设计：**任何继续膨胀必须先经历一次
    显式的预算上调评审（改本 ADR 状态行 + 预算数字），而不是默认允许**。
 3. **拆分路径登记（触发条件式，非排期）**：
    - DaemonAdminApi：按域拆 partial class（providers / knowledge / evolution / tasks / models…），
-     纯文件组织、无行为变化，风险最低；预算超限时首选。
+     纯文件组织、无行为变化，风险最低；预算超限时首选。**已执行（2026-10-31）**：
+     providers+models、knowledge 两域先行拆分；剩余 evolution / schedules / sessions 等域
+     在下次触顶时按同一模式迁出。
    - DaemonServer：先抽 switch 分发到 `per-method` 注册表，再按域 partial。
    - SettingsDialog.vue / App.vue：按面板抽 SFC 子组件；需在拆分前补齐交互回归
      （Electron GUI 冒烟本机不可信，依赖 vitest + typecheck 保障）。
@@ -59,6 +71,7 @@ partial 拆分（决策 3 的 providers 域拆分）留待预算再次触顶）�
 
 ## 影响
 
-- `DocsFactsTests.GiantClass_LineBudget_Maintained`：读四个文件行数对预算断言。
+- `DocsFactsTests.GiantClass_LineBudget_Maintained`：读四个文件行数对预算断言；
+  `.cs` 聚合点按前缀汇总全部 partial（防止拆分变相扩容）。
 - 本 ADR 的预算数字与测试常量互相锚定：改预算必须同步改 ADR 与测试（测试注释指向本 ADR）。
 - 后续新增 admin RPC 的实现类按「新代码禁入」落在独立文件，聚合面只减不增。

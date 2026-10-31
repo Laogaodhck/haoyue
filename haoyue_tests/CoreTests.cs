@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.IO.Compression;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
@@ -45,6 +46,64 @@ public sealed class CoreTests : IDisposable
         Assert.True(sub1.Reader.TryRead(out _));
         Assert.False(await sub2.Reader.WaitToReadAsync());
         sub1.Dispose();
+    }
+
+    [Fact]
+    public async Task EventBus_Overflow_CoalescesTextDeltas_WithoutLosingContent()
+    {
+        var bus = new EventBus();
+        using var sub = bus.Subscribe(capacity: 1);
+
+        bus.Publish(new AssistantTextDeltaEvent("a")); // fills the bounded queue
+        bus.Publish(new AssistantTextDeltaEvent("b")); // overflow → pending
+        bus.Publish(new AssistantTextDeltaEvent("c")); // merged into pending
+
+        var first = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var second = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("a", Assert.IsType<AssistantTextDeltaEvent>(first).Delta);
+        Assert.Equal("bc", Assert.IsType<AssistantTextDeltaEvent>(second).Delta);
+    }
+
+    [Fact]
+    public async Task EventBus_Overflow_KeepsEventOrder_AcrossCoalescedDeltas()
+    {
+        var bus = new EventBus();
+        using var sub = bus.Subscribe(capacity: 1);
+
+        bus.Publish(new AssistantTextDeltaEvent("a"));
+        bus.Publish(new AssistantTextDeltaEvent("b"));
+        bus.Publish(new ErrorEvent("boom"));
+        bus.Publish(new AssistantTextDeltaEvent("c"));
+
+        var a = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var b = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var error = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var c = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("a", Assert.IsType<AssistantTextDeltaEvent>(a).Delta);
+        Assert.Equal("b", Assert.IsType<AssistantTextDeltaEvent>(b).Delta);
+        Assert.Equal("boom", Assert.IsType<ErrorEvent>(error).Message);
+        Assert.Equal("c", Assert.IsType<AssistantTextDeltaEvent>(c).Delta);
+    }
+
+    [Fact]
+    public async Task EventBus_Overflow_CoalescesThinkingSeparatelyFromText()
+    {
+        var bus = new EventBus();
+        using var sub = bus.Subscribe(capacity: 1);
+
+        bus.Publish(new AssistantTextDeltaEvent("t"));
+        bus.Publish(new ThinkingDeltaEvent("x"));
+        bus.Publish(new ThinkingDeltaEvent("y"));
+        bus.Publish(new AssistantTextDeltaEvent("z"));
+
+        var text = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var thinking = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var tail = await sub.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("t", Assert.IsType<AssistantTextDeltaEvent>(text).Delta);
+        Assert.Equal("xy", Assert.IsType<ThinkingDeltaEvent>(thinking).Delta);
+        Assert.Equal("z", Assert.IsType<AssistantTextDeltaEvent>(tail).Delta);
     }
 
     [Fact]

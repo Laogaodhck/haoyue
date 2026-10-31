@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import { daemonRequest } from './daemon-rpc'
 import {
   ArrowDown, Check, ChevronDown, ChevronUp, Circle, CornerDownLeft,
   Folder, FolderOpen, History, LoaderCircle, MoreHorizontal, PanelRight,
-  RefreshCw, Search, ShieldAlert, Telescope, TerminalSquare, Trash2, Sparkles,
-  Undo2, X
+  RefreshCw, Search, ShieldAlert, Telescope, TerminalSquare, Trash2, Sparkles, Undo2, X
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import type { AppearanceTheme, AppInfo, DaemonMessage, DaemonState } from '../../shared/ipc'
@@ -339,7 +339,7 @@ function ensureProject(path: string, name?: string): ProjectItem {
 
 async function saveProject(project: ProjectItem): Promise<ProjectItem> {
   const oldId = project.id
-  const response = await window.haoyue.daemon.request('project.upsert', {
+  const response = await daemonRequest('project.upsert', {
     id: project.id,
     path: project.path,
     name: project.name
@@ -373,7 +373,7 @@ async function migrateStoredProjects(): Promise<void> {
   const stored = loadStoredProjects()
   for (const project of stored) {
     if (isForbiddenProjectPath(project.path, appInfo.value.userProfilePath)) continue
-    await window.haoyue.daemon.request('project.upsert', {
+    await daemonRequest('project.upsert', {
       id: project.id,
       path: project.path,
       name: project.name
@@ -390,7 +390,7 @@ async function removeInvalidProjectRows(): Promise<void> {
     isForbiddenProjectPath(project.path, appInfo.value.userProfilePath))
   for (const project of invalid) {
     try {
-      await window.haoyue.daemon.request('project.remove', { id: project.id, keepSessions: true })
+      await daemonRequest('project.remove', { id: project.id, keepSessions: true })
     } catch {
       continue // leave the row in place; the next launch retries the cleanup
     }
@@ -523,7 +523,7 @@ async function migrateImplicitDocumentsProject(): Promise<void> {
   }
 
   if (!threads.value.some((thread) => thread.projectId === project.id)) {
-    await window.haoyue.daemon.request('project.remove', { id: project.id })
+    await daemonRequest('project.remove', { id: project.id })
     projects.value = projects.value.filter((item) => item.id !== project.id)
     if (selectedProjectId.value === project.id) selectedProjectId.value = ''
     if (activeThread.value?.projectId === project.id) activeThreadId.value = ''
@@ -536,13 +536,13 @@ async function loadRuntimeState(): Promise<void> {
     await migrateStoredProjects()
     void refreshEvolutionCandidates() // restore the candidate banner after reconnect
     const [projectResponse, modelResponse, workspaceResponse, modeResponse, catalogResponse, configStatusResponse, agentConfigResponse] = await Promise.all([
-      window.haoyue.daemon.request('project.list'),
-      window.haoyue.daemon.request('model.list'),
-      window.haoyue.daemon.request('workspace.get'),
-      window.haoyue.daemon.request('agent.mode.get'),
-      window.haoyue.daemon.request('model.catalog'),
-      window.haoyue.daemon.request('config.status').catch(() => null),
-      window.haoyue.daemon.request('agent.config.get').catch(() => null)
+      daemonRequest('project.list'),
+      daemonRequest('model.list'),
+      daemonRequest('workspace.get'),
+      daemonRequest('agent.mode.get'),
+      daemonRequest('model.catalog'),
+      daemonRequest('config.status').catch(() => null),
+      daemonRequest('agent.config.get').catch(() => null)
     ])
     if (configStatusResponse) {
       try {
@@ -620,7 +620,7 @@ async function reconcileInterruptedTurns(): Promise<void> {
   if (!daemonState.value.connected) return
   let sessionIds: string[] = []
   try {
-    const response = await window.haoyue.daemon.request('agent.interrupted')
+    const response = await daemonRequest('agent.interrupted')
     sessionIds = JSON.parse(response.data) as string[]
   } catch {
     return
@@ -652,7 +652,7 @@ async function replayMissedTerminals(): Promise<void> {
   if (opens.length === 0) return
   let rows: JournalRow[] = []
   try {
-    const response = await window.haoyue.daemon.request('events.recent', { limit: 500, after: lastJournalId })
+    const response = await daemonRequest('events.recent', { limit: 500, after: lastJournalId })
     const parsed = JSON.parse(response.data) as JournalRow[]
     if (Array.isArray(parsed)) rows = parsed
   } catch {
@@ -701,7 +701,7 @@ async function applyRecoveredTurn(thread: ThreadItem, recovered: RecoveredTurn):
 async function handleRebuildConfig(): Promise<void> {
   rebuildingConfig.value = true
   try {
-    await window.haoyue.daemon.request('config.rebuild')
+    await daemonRequest('config.rebuild')
     configAnomaly.value = null
     await loadRuntimeState()
   } catch (err) {
@@ -828,7 +828,7 @@ const expertNames = ref<Record<string, string>>({})
 async function expertLabelFor(id: string): Promise<string> {
   if (expertNames.value[id]) return expertNames.value[id]
   try {
-    const response = await window.haoyue.daemon.request('expert.list', {})
+    const response = await daemonRequest('expert.list', {})
     const experts = JSON.parse(response.data) as Array<{ id: string, name: string, avatar: string }>
     const map: Record<string, string> = {}
     for (const expert of experts) map[expert.id] = `${expert.avatar} ${expert.name}`
@@ -855,7 +855,7 @@ async function removeExpert(thread: ThreadItem): Promise<void> {
   thread.expertLabel = undefined
   if (hadSession && daemonState.value.connected) {
     try {
-      await window.haoyue.daemon.request('session.update', {
+      await daemonRequest('session.update', {
         id: thread.sessionId,
         ...sessionScope(thread, projects.value.find((item) => item.id === thread.projectId)),
         expertId: ''
@@ -965,7 +965,7 @@ async function branchFromMessage(message: ChatMessage): Promise<void> {
     }
     const keepCount = parseInt(match[1], 10) + 1
     try {
-      const response = await window.haoyue.daemon.request('session.fork', {
+      const response = await daemonRequest('session.fork', {
         id: currentThread.sessionId,
         ...sessionScope(currentThread, project),
         keepCount,
@@ -1105,7 +1105,7 @@ async function handleEditConfirm(revertFiles: boolean): Promise<void> {
       return
     }
     try {
-      await window.haoyue.daemon.request('session.truncate', {
+      await daemonRequest('session.truncate', {
         id: thread.sessionId,
         ...sessionScope(thread, project),
         keepCount: parseInt(match[1], 10)
@@ -1134,7 +1134,7 @@ async function handleEditConfirm(revertFiles: boolean): Promise<void> {
 
 async function ensureRuntimeProject(project: ProjectItem): Promise<void> {
   if (samePath(runtimeWorkspacePath.value, project.path)) return
-  const response = await window.haoyue.daemon.request('workspace.open', { path: project.path })
+  const response = await daemonRequest('workspace.open', { path: project.path })
   const opened = JSON.parse(response.data) as RuntimeWorkspace
   project.path = opened.path
   project.name = opened.name || project.name
@@ -1189,7 +1189,7 @@ async function selectThread(id: string, fromHistory = false): Promise<void> {
     if (project) await ensureRuntimeProject(project)
     const scope = sessionScope(thread, project)
     if (thread.sessionId && (!thread.sessionLoaded || !thread.running)) {
-      const response = await window.haoyue.daemon.request('session.get', {
+      const response = await daemonRequest('session.get', {
         id: thread.sessionId,
         limit: SESSION_PAGE_SIZE,
         ...scope
@@ -1417,7 +1417,7 @@ async function regenerateMessage(message: ChatMessage): Promise<void> {
   }
   const keepCount = parseInt(match[1], 10) + 1
   try {
-    await window.haoyue.daemon.request('session.truncate', {
+    await daemonRequest('session.truncate', {
       id: thread.sessionId,
       ...sessionScope(thread, project),
       keepCount
@@ -1463,7 +1463,7 @@ async function resumeThreadIfArchived(thread: ThreadItem): Promise<boolean> {
   })) return false
   localStorage.setItem(AUTO_RESUME_KEY, '1')
   try {
-    await window.haoyue.daemon.request('session.archive', {
+    await daemonRequest('session.archive', {
       id: thread.sessionId,
       ...sessionScope(thread, project),
       archived: false
@@ -1505,7 +1505,7 @@ async function respondApproval(approve: boolean): Promise<void> {
   if (!approval || approvalBusy.value) return
   approvalBusy.value = true
   try {
-    await window.haoyue.daemon.request('agent.respondApproval', {
+    await daemonRequest('agent.respondApproval', {
       callId: approval.callId,
       approve
     })
@@ -1537,7 +1537,7 @@ async function undoLastTurn(): Promise<void> {
   if (!daemonState.value.connected) return
   undoInFlight.value = true
   try {
-    const response = await window.haoyue.daemon.request('agent.undo', { sessionId: thread.sessionId })
+    const response = await daemonRequest('agent.undo', { sessionId: thread.sessionId })
     if (response.event === 'error') {
       await window.haoyue.notify('撤销失败', response.data)
       return
@@ -1602,7 +1602,7 @@ async function steerQueuedMessage(thread: ThreadItem, queued: QueuedMessage): Pr
   thread.pendingGuidance = (thread.pendingGuidance ?? 0) + 1
   if (thread.id === activeThreadId.value) void scrollToBottom(true, true)
   try {
-    await window.haoyue.daemon.request('agent.steer', {
+    await daemonRequest('agent.steer', {
       message: formatPromptWithFiles(queued.content, queued.files),
       images: plainImages(queued.images),
       sessionId: thread.sessionId,
@@ -1661,7 +1661,7 @@ async function runMessageTurn(
     const scope = sessionScope(thread, project)
     let sessionCreated = false
     if (!thread.sessionId) {
-      const sessionResponse = await window.haoyue.daemon.request('session.new', {
+      const sessionResponse = await daemonRequest('session.new', {
         ...scope,
         reasoningLevel,
         networkEnabled: thread.networkEnabled ?? true,
@@ -1672,14 +1672,14 @@ async function runMessageTurn(
       sessionCreated = true
     }
     if (sessionCreated || titleChanged) {
-      await window.haoyue.daemon.request('session.update', {
+      await daemonRequest('session.update', {
         id: thread.sessionId,
         ...scope,
         title: thread.title
       })
     }
     const daemonPrompt = formatPromptWithFiles(content, files)
-    const response = await window.haoyue.daemon.request('chat', {
+    const response = await daemonRequest('chat', {
       message: daemonPrompt,
       images: plainImages(images),
       sessionId: thread.sessionId,
@@ -1756,7 +1756,7 @@ async function saveTaskTitle(title: string): Promise<void> {
   thread.title = title
   if (thread.sessionId) {
     try {
-      await window.haoyue.daemon.request('session.update', {
+      await daemonRequest('session.update', {
         id: thread.sessionId,
         ...sessionScope(thread, project),
         title
@@ -1776,7 +1776,7 @@ async function renameTaskInline(thread: ThreadItem, title: string): Promise<void
   thread.title = title
   if (!thread.sessionId) return
   try {
-    await window.haoyue.daemon.request('session.update', {
+    await daemonRequest('session.update', {
       id: thread.sessionId,
       ...sessionScope(thread, project),
       title
@@ -1820,7 +1820,7 @@ async function initializeProjectWorkspace(project: ProjectItem): Promise<void> {
   }
   try {
     await ensureRuntimeProject(project)
-    const response = await window.haoyue.daemon.request('workspace.init')
+    const response = await daemonRequest('workspace.init')
     const result = JSON.parse(response.data) as { created: string[] }
     await window.haoyue.notify(
       '工作区元数据已初始化',
@@ -1855,7 +1855,7 @@ const evolutionInFlight = ref(false)
 
 async function refreshEvolutionCandidates(): Promise<void> {
   try {
-    const list = await window.haoyue.daemon.request('evolution.pending-list')
+    const list = await daemonRequest('evolution.pending-list')
     evolutionCandidates.value = Array.isArray(list)
       ? list.filter((item): item is EvolutionCandidate =>
         Boolean(item && typeof item.fingerprint === 'string' && typeof item.skillName === 'string'))
@@ -1878,7 +1878,7 @@ async function decideEvolution(candidate: EvolutionCandidate, adopt: boolean): P
   if (evolutionInFlight.value) return
   evolutionInFlight.value = true
   try {
-    await window.haoyue.daemon.request('evolution.decide', {
+    await daemonRequest('evolution.decide', {
       fingerprint: candidate.fingerprint,
       decision: adopt ? 'adopt' : 'reject'
     })
@@ -1899,7 +1899,7 @@ async function feedbackNegative(): Promise<void> {
   const thread = activeThread.value
   if (!thread?.sessionId) return
   try {
-    await window.haoyue.daemon.request('feedback.turn', { sessionId: thread.sessionId, kind: 'negative' })
+    await daemonRequest('feedback.turn', { sessionId: thread.sessionId, kind: 'negative' })
   } catch {
     // feedback is best-effort; never disturb the user over a failed journal write
   }
@@ -1911,7 +1911,7 @@ async function stopTurn(): Promise<void> {
   const params = cancelParams(thread)
   if (!params) return
   try {
-    await window.haoyue.daemon.request('agent.cancel', params)
+    await daemonRequest('agent.cancel', params)
   } catch { /* sendMessage owns the final state */ }
 }
 
@@ -1926,7 +1926,7 @@ async function changeNetwork(enabled: boolean): Promise<void> {
   const project = projects.value.find((item) => item.id === thread.projectId)
   if (!thread.sessionId || !daemonState.value.connected || (thread.projectId && !project)) return
   try {
-    await window.haoyue.daemon.request('session.update', {
+    await daemonRequest('session.update', {
       id: thread.sessionId,
       ...sessionScope(thread, project),
       networkEnabled: enabled
@@ -1938,14 +1938,14 @@ async function changeModel(model: string): Promise<void> {
   const previousModel = activeModel.value
   activeModel.value = model
   if (!daemonState.value.connected || !model) return
-  try { await window.haoyue.daemon.request('model.switch', { model }) }
+  try { await daemonRequest('model.switch', { model }) }
   catch { activeModel.value = previousModel }
 }
 
 async function changeMode(nextMode: string): Promise<void> {
   if (nextMode === mode.value) return
   try {
-    const response = await window.haoyue.daemon.request('agent.mode.switch', { mode: nextMode })
+    const response = await daemonRequest('agent.mode.switch', { mode: nextMode })
     mode.value = response.data
   } catch { /* Keep showing the active Runtime mode. */ }
 }
@@ -1957,7 +1957,7 @@ async function changeReasoningLevel(level: ReasoningLevel): Promise<void> {
   const project = projects.value.find((item) => item.id === thread.projectId)
   if (!thread.sessionId || !daemonState.value.connected || (thread.projectId && !project)) return
   try {
-    await window.haoyue.daemon.request('session.update', {
+    await daemonRequest('session.update', {
       id: thread.sessionId,
       ...sessionScope(thread, project),
       reasoningLevel: level
@@ -1970,7 +1970,7 @@ async function optimizePrompt(text: string): Promise<string> {
   if (!activeModel.value) throw new Error('尚未配置模型，请先在设置中新建 Provider 和模型。')
   const params: Record<string, unknown> = { text }
   params.model = activeModel.value
-  const response = await window.haoyue.daemon.request('prompt.optimize', params, {
+  const response = await daemonRequest('prompt.optimize', params, {
     timeoutMs: PROMPT_OPTIMIZE_TIMEOUT_MS
   })
   return response.data
@@ -1981,7 +1981,7 @@ async function optimizePrompt(text: string): Promise<string> {
  * root/daemon 都用惰性取值，避免在 setup 阶段固化到某一次 computed 结果。
  */
 const suggestWorkspaceFiles = createWorkspaceFileSuggester({
-  daemon: () => (daemonState.value.connected ? window.haoyue.daemon : null),
+  daemon: () => (daemonState.value.connected ? { request: daemonRequest } : null),
   root: () => activeProject.value?.path ?? null
 })
 

@@ -94,6 +94,11 @@ public sealed class McpManager(
         foreach (var (name, server) in configStore.Config.Mcp.Servers)
             servers[name] = server;
 
+        // 工作区配置是仓库内容，克隆后打开即生效——只允许受信工作区参与合并。
+        // 未受信时连 .haoyue/config.json 都不加载（WorkspaceManager 已置 Config=null），
+        // 并跳过 mcp/servers.json，避免「打开一次就执行其中的命令」。
+        if (!workspace.Trusted) return servers;
+
         // <workspace>/mcp/servers.json
         var serversFile = Path.Combine(workspace.McpDir, "servers.json");
         if (File.Exists(serversFile))

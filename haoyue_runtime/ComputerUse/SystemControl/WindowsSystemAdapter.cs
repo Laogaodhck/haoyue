@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -10,7 +11,10 @@ namespace Haoyue.Runtime.ComputerUse.SystemControl;
 /// and IE start page), Chrome/Edge preference files, Firefox prefs.js, and browser
 /// shortcut arguments. HKLM policy removal requires elevation — failures are
 /// reported in the outcome instead of thrown.
+/// Registry APIs are Windows-only; the factory constructs this type behind
+/// <see cref="OperatingSystem.IsWindows"/> so call sites stay platform-checked.
 /// </summary>
+[SupportedOSPlatform("windows")]
 public sealed class WindowsSystemAdapter : ISystemControlAdapter
 {
     public string PlatformName => "Windows";

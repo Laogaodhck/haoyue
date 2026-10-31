@@ -11,7 +11,7 @@ namespace Haoyue.Runtime.Workspaces;
 /// </summary>
 internal static class WorkspaceFileCache
 {
-    private sealed record Cached(string Fingerprint, object Value);
+    private sealed record Cached(string Fingerprint, object? Value);
 
     private static readonly ConcurrentDictionary<string, Cached> Cache = new(StringComparer.OrdinalIgnoreCase);
     internal static long Hits;
@@ -33,12 +33,12 @@ internal static class WorkspaceFileCache
     }
 
     /// <summary>指纹命中返回缓存值；否则执行 produce 并落缓存。</summary>
-    public static T GetOrAdd<T>(string key, string fingerprint, Func<T> produce) where T : class
+    public static T GetOrAdd<T>(string key, string fingerprint, Func<T> produce) where T : class?
     {
         if (Cache.TryGetValue(key, out var cached) && cached.Fingerprint == fingerprint)
         {
             Interlocked.Increment(ref Hits);
-            return (T)cached.Value;
+            return (T)cached.Value!;
         }
         Interlocked.Increment(ref Misses);
         var value = produce();

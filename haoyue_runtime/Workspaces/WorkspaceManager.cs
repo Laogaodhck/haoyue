@@ -12,6 +12,15 @@ public sealed class WorkspaceInfo
     public WorkspaceConfig? Config { get; init; }
     public bool IsGlobal { get; init; }
 
+    /// <summary>用户是否显式放行了该工作区；未受信时 <see cref="Config"/> 恒为 null。</summary>
+    public bool Trusted { get; init; } = true;
+
+    /// <summary>工作区根下的 .haoyue/config.json 是否存在（未受信时用于提示）。</summary>
+    public bool HasWorkspaceConfig { get; init; }
+
+    /// <summary>工作区是否携带 MCP 服务器声明（mcp/servers.json 或工作区配置）。</summary>
+    public bool HasWorkspaceMcp { get; init; }
+
     public string Name => IsGlobal ? "Global" : Path.GetFileName(Root.TrimEnd(Path.DirectorySeparatorChar, '/'));
 
     public string HaoyueDir => IsGlobal ? Root : Path.Combine(Root, ".haoyue");
@@ -51,23 +60,46 @@ public sealed class WorkspaceManager : IWorkspaceManager
         [".git", ".haoyue", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"];
 
     private readonly string _haoyueHome;
+    private readonly IWorkspaceTrustStore _trust;
 
     public WorkspaceManager() : this(HaoyuePaths.Home)
     {
     }
 
     /// <summary>Test seam: simulates a different user profile / Haoyue state directory.</summary>
-    internal WorkspaceManager(string haoyueHome) => _haoyueHome = haoyueHome;
+    internal WorkspaceManager(string haoyueHome)
+        : this(haoyueHome, new WorkspaceTrustStore(Path.Combine(haoyueHome, "trusted-workspaces.json")))
+    {
+    }
+
+    internal WorkspaceManager(IWorkspaceTrustStore trust) : this(HaoyuePaths.Home, trust)
+    {
+    }
+
+    internal WorkspaceManager(string haoyueHome, IWorkspaceTrustStore trust)
+    {
+        _haoyueHome = haoyueHome;
+        _trust = trust;
+    }
 
     public WorkspaceInfo Detect(string? startDirectory = null)
     {
         var start = Path.GetFullPath(startDirectory ?? Directory.GetCurrentDirectory());
         var root = FindRoot(start) ?? start;
+        var trusted = _trust.IsTrusted(root);
+        var configPath = Path.Combine(root, ".haoyue", "config.json");
+        var mcpFile = Path.Combine(
+            Directory.Exists(Path.Combine(root, "mcp")) ? Path.Combine(root, "mcp") : Path.Combine(root, ".haoyue", "mcp"),
+            "servers.json");
+        var config = trusted ? LoadWorkspaceConfig(root) : null;
         return new WorkspaceInfo
         {
             Root = root,
             ProjectKinds = DetectKinds(root),
-            Config = LoadWorkspaceConfig(root),
+            Config = config,
+            Trusted = trusted,
+            HasWorkspaceConfig = File.Exists(configPath),
+            HasWorkspaceMcp = File.Exists(mcpFile) || (config?.Mcp?.Servers.Count ?? 0) > 0,
         };
     }
 

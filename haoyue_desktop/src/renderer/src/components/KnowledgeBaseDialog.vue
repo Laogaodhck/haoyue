@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import { ArrowLeft, BookMarked, BookOpen, ChevronDown, ChevronRight, Download, FileText, FileUp, FolderOpen, Link2, LoaderCircle, Pencil, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, X } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { Component } from 'vue'
@@ -237,7 +238,7 @@ const sortedEntries = computed(() => {
 })
 
 async function requestJson<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const response = await window.haoyue.daemon.request(method, params)
+  const response = await daemonRequest(method, params)
   return JSON.parse(response.data) as T
 }
 
@@ -245,7 +246,7 @@ async function requestJson<T>(method: string, params: Record<string, unknown> = 
 async function requestJsonWithTimeout<T>(
   method: string, params: Record<string, unknown>, timeoutMs: number
 ): Promise<T> {
-  const response = await window.haoyue.daemon.request(method, params, { timeoutMs })
+  const response = await daemonRequest(method, params, { timeoutMs })
   return JSON.parse(response.data) as T
 }
 

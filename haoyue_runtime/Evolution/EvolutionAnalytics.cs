@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
 
@@ -110,7 +111,7 @@ public static class EvolutionAnalytics
             switch (persisted.Type)
             {
                 case nameof(ToolCallCompletedEvent):
-                    if (TryRead<ToolCallCompletedEvent>(persisted.Payload) is not { } tool) break;
+                    if (TryRead(persisted.Payload, EventJsonContext.Default.ToolCallCompletedEvent) is not { } tool) break;
                     if (tool.Success) break;
                     if (string.Equals(tool.ToolName, "declare_skill", StringComparison.OrdinalIgnoreCase))
                         points[date] = points[date] with { Gaps = points[date].Gaps + 1 };
@@ -118,11 +119,11 @@ public static class EvolutionAnalytics
                         points[date] = points[date] with { ToolFailures = points[date].ToolFailures + 1 };
                     break;
                 case nameof(VerificationCompletedEvent):
-                    if (TryRead<VerificationCompletedEvent>(persisted.Payload) is { } verification && !verification.Success)
+                    if (TryRead(persisted.Payload, EventJsonContext.Default.VerificationCompletedEvent) is { } verification && !verification.Success)
                         points[date] = points[date] with { VerificationFailures = points[date].VerificationFailures + 1 };
                     break;
                 case nameof(UserFeedbackEvent):
-                    if (TryRead<UserFeedbackEvent>(persisted.Payload) is { } feedback
+                    if (TryRead(persisted.Payload, EventJsonContext.Default.UserFeedbackEvent) is { } feedback
                         && string.Equals(feedback.Kind, "negative", StringComparison.OrdinalIgnoreCase))
                         points[date] = points[date] with { Feedback = points[date].Feedback + 1 };
                     break;
@@ -130,7 +131,7 @@ public static class EvolutionAnalytics
                     points[date] = points[date] with { Corrections = points[date].Corrections + 1 };
                     break;
                 case nameof(TurnCompletedEvent):
-                    if (TryRead<TurnCompletedEvent>(persisted.Payload) is { } completed && completed.Cancelled)
+                    if (TryRead(persisted.Payload, EventJsonContext.Default.TurnCompletedEvent) is { } completed && completed.Cancelled)
                         points[date] = points[date] with { Cancels = points[date].Cancels + 1 };
                     break;
                 case nameof(ProviderRetryEvent):
@@ -206,16 +207,16 @@ public static class EvolutionAnalytics
         foreach (var persisted in database.RecentEvents(EventJournal.RetainedEvents))
         {
             if (persisted.Type != nameof(ToolCallStartedEvent)) continue;
-            if (TryRead<ToolCallStartedEvent>(persisted.Payload) is not { } started) continue;
+            if (TryRead(persisted.Payload, EventJsonContext.Default.ToolCallStartedEvent) is not { } started) continue;
             if (!string.Equals(started.ToolName, "declare_skill", StringComparison.OrdinalIgnoreCase)) continue;
             if (started.ArgumentSummary?.Contains(skillName, StringComparison.OrdinalIgnoreCase) == true) count++;
         }
         return count;
     }
 
-    private static T? TryRead<T>(string payload) where T : class
+    private static T? TryRead<T>(string payload, JsonTypeInfo<T> info) where T : class
     {
-        try { return JsonSerializer.Deserialize<T>(payload); }
+        try { return JsonSerializer.Deserialize(payload, info); }
         catch (JsonException) { return null; }
     }
 }

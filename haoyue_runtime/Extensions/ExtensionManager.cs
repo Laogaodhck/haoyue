@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Haoyue.Runtime.ComputerUse;
+using Haoyue.Runtime.NetworkOps;
 using Haoyue.Runtime.Tools;
 
 /// <summary>
@@ -23,13 +25,14 @@ public sealed class ExtensionManager : IAsyncDisposable
 
     public IReadOnlyList<IRuntimeExtension> Extensions => _extensions;
 
-    public void Register(IRuntimeExtension extension)
+    public void Register(IRuntimeExtension extension, Func<IRuntimeExtension>? factory = null)
     {
         ArgumentNullException.ThrowIfNull(extension);
         if (_extensions.All(e => e.Id != extension.Id))
         {
-            var type = extension.GetType();
-            _factories[extension.Id] = () => (IRuntimeExtension)Activator.CreateInstance(type)!;
+            // Factory is explicit so re-enabling never depends on reflection:
+            // Activator.CreateInstance(Type) is not trim/AOT safe.
+            _factories[extension.Id] = factory ?? (() => extension);
             _extensions.Add(extension);
         }
     }
@@ -44,43 +47,16 @@ public sealed class ExtensionManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Creates an ExtensionManager with default discovered extensions via reflection.
-    /// If an extension module is removed or excluded from compilation, this method
-    /// automatically continues with remaining extensions without build or runtime breakage.
+    /// Creates an ExtensionManager with the built-in extension set. Registration is
+    /// explicit (not assembly scanning) so the composition stays visible in code and
+    /// works under trimming/AOT, where <c>Assembly.GetTypes()</c> can drop constructors.
+    /// A removed or newly added extension is one line here; the runtime never breaks.
     /// </summary>
     public static ExtensionManager CreateDefault()
     {
         var manager = new ExtensionManager();
-        try
-        {
-            var extensionInterface = typeof(IRuntimeExtension);
-            var assembly = extensionInterface.Assembly;
-            foreach (var type in assembly.GetTypes())
-            {
-                if (!type.IsAbstract &&
-                    !type.IsInterface &&
-                    extensionInterface.IsAssignableFrom(type) &&
-                    type.GetConstructor(Type.EmptyTypes) is not null)
-                {
-                    try
-                    {
-                        if (Activator.CreateInstance(type) is IRuntimeExtension ext)
-                        {
-                            manager.Register(ext);
-                        }
-                    }
-                    catch
-                    {
-                        // Extension discovery failure should never crash runtime initialization
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // Assembly scanning safety net
-        }
-
+        manager.Register(new ComputerUseExtension(), static () => new ComputerUseExtension());
+        manager.Register(new NetworkOpsExtension(), static () => new NetworkOpsExtension());
         return manager;
     }
 

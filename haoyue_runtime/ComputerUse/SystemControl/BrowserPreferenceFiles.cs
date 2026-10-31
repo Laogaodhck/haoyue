@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Haoyue.Runtime.ComputerUse.SystemControl;
@@ -187,13 +188,11 @@ public static partial class BrowserPreferenceFiles
         {
             Directory.CreateDirectory(backupDirectory);
             var path = Path.Combine(backupDirectory, $"browser-homepage-backup-{DateTime.Now:yyyyMMdd-HHmmss}.json");
-            var payload = new
-            {
-                createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                note = "浏览器主页修复前备份。按 Location 定位注册表值/配置文件/快捷方式，手工恢复 CurrentValue 即可还原。",
-                findings,
-            };
-            File.WriteAllText(path, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+            var payload = new BrowserBackupDocument(
+                DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                "浏览器主页修复前备份。按 Location 定位注册表值/配置文件/快捷方式，手工恢复 CurrentValue 即可还原。",
+                findings);
+            File.WriteAllText(path, JsonSerializer.Serialize(payload, BrowserBackupJsonContext.Default.BrowserBackupDocument));
             return path;
         }
         catch (Exception)
@@ -202,3 +201,14 @@ public static partial class BrowserPreferenceFiles
         }
     }
 }
+
+/// <summary>Pre-repair backup document; explicit property names keep the on-disk format stable.</summary>
+internal sealed record BrowserBackupDocument(
+    [property: JsonPropertyName("createdAt")] string CreatedAt,
+    [property: JsonPropertyName("note")] string Note,
+    [property: JsonPropertyName("findings")] IReadOnlyList<BrowserFinding> Findings);
+
+/// <summary>Source-generated metadata for the backup document (trim/AOT safe).</summary>
+[JsonSourceGenerationOptions(WriteIndented = true)]
+[JsonSerializable(typeof(BrowserBackupDocument))]
+internal sealed partial class BrowserBackupJsonContext : JsonSerializerContext;

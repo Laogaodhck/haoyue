@@ -4,6 +4,7 @@ using Haoyue.Runtime.Providers;
 
 namespace Haoyue.Tests;
 
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class LocalModelTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "haoyue-local-tests", Guid.NewGuid().ToString("N"));
@@ -525,7 +526,8 @@ public sealed class LocalModelTests : IDisposable
     /// Gemma 4 的官方聊天模板使用 llama.cpp 内置 Jinja 尚不支持的语法，apply 失败后
     /// 兜底渲染器必须产出与 canonical 格式逐字符一致的提示词。
     /// </summary>
-    public sealed class GemmaTurnPromptTests
+    [Collection(ProcessEnvironmentCollection.Name)]
+public sealed class GemmaTurnPromptTests
     {
         [Fact]
         public void RendersSystemUserAndModelTurns()

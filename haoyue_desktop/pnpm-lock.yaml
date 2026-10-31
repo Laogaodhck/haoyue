@@ -15,7 +15,7 @@ importers:
     dependencies:
       '@electron-toolkit/utils':
         specifier: ^4.0.0
-        version: 4.0.0(electron@43.7.11)
+        version: 4.0.0(electron@45.2.1)
       '@lucide/vue':
         specifier: ^1.27.0
         version: 1.27.0(vue@3.5.44(typescript@6.0.3))
@@ -51,8 +51,8 @@ importers:
         specifier: ^2.5.1
         version: 2.5.1(@vue/compiler-dom@3.5.44)(@vue/server-renderer@3.5.44)(vue@3.5.44(typescript@6.0.3))
       electron:
-        specifier: ^43.5.0
-        version: 43.7.11
+        specifier: ^45.2.1
+        version: 45.2.1
       electron-builder:
         specifier: ^26.15.3
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)
@@ -1647,8 +1647,8 @@ packages:
     resolution: {integrity: sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==}
     engines: {node: '>=8.0.0'}
 
-  electron@43.7.11:
-    resolution: {integrity: sha512-wEzOBtconxs86zwFPKCn5OzwGpr/pTAIvNT70aoDYslKlUcc76NbKQr2pqH8IMqL2bnN1K0EfVTREDa6sEp6OQ==}
+  electron@45.2.1:
+    resolution: {integrity: sha512-t433yuo8Kh8WG/mTStnPRT/NtpWw8A+caNLJgeU0tS/FlfOkeNEntFsac4ViLgDxZOmDe7BeSkOANVqrqNHhDA==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -2997,9 +2997,9 @@ snapshots:
 
   '@electron-internal/extract-zip@1.0.5': {}
 
-  '@electron-toolkit/utils@4.0.0(electron@43.7.11)':
+  '@electron-toolkit/utils@4.0.0(electron@45.2.1)':
     dependencies:
-      electron: 43.7.11
+      electron: 45.2.1
 
   '@electron/asar@3.4.1':
     dependencies:
@@ -4412,7 +4412,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@43.7.11:
+  electron@45.2.1:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0

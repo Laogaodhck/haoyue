@@ -1,3 +1,4 @@
+import { daemonRequest } from './daemon-rpc'
 import { reactive, type Ref } from 'vue'
 import type { DaemonState } from '../../shared/ipc'
 import type { ImageAttachment, ProjectItem, ThreadItem } from './types'
@@ -20,7 +21,7 @@ export async function refreshProjectSessions(context: SessionSyncContext, projec
   if (!daemonState.value.connected) return
   project.loaded = false
   try {
-    const response = await window.haoyue.daemon.request('session.list', {
+    const response = await daemonRequest('session.list', {
       workspace: project.path,
       includeArchived: true
     })
@@ -62,7 +63,7 @@ export async function refreshProjectSessions(context: SessionSyncContext, projec
 export async function refreshGlobalSessions(context: SessionSyncContext): Promise<void> {
   const { daemonState, threads } = context
   if (!daemonState.value.connected) return
-  const response = await window.haoyue.daemon.request('session.list', {
+  const response = await daemonRequest('session.list', {
     global: true,
     includeArchived: true
   })
@@ -158,7 +159,7 @@ async function fetchSessionPage(
   project: ProjectItem | undefined,
   page: Record<string, unknown>
 ): Promise<RuntimeSession> {
-  const response = await window.haoyue.daemon.request('session.get', {
+  const response = await daemonRequest('session.get', {
     id: thread.sessionId,
     limit: SESSION_PAGE_SIZE,
     ...sessionScope(thread, project),
@@ -214,8 +215,7 @@ export function requestSessionImageBytes(
   const key = imageSourceKey(thread.sessionId, image.id)
   if (sessionImageSources[key] || pendingImageBytes.has(key)) return
   pendingImageBytes.add(key)
-  void window.haoyue.daemon
-    .request('session.image', { id: thread.sessionId, imageId: image.id, ...sessionScope(thread, project) })
+  void daemonRequest('session.image', { id: thread.sessionId, imageId: image.id, ...sessionScope(thread, project) })
     .then((response) => {
       const stored = JSON.parse(response.data) as { mediaType?: string; data?: string | null }
       if (stored.data) {

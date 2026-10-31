@@ -49,6 +49,52 @@ export function errorCodeOf(message: DaemonMessage): DaemonErrorCode {
     : 'unknown'
 }
 
+/** `daemon:request` 跨 IPC 的错误信封：Electron 会丢失 Error 上的自定义属性，故用纯对象传递。 */
+export interface DaemonRpcError {
+  code: DaemonErrorCode
+  message: string
+  method: string
+}
+
+/**
+ * `daemon:request` 的跨 IPC 返回值。成功回显原 DaemonMessage，失败回结构化错误，
+ * 而不是让 ipcMain.handle 直接 reject——reject 后 code/method 在渲染进程不可见。
+ */
+export type DaemonRpcResult =
+  | { ok: true; message: DaemonMessage }
+  | { ok: false; error: DaemonRpcError }
+
+/** 渲染进程侧的契约化异常：行为分支看 code，message 仅展示。 */
+export class DaemonRequestError extends Error {
+  readonly code: DaemonErrorCode
+  readonly method: string
+
+  constructor(code: DaemonErrorCode, message: string, method: string) {
+    super(message)
+    this.name = 'DaemonRequestError'
+    this.code = code
+    this.method = method
+  }
+}
+
+/** 主进程侧：把客户端异常归一化为可跨 IPC 的错误信封。 */
+export function toDaemonRpcError(error: unknown, method: string): DaemonRpcError {
+  if (error instanceof DaemonError) {
+    return { code: error.code, message: error.message, method: error.method ?? method }
+  }
+  return {
+    code: 'unknown',
+    message: error instanceof Error ? error.message : String(error),
+    method
+  }
+}
+
+/** 渲染进程侧：把结构化结果还原为消息或抛出带 code/method 的异常。 */
+export function unwrapDaemonResult(result: DaemonRpcResult): DaemonMessage {
+  if (result.ok) return result.message
+  throw new DaemonRequestError(result.error.code, result.error.message, result.error.method)
+}
+
 export interface DaemonState {
   connected: boolean
   endpoint: string
@@ -175,7 +221,7 @@ export interface DesktopApi {
       method: string,
       params?: Record<string, unknown>,
       options?: DaemonRequestOptions
-    ): Promise<DaemonMessage>
+    ): Promise<DaemonRpcResult>
     onEvent(listener: (message: DaemonMessage) => void): () => void
     onState(listener: (state: DaemonState) => void): () => void
   }

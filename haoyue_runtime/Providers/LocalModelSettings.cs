@@ -306,7 +306,7 @@ public sealed class LocalModelSettings
         if (StopStrings is { Count: > 0 } stops)
         {
             var array = new JsonArray();
-            foreach (var stop in stops) array.Add(JsonValue.Create(stop));
+            foreach (var stop in stops) array.Add((JsonNode)JsonValue.Create(stop)!);
             node["stopStrings"] = array;
         }
         Set("enableThinking", EnableThinking is { } thinking ? JsonValue.Create(thinking) : null);

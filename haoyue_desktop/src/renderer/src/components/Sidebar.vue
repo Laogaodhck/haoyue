@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import {
   Archive,
   Blocks,
@@ -177,7 +178,7 @@ async function runRemoteSearch(term: string): Promise<void> {
   remoteSearching.value = true
   remoteError.value = ''
   try {
-    const response = await window.haoyue.daemon.request('session.search', {
+    const response = await daemonRequest('session.search', {
       query: term,
       limit: 20,
       includeArchived: true,

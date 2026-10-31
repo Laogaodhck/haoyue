@@ -103,7 +103,7 @@ public class DocsFactsTests
     {
         var json = JsonDocument.Parse(ReadRepoFile("contracts", "daemon-contract.json"));
         var n = json.RootElement.GetProperty("methods").GetArrayLength();
-        Assert.Equal(125, n);
+        Assert.Equal(127, n);
         AssertReadmeMentions([$"{n} 个 RPC 方法"], [$"all {n} RPC methods"]);
     }
 
@@ -126,15 +126,20 @@ public class DocsFactsTests
     /// 预算 = 2026-10-15 基线行数 + 约 3% 余量。
     /// </summary>
     [Theory]
-    [InlineData("haoyue_runtime/Daemon/DaemonAdminApi.cs", 3350)]
-    [InlineData("haoyue_runtime/Daemon/DaemonServer.cs", 3150)]
+    // partial 类按「整个类」计行（前缀匹配所有同名 partial 文件），否则拆分可以变相绕过预算。
+    [InlineData("haoyue_runtime/Daemon/DaemonAdminApi.cs", 4050)]
+    [InlineData("haoyue_runtime/Daemon/DaemonServer.cs", 3250)]
     [InlineData("haoyue_desktop/src/renderer/src/components/SettingsDialog.vue", 2700)]
     [InlineData("haoyue_desktop/src/renderer/src/App.vue", 2400)]
     public void GiantClass_LineBudget_Maintained(string relativePath, int budget)
     {
-        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), relativePath.Replace('/', Path.DirectorySeparatorChar))).Length;
+        var full = Path.Combine(FindRepoRoot(), relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var files = relativePath.EndsWith(".cs", StringComparison.Ordinal)
+            ? Directory.GetFiles(Path.GetDirectoryName(full)!, Path.GetFileNameWithoutExtension(relativePath) + "*.cs")
+            : [full];
+        var lines = files.Sum(file => File.ReadAllLines(file).Length);
         Assert.True(lines <= budget,
-            $"{relativePath} 已达 {lines} 行，超出预算 {budget}（ADR-20261015-giant-class-budget.md）。" +
-            "先做拆分评审或显式上调预算（同步 ADR 与本测试），不要默认继续膨胀。");
+            $"{relativePath}（含 partial，共 {files.Length} 个文件）已达 {lines} 行，超出预算 {budget}" +
+            "（ADR-20261015-giant-class-budget.md）。先做拆分评审或显式上调预算（同步 ADR 与本测试），不要默认继续膨胀。");
     }
 }

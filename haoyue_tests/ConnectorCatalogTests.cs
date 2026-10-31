@@ -16,6 +16,7 @@ namespace Haoyue.Tests;
 /// S5 连接器生态护栏：目录加载完整性、包规范校验、安装器占位符/加密落盘、
 /// 卸载闭环。全部在临时目录进行，不触碰真实 ~/.haoyue/config.json。
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class ConnectorCatalogTests : IDisposable
 {
     private readonly string _dir =
@@ -258,6 +259,7 @@ public sealed class ConnectorCatalogTests : IDisposable
 /// 连接器供应链完整性护栏（P2）：仓库 SHA256SUMS 清单与目录内容自洽、
 /// Verify 对未篡改包放行、对篡改清单/内置服务器抛可读异常、无清单目录跳过。
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class ConnectorIntegrityTests : IDisposable
 {
     private readonly string _dir =
@@ -398,6 +400,7 @@ public sealed class ConnectorIntegrityTests : IDisposable
 /// 连接器 daemon RPC 护栏：ListConnectors 的目录/安装状态合成、Install 的
 /// 占位符与加密落盘、卸载闭环与未知 id 拒绝。走真实 DaemonAdminApi。
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class ConnectorDaemonApiTests : IDisposable
 {
     private readonly string _dir =

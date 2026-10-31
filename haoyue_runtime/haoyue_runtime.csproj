@@ -7,7 +7,9 @@
     <RootNamespace>Haoyue.Runtime</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- 契约面对告警零容忍：新增告警当场处理，不得静默积累。AOT/裁剪分析器已开启，
+         JSON 序列化一律走源生成上下文（EventJsonContext / AuditJsonContext 等）。 -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>

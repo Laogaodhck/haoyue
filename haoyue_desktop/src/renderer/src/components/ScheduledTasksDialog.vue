@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import {
   ArrowLeft,
   CalendarClock,
@@ -72,7 +73,7 @@ const selectedPreset = computed({
 })
 
 async function requestJson<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const response = await window.haoyue.daemon.request(method, params)
+  const response = await daemonRequest(method, params)
   return JSON.parse(response.data) as T
 }
 
@@ -203,7 +204,7 @@ async function toggleTask(task: ScheduledTaskInfo): Promise<void> {
 async function runTask(task: ScheduledTaskInfo): Promise<void> {
   beginAction(`schedule.run:${task.id}`)
   try {
-    await window.haoyue.daemon.request('schedule.run', { id: task.id })
+    await daemonRequest('schedule.run', { id: task.id })
     notice.value = `已触发「${task.name}」`
     await loadTasks()
   } catch (reason) {
@@ -225,7 +226,7 @@ async function removeTask(task: ScheduledTaskInfo): Promise<void> {
   if (!confirmed) return
   beginAction(`schedule.delete:${task.id}`)
   try {
-    await window.haoyue.daemon.request('schedule.delete', { id: task.id })
+    await daemonRequest('schedule.delete', { id: task.id })
     notice.value = `已删除「${task.name}」`
     await loadTasks()
   } catch (reason) {

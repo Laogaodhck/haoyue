@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import { ChevronDown, FileText, Folder, FolderOpen, LoaderCircle, RefreshCw } from '@lucide/vue'
 import { onMounted, ref } from 'vue'
+import WorkspaceTrustNotice from './WorkspaceTrustNotice.vue'
 import { summarizeWorkspaceFiles, type WorkspaceDirEntry } from '../workspace-overview'
 
 /// 欢迎页的「工作区速览」卡片：复用 workspace.files RPC（与 @ 引用同一数据源，
@@ -20,7 +22,7 @@ async function refresh(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const response = await window.haoyue.daemon.request('workspace.files', {
+    const response = await daemonRequest('workspace.files', {
       workspace: props.workspacePath,
       query: '',
       limit: 60
@@ -58,6 +60,7 @@ onMounted(() => { void refresh() })
         <ChevronDown :size="14" class="workspace-overview-chevron" :class="{ rotated: open }" aria-hidden="true" />
       </span>
     </button>
+    <WorkspaceTrustNotice :workspace-path="workspacePath" @changed="refresh" />
     <p v-if="error" class="workspace-overview-error">目录读取失败：{{ error }}</p>
     <ul v-if="open && entries.length" class="workspace-overview-list">
       <li v-for="entry in entries" :key="entry.name" class="workspace-overview-row"

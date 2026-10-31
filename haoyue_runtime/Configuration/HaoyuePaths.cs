@@ -56,6 +56,10 @@ public static class HaoyuePaths
     public static void EnsureCreated()
     {
         Directory.CreateDirectory(Home);
+        // ~/.haoyue holds the daemon socket, handshake token, sessions and config:
+        // owner-only (0700) on Unix so another local account cannot even list it.
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(Home, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         Directory.CreateDirectory(LogsDir);
         Directory.CreateDirectory(SkillsDir);
     }

@@ -15,6 +15,7 @@ namespace Haoyue.Tests;
 /// 真实渲染用例在「Python + doc_toolkit + 三件套依赖」齐备的环境才执行，
 /// 其余环境静默跳过（与 CI 无 Python 的事实兼容）。
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class DocRenderToolTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "haoyue-docrender-" + Guid.NewGuid().ToString("N"));

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import { Plus, Trash2, X } from '@lucide/vue'
 import { ref, watch } from 'vue'
 import { useEscapeClose } from '../use-escape-close'
@@ -27,7 +28,7 @@ const saving = ref(false)
 const error = ref('')
 
 async function request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const response = await window.haoyue.daemon.request(method, params)
+  const response = await daemonRequest(method, params)
   return JSON.parse(response.data) as T
 }
 

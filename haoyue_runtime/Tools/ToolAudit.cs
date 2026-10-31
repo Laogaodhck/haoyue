@@ -33,6 +33,8 @@ public static class ToolAuditLog
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    private static readonly AuditJsonContext Json = new(JsonOptions);
+
     public static string AuditFile(WorkspaceInfo workspace) =>
         Path.Combine(workspace.Root, ".haoyue", "audit", "tools.jsonl");
 
@@ -72,7 +74,7 @@ public static class ToolAuditLog
                     Target = CredentialRedactor.Redact(record.Target),
                     Summary = CredentialRedactor.Redact(record.Summary),
                 };
-                File.AppendAllText(file, JsonSerializer.Serialize(redacted, JsonOptions) + Environment.NewLine);
+                File.AppendAllText(file, JsonSerializer.Serialize(redacted, Json.ToolAuditRecord) + Environment.NewLine);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

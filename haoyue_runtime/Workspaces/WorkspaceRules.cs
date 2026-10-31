@@ -1,3 +1,5 @@
+using Haoyue.Runtime.Tools;
+
 namespace Haoyue.Runtime.Workspaces;
 
 /// <summary>One hierarchical AGENTS.md rule file discovered under a workspace root.</summary>
@@ -109,7 +111,7 @@ public static class WorkspaceRules
         {
             throw new ArgumentException($"Invalid rules path: {ex.Message}", nameof(relativePath));
         }
-        if (!fullPath.StartsWith(rootPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        if (!PathGuard.IsInside(rootPath, fullPath))
             throw new ArgumentException("规则路径越出了工作区根目录");
         return fullPath;
     }

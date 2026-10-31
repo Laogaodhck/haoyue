@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { toIpcPayload } from '../shared/ipc.js'
-import type { DaemonMessage, DaemonState, DesktopApi, WebBlockedNotice } from '../shared/ipc.js'
+import type {
+  DaemonMessage,
+  DaemonRpcResult,
+  DaemonState,
+  DesktopApi,
+  WebBlockedNotice
+} from '../shared/ipc.js'
 
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke('app:info'),
@@ -41,7 +47,7 @@ const api: DesktopApi = {
   },
   daemon: {
     connect: () => ipcRenderer.invoke('daemon:connect'),
-    request: (method, params, options) => ipcRenderer.invoke(
+    request: (method, params, options): Promise<DaemonRpcResult> => ipcRenderer.invoke(
       'daemon:request',
       method,
       params === undefined ? undefined : toIpcPayload(params),

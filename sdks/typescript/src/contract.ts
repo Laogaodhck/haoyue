@@ -7,40 +7,40 @@
 export const CONTRACT_VERSION = "1.0";
 export const PROTOCOL_VERSION = "2.2";
 
-/** 契约声明的全部 RPC 方法名（125 个）。 */
+/** 契约声明的全部 RPC 方法名（127 个）。 */
 export type MethodName =
   "ping" | "protocol.info" | "contract.export" | "events.recent"
   | "shutdown" | "chat" | "agent.runTurn" | "agent.steer"
   | "agent.respondApproval" | "agent.cancel" | "agent.undo" | "agent.interrupted"
-  | "feedback.turn" | "workspace.get" | "workspace.open" | "workspace.files"
-  | "workspace.init" | "agent.mode.get" | "agent.mode.switch" | "config.save"
-  | "config.get" | "config.status" | "config.rebuild" | "routing.get"
-  | "routing.set" | "advanced.get" | "advanced.set" | "web.allowedGet"
-  | "web.allowedSet" | "agent.config.get" | "agent.config.set" | "prompt.optimize"
-  | "provider.list" | "provider.upsert" | "provider.use" | "provider.remove"
-  | "provider.test" | "provider.models.fetch" | "local.models" | "model.list"
-  | "model.catalog" | "model.switch" | "model.test" | "model.status"
-  | "model.preload" | "model.unload" | "model.config.get" | "model.update"
-  | "model.benchmark" | "schedule.list" | "schedule.create" | "schedule.update"
-  | "schedule.toggle" | "schedule.delete" | "schedule.run" | "task.start"
-  | "task.get" | "task.list" | "task.cancel" | "mcp.list"
-  | "mcp.upsert" | "mcp.remove" | "mcp.reload" | "connectors.list"
-  | "connectors.install" | "connectors.uninstall" | "skill.list" | "skill.import"
-  | "skill.toggle" | "skill.official.list" | "skill.official.install" | "expert.list"
-  | "knowledge.list" | "knowledge.search" | "knowledge.save" | "knowledge.delete"
-  | "knowledge.import" | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get"
-  | "knowledge.synonyms.save" | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete"
-  | "knowledge.source.add" | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete"
-  | "knowledge.source.refresh" | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build"
-  | "memory.get" | "memory.save" | "rules.list" | "rules.save"
-  | "rules.delete" | "usage.get" | "usage.timeline" | "session.list"
-  | "session.search" | "session.get" | "session.image" | "session.truncate"
-  | "session.fork" | "session.update" | "session.archive" | "session.delete"
-  | "session.resume" | "session.new" | "project.list" | "project.upsert"
-  | "project.remove" | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list"
-  | "evolution.decide" | "evolution.history" | "evolution.stats" | "evolution.config.get"
-  | "evolution.config.set" | "doctor" | "doctor.run" | "lock.list"
-  | "factory.reset"
+  | "feedback.turn" | "workspace.get" | "workspace.open" | "workspace.trust"
+  | "workspace.untrust" | "workspace.files" | "workspace.init" | "agent.mode.get"
+  | "agent.mode.switch" | "config.save" | "config.get" | "config.status"
+  | "config.rebuild" | "routing.get" | "routing.set" | "advanced.get"
+  | "advanced.set" | "web.allowedGet" | "web.allowedSet" | "agent.config.get"
+  | "agent.config.set" | "prompt.optimize" | "provider.list" | "provider.upsert"
+  | "provider.use" | "provider.remove" | "provider.test" | "provider.models.fetch"
+  | "local.models" | "model.list" | "model.catalog" | "model.switch"
+  | "model.test" | "model.status" | "model.preload" | "model.unload"
+  | "model.config.get" | "model.update" | "model.benchmark" | "schedule.list"
+  | "schedule.create" | "schedule.update" | "schedule.toggle" | "schedule.delete"
+  | "schedule.run" | "task.start" | "task.get" | "task.list"
+  | "task.cancel" | "mcp.list" | "mcp.upsert" | "mcp.remove"
+  | "mcp.reload" | "connectors.list" | "connectors.install" | "connectors.uninstall"
+  | "skill.list" | "skill.import" | "skill.toggle" | "skill.official.list"
+  | "skill.official.install" | "expert.list" | "knowledge.list" | "knowledge.search"
+  | "knowledge.save" | "knowledge.delete" | "knowledge.import" | "knowledge.tags"
+  | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list"
+  | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list"
+  | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve"
+  | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get" | "memory.save"
+  | "rules.list" | "rules.save" | "rules.delete" | "usage.get"
+  | "usage.timeline" | "session.list" | "session.search" | "session.get"
+  | "session.image" | "session.truncate" | "session.fork" | "session.update"
+  | "session.archive" | "session.delete" | "session.resume" | "session.new"
+  | "project.list" | "project.upsert" | "project.remove" | "evolution.inspect"
+  | "evolution.reflect" | "evolution.pending-list" | "evolution.decide" | "evolution.history"
+  | "evolution.stats" | "evolution.config.get" | "evolution.config.set" | "doctor"
+  | "doctor.run" | "lock.list" | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -158,6 +158,20 @@ export const METHODS: readonly MethodInfo[] = [
     terminalEvents: ["result", "error"],
   },
   {
+    name: "workspace.trust",
+    category: "workspace",
+    description: "\u53d7\u4fe1\u5de5\u4f5c\u533a\uff08\u542f\u7528\u5176 .haoyue/config.json \u4e0e mcp/servers.json \u4e2d\u7684\u81ea\u52a8\u6267\u884c\u914d\u7f6e\uff09",
+    paramsSchema: {"properties": {"path": {"description": "目标工作区；留空为当前工作区", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "workspace.untrust",
+    category: "workspace",
+    description: "\u64a4\u9500\u5de5\u4f5c\u533a\u4fe1\u4efb\uff08\u7acb\u5373\u505c\u7528\u5176\u5de5\u4f5c\u533a\u7ea7\u914d\u7f6e\u4e0e MCP \u670d\u52a1\u5668\uff09",
+    paramsSchema: {"properties": {"path": {"description": "目标工作区；留空为当前工作区", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
     name: "workspace.files",
     category: "workspace",
     description: "\u5217\u4e3e\u5de5\u4f5c\u533a\u5185\u6587\u4ef6\uff0c\u4f9b\u8f93\u5165\u6846 @ \u5f15\u7528\u6311\u9009\uff08\u5df2\u8df3\u8fc7\u6784\u5efa\u4ea7\u7269\u4e0e\u51ed\u8bc1\u6587\u4ef6\uff0c\u53ea\u7ed9\u76f8\u5bf9\u8def\u5f84\uff09",
@@ -189,7 +203,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "config.save",
     category: "config",
     description: "\u914d\u7f6e\u5b57\u6bb5\u7ea7\u8865\u4e01\uff08\u591a\u7aef\u5355\u5199\u8005\u6536\u655b\uff1b\u5e26 workspace \u65f6\u5199\u8be5\u9879\u76ee .haoyue/config.json\uff09",
-    paramsSchema: {"properties": {"fields": {"description": "递归字段补丁对象", "type": "string"}, "workspace": {"description": "目标工作区绝对路径；留空写全局配置", "type": "string"}}, "required": ["fields"], "type": "object"},
+    paramsSchema: {"properties": {"fields": {"additionalProperties": true, "description": "递归字段补丁对象", "type": "object"}, "workspace": {"description": "目标工作区绝对路径；留空写全局配置", "type": "string"}}, "required": ["fields"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -476,7 +490,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "mcp.upsert",
     category: "mcp",
     description: "\u521b\u5efa\u6216\u66f4\u65b0 MCP \u670d\u52a1\u5668",
-    paramsSchema: {"properties": {"name": {"description": "服务器名", "type": "string"}, "scope": {"description": "写入作用域", "enum": ["workspace", "global"], "type": "string"}, "server": {"properties": {"args": {"description": "命令参数", "type": "array"}, "command": {"description": "stdio 启动命令", "type": "string"}, "cwd": {"description": "stdio 子进程工作目录；留空默认当前工作区根目录", "type": "string"}, "enabled": {"description": "是否启用", "type": "boolean"}, "env": {"description": "环境变量对象", "type": "string"}, "transport": {"description": "传输方式（stdio / sse）", "type": "string"}, "url": {"description": "远程服务地址", "type": "string"}}, "type": "object"}}, "required": ["name", "server"], "type": "object"},
+    paramsSchema: {"properties": {"name": {"description": "服务器名", "type": "string"}, "scope": {"description": "写入作用域", "enum": ["workspace", "global"], "type": "string"}, "server": {"properties": {"args": {"description": "命令参数", "type": "array"}, "command": {"description": "stdio 启动命令", "type": "string"}, "cwd": {"description": "stdio 子进程工作目录；留空默认当前工作区根目录", "type": "string"}, "enabled": {"description": "是否启用", "type": "boolean"}, "env": {"additionalProperties": {"type": "string"}, "description": "环境变量对象（键值均为字符串）", "type": "object"}, "transport": {"description": "传输方式（stdio / sse）", "type": "string"}, "url": {"description": "远程服务地址", "type": "string"}}, "type": "object"}}, "required": ["name", "server"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -504,7 +518,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "connectors.install",
     category: "connectors",
     description: "\u4e00\u952e\u5b89\u88c5\u8fde\u63a5\u5668\uff08\u5360\u4f4d\u7b26\u586b\u5145\u3001secret \u52a0\u5bc6\u843d\u76d8\uff09",
-    paramsSchema: {"properties": {"id": {"description": "连接器包 id", "type": "string"}, "values": {"properties": {"key": {"description": "inputs 配置项取值（键名与包 inputs.key 对应）", "type": "string"}}, "type": "object"}}, "required": ["id"], "type": "object"},
+    paramsSchema: {"properties": {"id": {"description": "连接器包 id", "type": "string"}, "values": {"additionalProperties": {"type": "string"}, "description": "inputs 配置项取值（键名与包 inputs.key 对应）", "type": "object"}}, "required": ["id"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

@@ -211,6 +211,10 @@ public static class DaemonContract
     private static JsonObject SFreeObject(string description) =>
         new() { ["type"] = "object", ["description"] = description, ["additionalProperties"] = new JsonObject { ["type"] = "string" } };
 
+    /// <summary>任意 JSON 对象（递归补丁等）：值可以是对象/数组/标量，键名不预设。</summary>
+    private static JsonObject SAnyObject(string description) =>
+        new() { ["type"] = "object", ["description"] = description, ["additionalProperties"] = true };
+
     private static JsonObject SNumber(string description) =>
         new() { ["type"] = "number", ["description"] = description };
 
@@ -328,7 +332,7 @@ public static class DaemonContract
         ("cwd", SString("stdio 子进程工作目录；留空默认当前工作区根目录"), false),
         ("enabled", SBoolean("是否启用"), false),
         ("args", SArray("命令参数"), false),
-        ("env", SString("环境变量对象"), false));
+        ("env", SFreeObject("环境变量对象（键值均为字符串）"), false));
 
     private static readonly JsonObject KnowledgeScope = SObject(
         ("workspace", SString("工作区路径；缺省用当前工作区"), false),
@@ -835,12 +839,15 @@ public static class DaemonContract
         ("createdAt", SString("创建时间")),
         ("updatedAt", SString("更新时间")));
 
-    /// <summary>工作区（workspace.get / workspace.open）。</summary>
+    /// <summary>工作区（workspace.get / workspace.open / workspace.trust）。</summary>
     private static readonly JsonObject WorkspaceResult = RObject(
         ("path", SString("工作区根目录")),
         ("name", SString("工作区名")),
         ("projectKinds", SArray("项目类型标签")),
-        ("mode", SString("Agent 模式", "plan", "readonly", "edit", "auto")));
+        ("mode", SString("Agent 模式", "plan", "readonly", "edit", "auto")),
+        ("trusted", SBoolean("用户是否显式受信该工作区；未受信时不应用其 .haoyue/config.json 与 mcp/servers.json")),
+        ("hasWorkspaceConfig", SBoolean("工作区根下 .haoyue/config.json 是否存在")),
+        ("hasWorkspaceMcp", SBoolean("工作区是否声明了 MCP 服务器")));
 
     /// <summary>配置一致性诊断（config.status）。</summary>
     private static readonly JsonObject ConfigStatusResult = RObject(
@@ -1141,6 +1148,14 @@ public static class DaemonContract
             ("path", SString("工作区根目录"), true)),
             result: WorkspaceResult,
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("workspace.trust", "workspace", "受信工作区（启用其 .haoyue/config.json 与 mcp/servers.json 中的自动执行配置）",
+            parameters: SObject(("path", SString("目标工作区；留空为当前工作区"), false)),
+            result: WorkspaceResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("workspace.untrust", "workspace", "撤销工作区信任（立即停用其工作区级配置与 MCP 服务器）",
+            parameters: SObject(("path", SString("目标工作区；留空为当前工作区"), false)),
+            result: WorkspaceResult,
+            errors: E(DaemonErrorCode.InvalidParams)),
         M("workspace.files", "workspace", "列举工作区内文件，供输入框 @ 引用挑选（已跳过构建产物与凭证文件，只给相对路径）",
             parameters: Scope(
                 ("query", SString("模糊匹配词；留空则返回最近修改的文件"), false),
@@ -1160,7 +1175,7 @@ public static class DaemonContract
 
         // config
         M("config.save", "config", "配置字段级补丁（多端单写者收敛；带 workspace 时写该项目 .haoyue/config.json）", parameters: SObject(
-            ("fields", SString("递归字段补丁对象"), true),
+            ("fields", SAnyObject("递归字段补丁对象"), true),
             ("workspace", SString("目标工作区绝对路径；留空写全局配置"), false)),
             result: RText, errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.Conflict, DaemonErrorCode.NotFound)),
         M("config.get", "config", "读取配置文档（密钥不回传）；带 workspace 时读该项目 .haoyue/config.json", parameters: SObject(
@@ -1403,8 +1418,7 @@ public static class DaemonContract
             result: ConnectorListResult, errors: E()),
         M("connectors.install", "connectors", "一键安装连接器（占位符填充、secret 加密落盘）", parameters: SObject(
             ("id", SString("连接器包 id"), true),
-            ("values", SObject(
-                ("key", SString("inputs 配置项取值（键名与包 inputs.key 对应）"), false)), false)),
+            ("values", SFreeObject("inputs 配置项取值（键名与包 inputs.key 对应）"), false)),
             result: ConnectorListResult,
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
         M("connectors.uninstall", "connectors", "卸载连接器", parameters: SObject(

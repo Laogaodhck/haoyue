@@ -117,6 +117,8 @@ public static class BashAuditLog
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    private static readonly AuditJsonContext Json = new(JsonOptions);
+
     public static string AuditFile(WorkspaceInfo workspace) =>
         Path.Combine(workspace.Root, ".haoyue", "audit", "bash.jsonl");
 
@@ -130,7 +132,7 @@ public static class BashAuditLog
             {
                 AuditRotation.RotateIfNeeded(file);
                 var redacted = record with { Command = Haoyue.Runtime.Secrets.CredentialRedactor.Redact(record.Command) };
-                File.AppendAllText(file, JsonSerializer.Serialize(redacted, JsonOptions) + Environment.NewLine);
+                File.AppendAllText(file, JsonSerializer.Serialize(redacted, Json.BashAuditRecord) + Environment.NewLine);
             }
         }
         catch (IOException)

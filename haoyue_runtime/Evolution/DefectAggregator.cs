@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
 
@@ -79,8 +80,6 @@ public sealed class DefectAggregator(HaoyueDatabase database)
     /// <summary>Cap for normalized error text so fingerprints stay stable across noise.</summary>
     public const int ErrorSummaryChars = 160;
 
-    private static readonly JsonSerializerOptions PayloadOptions = new();
-
     /// <summary>Scans the most recent journal rows and returns aggregated defects, oldest first.
     /// <paramref name="excludeSessions"/> lists reflection-turn session ids (from the evolution
     /// decision log) so the engine never aggregates its own failures. Session attribution is
@@ -122,7 +121,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
             switch (persisted.Type)
             {
                 case nameof(TurnStartedEvent):
-                    if (TryDeserialize<TurnStartedEvent>(persisted.Payload) is { } started)
+                    if (TryDeserialize(persisted.Payload, EventJsonContext.Default.TurnStartedEvent) is { } started)
                     {
                         currentSession = started.SessionId;
                         if (started.TurnId is { Length: > 0 } startedTurn)
@@ -131,7 +130,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     break;
 
                 case nameof(TurnCompletedEvent):
-                    if (TryDeserialize<TurnCompletedEvent>(persisted.Payload) is { } completed)
+                    if (TryDeserialize(persisted.Payload, EventJsonContext.Default.TurnCompletedEvent) is { } completed)
                     {
                         if (completed.TurnId is { Length: > 0 } completedTurn)
                             turnSessions[completedTurn] = completed.SessionId;
@@ -147,7 +146,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     break;
 
                 case nameof(ProviderRetryEvent):
-                    if (TryDeserialize<ProviderRetryEvent>(persisted.Payload) is not { } retry) break;
+                    if (TryDeserialize(persisted.Payload, EventJsonContext.Default.ProviderRetryEvent) is not { } retry) break;
                     if (Excluded(retry)) break;
                     var retryKey = new ClusterKey(retry.ModelRef, NormalizeError(retry.Reason));
                     providerRetries.TryAdd(retryKey, []);
@@ -155,7 +154,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     break;
 
                 case nameof(UserSteerEvent):
-                    if (TryDeserialize<UserSteerEvent>(persisted.Payload) is not { } steer) break;
+                    if (TryDeserialize(persisted.Payload, EventJsonContext.Default.UserSteerEvent) is not { } steer) break;
                     if (Excluded(steer)) break;
                     var correctionKey = SessionOf(steer) ?? "-";
                     corrections.TryAdd(correctionKey, []);
@@ -163,7 +162,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     break;
 
                 case nameof(ToolCallCompletedEvent):
-                    var tool = TryDeserialize<ToolCallCompletedEvent>(persisted.Payload);
+                    var tool = TryDeserialize(persisted.Payload, EventJsonContext.Default.ToolCallCompletedEvent);
                     if (tool is null || tool.Success) break;
                     if (Excluded(tool)) break;
                     var error = NormalizeError(tool.ResultSummary);
@@ -185,7 +184,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     break;
 
                 case nameof(RetrievalMissEvent):
-                    var miss = TryDeserialize<RetrievalMissEvent>(persisted.Payload);
+                    var miss = TryDeserialize(persisted.Payload, EventJsonContext.Default.RetrievalMissEvent);
                     if (miss is null || string.IsNullOrWhiteSpace(miss.Query)) break;
                     if (Excluded(miss)) break;
                     var missKey = new ClusterKey(miss.ToolName, NormalizeQuery(miss.Query));
@@ -194,7 +193,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     break;
 
                 case nameof(VerificationCompletedEvent):
-                    var verification = TryDeserialize<VerificationCompletedEvent>(persisted.Payload);
+                    var verification = TryDeserialize(persisted.Payload, EventJsonContext.Default.VerificationCompletedEvent);
                     if (verification is null) break;
                     if (Excluded(verification)) break;
                     // 每个回合各自成链：并发回合的失败不得拼成同一次挣扎。
@@ -223,7 +222,7 @@ public sealed class DefectAggregator(HaoyueDatabase database)
                     // P4: one thumbs-down is one defect report — no threshold. The
                     // fingerprint embeds the journal timestamp so repeated feedback on
                     // the same session stays distinct; reflection reads the transcript.
-                    if (TryDeserialize<UserFeedbackEvent>(persisted.Payload) is not { } feedback) break;
+                    if (TryDeserialize(persisted.Payload, EventJsonContext.Default.UserFeedbackEvent) is not { } feedback) break;
                     if (!string.Equals(feedback.Kind, "negative", StringComparison.OrdinalIgnoreCase)) break;
                     // 反自喂养：反馈自带 SessionId，直接按 id 比对，不依赖 TurnStarted/Completed
                     // 括号法（并发回合交错时它会串号），保证反思回合自己的反馈不会变成新缺陷。
@@ -480,13 +479,13 @@ public sealed class DefectAggregator(HaoyueDatabase database)
         return Convert.ToHexString(hash)[..16].ToLowerInvariant();
     }
 
-    private static T? TryDeserialize<T>(string payload) where T : class
+    private static T? TryDeserialize<T>(string payload, JsonTypeInfo<T> info) where T : class
     {
         try
         {
             // Truncated payloads collapse to {"type","truncated"} and deserialize to defaults;
             // reject those so a single oversized row cannot fabricate a synthetic event.
-            return JsonSerializer.Deserialize<T>(payload, PayloadOptions) is { } value
+            return JsonSerializer.Deserialize(payload, info) is { } value
                 && JsonNodeLooksReal(payload)
                 ? value
                 : null;

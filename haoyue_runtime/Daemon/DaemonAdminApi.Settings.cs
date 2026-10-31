@@ -8,8 +8,8 @@ namespace Haoyue.Runtime.Daemon;
 /// <summary>
 /// 设置面（settings surface）：把此前「只能手改 config.json」的配置收进 RPC。
 ///
-/// 拆到独立 partial 文件的原因是 <c>DaemonAdminApi.cs</c> 有 3350 行硬预算
-/// （ADR-20261015-giant-class-budget.md），继续往里堆会直接顶红 DocsFactsTests。
+/// 拆到独立 partial 文件的原因是整个 <c>DaemonAdminApi</c>（含 partial）有类级行数
+/// 硬预算（ADR-20261015-giant-class-budget.md），继续往里堆会直接顶红 DocsFactsTests。
 /// 这里集中三件事：
 /// 1) 路由与容灾全字段（回退链 / 负载均衡 / 重试与熔断 / 本地→云回退）；
 /// 2) 智能体专家参数（步数、思考预算、工具输出上限、委派配额、记忆固化、保留期…）；

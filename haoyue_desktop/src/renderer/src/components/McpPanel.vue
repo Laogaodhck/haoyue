@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import {
   ArrowLeft,
   BookOpen,
@@ -51,6 +52,7 @@ import {
 } from '../mcp-form'
 import FieldLabel from './FieldLabel.vue'
 import SelectMenu from './SelectMenu.vue'
+import WorkspaceTrustNotice from './WorkspaceTrustNotice.vue'
 
 const props = defineProps<{
   /** Active workspace directory, used by presets that serve a folder on disk. */
@@ -158,7 +160,7 @@ function statusLine(server: Pick<McpServerSummary, 'connected' | 'connecting' | 
 // ---------------------------------------------------------------- data
 
 async function requestJson<T>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
-  const response = await window.haoyue.daemon.request(method, params, timeoutMs ? { timeoutMs } : undefined)
+  const response = await daemonRequest(method, params, timeoutMs ? { timeoutMs } : undefined)
   return JSON.parse(response.data) as T
 }
 
@@ -481,6 +483,8 @@ watch(form, () => {
       </section>
 
       <p v-if="message" class="mcp-panel-message" :class="{ error: !!error }">{{ message }}</p>
+
+      <WorkspaceTrustNotice :workspace-path="workspacePath" show-trusted @changed="load" />
 
       <section v-if="loading && servers.length === 0" class="mcp-empty-card">正在加载 MCP 服务器…</section>
       <section v-else-if="servers.length === 0" class="mcp-empty-card">

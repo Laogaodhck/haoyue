@@ -78,6 +78,10 @@ jobs:
     env:
       ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
       ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+      # Authenticode：配置 WINDOWS_CSC_LINK（base64/PFX 或 URL）与 WINDOWS_CSC_KEY_PASSWORD
+      # 即对 exe 签名；未配置时为空串，electron-builder 按「无证书」跳过，产物仍是未签名。
+      CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       # 跟随 global.json 的精确 SDK 版本（锁文件含 SDK 隐式包版本，SDK 漂移即 NU1004）。

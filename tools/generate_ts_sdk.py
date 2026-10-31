@@ -245,9 +245,9 @@ export class DaemonClient {
     socket.on("close", () => this.handleClose());
     this.socket = socket;
 
-    // 握手：token 不对/版本不匹配时 daemon 回 error 并断开。
+    // 握手：daemon 成功时回 result（data 为协议信息 JSON），失败回 error 并断开。
     const handshake = await Promise.race([
-      this.rawCall("handshake", { token: this.token, protocolVersion: PROTOCOL_VERSION }, new Set(["ready"])),
+      this.rawCall("handshake", { token: this.token, protocolVersion: PROTOCOL_VERSION }, new Set(["result"])),
       socketError,
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new DaemonError("handshakeTimeout", "握手超时")), this.options.handshakeTimeoutMs),
@@ -420,6 +420,7 @@ PACKAGE_JSON = {
     "types": "dist/index.d.ts",
     "scripts": {
         "build": "tsc -p tsconfig.json",
+        "test": "npm run build && node --test tests/client.test.mjs",
         "example": "node --experimental-strip-types examples/hello.ts",
     },
     "devDependencies": {

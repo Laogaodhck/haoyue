@@ -1,3 +1,4 @@
+import { daemonRequest } from './daemon-rpc'
 import type { Ref } from 'vue'
 import type { DaemonState } from '../../shared/ipc'
 import type { ProjectItem, ThreadItem } from './types'
@@ -71,7 +72,7 @@ export function createThreadActions(context: ThreadActionsContext) {
     if (thread.projectId && !project) return
     if (!guardNotRunning([thread], '归档')) return
     if (thread.sessionId) {
-      await window.haoyue.daemon.request('session.archive', {
+      await daemonRequest('session.archive', {
         id: thread.sessionId,
         ...sessionScope(thread, project),
         archived: true
@@ -88,7 +89,7 @@ export function createThreadActions(context: ThreadActionsContext) {
     const project = projects.value.find((item) => item.id === thread.projectId)
     if ((thread.projectId && !project) || !thread.sessionId) return
     if (!guardNotRunning([thread], '恢复')) return
-    await window.haoyue.daemon.request('session.archive', {
+    await daemonRequest('session.archive', {
       id: thread.sessionId,
       ...sessionScope(thread, project),
       archived: false
@@ -127,7 +128,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
     await applyBatch(targets, async (thread) => {
       if (thread.sessionId) {
-        await window.haoyue.daemon.request('session.archive', {
+        await daemonRequest('session.archive', {
           id: thread.sessionId,
           workspace: project.path,
           archived: true
@@ -152,7 +153,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
     await applyBatch(targets, async (thread) => {
       if (thread.sessionId) {
-        await window.haoyue.daemon.request('session.archive', {
+        await daemonRequest('session.archive', {
           id: thread.sessionId,
           global: true,
           archived: true
@@ -176,7 +177,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
       danger: true
     })) return
     if (thread.sessionId) {
-      await window.haoyue.daemon.request('session.delete', {
+      await daemonRequest('session.delete', {
         id: thread.sessionId,
         ...sessionScope(thread, project)
       })
@@ -199,7 +200,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
     await applyBatch(targets, async (thread) => {
       if (thread.sessionId) {
-        await window.haoyue.daemon.request('session.delete', { id: thread.sessionId, global: true })
+        await daemonRequest('session.delete', { id: thread.sessionId, global: true })
       }
       threads.value = threads.value.filter((item) => item.id !== thread.id)
     })
@@ -221,7 +222,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
     await applyBatch(targets, async (thread) => {
       if (thread.sessionId) {
-        await window.haoyue.daemon.request('session.delete', {
+        await daemonRequest('session.delete', {
           id: thread.sessionId,
           workspace: project.path
         })
@@ -246,7 +247,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     await applyBatch(targets, async (thread) => {
       const project = projects.value.find((item) => item.id === thread.projectId)
       if (thread.sessionId && (project || !thread.projectId)) {
-        await window.haoyue.daemon.request('session.delete', {
+        await daemonRequest('session.delete', {
           id: thread.sessionId,
           ...sessionScope(thread, project)
         })
@@ -283,7 +284,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     })) return
 
     try {
-      await window.haoyue.daemon.request('project.remove', { id: project.id })
+      await daemonRequest('project.remove', { id: project.id })
     } catch {
       await refreshProjectSessions(project).catch(() => undefined)
       return

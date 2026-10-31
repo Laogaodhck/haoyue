@@ -96,7 +96,7 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.EnsureCreated();
+    DatabaseMigration.Apply(db);
 }
 
 if (!app.Environment.IsDevelopment())
@@ -258,3 +258,6 @@ static async Task SignInAsync(HttpContext context, User user)
             ExpiresUtc = DateTimeOffset.UtcNow.AddDays(7)
         });
 }
+
+/// <summary>WebApplicationFactory&lt;Program&gt; 需要 Program 类型可见。</summary>
+public partial class Program;

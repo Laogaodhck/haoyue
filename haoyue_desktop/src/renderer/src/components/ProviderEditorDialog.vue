@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import { Eye, EyeOff, FolderOpen, Gauge, Plus, RefreshCw, Save, Settings2, Trash2, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import FieldLabel from './FieldLabel.vue'
@@ -175,7 +176,7 @@ async function scanLocalModels(): Promise<void> {
     const params: Record<string, unknown> = {}
     const directory = scanDirectory.value.trim()
     if (directory) params.directory = directory
-    const response = await window.haoyue.daemon.request('local.models', params)
+    const response = await daemonRequest('local.models', params)
     const result = JSON.parse(response.data) as {
       directory: string
       exists: boolean

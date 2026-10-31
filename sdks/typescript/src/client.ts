@@ -135,9 +135,9 @@ export class DaemonClient {
     socket.on("close", () => this.handleClose());
     this.socket = socket;
 
-    // 握手：token 不对/版本不匹配时 daemon 回 error 并断开。
+    // 握手：daemon 成功时回 result（data 为协议信息 JSON），失败回 error 并断开。
     const handshake = await Promise.race([
-      this.rawCall("handshake", { token: this.token, protocolVersion: PROTOCOL_VERSION }, new Set(["ready"])),
+      this.rawCall("handshake", { token: this.token, protocolVersion: PROTOCOL_VERSION }, new Set(["result"])),
       socketError,
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new DaemonError("handshakeTimeout", "握手超时")), this.options.handshakeTimeoutMs),
@@ -986,6 +986,18 @@ export class DaemonClient {
      */
     workspaceOpen: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("workspace.open", params),
+    /**
+     * 受信工作区（启用其 .haoyue/config.json 与 mcp/servers.json 中的自动执行配置）
+     * 终态事件：result, error
+     */
+    workspaceTrust: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("workspace.trust", params),
+    /**
+     * 撤销工作区信任（立即停用其工作区级配置与 MCP 服务器）
+     * 终态事件：result, error
+     */
+    workspaceUntrust: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("workspace.untrust", params),
     /**
      * 列举工作区内文件，供输入框 @ 引用挑选（已跳过构建产物与凭证文件，只给相对路径）
      * 终态事件：result, error

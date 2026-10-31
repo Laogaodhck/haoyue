@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import {
   Bell,
   CalendarDays,
@@ -125,7 +126,7 @@ function statusLabel(connector: ConnectorEntry): string {
 }
 
 async function requestJson<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const response = await window.haoyue.daemon.request(method, params)
+  const response = await daemonRequest(method, params)
   return JSON.parse(response.data) as T
 }
 

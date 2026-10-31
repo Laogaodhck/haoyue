@@ -7,7 +7,7 @@ using Haoyue.Runtime.Tools;
 /// <summary>
 /// Runtime extension providing Network Ops tools (network_diagnose / network_cmd).
 /// Implements IRuntimeExtension so core runtime has zero static coupling to the
-/// plugin; discovered by ExtensionManager via reflection like Computer Use.
+/// plugin; registered explicitly by ExtensionManager.CreateDefault like Computer Use.
 /// </summary>
 public sealed class NetworkOpsExtension : IRuntimeExtension
 {

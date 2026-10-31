@@ -4,6 +4,7 @@ using Haoyue.Runtime.Secrets;
 
 namespace Haoyue.Tests;
 
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class ConfigTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "haoyue-tests", Guid.NewGuid().ToString("N"));

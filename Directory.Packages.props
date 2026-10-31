@@ -5,9 +5,9 @@
     no Version attribute. Lock files (packages.lock.json) are enabled via
     RestorePackagesWithLockFile in Directory.Build.props; CI verifies dependency
     drift with locked-mode restore. Add new packages here first.
-    NOTE 1: Markdig is versioned per project via Condition: haoyue_cli pins
-    1.3.2 while haoyue_webserver uses 0.41.0. Verify API compatibility before
-    unifying.
+    NOTE 1: Markdig is pinned to one version for every project (CLI + webserver):
+    two versions of the same markdown engine meant two renderers could disagree
+    on the same document. Bump it here, then run both test suites.
     NOTE 2: keep XML comments free of double hyphens (illegal in XML); a
     malformed copy of this file is silently skipped by MSBuild.
   -->
@@ -18,13 +18,13 @@
   <ItemGroup>
     <PackageVersion Include="CliWrap" Version="3.10.3" />
     <PackageVersion Include="Cronos" Version="0.8.4" />
-    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="coverlet.msbuild" Version="6.0.4" />
     <PackageVersion Include="DiffPlex" Version="1.9.0" />
     <PackageVersion Include="LLamaSharp" Version="0.27.0" />
     <PackageVersion Include="LLamaSharp.Backend.Cpu" Version="0.27.0" />
     <PackageVersion Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" />
-    <PackageVersion Include="Markdig" Version="0.41.0" Condition="'$(MSBuildProjectName)' == 'haoyue_webserver'" />
-    <PackageVersion Include="Markdig" Version="1.3.2" Condition="'$(MSBuildProjectName)' != 'haoyue_webserver'" />
+    <PackageVersion Include="Markdig" Version="1.3.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.10" />

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import {
   Activity,
   ArrowLeft,
@@ -427,7 +428,7 @@ const connectorsView = ref<'store' | 'advanced'>('store')
 
 /** 连接器安装/卸载后让 MCP 面板状态随之刷新（重连由 daemon 后台完成）。 */
 function onConnectorsChanged(): void {
-  window.haoyue.daemon.request('mcp.reload', {}).catch(() => {})
+  daemonRequest('mcp.reload', {}).catch(() => {})
 }
 
 function beginAction(name: string): void {
@@ -1183,7 +1184,7 @@ async function saveProvider(value: ProviderFormValue): Promise<void> {
     // 明文不再回传，表单留空即「保持已存密钥不变」；删除需要显式勾选。
     if (clearApiKey) parameters.clearApiKey = true
     else if (apiKey.trim()) parameters.apiKey = apiKey.trim()
-    await window.haoyue.daemon.request('provider.upsert', parameters)
+    await daemonRequest('provider.upsert', parameters)
     providerEditorOpen.value = false
     await loadModels()
     emit('runtimeChanged')
@@ -1210,7 +1211,7 @@ async function fetchProviderModels(provider: ProviderInfo): Promise<void> {
 async function useProvider(provider: ProviderInfo): Promise<void> {
   beginAction(`provider.use:${provider.id}`)
   try {
-    await window.haoyue.daemon.request('provider.use', { id: provider.id })
+    await daemonRequest('provider.use', { id: provider.id })
     await loadModels()
     emit('runtimeChanged')
   } catch (reason) {
@@ -1242,7 +1243,7 @@ async function removeProvider(provider: ProviderInfo): Promise<void> {
   })) return
   beginAction('provider.remove')
   try {
-    await window.haoyue.daemon.request('provider.remove', { id: provider.id })
+    await daemonRequest('provider.remove', { id: provider.id })
     await loadModels()
     emit('runtimeChanged')
   } catch (reason) {
@@ -1256,7 +1257,7 @@ async function switchModel(): Promise<void> {
   if (!selectedModel.value) return
   beginAction('model.switch')
   try {
-    await window.haoyue.daemon.request('model.switch', { model: selectedModel.value })
+    await daemonRequest('model.switch', { model: selectedModel.value })
     await loadModels()
     emit('runtimeChanged')
   } catch (reason) {

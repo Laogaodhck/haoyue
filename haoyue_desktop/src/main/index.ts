@@ -10,7 +10,8 @@ import iconIco from '../../resources/favicon.ico?asset'
 // Windows 任务栏/托盘必须用多分辨率 .ico（16-256 全套）：256px 单尺寸 PNG 在部分 DPI
 // 缩放配置下会被系统解析失败，表现为任务栏图标空白或回退默认图标。
 const appIcon = process.platform === 'win32' ? iconIco : iconPng
-import type { DaemonMessage, DaemonRequestOptions, RevertDiffItem } from '../shared/ipc.js'
+import type { DaemonMessage, DaemonRequestOptions, DaemonRpcResult, RevertDiffItem } from '../shared/ipc.js'
+import { toDaemonRpcError } from '../shared/ipc.js'
 import { DaemonClient } from './daemon-client.js'
 import { openDaemonLogSink, readDaemonLogTail } from './daemon-log.js'
 import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
@@ -527,10 +528,21 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('daemon:connect', () => daemon.connect())
+  // 结构化回包：ipcMain.handle 的 reject 会把 Error 压成字符串，code/method 到不了渲染进程。
   ipcMain.handle(
     'daemon:request',
-    (_event, method: string, params?: Record<string, unknown>, options?: DaemonRequestOptions) =>
-      daemon.request(method, params, options))
+    async (
+      _event,
+      method: string,
+      params?: Record<string, unknown>,
+      options?: DaemonRequestOptions
+    ): Promise<DaemonRpcResult> => {
+      try {
+        return { ok: true, message: await daemon.request(method, params, options) }
+      } catch (error) {
+        return { ok: false, error: toDaemonRpcError(error, method) }
+      }
+    })
 
   daemon.on('event', (message) => {
     if (message.event === 'tool_start' && (message.data === 'computer' || message.data === 'computer_inspect')) {

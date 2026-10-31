@@ -49,6 +49,20 @@ public sealed class EventJournalTests : IDisposable
     }
 
     [Fact]
+    public void Serialize_EveryEventType_HasSourceGeneratedMetadata()
+    {
+        // 台账按运行时类型序列化：任何新增事件忘了进 EventJsonContext 都会静默
+        // 退化成 {"type","truncated"} 占位符。这个测试把该漂移挡在 CI。
+        var eventTypes = typeof(RuntimeEvent).Assembly.GetTypes()
+            .Where(type => type is { IsAbstract: false, IsClass: true } && typeof(RuntimeEvent).IsAssignableFrom(type))
+            .ToList();
+
+        Assert.NotEmpty(eventTypes);
+        foreach (var type in eventTypes)
+            Assert.NotNull(EventJsonContext.Default.GetTypeInfo(type));
+    }
+
+    [Fact]
     public void JournaledEventBus_PersistsKeyEvents_AndForwardsEverything()
     {
         var bus = new JournaledEventBus(new EventBus(), _database);

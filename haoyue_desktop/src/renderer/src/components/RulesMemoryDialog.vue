@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import { ArrowLeft, Brain, FolderOpen, LoaderCircle, Plus, RefreshCw, Save, ScrollText, Trash2, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { confirmAction } from '../confirmation'
@@ -128,7 +129,7 @@ const displayPath = computed(() => {
 })
 
 async function requestJson<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const response = await window.haoyue.daemon.request(method, params)
+  const response = await daemonRequest(method, params)
   return JSON.parse(response.data) as T
 }
 

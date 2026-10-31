@@ -116,16 +116,23 @@ public static class EventJournal
     /// <summary>
     /// Serializes the concrete event record. Oversized payloads (for example a
     /// tool summary that hit the 30k output cap) collapse to a placeholder so a
-    /// single row cannot bloat the journal.
+    /// single row cannot bloat the journal. Serialization goes through
+    /// <see cref="EventJsonContext"/> (source-generated) to stay trim/AOT safe;
+    /// an unregistered type degrades to the same placeholder rather than
+    /// taking the turn down — <c>EventJsonContextTests</c> forbids that drift.
     /// </summary>
     public static string Serialize(RuntimeEvent evt)
     {
         var type = evt.GetType().Name;
-        var payload = JsonSerializer.Serialize(evt, evt.GetType());
-        return payload.Length <= MaxPayloadChars
-            ? payload
-            : JsonSerializer.Serialize(new { type, truncated = true });
+        var info = EventJsonContext.Default.GetTypeInfo(evt.GetType());
+        var payload = info is null
+            ? Truncated(type)
+            : JsonSerializer.Serialize(evt, info);
+        return payload.Length <= MaxPayloadChars ? payload : Truncated(type);
     }
+
+    private static string Truncated(string type) =>
+        new JsonObject { ["type"] = type, ["truncated"] = true }.ToJsonString();
 }
 
 /// <summary>

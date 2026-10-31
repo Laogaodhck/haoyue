@@ -25,6 +25,8 @@ public sealed class LocalModelFingerprints
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
     };
 
+    private static readonly LocalModelFingerprintJsonContext Json = new(SerializerOptions);
+
     private readonly Lock _gate = new();
     private readonly string _filePath;
     private Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
@@ -179,7 +181,7 @@ public sealed class LocalModelFingerprints
         {
             if (!File.Exists(_filePath)) return;
             var json = File.ReadAllText(_filePath);
-            var file = JsonSerializer.Deserialize<FingerprintFile>(json, SerializerOptions);
+            var file = JsonSerializer.Deserialize(json, Json.FingerprintFile);
             if (file?.Entries is not { } entries || file.Version != FormatVersion)
             {
                 _entries = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
@@ -204,7 +206,7 @@ public sealed class LocalModelFingerprints
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
             var temp = _filePath + ".tmp";
             var file = new FingerprintFile { Version = FormatVersion, Entries = _entries };
-            File.WriteAllText(temp, JsonSerializer.Serialize(file, SerializerOptions));
+            File.WriteAllText(temp, JsonSerializer.Serialize(file, Json.FingerprintFile));
             File.Move(temp, _filePath, overwrite: true);
             _dirty = false;
         }
@@ -214,7 +216,7 @@ public sealed class LocalModelFingerprints
         }
     }
 
-    private sealed class Entry
+    internal sealed class Entry
     {
         public string? LastGoodSignature { get; set; }
         public string? BackendBuild { get; set; }
@@ -227,9 +229,13 @@ public sealed class LocalModelFingerprints
         public List<long> LoadDurationsMs { get; set; } = [];
     }
 
-    private sealed class FingerprintFile
+    internal sealed class FingerprintFile
     {
         public int Version { get; set; }
         public Dictionary<string, Entry> Entries { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }
+
+/// <summary>Source-generated metadata for the on-disk fingerprint cache (trim/AOT safe).</summary>
+[JsonSerializable(typeof(LocalModelFingerprints.FingerprintFile))]
+internal sealed partial class LocalModelFingerprintJsonContext : JsonSerializerContext;

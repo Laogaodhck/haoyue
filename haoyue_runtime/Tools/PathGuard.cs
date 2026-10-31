@@ -27,11 +27,52 @@ internal static class PathGuard
     internal static string Trim(string path) =>
         path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
+    /// <summary>
+    /// Resolves every existing link (symlink, Windows junction) along the path, then
+    /// appends the not-yet-existing tail. A logical path inside the workspace can point
+    /// outside it through a link, so boundary checks must compare real targets.
+    /// Returns null when a link chain cannot be resolved (broken link / IO error):
+    /// callers treat that as "not inside" (fail closed) rather than trusting the
+    /// logical spelling.
+    /// </summary>
+    internal static string? RealPath(string path)
+    {
+        try
+        {
+            var full = Trim(Path.GetFullPath(path));
+            var root = Path.GetPathRoot(full);
+            if (string.IsNullOrEmpty(root)) return full;
+
+            var current = root;
+            var segments = full[root.Length..]
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+            foreach (var segment in segments)
+            {
+                var next = Path.Combine(current, segment);
+                FileSystemInfo info = Directory.Exists(next) ? new DirectoryInfo(next) : new FileInfo(next);
+                if (info.LinkTarget is not null)
+                {
+                    var target = info.ResolveLinkTarget(returnFinalTarget: true)
+                        ?? throw new IOException($"Unresolvable link: {next}");
+                    next = target.FullName;
+                }
+                current = Path.GetFullPath(next);
+            }
+            return Trim(current);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
     internal static bool IsInside(string root, string candidate)
     {
+        var normalizedRoot = RealPath(root);
+        var normalizedCandidate = RealPath(candidate);
+        if (normalizedRoot is null || normalizedCandidate is null) return false;
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var normalizedRoot = Trim(Path.GetFullPath(root));
-        var normalizedCandidate = Trim(candidate);
         return normalizedCandidate.Equals(normalizedRoot, comparison)
             || normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison);
     }
@@ -39,8 +80,8 @@ internal static class PathGuard
     /// <summary>True for key material, token stores and browser session data.</summary>
     internal static bool IsCredentialPath(string path)
     {
-        var segments = Path.GetFullPath(path)
-            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var resolved = RealPath(path) ?? Path.GetFullPath(path);
+        var segments = resolved.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var fileName = segments[^1];
         if (CredentialFileNames.Contains(fileName, StringComparer.OrdinalIgnoreCase)
             || fileName.Equals(".env", StringComparison.OrdinalIgnoreCase)

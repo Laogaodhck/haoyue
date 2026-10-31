@@ -39,14 +39,26 @@ jobs:
         # DaemonContract.cs 一致（Haoyue_UpdateContract=1 重新生成快照后跑 tools/generate_ts_sdk.py）。
         run: python tools/generate_ts_sdk.py --check
       - name: Scan NuGet packages for known vulnerabilities
-        run: dotnet list Haoyue.slnx package --vulnerable --include-transitive
-      - name: Test
-        run: dotnet test Haoyue.slnx -c Release --no-build --collect:"XPlat Code Coverage;Format=cobertura" --settings haoyue_tests/coverage.runsettings --results-directory ./coverage
+        # dotnet list 自身始终返回 0：这里用 JSON 输出 + 包装脚本把「发现漏洞」变成构建失败。
+        run: dotnet list Haoyue.slnx package --vulnerable --include-transitive --format json | python tools/check_nuget_vulnerabilities.py
+      - name: Test with coverage gate
+        # 覆盖率硬门槛（coverlet.msbuild）：XPlat collector 会静默忽略 Threshold，
+        # 只有 msbuild 包会在阈值未达标时让 dotnet test 非零退出。
+        run: >
+          dotnet test Haoyue.slnx -c Release --no-build
+          /p:CollectCoverage=true
+          /p:CoverletOutputFormat=cobertura
+          /p:CoverletOutput="${{ github.workspace }}/coverage/coverage"
+          /p:Include="[haoyue_runtime]*"
+          /p:Exclude="[haoyue_cli]*,[haoyue_webserver]*,[*test*]*"
+          /p:Threshold=70,55
+          /p:ThresholdType=line,branch
+          /p:ThresholdStat=total
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
           name: dotnet-coverage
-          path: coverage/**/coverage.cobertura.xml
+          path: coverage/*.cobertura.xml
           if-no-files-found: error
       - name: Check packages.lock.json was not rewritten
         # L-8：本地 GPU 构建（-p:LlamaBackend=Cuda12 -r win-x64）会把 Cuda12 记为直接
@@ -58,6 +70,37 @@ jobs:
             echo "::error::packages.lock.json 被还原/构建改写。请执行 git checkout -- '*packages.lock.json' 后重新提交（仓库基准为无 RID + 默认 CPU 后端）。"
             exit 1
           fi
+
+  linux:
+    # 跨平台护栏：daemon 的 Unix socket 路径、PathGuard 符号链接解析、Python
+    # 连接器运行时都只在 Linux 上才走到真正的分支，Windows-only CI 永远发现不了。
+    name: Linux build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - name: Check version consistency
+        run: python3 version.py check
+      - name: Restore (locked mode)
+        run: dotnet restore Haoyue.slnx --locked-mode
+      - name: Build
+        run: dotnet build Haoyue.slnx -c Release --no-restore
+      - name: Test
+        run: dotnet test Haoyue.slnx -c Release --no-build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: TS SDK integration test
+        working-directory: sdks/typescript
+        run: |
+          npm ci
+          npm test
 
   connectors:
     name: Connector server tests (python)

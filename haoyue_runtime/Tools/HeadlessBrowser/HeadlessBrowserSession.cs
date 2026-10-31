@@ -214,7 +214,7 @@ internal sealed class HeadlessBrowserSession : IAsyncDisposable
     /// <summary>Extracts the primitive value produced by a Runtime.evaluate response, or null.</summary>
     internal static string? ResultValue(JsonNode? evaluateResponse) =>
         evaluateResponse?["result"]?["value"] is { } value
-            ? value.ToJsonString(System.Text.Json.JsonSerializerOptions.Default).Trim('"')
+            ? value.ToJsonString().Trim('"')
             : null;
 
     private static JsonObject EvalParams(string expression) => new()

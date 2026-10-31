@@ -11,7 +11,11 @@ import {
   sessionImageSources
 } from './session-sync'
 
-const daemonRequest = vi.fn<(method: string, params: Record<string, unknown>) => Promise<{ data: string }>>()
+const daemonRequest = vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>()
+
+function ok(data: string): unknown {
+  return { ok: true, message: { id: 1, event: 'result', data } }
+}
 const context = { daemonState: ref({ connected: true } as unknown as DaemonState) }
 
 function chat(content: string): ChatMessage {
@@ -57,12 +61,10 @@ describe('session paging', () => {
       sessionFirstIndex: 6,
       sessionHasMore: true
     })
-    daemonRequest.mockResolvedValueOnce({
-      data: page(
-        [{ role: 'user', text: '旧1' }, { role: 'assistant', text: '旧2' }],
-        { total: 10, firstIndex: 4, hasMore: true }
-      )
-    })
+    daemonRequest.mockResolvedValueOnce(ok(page(
+      [{ role: 'user', text: '旧1' }, { role: 'assistant', text: '旧2' }],
+      { total: 10, firstIndex: 4, hasMore: true }
+    )))
 
     await loadEarlierMessages(context, item)
 
@@ -96,9 +98,9 @@ describe('session paging', () => {
     expect(item.loadingEarlier).toBe(false)
     expect(item.sessionFirstIndex).toBe(6)
 
-    daemonRequest.mockResolvedValueOnce({
-      data: page([{ role: 'user', text: '旧1' }], { total: 7, firstIndex: 5, hasMore: true })
-    })
+    daemonRequest.mockResolvedValueOnce(ok(
+      page([{ role: 'user', text: '旧1' }], { total: 7, firstIndex: 5, hasMore: true })
+    ))
     await loadEarlierMessages(context, item)
     expect(item.messages.map((message) => message.content)).toEqual(['旧1', '近1'])
   })
@@ -112,9 +114,9 @@ describe('session paging', () => {
 
   it('replaces the window and refreshes the header when idle', async () => {
     const item = thread({ messages: [chat('过期内容')], sessionFirstIndex: 3, sessionHasMore: true })
-    daemonRequest.mockResolvedValueOnce({
-      data: page([{ role: 'user', text: '新内容' }], { total: 2, firstIndex: 0, hasMore: false, title: '改名了' })
-    })
+    daemonRequest.mockResolvedValueOnce(ok(
+      page([{ role: 'user', text: '新内容' }], { total: 2, firstIndex: 0, hasMore: false, title: '改名了' })
+    ))
     await reloadThreadSession(context, item)
     expect(item.messages.map((message) => message.content)).toEqual(['新内容'])
     expect(item.title).toBe('改名了')
@@ -127,9 +129,9 @@ describe('deferred session image bytes', () => {
   const image: ImageAttachment = { id: 'img-1', name: 'a.png', mediaType: 'image/png', sizeBytes: 3 }
 
   it('fetches each pending image once, even for concurrent callers', async () => {
-    daemonRequest.mockResolvedValue({
-      data: JSON.stringify({ id: 'img-1', name: 'a.png', mediaType: 'image/png', data: 'AQID', sizeBytes: 3 })
-    })
+    daemonRequest.mockResolvedValue(ok(
+      JSON.stringify({ id: 'img-1', name: 'a.png', mediaType: 'image/png', data: 'AQID', sizeBytes: 3 })
+    ))
     const item = thread()
 
     requestSessionImageBytes(context, item, undefined, image)
@@ -161,9 +163,9 @@ describe('deferred session image bytes', () => {
     await settled()
     expect(sessionImageSources[imageSourceKey('s-1', 'img-1')]).toBeUndefined()
 
-    daemonRequest.mockResolvedValueOnce({
-      data: JSON.stringify({ id: 'img-1', mediaType: 'image/png', data: 'BAUG' })
-    })
+    daemonRequest.mockResolvedValueOnce(ok(
+      JSON.stringify({ id: 'img-1', mediaType: 'image/png', data: 'BAUG' })
+    ))
     requestSessionImageBytes(context, thread(), undefined, image)
     await settled()
     expect(sessionImageSources[imageSourceKey('s-1', 'img-1')]).toBe('data:image/png;base64,BAUG')

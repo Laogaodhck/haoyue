@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { daemonRequest } from '../daemon-rpc'
 import { AlertCircle, Brain, CircleHelp, Gauge, Layers, Save, SlidersHorizontal, X, Zap } from '@lucide/vue'
 import { computed, reactive, ref, watch } from 'vue'
 
@@ -250,7 +251,7 @@ async function handleSave(): Promise<void> {
   notice.value = ''
   try {
     const load = toLoad()
-    await window.haoyue.daemon.request('model.update', {
+    await daemonRequest('model.update', {
       provider: props.providerId,
       id: props.modelId,
       load
@@ -276,7 +277,7 @@ async function handleVerify(): Promise<void> {
   loadReport.value = null
   try {
     const result = JSON.parse(
-      (await window.haoyue.daemon.request('model.test', { model: props.modelId })).data
+      (await daemonRequest('model.test', { model: props.modelId })).data
     ) as { success: boolean; detail: string; latencyMs: number }
     if (result.success) {
       notice.value = `加载并推理验证通过 · ${Math.round(result.latencyMs)} ms · ${result.detail}`

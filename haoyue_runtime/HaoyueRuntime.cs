@@ -39,6 +39,7 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     public IHealthChecker Health => _services.GetRequiredService<IHealthChecker>();
     public IToolRegistry Tools => _services.GetRequiredService<IToolRegistry>();
     public IWorkspaceManager Workspaces => _services.GetRequiredService<IWorkspaceManager>();
+    public IWorkspaceTrustStore WorkspaceTrust => _services.GetRequiredService<IWorkspaceTrustStore>();
     public ISessionStore Sessions => _services.GetRequiredService<ISessionStore>();
     public IProjectStore Projects => _services.GetRequiredService<IProjectStore>();
     public IScheduleStore Schedules => _services.GetRequiredService<IScheduleStore>();
@@ -98,7 +99,8 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
         string startDirectory,
         IConfigStore configStore,
         string? databaseFile = null,
-        IHealthChecker? healthChecker = null)
+        IHealthChecker? healthChecker = null,
+        IWorkspaceTrustStore? workspaceTrust = null)
         => CreateCore(startDirectory, services =>
         {
             services.AddSingleton(configStore);
@@ -106,6 +108,10 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                 services.AddSingleton(new HaoyueDatabase(databaseFile));
             if (healthChecker is not null)
                 services.AddSingleton(healthChecker);
+            // Tests point trust at a temp file so daemon trust calls never touch the
+            // real ~/.haoyue/trusted-workspaces.json.
+            if (workspaceTrust is not null)
+                services.AddSingleton(workspaceTrust);
         });
 
     private static HaoyueRuntime CreateCore(
@@ -137,6 +143,23 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
 
     public Task<IReadOnlyList<McpServerStatus>> ConnectMcpAsync(CancellationToken ct) =>
         Mcp.ConnectAllAsync(Workspace, ct);
+
+    /// <summary>
+    /// Records (or revokes) the user's trust for a workspace. When the change targets the
+    /// active workspace the runtime reloads it immediately, so a revoked workspace loses
+    /// its config/MCP servers on the next turn.
+    /// </summary>
+    public WorkspaceInfo ApplyWorkspaceTrust(string path, bool trusted)
+    {
+        if (trusted) WorkspaceTrust.Trust(path);
+        else WorkspaceTrust.Untrust(path);
+        var same = string.Equals(
+            Path.GetFullPath(Workspace.Root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        if (same) RefreshWorkspace(path);
+        return Workspace;
+    }
 
     private void RegisterBasePromptContributions()
     {
@@ -408,7 +431,11 @@ public static class RuntimeServiceCollectionExtensions
         services.AddSingleton<IProviderManager, ProviderManager>();
 
         services.AddSingleton<IToolRegistry, ToolRegistry>();
-        services.AddSingleton<IWorkspaceManager, WorkspaceManager>();
+        services.AddSingleton<IWorkspaceTrustStore, WorkspaceTrustStore>();
+        // The manager must share the resolved trust store: a second default instance would
+        // read the real ~/.haoyue file even when a caller (tests) injected another store.
+        services.AddSingleton<IWorkspaceManager>(provider =>
+            new WorkspaceManager(provider.GetRequiredService<IWorkspaceTrustStore>()));
         services.AddSingleton<HaoyueDatabase>();
         // H-E: per-model token 估算校准系数的持久化（ProviderManager 写、Agent 读）。
         services.AddSingleton<Data.ModelTokenStats>();

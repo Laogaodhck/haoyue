@@ -275,7 +275,7 @@ public sealed class OpenAiCompatibleClient(ILlmHttpFactory httpFactory) : ILlmCl
                 .Where(item => item["embedding"] is JsonArray)
                 .OrderBy(item => item["index"]?.GetValue<int>() ?? 0)
                 .Select(item => item["embedding"]!.AsArray()
-                    .Select(v => v?.Deserialize<float>() ?? 0f)
+                    .Select(v => v is JsonValue value && value.TryGetValue<float>(out var weight) ? weight : 0f)
                     .ToArray())
                 .ToList();
             var responseModel = root?["model"]?.GetValue<string>() ?? model;

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Haoyue.Runtime.Data;
 
 namespace Haoyue.Runtime.Agents;
 
@@ -241,9 +242,30 @@ public sealed class TurnExecutionScope(string sessionId, string workspaceRoot)
 /// </summary>
 public sealed class TurnUndoRegistry
 {
-    private readonly ConcurrentDictionary<string, TurnUndoLedger> _latest = new(StringComparer.Ordinal);
+    /// <summary>Retention bound: ledgers are per-session and never expire on their own,
+    /// so an unbounded map would pin every session's file contents for the daemon's lifetime.</summary>
+    public const int MaxLedgers = 64;
 
-    public void Deposit(TurnUndoLedger ledger) => _latest[ledger.SessionId] = ledger;
+    private readonly ConcurrentDictionary<string, TurnUndoLedger> _latest = new(StringComparer.Ordinal);
+    private readonly Lock _gate = new();
+
+    public void Deposit(TurnUndoLedger ledger)
+    {
+        lock (_gate)
+        {
+            _latest[ledger.SessionId] = ledger;
+            if (_latest.Count <= MaxLedgers) return;
+
+            var stale = _latest.Values
+                .OrderBy(item => item.CompletedAt)
+                .Take(_latest.Count - MaxLedgers)
+                .ToList();
+            foreach (var item in stale)
+            {
+                _latest.TryRemove(item.SessionId, out _);
+            }
+        }
+    }
 
     /// <summary>Removes and returns the ledger — an undo is a one-shot action.</summary>
     public TurnUndoLedger? Take(string sessionId) =>
@@ -278,9 +300,8 @@ public static class TurnUndoLedgerExtensions
                 }
                 else
                 {
-                    var dir = Path.GetDirectoryName(change.AbsolutePath);
-                    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                    await File.WriteAllTextAsync(change.AbsolutePath, change.PreviousContent, ct).ConfigureAwait(false);
+                    // 原子恢复：撤销途中断电也不能把用户的文件截成半截（比不撤销更糟）。
+                    await AtomicFile.WriteAllTextAsync(change.AbsolutePath, change.PreviousContent, ct).ConfigureAwait(false);
                 }
                 restored.Add(change.Description);
             }

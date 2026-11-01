@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Workspaces;
@@ -25,7 +26,9 @@ public static class PromptVariables
         {
             ["cwd"] = hasWorkspace ? workspace!.Root : Directory.GetCurrentDirectory(),
             // Weekday + time-of-day so "现在几点""今天周几" questions are answerable.
-            ["datetime"] = DateTimeOffset.Now.ToString("yyyy-MM-dd ddd HH:mm zzz"),
+            // Invariant culture: "ddd" otherwise renders "周六" on a zh-CN machine and
+            // "Sat" elsewhere, so prompts would differ by host locale.
+            ["datetime"] = DateTimeOffset.Now.ToString("yyyy-MM-dd ddd HH:mm zzz", CultureInfo.InvariantCulture),
             ["os"] = RuntimeInformation.OSDescription,
             ["platform"] = RuntimeInformation.RuntimeIdentifier,
             ["workspace"] = hasWorkspace ? workspace!.Root : "",

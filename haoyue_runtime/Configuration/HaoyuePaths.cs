@@ -3,10 +3,22 @@ namespace Haoyue.Runtime.Configuration;
 /// <summary>Well-known file system locations for global (per-user) state.</summary>
 public static class HaoyuePaths
 {
+    /// <summary>Override for the state root. Tests point this at a temp directory so a run
+    /// never touches the developer's real ~/.haoyue (usage log, sessions, credentials).</summary>
+    public const string HomeEnvironmentVariable = "HAOYUE_HOME";
+
     /// <summary>The current user's profile directory (parent of the Haoyue state folder).</summary>
     public static string HomeDir { get; } = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-    public static string Home => Path.Combine(HomeDir, ".haoyue");
+    public static string Home { get; } = ResolveHome();
+
+    private static string ResolveHome()
+    {
+        var overridden = Environment.GetEnvironmentVariable(HomeEnvironmentVariable);
+        return string.IsNullOrWhiteSpace(overridden)
+            ? Path.Combine(HomeDir, ".haoyue")
+            : Path.GetFullPath(overridden.Trim());
+    }
 
     public static string ConfigFile => Path.Combine(Home, "config.json");
     public static string StateFile => Path.Combine(Home, "state.json");

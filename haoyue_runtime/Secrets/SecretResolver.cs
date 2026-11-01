@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Win32;
+using Haoyue.Runtime.Configuration;
 
 namespace Haoyue.Runtime.Secrets;
 
@@ -504,7 +505,7 @@ public static class SecretResolver
     private static readonly JsonSerializerOptions SecretsJsonOptions = new() { WriteIndented = true };
 
     internal static string SecretsFilePath() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".haoyue", SecretsFileName);
+        Path.Combine(HaoyuePaths.Home, SecretsFileName);
 
     /// <summary>
     /// 随机库钥的位置：平台拿不到机器标识（macOS 的 IOPlatformUUID 需要额外进程，其它
@@ -512,7 +513,7 @@ public static class SecretResolver
     /// 时明确失败，而不是换一把新钥把已存凭证全变成不可解析。
     /// </summary>
     internal static string StoreKeyPath() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".haoyue", StoreKeyFileName);
+        Path.Combine(HaoyuePaths.Home, StoreKeyFileName);
 
     /// <summary>
     /// Stores a credential in the file store and returns the entry id for the
@@ -526,17 +527,7 @@ public static class SecretResolver
                 "The file credential store has no usable key on this platform: neither a machine " +
                 $"identifier nor {StoreKeyPath()} is available. The credential was not saved.");
         var path = SecretsFilePath();
-        JsonObject root;
-        try
-        {
-            root = File.Exists(path)
-                ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? new JsonObject()
-                : new JsonObject();
-        }
-        catch (JsonException)
-        {
-            root = new JsonObject(); // corrupt store: rebuild; resolution already returns null for it.
-        }
+        var root = ReadStoreForWrite(path);
         if (root["entries"] is not JsonObject entries)
         {
             entries = new JsonObject();
@@ -544,11 +535,70 @@ public static class SecretResolver
         }
         entries[id] = FileStoreSeal(machineId, id, value);
         root["version"] = 1;
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, root.ToJsonString(SecretsJsonOptions));
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        WriteFileAtomically(path, root.ToJsonString(SecretsJsonOptions));
         return id;
+    }
+
+    /// <summary>
+    /// Reads the store for a read-modify-write cycle. A corrupt store is moved aside
+    /// instead of being overwritten in place: rebuilding from scratch would silently
+    /// destroy every credential still recoverable from the broken file.
+    /// </summary>
+    private static JsonObject ReadStoreForWrite(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return new JsonObject();
+        }
+
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(path)) is JsonObject root)
+            {
+                return root;
+            }
+        }
+        catch (JsonException)
+        {
+            // handled below: quarantine and rebuild
+        }
+
+        var backup = $"{path}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.bak";
+        File.Move(path, backup, overwrite: true);
+        return new JsonObject();
+    }
+
+    /// <summary>
+    /// Temp file in the target directory + rename: a crash mid-write can never leave a
+    /// truncated secrets.json, which would make every stored credential unreadable.
+    /// The temp file gets 0600 before the rename so the ciphertext is never world-readable.
+    /// </summary>
+    private static void WriteFileAtomically(string path, string contents)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = Path.Combine(
+            Path.GetDirectoryName(path)!,
+            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                using var writer = new StreamWriter(stream);
+                writer.Write(contents);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temp, path, overwrite: true);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch (IOException) { }
+        }
     }
 
     /// <summary>Resolves an entry id; every failure mode returns null, never ciphertext.</summary>
@@ -660,10 +710,7 @@ public static class SecretResolver
             }
 
             var fresh = RandomNumberGenerator.GetBytes(FileKeyByteCount);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, Convert.ToBase64String(fresh));
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            WriteFileAtomically(path, Convert.ToBase64String(fresh));
             return fresh;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException

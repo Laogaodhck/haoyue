@@ -54,7 +54,8 @@ public static class KnowledgeWeb
             HttpResponseMessage response;
             try
             {
-                response = await client.GetAsync(current, ct).ConfigureAwait(false);
+                // 只等响应头：正文按块读，超过上限立即断开，避免把几个 GB 的响应整体缓冲进内存。
+                response = await client.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -79,21 +80,27 @@ public static class KnowledgeWeb
                 if (mediaType is not ("text/html" or "application/xhtml+xml" or "text/plain" or "application/json"))
                     throw new KnowledgeWebException($"不支持的内容类型：{mediaType}（仅支持网页与纯文本）");
 
+                var declaredLength = response.Content.Headers.ContentLength;
+                if (declaredLength > MaxBodyBytes)
+                    throw new KnowledgeWebException($"网页过大：超过 {MaxBodyBytes / 1024 / 1024} MB 限制");
+
                 byte[] body;
                 try
                 {
-                    body = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+                    body = await ReadBodyWithLimitAsync(response.Content, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     throw;
                 }
-                catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+                catch (KnowledgeWebException)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or IOException)
                 {
                     throw new KnowledgeWebException($"读取链接内容失败：{ex.Message}");
                 }
-                if (body.Length > MaxBodyBytes)
-                    throw new KnowledgeWebException($"网页过大：超过 {MaxBodyBytes / 1024 / 1024} MB 限制");
 
                 var charset = response.Content.Headers.ContentType?.CharSet;
                 var text = Decode(body, charset);
@@ -107,6 +114,31 @@ public static class KnowledgeWeb
         }
 
         throw new KnowledgeWebException($"重定向次数超过 {MaxRedirects} 次，已停止抓取。");
+    }
+
+    /// <summary>
+    /// Streams the body into memory with a hard byte cap. The old ReadAsByteArrayAsync
+    /// path buffered the whole response first and only checked the size afterwards,
+    /// so a hostile or misconfigured endpoint could exhaust memory before the limit ran.
+    /// </summary>
+    private static async Task<byte[]> ReadBodyWithLimitAsync(HttpContent content, CancellationToken ct)
+    {
+        await using var stream = await content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        while (true)
+        {
+            var read = await stream.ReadAsync(chunk, ct).ConfigureAwait(false);
+            if (read == 0) break;
+            if (buffer.Length + read > MaxBodyBytes)
+            {
+                throw new KnowledgeWebException($"网页过大：超过 {MaxBodyBytes / 1024 / 1024} MB 限制");
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
     }
 
     private static bool IsRedirect(HttpResponseMessage response) =>

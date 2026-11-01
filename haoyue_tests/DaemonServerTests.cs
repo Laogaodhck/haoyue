@@ -1231,7 +1231,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
         await connection.SendAsync(1, "project.upsert", new JsonObject
         {
             ["id"] = "home-project",
-            ["path"] = Path.GetDirectoryName(HaoyuePaths.Home)!,
+            ["path"] = HaoyuePaths.HomeDir,
             ["name"] = "Home",
         });
         Assert.Equal("error", (await connection.ReadAsync())["event"]!.GetValue<string>());

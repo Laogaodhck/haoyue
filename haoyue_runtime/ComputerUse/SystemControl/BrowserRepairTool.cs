@@ -1,5 +1,6 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json.Nodes;
+using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Tools.Builtin;
@@ -23,8 +24,7 @@ public sealed class BrowserRepairTool(IPromptProvider prompts, ISystemControlAda
     public override bool Mutating => true;
     public override bool RequiresWorkspace => false;
 
-    private static string BackupDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".haoyue", "browser-repair-backups");
+    private static string BackupDirectory => Path.Combine(HaoyuePaths.Home, "browser-repair-backups");
 
     public override JsonObject ParameterSchema => ToolSchema.Object(
         ("action", ToolSchema.String("detect: 扫描劫持项（只读）; repair: 备份后自动修复", "detect", "repair"), true),

@@ -138,9 +138,11 @@ public sealed class WorkspaceManager : IWorkspaceManager
             return false;
 
         var markerPath = Path.GetFullPath(Path.Combine(dir.FullName, ".haoyue"));
-        return string.Equals(
-            markerPath, _haoyueHome,
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        // 默认状态目录（~/.haoyue）永远按用户级状态看待，即使 HAOYUE_HOME 被改到了别处：
+        // 否则开发与测试环境一旦重定向状态根，用户 profile 就会被当成项目根。
+        return string.Equals(markerPath, _haoyueHome, comparison)
+            || string.Equals(markerPath, Path.Combine(HaoyuePaths.HomeDir, ".haoyue"), comparison);
     }
 
     private static List<string> DetectKinds(string root)

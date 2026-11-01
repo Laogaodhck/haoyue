@@ -1544,14 +1544,14 @@ internal sealed partial class DaemonAdminApi(
         if (inlineWorkspaceConfig)
         {
             Directory.CreateDirectory(runtime.Workspace.HaoyueDir);
-            File.WriteAllText(
+            AtomicFile.WriteAllText(
                 Path.Combine(runtime.Workspace.HaoyueDir, "config.json"),
                 JsonSerializer.Serialize(runtime.Workspace.Config!, HaoyueJsonContext.Default.WorkspaceConfig));
             return;
         }
 
         Directory.CreateDirectory(runtime.Workspace.McpDir);
-        File.WriteAllText(
+        AtomicFile.WriteAllText(
             Path.Combine(runtime.Workspace.McpDir, "servers.json"),
             JsonSerializer.Serialize(config, HaoyueJsonContext.Default.McpConfig));
     }

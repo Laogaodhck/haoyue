@@ -223,6 +223,41 @@ public class McpSecretsTests
         Assert.Equal("secret-a", SecretResolver.FileStoreLookup(idA));
     }
 
+    [Fact]
+    public void FileStore_CorruptFile_IsQuarantinedBeforeRebuild()
+    {
+        // 损坏的 secrets.json 不能被原地覆盖：里面可能还有可恢复的条目，先改名为
+        // *.corrupt-*.bak 再重建，至少留下取证/手工恢复的余地。
+        var path = SecretResolver.SecretsFilePath();
+        var directory = Path.GetDirectoryName(path)!;
+        var original = File.Exists(path) ? File.ReadAllBytes(path) : null;
+        var marker = $"{{ corrupt-{Guid.NewGuid():N}";
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(path, marker);
+
+            const string id = "mcp:test:filestore:quarantined";
+            SecretResolver.FileStoreStore(id, "kept-value");
+
+            var quarantined = Directory.GetFiles(directory, "secrets.json.corrupt-*.bak")
+                .Single(file => File.ReadAllText(file) == marker);
+            Assert.Equal("kept-value", SecretResolver.FileStoreLookup(id));
+            File.Delete(quarantined);
+        }
+        finally
+        {
+            if (original is null)
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            else
+            {
+                File.WriteAllBytes(path, original);
+            }
+        }
+    }
+
     private static void TamperFileEntry(string id, string payload)
     {
         var path = SecretResolver.SecretsFilePath();

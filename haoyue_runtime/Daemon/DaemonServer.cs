@@ -2917,7 +2917,7 @@ public sealed partial class DaemonServer : IAsyncDisposable
         workspaceConfig.Mode = mode;
         Directory.CreateDirectory(_runtime.Workspace.HaoyueDir);
         var path = Path.Combine(_runtime.Workspace.HaoyueDir, "config.json");
-        File.WriteAllText(path, JsonSerializer.Serialize(workspaceConfig, HaoyueJsonContext.Default.WorkspaceConfig));
+        Haoyue.Runtime.Data.AtomicFile.WriteAllText(path, JsonSerializer.Serialize(workspaceConfig, HaoyueJsonContext.Default.WorkspaceConfig));
     }
 
     private static bool TryNormalizeMode(string? rawMode, out string mode)

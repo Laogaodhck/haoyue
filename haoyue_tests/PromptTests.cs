@@ -1,3 +1,4 @@
+using System.Globalization;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Agents;
 
@@ -140,6 +141,27 @@ public sealed class PromptTests : IDisposable
 
         var imageOutputPrompt = PromptVariables.BuildCapabilityInstruction(vision: true, imageOutput: true);
         Assert.Contains("may also expose image output", imageOutputPrompt);
+    }
+
+    [Fact]
+    public void PromptVariables_DatetimeIsCultureInvariant()
+    {
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("zh-CN");
+            var chinese = PromptVariables.Build(workspace: null, model: null)["datetime"];
+            CultureInfo.CurrentCulture = new CultureInfo("fr-FR");
+            var french = PromptVariables.Build(workspace: null, model: null)["datetime"];
+
+            // 同一套英文格式，不随宿主语言变成「周六」或「sam.」。
+            Assert.Matches(@"^\d{4}-\d{2}-\d{2} (Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2} [+-]\d{2}:\d{2}$", chinese);
+            Assert.Equal(chinese.Split(' ')[1], french.Split(' ')[1]);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Text;
+using Haoyue.Runtime.Configuration;
 
 namespace Haoyue.Runtime.Data;
 
@@ -83,7 +84,7 @@ public static class KnowledgeTuning
     /// would leave a null inside <see cref="_paths"/> — which crashed the very first search.
     /// </remarks>
     private static readonly string DefaultPathValue = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".haoyue", "knowledge", "synonyms.txt");
+        HaoyuePaths.Home, "knowledge", "synonyms.txt");
 
     public static string DefaultPath => DefaultPathValue;
 

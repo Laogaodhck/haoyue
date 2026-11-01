@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Data;
 
 namespace Haoyue.Runtime.Daemon;
 
@@ -350,7 +351,7 @@ internal sealed partial class DaemonAdminApi
                    ?? new JsonObject();
         MergePatch(node, patch);
         var updated = node.Deserialize(HaoyueJsonContext.Default.WorkspaceConfig) ?? current;
-        File.WriteAllText(file, JsonSerializer.Serialize(updated, HaoyueJsonContext.Default.WorkspaceConfig));
+        AtomicFile.WriteAllText(file, JsonSerializer.Serialize(updated, HaoyueJsonContext.Default.WorkspaceConfig));
 
         if (SameRoot(root, runtime.Workspace.Root) && runtime.Workspace.Config is { } live)
             CopyWorkspaceConfig(updated, live);

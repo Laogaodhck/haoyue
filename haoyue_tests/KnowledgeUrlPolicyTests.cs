@@ -166,8 +166,64 @@ public class KnowledgeUrlPolicyTests
             KnowledgeWeb.FetchAsync(new Uri("http://8.8.8.8/"), null, handler));
     }
 
+    [Fact]
+    public async Task Fetch_OversizedStreamedBody_AbortsAtCap()
+    {
+        // 无限流的假响应：只有「边读边计数并在超限时立刻中断」才能收场；
+        // 旧实现先整体缓冲再检查大小，遇到这种响应会一直读到进程被拖垮。
+        var flood = new FloodStream();
+        var handler = new RouteHandler(_ =>
+        {
+            var content = new StreamContent(flood);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/html");
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+
+        var ex = await Assert.ThrowsAsync<KnowledgeWebException>(() =>
+            KnowledgeWeb.FetchAsync(new Uri("http://8.8.8.8/huge"), null, handler));
+
+        Assert.Contains("网页过大", ex.Message);
+        Assert.True(flood.Produced <= KnowledgeWeb.MaxBodyBytes + 81920,
+            $"应在超过上限后立即停止读取，实际读取 {flood.Produced} 字节");
+    }
+
     private static HttpResponseMessage Redirect(string location) =>
         new(HttpStatusCode.Found) { Headers = { Location = new Uri(location) } };
+
+    /// <summary>永不结束的字节流，用来验证抓取端的流式上限。</summary>
+    private sealed class FloodStream : Stream
+    {
+        public long Produced { get; private set; }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => Produced;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var n = Math.Min(count, 81920);
+            Array.Fill(buffer, (byte)'a', offset, n);
+            Produced += n;
+            return n;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            buffer.Span.Fill((byte)'a');
+            Produced += buffer.Length;
+            return ValueTask.FromResult(buffer.Length);
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     private sealed class RouteHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {

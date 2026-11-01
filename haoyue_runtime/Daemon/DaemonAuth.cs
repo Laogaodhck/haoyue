@@ -2,6 +2,7 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Text;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Data;
 
 namespace Haoyue.Runtime.Daemon;
 
@@ -35,20 +36,9 @@ public static class DaemonAuth
 
         Directory.CreateDirectory(HaoyuePaths.Home);
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(TokenLength / 2));
-        File.WriteAllText(HaoyuePaths.DaemonTokenFile, token);
-        if (!OperatingSystem.IsWindows())
-        {
-            try
-            {
-                File.SetUnixFileMode(HaoyuePaths.DaemonTokenFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            }
-            catch (PlatformNotSupportedException)
-            {
-                // Some unix flavours may not support the syscall; the profile
-                // directory permissions remain the effective boundary.
-            }
-        }
-        else
+        // Unix 权限在临时文件上就设好再做替换：成品的 0600 不存在「先 0644 后被收紧」的窗口。
+        AtomicFile.WriteAllText(HaoyuePaths.DaemonTokenFile, token, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        if (OperatingSystem.IsWindows())
         {
             // Windows：显式把 ACL 收紧到当前用户（切断继承、仅保留本用户读写）。
             // profile 目录默认 ACL 已私有，但显式设规则保证目录 ACL 被放宽

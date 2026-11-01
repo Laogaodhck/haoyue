@@ -119,4 +119,22 @@ public sealed class TurnScopeTests : IDisposable
         registry.Deposit(second);
         Assert.Same(second, registry.Take("s2"));
     }
+
+    [Fact]
+    public void UndoRegistry_EvictsOldestLedgersBeyondCap()
+    {
+        // 台账按会话累积且不会自行过期：不设上限就会把每个会话的文件内容一直留在内存里。
+        var registry = new TurnUndoRegistry();
+        var start = DateTimeOffset.UtcNow.AddHours(-1);
+        var total = TurnUndoRegistry.MaxLedgers + 5;
+        for (var i = 0; i < total; i++)
+        {
+            registry.Deposit(new TurnUndoLedger($"s{i}", _dir, start.AddSeconds(i), false, []));
+        }
+
+        Assert.Null(registry.Peek("s0"));
+        Assert.Null(registry.Peek("s4"));
+        Assert.NotNull(registry.Peek("s5"));
+        Assert.NotNull(registry.Peek($"s{total - 1}"));
+    }
 }

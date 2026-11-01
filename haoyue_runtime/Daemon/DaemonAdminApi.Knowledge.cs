@@ -581,8 +581,7 @@ internal sealed partial class DaemonAdminApi
         var path = KnowledgeTuning.ActivePath;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, content);
+            AtomicFile.WriteAllText(path, content);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

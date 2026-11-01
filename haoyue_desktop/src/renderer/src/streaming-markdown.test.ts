@@ -87,6 +87,25 @@ describe('renderStreamingContent (1.1 增量渲染)', () => {
     expect(result.html).toContain('<p>前言</p>')
   })
 
+  it('routes cache writes through the caller so the memo can stay bounded', () => {
+    const cache = new Map<string, string>()
+    const written: string[] = []
+    const result = renderStreamingContent('第一段\n\n第二段\n\n尾部', {
+      renderBlock,
+      cache,
+      cacheBlock: (source, html) => {
+        written.push(source)
+        cache.set(source, html)
+        if (cache.size > 1) cache.delete(cache.keys().next().value!)
+      },
+      renderFallback: (source) => `<pre class="unclosed-fence">${md.utils.escapeHtml(source)}</pre>`,
+    })
+
+    expect(written).toEqual(['第一段', '第二段'])
+    expect(cache.size).toBe(1)
+    expect(result.html).toContain('<p>第一段</p>')
+  })
+
   it('keeps 30k-char stream frames within budget: one tail block parsed per frame', () => {
     // 性能打点（宽松阈值，防 O(n²) 回归）：30k 字首帧全解析，随后每帧只解析尾部块。
     const paragraphs = Array.from({ length: 300 }, (_, i) => `第 ${i} 段 ` + '内容'.repeat(60))

@@ -2,6 +2,8 @@ import { closeSync, createWriteStream, existsSync, fstatSync, mkdirSync, openSyn
 import { join } from 'node:path'
 
 const maxLogBytes = 8 * 1024 * 1024
+/** 未遇到换行时最多暂存这么多字符；超过就按原文脱敏后立即写出。 */
+const maxPendingChars = 64 * 1024
 
 export interface DaemonLogSink {
   append(chunk: string): void
@@ -32,14 +34,44 @@ export function openDaemonLogSink(logDir: string): DaemonLogSink {
     return silentSink
   }
   stream.write(`\n===== daemon spawn ${new Date().toISOString()} =====\n`)
+  // 密钥脱敏必须在落盘前完成：日志文件本身也可能被打包带走。按整行匹配，
+  // 避免 key=value 这类片段被 stdout 分块切断后漏网。
+  let pending = ''
+  const flushLines = (): void => {
+    const lastBreak = pending.lastIndexOf('\n')
+    if (lastBreak < 0) {
+      // 没有换行的超长输出不能无限留在内存里；截断前仍过一遍脱敏。
+      if (pending.length > maxPendingChars) {
+        if (stream.writable) stream.write(redactLogSecrets(pending))
+        pending = ''
+      }
+      return
+    }
+    const complete = pending.slice(0, lastBreak + 1)
+    pending = pending.slice(lastBreak + 1)
+    if (stream.writable) stream.write(redactLogSecrets(complete))
+  }
   return {
     append: (chunk) => {
-      if (stream.writable) stream.write(chunk)
+      if (!stream.writable) return
+      pending += chunk
+      flushLines()
     },
     writeMarker: (line) => {
-      if (stream.writable) stream.write(`\n----- ${line} -----\n`)
+      // 先排空半行，标记才不会插进上一行中间。
+      if (pending) {
+        if (stream.writable) stream.write(redactLogSecrets(pending))
+        pending = ''
+      }
+      if (stream.writable) stream.write(`\n----- ${redactLogSecrets(line)} -----\n`)
     },
-    close: () => stream.end()
+    close: () => {
+      if (pending) {
+        if (stream.writable) stream.write(redactLogSecrets(pending))
+        pending = ''
+      }
+      stream.end()
+    }
   }
 }
 

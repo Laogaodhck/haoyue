@@ -43,6 +43,23 @@ describe('daemon log sink', () => {
     expect(statSync(join(dir, 'daemon.prev.log')).size).toBeGreaterThan(8 * 1024 * 1024)
     expect(readFileSync(join(dir, 'daemon.log'), 'utf-8')).toContain('fresh')
   })
+
+  it('redacts credentials before they reach the log file', async () => {
+    const sink = openDaemonLogSink(dir)
+    // 密钥被 stdout 分块切断，也要在整行拼好后脱敏。
+    sink.append('Authorization: Bearer sk-abcdef012')
+    sink.append('3456789morerandomchars\n')
+    sink.append('request body {"api_key":"supersecretvalue"} failed')
+    sink.writeMarker('daemon exit code=1')
+    sink.close()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const text = readFileSync(join(dir, 'daemon.log'), 'utf-8')
+    expect(text).not.toContain('sk-abcdef0123456789morerandomchars')
+    expect(text).not.toContain('supersecretvalue')
+    expect(text).toContain('request body')
+    expect(text).toContain('daemon exit code=1')
+  })
 })
 
 describe('readDaemonLogTail', () => {

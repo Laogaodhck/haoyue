@@ -76,14 +76,19 @@ md.renderer.rules.fence = (tokens, index, _options, env) => {
 
 // ---------------------------------------------------------------- math
 
-/** Extracts fenced code (math inside code must stay untouched). */
-function protectFences(source: string): { text: string; fences: string[] } {
+/** Extracts fenced blocks and inline code (math inside code must stay untouched). */
+function protectCode(source: string): { text: string; fences: string[] } {
   const fences: string[] = []
-  const text = source.replace(/```[\s\S]*?```/g, (fence) => {
+  const stash = (code: string): string => {
     const token = `@@FENCE${fences.length}@@`
-    fences.push(fence)
+    fences.push(code)
     return token
-  })
+  }
+  // 围栏先整体取出：其中的反引号不能被后面的行内代码规则当成配对符。
+  let text = source.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, stash)
+  // 行内代码：`code` 或 ``code``。不取出的话，`$HOME` 与 `$PATH` 之间的文本
+  // 会被 $…$ 规则当成一条公式。
+  text = text.replace(/(`+)([^`][\s\S]*?)\1/g, stash)
   return { text, fences }
 }
 
@@ -96,7 +101,8 @@ function renderMath(source: string): { text: string; pending: string[] } {
     pending.push(katex.renderToString(tex, { displayMode: true, throwOnError: false }))
     return token
   })
-  result = result.replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_all, prefix: string, tex: string) => {
+  // 与 KaTeX auto-render 一致：定界符内侧不能是空白。"$5 and $10" 这类金额不该变成公式。
+  result = result.replace(/(^|[^\\$])\$(?!\s)([^$\n]+?)(?<!\s)\$/g, (_all, prefix: string, tex: string) => {
     const token = `@@MATH${pending.length}@@`
     pending.push(katex.renderToString(tex, { displayMode: false, throwOnError: false }))
     return `${prefix}${token}`
@@ -114,13 +120,25 @@ function resolveMath(html: string, pending: string[]): string {
  * katex 与 hljs——两者只在块定稿时执行一次（1.1：替代旧的全篇流式降级）。
  */
 function renderUnit(source: string, streaming: boolean): string {
-  const { text, fences } = protectFences(source)
+  const { text, fences } = protectCode(source)
   const math = streaming ? { text, pending: [] as string[] } : renderMath(text)
   const html = md.render(restoreFences(math.text, fences), { streaming })
   return resolveMath(html, math.pending)
 }
 
+/** 每个气泡的定稿块 memo。条目上限兜底：长回合会积累成百上千块，不再无限增长。 */
+const MaxCachedBlocks = 256
 const blockCache = new Map<string, string>()
+
+function cacheBlock(source: string, html: string): void {
+  blockCache.set(source, html)
+  while (blockCache.size > MaxCachedBlocks) {
+    const oldest = blockCache.keys().next().value
+    if (oldest === undefined) break
+    blockCache.delete(oldest)
+  }
+}
+
 const fallbackBlock = (source: string): string =>
   `<pre class="unclosed-fence">${md.utils.escapeHtml(source)}</pre>`
 
@@ -132,6 +150,7 @@ const rendered = computed(() => {
     renderBlock: (source, finalized) => renderUnit(source, !finalized),
     cache: blockCache,
     renderFallback: fallbackBlock,
+    cacheBlock,
   }).html
 })
 

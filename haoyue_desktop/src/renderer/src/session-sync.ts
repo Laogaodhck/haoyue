@@ -196,6 +196,20 @@ function applySessionPage(thread: ThreadItem, saved: RuntimeSession, mode: 'repl
  */
 export const sessionImageSources = reactive<Record<string, string>>({})
 const pendingImageBytes = new Set<string>()
+// 缓存上限：base64 图片常以 MB 计，逐会话累积而不淘汰会把渲染进程内存吃光。
+export const MaxCachedSessionImages = 48
+const imageSourceOrder: string[] = []
+
+function rememberImageSource(key: string, url: string): void {
+  const existing = imageSourceOrder.indexOf(key)
+  if (existing >= 0) imageSourceOrder.splice(existing, 1)
+  imageSourceOrder.push(key)
+  sessionImageSources[key] = url
+  while (imageSourceOrder.length > MaxCachedSessionImages) {
+    const oldest = imageSourceOrder.shift()
+    if (oldest) delete sessionImageSources[oldest]
+  }
+}
 
 export function imageSourceKey(sessionId: string, imageId: string): string {
   return `${sessionId}:${imageId}`
@@ -219,7 +233,7 @@ export function requestSessionImageBytes(
     .then((response) => {
       const stored = JSON.parse(response.data) as { mediaType?: string; data?: string | null }
       if (stored.data) {
-        sessionImageSources[key] = `data:${stored.mediaType || image.mediaType};base64,${stored.data}`
+        rememberImageSource(key, `data:${stored.mediaType || image.mediaType};base64,${stored.data}`)
       }
     })
     .catch(() => undefined)

@@ -44,7 +44,7 @@ import {
 } from './app-helpers'
 import { createChatActions } from './app-actions'
 import { readScrollPosition, saveScrollPosition } from './scroll-memory'
-import { loadDrafts, persistDrafts as persistDraftsToStorage } from './thread-drafts'
+import { dropDraft, loadDrafts, persistDrafts as persistDraftsToStorage } from './thread-drafts'
 import { createViewHistory } from './view-history'
 import { createConversationSearch } from './conversation-search'
 import { openBackgroundTaskSession, openSessionHit, type SessionOpenerDeps } from './session-opener'
@@ -301,7 +301,13 @@ const settingsThread = computed(() => threads.value.find((thread) => thread.id =
 const settingsProject = computed(() => projects.value.find((project) => project.id === settingsThread.value?.projectId))
 // 启动预热提示（Failed 时说清「不影响使用」）；断连时进度失去意义——daemon 可能已重启。
 const modelPreloadLabel = computed(() => formatPreloadLabel(modelPreload.value))
-watch(() => daemonState.value.connected, (connected) => { if (!connected) modelPreload.value = null })
+watch(() => daemonState.value.connected, (connected) => {
+  if (connected) return
+  modelPreload.value = null
+  // 断连后审批回传必然失败：留着弹窗会让「拒绝/允许」和 Esc 都变成无效点击。
+  // daemon 侧会按超时拒绝收场，这里直接收掉本地弹窗。
+  for (const thread of threads.value) thread.pendingApproval = undefined
+})
 const conversationTitle = computed(() =>
   activeThread.value?.title || activeProject.value?.name || '任务')
 const runtimeConnectionLabel = computed(() => {
@@ -1051,7 +1057,7 @@ const chatActions = createChatActions({
   switchModel: (model) => void changeModel(model),
   switchMode: (nextMode) => void changeMode(nextMode),
   switchDepth: changeReasoningLevel,
-  clearDraft: (thread) => { composerDrafts.delete(thread.id); composer.value?.setValue('') },
+  clearDraft: (thread) => { dropDraft(composerDrafts, thread.id); composer.value?.setValue('') },
   saveTextFile: (name, content) => window.haoyue.saveTextFile(name, content),
   notify: (title, body) => void window.haoyue?.notify?.(title, body),
   models: () => models.value,
@@ -1101,8 +1107,7 @@ async function sendMessage(content: string, images: ImageAttachment[], files?: F
     thread.queuedMessages.push({ id: makeId(), content, images, files, createdAt: Date.now() })
     return
   }
-  composerDrafts.delete(thread.id)
-  persistDrafts()
+  dropDraft(composerDrafts, thread.id)
   await runMessageTurn(thread, content, images, files)
 }
 
@@ -1120,7 +1125,14 @@ async function respondApproval(approve: boolean): Promise<void> {
     })
     thread!.pendingApproval = undefined
   } catch {
-    // 回传失败保留弹窗：daemon 侧超时自会按拒绝收场，用户也可重试。
+    // 回传失败时不能静默保留弹窗：重试也只是再失败一次。
+    if (!daemonState.value.connected) {
+      // Runtime 已断开：daemon 会按超时拒绝收场，本地直接收掉弹窗并告知。
+      thread!.pendingApproval = undefined
+      void window.haoyue.notify('审批已失效', 'Runtime 连接已断开，本次调用按拒绝处理。')
+    } else {
+      void window.haoyue.notify('审批回传失败', '请重试；若持续失败，弹窗将在 120 秒超时后按拒绝处理。')
+    }
   } finally {
     approvalBusy.value = false
   }
@@ -1419,7 +1431,8 @@ const {
   conversationSelectionToken,
   selectThread,
   refreshProjectSessions,
-  reconnectDaemon
+  reconnectDaemon,
+  discardDraft: (threadId) => dropDraft(composerDrafts, threadId)
 })
 
 async function initializeProjectWorkspace(project: ProjectItem): Promise<void> {

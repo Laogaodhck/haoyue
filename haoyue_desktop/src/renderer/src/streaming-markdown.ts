@@ -103,6 +103,8 @@ export interface IncrementalOptions {
   renderBlock: (source: string, finalized: boolean) => string
   /** 块内容 → HTML 的 memo（同一块跨帧复用）。 */
   cache: Map<string, string>
+  /** 写入 memo（可选）：调用方借此限制条目数、淘汰最旧块。缺省直接 set。 */
+  cacheBlock?: (source: string, html: string) => void
   /** 未闭合围栏块的降级渲染（纯文本转义）。 */
   renderFallback: (source: string) => string
 }
@@ -121,6 +123,7 @@ export interface IncrementalResult {
 export function renderStreamingContent(markdown: string, options: IncrementalOptions): IncrementalResult {
   const { finalized, tail, tailInFence } = splitFinalizedBlocks(markdown)
   const parts: string[] = []
+  const cacheBlock = options.cacheBlock ?? ((source: string, html: string) => options.cache.set(source, html))
   let parsedBlocks = 0
   let cacheHits = 0
 
@@ -132,7 +135,7 @@ export function renderStreamingContent(markdown: string, options: IncrementalOpt
       continue
     }
     const html = options.renderBlock(block, true)
-    options.cache.set(block, html)
+    cacheBlock(block, html)
     parsedBlocks++
     parts.push(html)
   }

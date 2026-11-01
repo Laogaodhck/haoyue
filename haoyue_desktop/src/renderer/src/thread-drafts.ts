@@ -29,16 +29,24 @@ export function loadDrafts(): Map<string, ComposerDraft> {
   return drafts
 }
 
-/** 落盘。只写有内容的草稿：空文本不占存储，也不该在恢复时抢焦点。 */
+/** 落盘。只写有内容的草稿：空文本不占存储，也不该在恢复时抢焦点。
+ *  图片是 base64 data URL，几张就能吃满 localStorage 的 5MB 配额并让后续所有草稿
+ *  写入静默失败——图片草稿只保留在内存里，重启后不恢复。 */
 export function persistDrafts(drafts: Map<string, ComposerDraft>): void {
   try {
     const entries: Record<string, ComposerDraft> = {}
     for (const [threadId, draft] of drafts) {
-      if (draft.text.trim() || draft.images.length > 0 || draft.files.length > 0)
-        entries[threadId] = draft
+      if (draft.text.trim() || draft.files.length > 0)
+        entries[threadId] = { text: draft.text, images: [], files: draft.files }
     }
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(entries))
   } catch {
     // 存储配额满等故障静默降级：内存 Map 仍是权威来源。
   }
+}
+
+/** 任务被删除时同步清掉草稿，避免附件信息留在 localStorage 里成为孤儿。 */
+export function dropDraft(drafts: Map<string, ComposerDraft>, threadId: string): void {
+  if (!drafts.delete(threadId)) return
+  persistDrafts(drafts)
 }

@@ -36,6 +36,8 @@ export function markThreadInterrupted(
   thread.running = false
   thread.queueDraining = false
   thread.assistantId = undefined
+  // 回合已经死了，待审批的调用不可能再被放行；不收掉弹窗就会一直挡住界面。
+  thread.pendingApproval = undefined
   for (let i = thread.messages.length - 1; i >= 0; i--) {
     const message = thread.messages[i]
     if (message?.role === 'assistant') {

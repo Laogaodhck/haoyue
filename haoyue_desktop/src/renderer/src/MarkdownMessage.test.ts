@@ -43,6 +43,26 @@ describe('MarkdownMessage (组件级)', () => {
     expect(final.html()).toContain('class="katex"')
   })
 
+  it('leaves $ inside inline code and tilde fences untouched', () => {
+    const wrapper = mount(MarkdownMessage, {
+      props: { content: '用 `$HOME` 和 `$PATH`，以及\n\n~~~sh\necho $HOME\n~~~' },
+    })
+    const html = wrapper.html()
+    expect(html).toContain('<code>$HOME</code>')
+    expect(html).toContain('<code>$PATH</code>')
+    expect(html).toContain('language-sh')
+    expect(html).toContain('$HOME</span>')
+    expect(html).not.toContain('class="katex"')
+  })
+
+  it('does not turn currency amounts into formulas', () => {
+    const wrapper = mount(MarkdownMessage, { props: { content: '价格是 $5 到 $10 之间' } })
+
+    expect(wrapper.html()).toContain('$5')
+    expect(wrapper.html()).toContain('$10')
+    expect(wrapper.html()).not.toContain('class="katex"')
+  })
+
   it('streams incrementally: stable blocks keep identity while the tail grows', async () => {
     const wrapper = mount(MarkdownMessage, {
       props: { content: '第一段\n\n第二段\n\n正在增长', streaming: true },

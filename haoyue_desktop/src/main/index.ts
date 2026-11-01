@@ -39,10 +39,12 @@ import {
 } from './connection-settings.js'
 import { openDaemonLogSink, readDaemonLogTail } from './daemon-log.js'
 import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
+import { isTrustedIpcSender, requireAbsolutePath } from './ipc-guard.js'
 import { checkForUpdate } from './update-check.js'
 import { attachWebviewGuard, checkBrowserUrl } from './web-guard.js'
 import {
   destroyComputerOverlay,
+  getComputerOverlaySessionId,
   hideComputerOverlay,
   isComputerOverlayActive,
   scheduleHideComputerOverlay,
@@ -475,9 +477,22 @@ function createWindow(): void {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
+/**
+ * 只接受主窗口顶层 frame 的 IPC。内嵌 <webview> 承载的是任意白名单站点：即使
+ * 某次配置失误把 preload 挂到了 guest 上，也不该让它借通道读写本机文件。
+ */
 function registerIpc(): void {
   const logDir = daemonLogDir()
-  ipcMain.handle('app:info', () => ({
+  const handle = <TArgs extends unknown[], TResult>(
+    channel: string,
+    handler: (event: Electron.IpcMainInvokeEvent, ...args: TArgs) => TResult
+  ): void => {
+    ipcMain.handle(channel, (event: Electron.IpcMainInvokeEvent, ...args: TArgs) => {
+      if (!isTrustedIpcSender(event, mainWindow)) throw new Error(`拒绝来自不可信发送方的 IPC 调用：${channel}`)
+      return handler(event, ...args)
+    })
+  }
+  handle('app:info', () => ({
     version: app.getVersion(),
     platform: process.platform,
     supportsMica,
@@ -488,9 +503,9 @@ function registerIpc(): void {
     daemonLogFile: join(logDir, 'daemon.log')
   }))
 
-  ipcMain.handle('app:daemon-log-tail', (_event, lines: number) => readDaemonLogTail(logDir, Number(lines)))
+  handle('app:daemon-log-tail', (_event, lines: number) => readDaemonLogTail(logDir, Number(lines)))
 
-  ipcMain.handle('app:select-workspace', async () => {
+  handle('app:select-workspace', async () => {
     const options: Electron.OpenDialogOptions = {
       title: '选择项目文件夹',
       properties: ['openDirectory', 'createDirectory']
@@ -501,7 +516,7 @@ function registerIpc(): void {
     return result.canceled ? null : result.filePaths[0] ?? null
   })
 
-  ipcMain.handle('app:select-skill-files', async () => {
+  handle('app:select-skill-files', async () => {
     const options: Electron.OpenDialogOptions = {
       title: '导入全局技能',
       filters: [{ name: 'Skill 文件', extensions: ['md', 'zip'] }],
@@ -514,7 +529,7 @@ function registerIpc(): void {
     return { paths: result.filePaths }
   })
 
-  ipcMain.handle('app:select-model-directory', async () => {
+  handle('app:select-model-directory', async () => {
     const options: Electron.OpenDialogOptions = {
       title: '选择模型目录',
       properties: ['openDirectory', 'createDirectory']
@@ -525,7 +540,7 @@ function registerIpc(): void {
     return result.canceled ? null : result.filePaths[0] ?? null
   })
 
-  ipcMain.handle('app:select-gguf-file', async () => {
+  handle('app:select-gguf-file', async () => {
     const options: Electron.OpenDialogOptions = {
       title: '选择 GGUF 模型文件',
       filters: [{ name: 'GGUF 模型', extensions: ['gguf'] }],
@@ -537,7 +552,7 @@ function registerIpc(): void {
     return result.canceled ? null : result.filePaths[0] ?? null
   })
 
-  ipcMain.handle('app:select-files', async () => {
+  handle('app:select-files', async () => {
     const options: Electron.OpenDialogOptions = {
       title: '选择文件',
       properties: ['openFile', 'multiSelections']
@@ -549,15 +564,16 @@ function registerIpc(): void {
     return result.filePaths
   })
 
-  ipcMain.handle('app:read-file-base64', async (_event, path: string) => {
+  handle('app:read-file-base64', async (_event, path: string) => {
     try {
       // 安全边界：该通道面向图片附件，拒绝任意扩展名与超大文件，
       // 防止渲染层被攻破后获得任意文件读取原语。
-      const ext = extname(String(path)).toLocaleLowerCase()
+      const filePath = requireAbsolutePath(path)
+      const ext = extname(filePath).toLocaleLowerCase()
       if (!imageMediaTypes[ext]) return null
-      const info = await stat(String(path))
+      const info = await stat(filePath)
       if (!info.isFile() || info.size > maxTotalImageBytes) return null
-      const data = await readFile(path)
+      const data = await readFile(filePath)
       return {
         data: data.toString('base64'),
         mediaType: imageMediaTypes[ext] || 'image/png',
@@ -568,11 +584,11 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('app:show-item', async (_event, path: string) => {
-    shell.showItemInFolder(path)
+  handle('app:show-item', async (_event, path: string) => {
+    shell.showItemInFolder(requireAbsolutePath(path))
   })
 
-  ipcMain.handle('app:save-text-file', async (_event, defaultName: string, content: string) => {
+  handle('app:save-text-file', async (_event, defaultName: string, content: string) => {
     const options: Electron.SaveDialogOptions = {
       title: '保存文件',
       defaultPath: String(defaultName || 'export.txt')
@@ -585,49 +601,49 @@ function registerIpc(): void {
     return result.filePath
   })
 
-  ipcMain.handle('app:close', () => mainWindow?.close())
+  handle('app:close', () => mainWindow?.close())
 
-  ipcMain.handle('app:open-devtools', () => {
+  handle('app:open-devtools', () => {
     mainWindow?.webContents.openDevTools({ mode: 'detach' })
   })
 
-  ipcMain.handle('app:notify', (_event, title: string, body: string) => {
+  handle('app:notify', (_event, title: string, body: string) => {
     if (typeof title === 'string' && typeof body === 'string') showNativeNotification(title, body)
   })
 
-  ipcMain.handle('app:set-theme', (_event, theme: 'system' | 'light' | 'dark') => {
+  handle('app:set-theme', (_event, theme: 'system' | 'light' | 'dark') => {
     if (theme === 'system' || theme === 'light' || theme === 'dark') {
       nativeTheme.themeSource = theme
       syncNativeWindowTheme()
     }
   })
 
-  ipcMain.handle('app:check-update', () => queryLatestVersion())
+  handle('app:check-update', () => queryLatestVersion())
 
-  ipcMain.handle('project:open-terminal', (_event, path: string) => openProjectTerminal(path))
-  ipcMain.handle('project:git-overview', (_event, path: string) => getGitOverview(path))
-  ipcMain.handle('project:git-history', (_event, path: string) => getGitHistory(path))
-  ipcMain.handle('project:revert-file-diffs', (_event, workspace: string, patches: RevertDiffItem[]) =>
-    revertFileDiffs(workspace, patches)
+  handle('project:open-terminal', (_event, path: string) => openProjectTerminal(requireAbsolutePath(path)))
+  handle('project:git-overview', (_event, path: string) => getGitOverview(requireAbsolutePath(path)))
+  handle('project:git-history', (_event, path: string) => getGitHistory(requireAbsolutePath(path)))
+  handle('project:revert-file-diffs', (_event, workspace: string, patches: RevertDiffItem[]) =>
+    revertFileDiffs(requireAbsolutePath(workspace), patches)
   )
 
   // 可视化浏览器：导航前校验白名单（与无头 browser 工具同一份 config.web.allowedSites）。
-  ipcMain.handle('web:check-url', (_event, url: string) => checkBrowserUrl(daemon, url))
-  ipcMain.handle('web:open-external', (_event, url: string) => {
+  handle('web:check-url', (_event, url: string) => checkBrowserUrl(daemon, url))
+  handle('web:open-external', (_event, url: string) => {
     if (!url.startsWith('https://') && !url.startsWith('http://')) return undefined
     return shell.openExternal(url)
   })
 
-  ipcMain.handle('daemon:connect', () => daemon.connect())
+  handle('daemon:connect', () => daemon.connect())
 
-  ipcMain.handle('connection:get', (): ConnectionSettingsView => ({
+  handle('connection:get', (): ConnectionSettingsView => ({
     mode: connectionSettings.mode,
     host: connectionSettings.host,
     port: connectionSettings.port,
     hasToken: Boolean(connectionSettings.token)
   }))
 
-  ipcMain.handle('connection:set', async (_event, update: ConnectionUpdate): Promise<{ ok: boolean; error?: string }> => {
+  handle('connection:set', async (_event, update: ConnectionUpdate): Promise<{ ok: boolean; error?: string }> => {
     const candidate = mergedConnectionUpdate(update)
     const problem = connectionSettingsProblem(candidate)
     if (problem) return { ok: false, error: problem }
@@ -648,7 +664,7 @@ function registerIpc(): void {
   })
 
   // 试连使用独立的客户端实例：不能打断当前连接，也不改变已保存的设置。
-  ipcMain.handle('connection:test', async (_event, update: ConnectionUpdate): Promise<ConnectionTestResult> => {
+  handle('connection:test', async (_event, update: ConnectionUpdate): Promise<ConnectionTestResult> => {
     const candidate = mergedConnectionUpdate(update)
     const problem = connectionSettingsProblem(candidate)
     if (problem) return { ok: false, endpoint: '', error: problem }
@@ -670,10 +686,10 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('connection:reveal-token', () => connectionSettings.token)
-  ipcMain.handle('connection:local-token', () => readDaemonToken())
+  handle('connection:reveal-token', () => connectionSettings.token)
+  handle('connection:local-token', () => readDaemonToken())
   // 结构化回包：ipcMain.handle 的 reject 会把 Error 压成字符串，code/method 到不了渲染进程。
-  ipcMain.handle(
+  handle(
     'daemon:request',
     async (
       _event,
@@ -689,6 +705,9 @@ function registerIpc(): void {
     })
 
   daemon.on('event', (message) => {
+    // 浮层绑定发起电脑操作的会话：别的会话跑完工具时不能把它收走。
+    const overlaySessionId = getComputerOverlaySessionId()
+    const fromOverlaySession = overlaySessionId === undefined || message.sessionId === overlaySessionId
     if (message.event === 'tool_start' && (message.data === 'computer' || message.data === 'computer_inspect')) {
       // 必须带上 sessionId：daemon 的 agent.cancel 在 params 为空时会取消「本连接上
       // 所有活跃回合」（见 DaemonServer 该分支的兜底语义），浮层「停止」会顺手杀掉
@@ -698,10 +717,10 @@ function registerIpc(): void {
         void daemon
           .request('agent.cancel', overlaySession ? { sessionId: overlaySession } : undefined)
           .catch(() => undefined)
-      })
-    } else if (message.event === 'tool_done' && (message.data?.includes('computer') || isComputerOverlayActive())) {
+      }, overlaySession)
+    } else if (message.event === 'tool_done' && fromOverlaySession && (message.data?.includes('computer') || isComputerOverlayActive())) {
       scheduleHideComputerOverlay(900)
-    } else if (message.event === 'done' || message.event === 'cancelled' || message.event === 'error') {
+    } else if ((message.event === 'done' || message.event === 'cancelled' || message.event === 'error') && fromOverlaySession) {
       hideComputerOverlay(true)
     }
 

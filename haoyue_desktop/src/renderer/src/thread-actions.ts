@@ -18,6 +18,7 @@ export interface ThreadActionsContext {
   selectThread: (id: string) => Promise<void> | void
   refreshProjectSessions: (project: ProjectItem) => Promise<void>
   reconnectDaemon: () => Promise<void>
+  discardDraft?: (threadId: string) => void
 }
 
 export function createThreadActions(context: ThreadActionsContext) {
@@ -33,8 +34,13 @@ export function createThreadActions(context: ThreadActionsContext) {
     conversationSelectionToken,
     selectThread,
     refreshProjectSessions,
-    reconnectDaemon
+    reconnectDaemon,
+    discardDraft
   } = context
+
+  function dropThreadDraft(threadId: string): void {
+    discardDraft?.(threadId)
+  }
 
   function chooseAfterRemoval(projectId?: string): void {
     // The selected task is about to change; stale session reads must not update
@@ -80,6 +86,7 @@ export function createThreadActions(context: ThreadActionsContext) {
       thread.archived = true
     } else {
       threads.value = threads.value.filter((item) => item.id !== thread.id)
+      dropThreadDraft(thread.id)
     }
     taskSettingsThreadId.value = ''
     if (activeThreadId.value === thread.id) chooseAfterRemoval(project?.id)
@@ -136,6 +143,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
         thread.archived = true
       } else {
         threads.value = threads.value.filter((item) => item.id !== thread.id)
+        dropThreadDraft(thread.id)
       }
     })
     if (activeAffected) chooseAfterRemoval(project.id)
@@ -161,6 +169,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
         thread.archived = true
       } else {
         threads.value = threads.value.filter((item) => item.id !== thread.id)
+        dropThreadDraft(thread.id)
       }
     })
     if (activeAffected) chooseAfterRemoval()
@@ -183,6 +192,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
       })
     }
     threads.value = threads.value.filter((item) => item.id !== thread.id)
+    dropThreadDraft(thread.id)
     taskSettingsThreadId.value = ''
     if (activeThreadId.value === thread.id) chooseAfterRemoval(project?.id)
   }
@@ -203,6 +213,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
         await daemonRequest('session.delete', { id: thread.sessionId, global: true })
       }
       threads.value = threads.value.filter((item) => item.id !== thread.id)
+      dropThreadDraft(thread.id)
     })
     taskSettingsThreadId.value = ''
     if (activeAffected) chooseAfterRemoval()
@@ -228,6 +239,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
         })
       }
       threads.value = threads.value.filter((item) => item.id !== thread.id)
+      dropThreadDraft(thread.id)
     })
     taskSettingsThreadId.value = ''
     if (activeAffected) chooseAfterRemoval(project.id)
@@ -253,6 +265,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
         })
       }
       threads.value = threads.value.filter((item) => item.id !== thread.id)
+      dropThreadDraft(thread.id)
     })
     taskSettingsThreadId.value = ''
     if (activeAffected) {
@@ -293,6 +306,7 @@ async function archiveProjectTasks(project: ProjectItem): Promise<void> {
     const activeAffected = targets.some((thread) => thread.id === activeThreadId.value)
     projects.value = projects.value.filter((item) => item.id !== project.id)
     threads.value = threads.value.filter((thread) => thread.projectId !== project.id)
+    for (const thread of targets) dropThreadDraft(thread.id)
     if (targets.some((thread) => thread.id === taskSettingsThreadId.value)) taskSettingsThreadId.value = ''
     if (activeAffected) activeThreadId.value = ''
     if (selectedProjectId.value === project.id) selectedProjectId.value = projects.value[0]?.id ?? ''

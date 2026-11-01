@@ -5,6 +5,11 @@ let hideTimer: NodeJS.Timeout | null = null
 let onCancelCallback: (() => void) | null = null
 let isShowing = false
 let isPageReady = false
+// 只有本模块注册的 Esc 才能注销：hideComputerOverlay 是无条件调用的，
+// 不能顺手把别人注册的全局快捷键一起清掉。
+let escapeRegistered = false
+// 浮层属于哪个会话：其他会话的 tool_done / 终态事件不该把这块浮层收走。
+let overlaySessionId: string | undefined
 
 const OVERLAY_HTML = `<!DOCTYPE html>
 <html>
@@ -248,7 +253,12 @@ export function isComputerOverlayActive(): boolean {
   return isShowing
 }
 
-export function showComputerOverlay(onCancel?: () => void): void {
+/** 浮层当前归属的会话；未显示时为 undefined（视为任意会话）。 */
+export function getComputerOverlaySessionId(): string | undefined {
+  return overlaySessionId
+}
+
+export function showComputerOverlay(onCancel?: () => void, sessionId?: string): void {
   if (hideTimer) {
     clearTimeout(hideTimer)
     hideTimer = null
@@ -258,6 +268,7 @@ export function showComputerOverlay(onCancel?: () => void): void {
     onCancelCallback = onCancel
   }
 
+  overlaySessionId = sessionId
   isShowing = true
   const win = getOverlayWindow()
   const primaryDisplay = screen.getPrimaryDisplay()
@@ -276,7 +287,7 @@ export function showComputerOverlay(onCancel?: () => void): void {
   // Register global shortcut for Escape to allow immediate abort
   try {
     if (!globalShortcut.isRegistered('Escape')) {
-      globalShortcut.register('Escape', () => {
+      escapeRegistered = globalShortcut.register('Escape', () => {
         hideComputerOverlay(true)
         onCancelCallback?.()
       })
@@ -301,10 +312,12 @@ export function hideComputerOverlay(immediate = false): void {
   }
 
   isShowing = false
+  overlaySessionId = undefined
 
   try {
-    if (globalShortcut.isRegistered('Escape')) {
+    if (escapeRegistered) {
       globalShortcut.unregister('Escape')
+      escapeRegistered = false
     }
   } catch { /* the shortcut may belong to another app */ }
 

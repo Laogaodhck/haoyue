@@ -5,6 +5,8 @@ import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 interface SelectOption {
   value: string
   label: string
+  /** 触发按钮上的短文案（菜单与悬浮提示仍用 label）。 */
+  triggerLabel?: string
   description?: string
   disabled?: boolean
 }
@@ -262,9 +264,10 @@ onBeforeUnmount(() => {
 <template>
   <div ref="root" class="custom-select" :class="{ open, disabled }">
     <button ref="trigger" class="custom-select-trigger" type="button" :disabled="disabled" :aria-label="label"
-      aria-haspopup="listbox" :aria-expanded="open" :aria-controls="listboxId" @click="toggle" @keydown="handleKeydown">
+      aria-haspopup="listbox" :aria-expanded="open" :aria-controls="listboxId"
+      :title="selectedOption?.triggerLabel ? selectedOption.label : undefined" @click="toggle" @keydown="handleKeydown">
       <span class="custom-select-value" :class="{ placeholder: !selectedOption }">
-        {{ selectedOption?.label || modelValue || placeholder }}
+        {{ selectedOption?.triggerLabel || selectedOption?.label || modelValue || placeholder }}
       </span>
       <ChevronDown class="custom-select-chevron" :size="15" />
     </button>

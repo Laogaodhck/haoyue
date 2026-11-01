@@ -84,6 +84,22 @@ const modeOptions = [
   { value: 'auto', label: '自动', description: '根据任务自动选择' }
 ]
 
+/** 触发器只显示模型名：去掉 provider 前缀、.gguf 与末尾的量化档位，完整 id 留给菜单与悬浮提示。 */
+const QUANT_TOKEN = /^(?:q\d.*|iq\d.*|f\d+|bf\d+|fp\d+|int\d+|awq|gptq|gguf)$/i
+
+function compactModelLabel(id: string): string {
+  const parts = (id.split('/').pop() ?? id).replace(/\.gguf$/i, '').split('-')
+  let end = parts.length
+  while (end > 1 && QUANT_TOKEN.test(parts[end - 1] ?? '')) end -= 1
+  return parts.slice(0, end).join('-')
+}
+
+const modelOptions = computed(() =>
+  props.models.length > 0
+    ? props.models.map((item) => ({ value: item, label: item, triggerLabel: compactModelLabel(item) }))
+    : [{ value: '', label: '未配置模型', triggerLabel: '未配置模型' }]
+)
+
 /** 全局网络被关时，任务级开关点亮也没有实际能力，图标必须显式置灰。 */
 const networkBlockedByGlobal = computed(
   () => props.globalNetworkEnabled === false && props.networkEnabled !== undefined
@@ -815,9 +831,8 @@ watch(() => props.supportsImages, async (supported) => {
         <em class="composer-scope-tag">全局</em>
       </span>
       <SelectMenu class="composer-select model-control" :model-value="model"
-        :options="models.length > 0 ? models.map((item) => ({ value: item, label: item })) : [{ value: '', label: '未配置模型' }]"
-        label="模型" :disabled="busy || disabled || models.length === 0" :menu-min-width="300" searchable
-        @update:model-value="emit('changeModel', $event)" />
+        :options="modelOptions" label="模型" :disabled="busy || disabled || models.length === 0"
+        :menu-min-width="300" searchable @update:model-value="emit('changeModel', $event)" />
       <span class="toolbar-spacer" />
       <ReasoningDepthMenu :model-value="reasoningLevel" :disabled="busy || disabled"
         @update:model-value="emit('changeReasoningLevel', $event)" />

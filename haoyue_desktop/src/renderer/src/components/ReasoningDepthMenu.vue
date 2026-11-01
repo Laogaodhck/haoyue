@@ -31,6 +31,17 @@ const labels: Record<ReasoningLevel, string> = {
   [ReasoningLevel.Ultra]: '超级（ultra）'
 }
 
+/** 触发器只放档位本身，档位全称与说明留给悬浮提示和弹层。 */
+const shortLabels: Record<ReasoningLevel, string> = {
+  [ReasoningLevel.None]: '关',
+  [ReasoningLevel.Low]: '低',
+  [ReasoningLevel.Medium]: '中',
+  [ReasoningLevel.High]: '高',
+  [ReasoningLevel.Max]: '最大',
+  [ReasoningLevel.XHigh]: '极高',
+  [ReasoningLevel.Ultra]: '超级'
+}
+
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
 const menu = ref<HTMLElement | null>(null)
@@ -138,11 +149,13 @@ onBeforeUnmount(removeListeners)
       :disabled="disabled"
       aria-haspopup="dialog"
       :aria-expanded="open"
+      :title="`思考深度：${labels[modelValue]}`"
+      :aria-label="`思考深度：${labels[modelValue]}`"
       @click="toggle"
       @keydown="handleKeydown"
     >
       <Gauge :size="15" />
-      <span>思考深度：{{ labels[modelValue] }}</span>
+      <span>{{ shortLabels[modelValue] }}</span>
       <ChevronDown :size="13" class="reasoning-chevron" :class="{ rotated: open }" />
     </button>
 

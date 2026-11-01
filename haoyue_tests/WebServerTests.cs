@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using haoyue_webserver.Data;
 using haoyue_webserver.Models;
+using haoyue_webserver.Security;
 using haoyue_webserver.Services;
 using Xunit;
 
@@ -210,5 +211,106 @@ public sealed class WebServerTests
         var html = markdownService.ToHtml(markdown);
         Assert.Contains("vp-callout-note", html);
         Assert.Contains("Note", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("[x](javascript:alert(1))")]
+    [InlineData("[x](JaVaScRiPt:alert(1))")]
+    [InlineData("[x](java&#115;cript:alert(1))")]
+    [InlineData("[x](data:text/html,<script>alert(1)</script>)")]
+    [InlineData("[x](vbscript:msgbox(1))")]
+    [InlineData("[x](file:///etc/passwd)")]
+    public void MarkdownService_DefusesUnsafeLinkDestinations(string markdown)
+    {
+        var html = new MarkdownService().ToHtml(markdown);
+
+        Assert.DoesNotContain("javascript:", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("data:text/html", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("vbscript:", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("file:", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("href=\"#\"", html);
+    }
+
+    [Theory]
+    [InlineData("[x](https://example.com/path)", "https://example.com/path")]
+    [InlineData("[x](/docs/start)", "/docs/start")]
+    [InlineData("[x](mailto:dev@example.com)", "mailto:dev@example.com")]
+    public void MarkdownService_KeepsSafeLinkDestinations(string markdown, string expected)
+    {
+        var html = new MarkdownService().ToHtml(markdown);
+
+        Assert.Contains($"href=\"{expected}\"", html);
+    }
+
+    [Fact]
+    public void MarkdownService_DefusesUnsafeImageDestinations()
+    {
+        var unsafeHtml = new MarkdownService().ToHtml("![x](javascript:alert(1)) ![y](data:image/png;base64,AA)");
+        Assert.Contains("src=\"#\"", unsafeHtml);
+        Assert.DoesNotContain("javascript:", unsafeHtml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("data:image", unsafeHtml, StringComparison.OrdinalIgnoreCase);
+
+        var safeHtml = new MarkdownService().ToHtml("![x](https://example.com/a.png)");
+        Assert.Contains("src=\"https://example.com/a.png\"", safeHtml);
+    }
+
+    [Theory]
+    [InlineData("java\nscript:alert(1)", false)]
+    [InlineData(" java\tscript:alert(1) ", false)]
+    [InlineData("java&#115;cript:alert(1)", false)]
+    [InlineData("https://example.com", true)]
+    [InlineData("/relative/path", true)]
+    [InlineData("mailto:dev@example.com", true)]
+    public void SafeLinkPolicy_NormalizesWhitespaceAndEntities(string url, bool expected)
+    {
+        Assert.Equal(expected, SafeLinkPolicy.IsSafeLink(url));
+    }
+
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("data:text/html,<script>alert(1)</script>")]
+    [InlineData("/relative")]
+    [InlineData("mailto:dev@example.com")]
+    public async Task SkillService_RejectsUnsafeHomepage(string homepage)
+    {
+        var (db, connection) = CreateInMemoryDbContext();
+        using (connection)
+        using (db)
+        {
+            var skills = new SkillService(db);
+            var input = new SkillInput
+            {
+                Name = "Unsafe Homepage",
+                Slug = "unsafe-homepage",
+                Summary = "summary",
+                ReadmeMarkdown = "# docs",
+                Homepage = homepage
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => skills.CreateAsync(
+                input, null, null, null, authorUserId: 1, authorUsername: "alice"));
+        }
+    }
+
+    [Fact]
+    public async Task SkillService_AcceptsHttpHomepage()
+    {
+        var (db, connection) = CreateInMemoryDbContext();
+        using (connection)
+        using (db)
+        {
+            var skills = new SkillService(db);
+            var input = new SkillInput
+            {
+                Name = "Safe Homepage",
+                Slug = "safe-homepage",
+                Summary = "summary",
+                ReadmeMarkdown = "# docs",
+                Homepage = " https://example.com/repo "
+            };
+
+            var created = await skills.CreateAsync(input, null, null, null, authorUserId: 1, authorUsername: "alice");
+            Assert.Equal("https://example.com/repo", created.Homepage);
+        }
     }
 }

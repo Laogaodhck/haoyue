@@ -131,6 +131,12 @@
             else if (_step == 3)
             {
                 <div class="mb-3">
+                    <label class="form-label">初始化令牌 *</label>
+                    <input type="password" class="form-control" @bind="_setupModel.SetupToken" placeholder="服务器启动日志中的一次性令牌" autocomplete="off" />
+                    <div class="form-text">首次启动日志会打印本次进程的令牌；也可通过 HAOYUE_SETUP_TOKEN 环境变量预先固定。</div>
+                </div>
+
+                <div class="mb-3">
                     <label class="form-label">站点名称</label>
                     <input class="form-control" @bind="_setupModel.SiteName" placeholder="Haoyue" />
                 </div>
@@ -242,6 +248,13 @@
     {
         _busy = true;
         _error = null;
+        if (string.IsNullOrWhiteSpace(_setupModel.SetupToken))
+        {
+            _error = "请输入服务器启动日志中的初始化令牌。";
+            _busy = false;
+            return;
+        }
+
         try
         {
             var result = await JS.InvokeAsync<AuthResult>("Haoyue.initializeSystem", _setupModel);

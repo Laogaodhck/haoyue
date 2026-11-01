@@ -258,10 +258,10 @@
           primaryTextColor: isDark ? '#f0f6fc' : '#0f172a',
           lineColor: isDark ? '#30363d' : '#cbd5e1'
         },
-        securityLevel: 'loose'
+        securityLevel: 'strict'
       });
 
-      document.querySelectorAll('.language-mermaid').forEach(function (block) {
+      document.querySelectorAll('pre.mermaid, .language-mermaid').forEach(function (block) {
         if (!block.dataset.processed) {
           block.dataset.processed = 'true';
           window.mermaid.run({ nodes: [block] }).catch(function (error) {

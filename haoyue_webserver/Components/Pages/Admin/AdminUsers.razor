@@ -129,6 +129,7 @@
 @code {
     private List<User> _users = new();
     private string? _currentUsername;
+    private int _currentUserId;
     private string? _error;
     private string? _message;
     private User? _passwordTarget;
@@ -140,6 +141,9 @@
     {
         var authState = await AuthStateProvider.GetAuthenticationStateAsync();
         _currentUsername = authState.User.Identity?.Name;
+        _currentUserId = int.TryParse(
+            authState.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+            out var id) ? id : 0;
         await LoadUsersAsync();
     }
 
@@ -148,10 +152,29 @@
         _users = await Auth.ListUsersAsync();
     }
 
+    // 授权状态在 Blazor circuit 内是缓存的，写操作必须回查数据库，
+    // 避免被撤销超管权限的会话继续执行管理动作。
+    private async Task<bool> VerifyStillSuperAdminAsync()
+    {
+        var isSuperAdmin = _currentUserId > 0 && await Auth.IsSuperAdminAsync(_currentUserId);
+        if (!isSuperAdmin)
+        {
+            _error = "当前账号已不再是超级管理员，操作已被拒绝，请重新登录。";
+            _modalError = _error;
+        }
+
+        return isSuperAdmin;
+    }
+
     private async Task ToggleSuperAdminAsync(User user)
     {
         _error = null;
         _message = null;
+        if (!await VerifyStillSuperAdminAsync())
+        {
+            return;
+        }
+
         var nextVal = !user.IsSuperAdmin;
         var success = await Auth.SetSuperAdminAsync(user.Id, nextVal);
         if (success)
@@ -193,6 +216,11 @@
             return;
         }
 
+        if (!await VerifyStillSuperAdminAsync())
+        {
+            return;
+        }
+
         try
         {
             var success = await Auth.ResetPasswordAsync(user.Id, _newPassword);
@@ -220,6 +248,12 @@
             return;
         }
 
+        if (!await VerifyStillSuperAdminAsync())
+        {
+            _deleteTarget = null;
+            return;
+        }
+
         try
         {
             var success = await Auth.DeleteUserAsync(user.Id);
@@ -243,6 +277,5 @@
 
         await LoadUsersAsync();
     }
-}
 }
 

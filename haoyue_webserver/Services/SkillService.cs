@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using haoyue_webserver.Data;
 using haoyue_webserver.Models;
+using haoyue_webserver.Security;
 
 namespace haoyue_webserver.Services;
 
@@ -231,7 +232,7 @@ haoyue skill install code-reviewer
             ReadmeMarkdown = input.ReadmeMarkdown,
             Author = string.IsNullOrWhiteSpace(input.Author) ? (authorUsername ?? "Community") : input.Author.Trim(),
             Version = NormalizeVersion(input.Version),
-            Homepage = NormalizeNull(input.Homepage),
+            Homepage = NormalizeHomepage(input.Homepage),
             IsOfficial = isOfficial,
             AuthorUserId = authorUserId,
             AuthorUsername = authorUsername,
@@ -277,7 +278,7 @@ haoyue skill install code-reviewer
         skill.ReadmeMarkdown = input.ReadmeMarkdown;
         skill.Author = string.IsNullOrWhiteSpace(input.Author) ? skill.Author : input.Author.Trim();
         skill.Version = NormalizeVersion(input.Version);
-        skill.Homepage = NormalizeNull(input.Homepage);
+        skill.Homepage = NormalizeHomepage(input.Homepage);
         skill.Enabled = input.Enabled;
         skill.UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -385,6 +386,17 @@ haoyue skill install code-reviewer
     {
         var value = version.Trim();
         return string.IsNullOrWhiteSpace(value) ? "1.0.0" : value;
+    }
+
+    private static string? NormalizeHomepage(string? value)
+    {
+        var trimmed = NormalizeNull(value);
+        if (trimmed is not null && !SafeLinkPolicy.IsSafeHomepage(trimmed))
+        {
+            throw new InvalidOperationException("主页链接必须是以 http:// 或 https:// 开头的完整地址。");
+        }
+
+        return trimmed;
     }
 
     private static string? NormalizeNull(string? value)

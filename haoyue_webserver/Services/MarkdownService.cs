@@ -1,6 +1,10 @@
 using System.Net;
 using System.Text.RegularExpressions;
 using Markdig;
+using Markdig.Renderers;
+using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
+using haoyue_webserver.Security;
 
 namespace haoyue_webserver.Services;
 
@@ -29,10 +33,40 @@ public sealed class MarkdownService
 
     public string ToHtml(string? markdown)
     {
-        var rawHtml = Markdown.ToHtml(markdown ?? string.Empty, _pipeline);
+        // Parse first so link/image destinations can be checked before rendering.
+        // DisableHtml() removes raw tags but leaves URLs untouched, which is exactly
+        // where javascript:/data: payloads live.
+        var document = Markdown.Parse(markdown ?? string.Empty, _pipeline);
+        SanitizeLinkDestinations(document);
+
+        using var writer = new StringWriter();
+        var renderer = new HtmlRenderer(writer);
+        _pipeline.Setup(renderer);
+        renderer.Render(document);
+        writer.Flush();
+
+        var rawHtml = writer.ToString();
         rawHtml = rawHtml.Replace("class=\"markdown-alert markdown-alert-", "class=\"markdown-alert vp-custom-block vp-callout vp-callout-");
         rawHtml = rawHtml.Replace("class=\"markdown-alert-title\"", "class=\"markdown-alert-title vp-callout-title\"");
         return TransformCallouts(rawHtml);
+    }
+
+    private static void SanitizeLinkDestinations(MarkdownDocument document)
+    {
+        foreach (var link in document.Descendants<LinkInline>())
+        {
+            if (link.Url is not { } url)
+            {
+                continue;
+            }
+
+            var safe = link.IsImage ? SafeLinkPolicy.IsSafeImage(url) : SafeLinkPolicy.IsSafeLink(url);
+            if (!safe)
+            {
+                // Keep the visible text but make the destination inert.
+                link.Url = "#";
+            }
+        }
     }
 
     public RenderedMarkdown Render(string? markdown)

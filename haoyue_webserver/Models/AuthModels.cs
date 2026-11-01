@@ -19,6 +19,7 @@ public sealed class SetupRequest
     public string AdminEmail { get; set; } = "admin@haoyue.org";
     public string AdminUsername { get => AdminEmail; set => AdminEmail = value; }
     public string AdminPassword { get; set; } = string.Empty;
+    public string SetupToken { get; set; } = string.Empty;
     public string SiteName { get; set; } = "Haoyue";
     public bool AllowRegistration { get; set; } = true;
     public bool SeedSampleSkills { get; set; } = true;

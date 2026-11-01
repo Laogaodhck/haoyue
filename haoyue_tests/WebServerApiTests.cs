@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using haoyue_webserver.Data;
 using haoyue_webserver.Models;
+using haoyue_webserver.Security;
 using Xunit;
 
 namespace haoyue_tests;
@@ -105,10 +106,12 @@ public sealed class WebServerApiTests
         var status = await client.GetFromJsonAsync<JsonElement>("/api/setup/status");
         Assert.False(status.GetProperty("isInitialized").GetBoolean());
 
+        var setupToken = factory.Services.GetRequiredService<SetupTokenProvider>().Token;
         var init = await client.PostAsJsonAsync("/api/setup/initialize", new
         {
             adminEmail = "admin@haoyue.org",
             adminPassword = "SecurePassword123",
+            setupToken,
             siteName = "Test Hub",
             allowRegistration = false,
             seedSampleSkills = false
@@ -129,6 +132,122 @@ public sealed class WebServerApiTests
         var registerJson = await register.Content.ReadFromJsonAsync<JsonElement>();
         Assert.False(registerJson.GetProperty("success").GetBoolean());
         Assert.Contains("未开放注册", registerJson.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task Api_Setup_RejectsInvalidToken_AndRegistrationBeforeInit()
+    {
+        using var factory = new WebAppFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var registerBeforeInit = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            email = "intruder@example.com",
+            password = "IntruderPassword123"
+        });
+        var registerJson = await registerBeforeInit.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(registerJson.GetProperty("success").GetBoolean());
+        Assert.Contains("尚未初始化", registerJson.GetProperty("error").GetString());
+
+        var init = await client.PostAsJsonAsync("/api/setup/initialize", new
+        {
+            adminEmail = "admin@haoyue.org",
+            adminPassword = "SecurePassword123",
+            setupToken = "not-the-token",
+            allowRegistration = true,
+            seedSampleSkills = false
+        });
+        Assert.Equal(HttpStatusCode.Forbidden, init.StatusCode);
+
+        var status = await client.GetFromJsonAsync<JsonElement>("/api/setup/status");
+        Assert.False(status.GetProperty("isInitialized").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Api_Registration_AfterSetup_NeverGrantsSuperAdmin()
+    {
+        using var factory = new WebAppFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var setupToken = factory.Services.GetRequiredService<SetupTokenProvider>().Token;
+        var init = await client.PostAsJsonAsync("/api/setup/initialize", new
+        {
+            adminEmail = "admin@haoyue.org",
+            adminPassword = "SecurePassword123",
+            setupToken,
+            allowRegistration = true,
+            seedSampleSkills = false
+        });
+        var initJson = await init.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(initJson.GetProperty("success").GetBoolean());
+
+        var register = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            email = "member@example.com",
+            password = "MemberPassword123"
+        });
+        var registerJson = await register.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(registerJson.GetProperty("success").GetBoolean());
+        Assert.False(registerJson.GetProperty("isSuperAdmin").GetBoolean());
+
+        var me = await client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        Assert.True(me.GetProperty("authenticated").GetBoolean());
+        Assert.False(me.GetProperty("isSuperAdmin").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Api_CookieRevalidatesRoleAndDeletion_FromDatabase()
+    {
+        using var factory = new WebAppFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        var setupToken = factory.Services.GetRequiredService<SetupTokenProvider>().Token;
+        var init = await client.PostAsJsonAsync("/api/setup/initialize", new
+        {
+            adminEmail = "admin@haoyue.org",
+            adminPassword = "SecurePassword123",
+            setupToken,
+            allowRegistration = false,
+            seedSampleSkills = false
+        });
+        Assert.True((await init.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("success").GetBoolean());
+
+        // 模拟另一管理员在会话存活期间撤销超管权限：cookie 里的角色声明必须被回查覆盖。
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var admin = await db.Users.SingleAsync(x => x.Username == "admin@haoyue.org");
+            admin.IsSuperAdmin = false;
+            await db.SaveChangesAsync();
+        }
+
+        var me = await client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        Assert.True(me.GetProperty("authenticated").GetBoolean());
+        Assert.False(me.GetProperty("isSuperAdmin").GetBoolean());
+
+        var denied = await client.GetAsync("/api/setup/test-db");
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+
+        // 账号被删除后，原 cookie 必须立即失效。
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var admin = await db.Users.SingleAsync(x => x.Username == "admin@haoyue.org");
+            db.Users.Remove(admin);
+            await db.SaveChangesAsync();
+        }
+
+        var meAfterDelete = await client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        Assert.False(meAfterDelete.GetProperty("authenticated").GetBoolean());
     }
 
     [Fact]

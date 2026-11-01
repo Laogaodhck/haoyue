@@ -1,4 +1,5 @@
 @rendermode InteractiveServer
+@using haoyue_webserver.Security
 @inject SkillService SkillCatalog
 @inject MarkdownService Markdown
 @inject IJSRuntime JS
@@ -85,7 +86,16 @@ else
                 <span><strong><i class="bi bi-tag me-1"></i>@(Language == "en" ? "Version:" : "版本：")</strong> v@_skill.Version</span>
                 @if (!string.IsNullOrWhiteSpace(_skill.Homepage))
                 {
-                    <span><strong><i class="bi bi-globe me-1"></i>@(Language == "en" ? "Homepage:" : "主页：")</strong> <a href="@_skill.Homepage" target="_blank" rel="noopener noreferrer">@_skill.Homepage</a></span>
+                    <span><strong><i class="bi bi-globe me-1"></i>@(Language == "en" ? "Homepage:" : "主页：")</strong>
+                        @if (SafeLinkPolicy.IsSafeHomepage(_skill.Homepage))
+                        {
+                            <a href="@_skill.Homepage" target="_blank" rel="noopener noreferrer">@_skill.Homepage</a>
+                        }
+                        else
+                        {
+                            <span>@_skill.Homepage</span>
+                        }
+                    </span>
                 }
             </div>
         </div>

@@ -139,8 +139,15 @@ public sealed class AuthService(AppDbContext db)
             return new AuthResult { Success = false, Error = "该邮箱已被注册。" };
         }
 
-        var hasUsers = await db.Users.AnyAsync();
-        if (hasUsers && !await IsRegistrationEnabledAsync())
+        var hasSuperAdmin = await db.Users.AnyAsync(x => x.IsSuperAdmin);
+        if (!hasSuperAdmin)
+        {
+            // Bootstrap must go through /setup with the one-time token; otherwise the
+            // first anonymous visitor would become SuperAdmin on a fresh deployment.
+            return new AuthResult { Success = false, Error = "系统尚未初始化，请先由运维人员完成 /setup 管理员配置。" };
+        }
+
+        if (!await IsRegistrationEnabledAsync())
         {
             return new AuthResult { Success = false, Error = "管理员当前未开放注册。" };
         }
@@ -148,7 +155,7 @@ public sealed class AuthService(AppDbContext db)
         var user = new User
         {
             Username = normalized,
-            IsSuperAdmin = !hasUsers,
+            IsSuperAdmin = false,
             CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         };
         user.PasswordHash = PasswordHasher.HashPassword(user, password);
@@ -175,6 +182,11 @@ public sealed class AuthService(AppDbContext db)
     public async Task<User?> GetByIdAsync(int id)
     {
         return await db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id);
+    }
+
+    public async Task<bool> IsSuperAdminAsync(int userId)
+    {
+        return await db.Users.AsNoTracking().AnyAsync(x => x.Id == userId && x.IsSuperAdmin);
     }
 
     public async Task<List<User>> ListUsersAsync()

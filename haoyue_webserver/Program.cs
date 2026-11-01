@@ -39,6 +39,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.SlidingExpiration = true;
         options.Events = new CookieAuthenticationEvents
         {
+            OnValidatePrincipal = ValidatePrincipalAsync,
             OnRedirectToLogin = context =>
             {
                 if (context.Request.Path.StartsWithSegments("/api"))
@@ -76,6 +77,7 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<SkillService>();
 builder.Services.AddSingleton<MarkdownService>();
 builder.Services.AddSingleton<DocService>();
+builder.Services.AddSingleton<SetupTokenProvider>();
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -98,6 +100,15 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     DatabaseMigration.Apply(db);
+}
+
+using (var scope = app.Services.CreateScope())
+{
+    var auth = scope.ServiceProvider.GetRequiredService<AuthService>();
+    if (!await auth.IsInitializedAsync())
+    {
+        app.Services.GetRequiredService<SetupTokenProvider>().Announce(app.Logger);
+    }
 }
 
 if (!app.Environment.IsDevelopment())
@@ -134,11 +145,18 @@ app.MapGet("/api/setup/test-db", async (AuthService auth) =>
     return Results.Json(status);
 }).RequireAuthorization("SuperAdminOnly");
 
-app.MapPost("/api/setup/initialize", async (HttpContext context, SetupRequest request, AuthService auth, SkillService skills) =>
+app.MapPost("/api/setup/initialize", async (HttpContext context, SetupRequest request, AuthService auth, SkillService skills, SetupTokenProvider tokens) =>
 {
     if (await auth.IsInitializedAsync())
     {
         return Results.Json(new { success = false, error = "系统已完成初始化，无法重复配置。" });
+    }
+
+    if (!tokens.IsValid(request.SetupToken))
+    {
+        return Results.Json(
+            new { success = false, error = "初始化令牌无效或已失效，请查看服务器启动日志。" },
+            statusCode: StatusCodes.Status403Forbidden);
     }
 
     var result = await auth.InitializeSystemAsync(request);
@@ -243,6 +261,18 @@ app.Run();
 
 static async Task SignInAsync(HttpContext context, User user)
 {
+    await context.SignInAsync(
+        CookieAuthenticationDefaults.AuthenticationScheme,
+        CreatePrincipal(user),
+        new AuthenticationProperties
+        {
+            IsPersistent = true,
+            ExpiresUtc = DateTimeOffset.UtcNow.AddDays(7)
+        });
+}
+
+static ClaimsPrincipal CreatePrincipal(User user)
+{
     var claims = new List<Claim>
     {
         new(ClaimTypes.NameIdentifier, user.Id.ToString()),
@@ -250,15 +280,43 @@ static async Task SignInAsync(HttpContext context, User user)
         new(ClaimTypes.Role, user.IsSuperAdmin ? "SuperAdmin" : "User")
     };
 
-    var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-    await context.SignInAsync(
-        CookieAuthenticationDefaults.AuthenticationScheme,
-        new ClaimsPrincipal(identity),
-        new AuthenticationProperties
-        {
-            IsPersistent = true,
-            ExpiresUtc = DateTimeOffset.UtcNow.AddDays(7)
-        });
+    return new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+}
+
+// Cookie 携带的角色声明会一直有效到过期，这里每次请求都回查数据库，
+// 以便账号删除或权限变更能立即生效，而不是等到下一轮登录。
+static async Task ValidatePrincipalAsync(CookieValidatePrincipalContext context)
+{
+    var userIdClaim = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+    if (!int.TryParse(userIdClaim, out var userId))
+    {
+        await RejectAsync(context);
+        return;
+    }
+
+    var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+    var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == userId);
+    if (user is null)
+    {
+        await RejectAsync(context);
+        return;
+    }
+
+    var expectedRole = user.IsSuperAdmin ? "SuperAdmin" : "User";
+    var stale = !string.Equals(context.Principal?.Identity?.Name, user.Username, StringComparison.Ordinal)
+        || !string.Equals(context.Principal?.FindFirstValue(ClaimTypes.Role), expectedRole, StringComparison.Ordinal);
+
+    if (stale)
+    {
+        context.ReplacePrincipal(CreatePrincipal(user));
+        context.ShouldRenew = true;
+    }
+}
+
+static async Task RejectAsync(CookieValidatePrincipalContext context)
+{
+    context.RejectPrincipal();
+    await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
 }
 
 /// <summary>WebApplicationFactory&lt;Program&gt; 需要 Program 类型可见。</summary>

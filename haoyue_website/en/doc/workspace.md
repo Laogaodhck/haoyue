@@ -18,6 +18,12 @@ The Runtime walks upward for root markers such as `.git`, `.haoyue`, `package.js
 
 Desktop shows the complete workspace path in the task header and scopes open-location, terminal, Git changes, and Git history actions to that directory.
 
+## Workspace trust
+
+A workspace's `.haoyue/config.json` (including the MCP servers it declares) and `mcp/servers.json` can carry auto-executed commands (MCP stdio launches, verification commands), so they are treated as untrusted by default: both files are ignored while loading, while workspace prompts, skills, and memory are unaffected.
+
+The trust list lives in `~/.haoyue/trusted-workspaces.json` and is granted or revoked explicitly via the daemon RPCs `workspace.trust` / `workspace.untrust`; Desktop shows a banner on untrusted workspaces with one-click approval. A corrupted trust file is treated as "no trusted workspaces" (fail closed).
+
 ## The `.haoyue` directory
 
 After `haoyue init` or Desktop workspace initialization, the default layout is:

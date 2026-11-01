@@ -63,11 +63,14 @@ haoyue provider list
 # 不带参数时进入交互式添加
 haoyue provider add
 
-# 非交互式添加
-haoyue provider add --id deepseek --kind openai \
+# 非交互式添加（密钥从标准输入读取，不留在 shell 历史与进程列表）
+printf '%s' "$DEEPSEEK_API_KEY" | haoyue provider add --id deepseek --kind openai \
   --base-url "https://api.deepseek.com" \
-  --api-key "your-api-key" \
+  --api-key-stdin \
   --model "deepseek-flash" --model "deepseek-v4-pro"
+
+# 修改密钥同理；仍用 --api-key "..." 时 CLI 会提示密钥暴露风险
+printf '%s' "$NEW_KEY" | haoyue provider edit deepseek --api-key-stdin
 
 haoyue provider edit deepseek --timeout 300 --priority 1
 haoyue provider test deepseek

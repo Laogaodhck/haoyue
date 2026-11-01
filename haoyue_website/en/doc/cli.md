@@ -63,11 +63,14 @@ haoyue provider list
 # Start the interactive add workflow
 haoyue provider add
 
-# Add non-interactively
-haoyue provider add --id deepseek --kind openai \
+# Add non-interactively (read the key from stdin so it stays out of shell history and process listings)
+printf '%s' "$DEEPSEEK_API_KEY" | haoyue provider add --id deepseek --kind openai \
   --base-url "https://api.deepseek.com" \
-  --api-key "your-api-key" \
+  --api-key-stdin \
   --model "deepseek-flash" --model "deepseek-v4-pro"
+
+# Rotate a key the same way; plain --api-key "..." still works but the CLI warns about exposure
+printf '%s' "$NEW_KEY" | haoyue provider edit deepseek --api-key-stdin
 
 haoyue provider edit deepseek --timeout 300 --priority 1
 haoyue provider test deepseek

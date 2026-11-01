@@ -83,8 +83,8 @@ git clone https://github.com/Laogaodhck/haoyue.git
 cd Haoyue
 dotnet build
 
-# 配置并测试 Provider
-dotnet run --project haoyue_cli -- provider add --id openai --kind openai --base-url "https://api.openai.com/v1" --api-key "sk-..." --model "gpt-5.5"
+# 配置并测试 Provider（密钥从标准输入读取）
+printf '%s' "$OPENAI_API_KEY" | dotnet run --project haoyue_cli -- provider add --id openai --kind openai --base-url "https://api.openai.com/v1" --api-key-stdin --model "gpt-5.5"
 dotnet run --project haoyue_cli -- provider test openai
 
 # 进入交互模式

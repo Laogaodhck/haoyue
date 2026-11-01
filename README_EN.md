@@ -80,7 +80,8 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 ### 🔒 Reliability & Safety (under the meta layer)
 
 - **Mandatory Tool Execution Policy Gate**: every tool call is evaluated by `ToolExecutionPolicy` after argument parsing and before execution (the model cannot bypass it) — user allow/deny regex rules plus built-in bash high-risk guards (recursive root deletion, disk wipe, fork bombs, curl|sh remote execution, shadow-copy deletion, etc.); a hit is rejected and journaled as an audit event; configured via `agent.toolPolicy`
-- **Credentials Never Travel in Plaintext**: decrypted provider API keys are no longer returned over RPC (only an "configured" flag; saves follow a "unchanged means untouched" semantic). Encrypted credential storage covers Windows DPAPI, the Linux keyring/file fallback, and the **macOS login Keychain** (native Security framework interop); when the Keychain is unreachable the runtime warns explicitly instead of silently storing plaintext
+- **Credentials Never Travel in Plaintext**: decrypted provider API keys are no longer returned over RPC (only an "configured" flag; saves follow a "unchanged means untouched" semantic). Encrypted credential storage covers Windows DPAPI, the Linux keyring/file fallback, and the **macOS login Keychain** (native Security framework interop); when the Keychain is unreachable the runtime warns explicitly instead of silently storing plaintext. CLI `provider add/edit` accepts `--api-key-stdin` and `connectors install --set KEY=-` reads values from stdin, so keys can stay out of shell history and process listings
+- **Log and IPC Egress Hardening**: daemon stdout/stderr is redacted per assembled line before hitting disk (so `Authorization` / `api_key` split across chunks are still caught), with a second pass at the diagnostics bundle and UI egress; every desktop IPC channel accepts only the main window's top-level frame, and path arguments must be absolute
 - **Read Tools Share the Write-Side Boundary**: read_file / grep / list / search resolve inside the same workspace fence as writes — crossing it requires explicit opt-in via `agent.extraReadableRoots`; a credential denylist (SSH private keys, `.aws` / `.gnupg` / `.kube`-style credential directories, `secrets.json`, `.netrc`, `.env*`, `.pem` / `.key` and friends) plus the audit directory are always refused — credential contents never silently flow into context through tool results. The fence compares real paths: symlinks / junctions are resolved segment by segment, and an unresolvable link chain is treated as out of bounds
 - **Workspace Trust Gate**: a workspace's `.haoyue/config.json` and `mcp/servers.json` can carry auto-executed commands (MCP stdio, verify), so both are ignored while loading an untrusted workspace — a cloned repository cannot gain execution rights by simply being opened once; trust lives in `~/.haoyue/trusted-workspaces.json` and is granted or revoked explicitly via `workspace.trust` / `workspace.untrust`; a corrupted trust file is treated as "no trusted workspaces" (fail closed)
 - **computer_exec Under Guard and Audit**: the built-in high-risk guard judges by "command content + execution-class tool" (no longer matching only the tool name `bash`), and `computer_exec` writes bash-shaped audit records
@@ -297,7 +298,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (1232 cases, coverage gates: line ≥70% / branch ≥55%)
+├── haoyue_tests/         # Runtime unit tests (1262 cases, coverage gates: line ≥70% / branch ≥55%)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── contracts/            # daemon contract snapshot (exported from the DaemonContract single source, JSON Schema 2020-12)
@@ -418,7 +419,7 @@ Each local model can additionally override provider-level settings via the `load
 ```bash
 # Sessions & providers
 haoyue session list && haoyue session resume <session-id>
-haoyue provider add openai --api-key sk-...
+printf '%s' 'sk-...' | haoyue provider add openai --api-key-stdin   # keeps the key out of shell history
 haoyue model use openai/gpt-5.5
 
 # Knowledge base & memory
@@ -489,10 +490,10 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1232 / haoyue_cli_tests 18 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1262 / haoyue_cli_tests 27 cases)
 
 # Desktop (requires pnpm install first)
-cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest: 350 cases across 34 files
+cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest: 357 cases across 36 files
 ```
 
 Gates: `haoyue_runtime` line ≥70% / branch ≥55%; CLI (`haoyue_cli`) line ≥15% / branch ≥15%; webserver line ≥45% / branch ≥15% — each runs on its own and `dotnet test` fails when a gate is missed. Contract-snapshot drift, Runbook section completeness, docs statistics (docs-facts: README numbers are derived from source at test time), giant-class line budgets, and the `wwwroot/lib` vendored-lib manifest (hashes / version floor / reference coverage) are all enforced by guard tests. The desktop app runs `pnpm lint`, a component line budget, `pnpm test`, and `pnpm typecheck && pnpm build` in CI's desktop job; the three `benchmarks/*` eval projects are part of `Haoyue.slnx` (compiled in CI), and agent-eval additionally has a weekly scheduled workflow (provider config seeded from repo secrets; skipped automatically when absent). CI also runs NuGet vulnerable-dependency scanning (failures now break the build), `pnpm audit` (prod deps, high severity gate), the TS SDK contract self-check, and locked-mode restore (`packages.lock.json` pins the dependency graph). A Linux job covers Unix sockets, symlink resolution, Python connectors, and the TS SDK integration test. Both the runtime and the test project build with `TreatWarningsAsErrors`; the runtime also enables the AOT / trim analyzers, and all JSON serialization goes through source-generated contexts.
@@ -566,7 +567,7 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
 - Local GGUF load & quantization optimization report (per-layer KV-head parsing fix for hybrid architectures + Flash Attention everywhere + measured Q4/Q5/Q8 comparison: nemotron decode +22%, long-context +45%, requantization buys no quality; reproducible via benchmarks/model-opt) (in Chinese)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1232+18+350, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1262+27+357, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Desktop UI review — three-column layout & key bindings (22 findings across layout responsibility / dead keys / duplicate entries / capability gaps, ranked P1-P3, plus 14 batched recommendations and an item-by-item fix reconciliation: background task panel, local inference dashboard, routing & failover, workspace config, agent expert settings, settings search and offline read-only)
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review

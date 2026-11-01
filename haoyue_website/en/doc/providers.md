@@ -166,10 +166,14 @@ The default load-balancing mode is `priority`. Candidate attempts support expone
 ```bash
 haoyue provider list
 
-haoyue provider add --id deepseek --kind openai \
-  --api-key "sk-..." \
+# Add an OpenAI-compatible Provider (DeepSeek in this example; key via stdin)
+printf '%s' "$DEEPSEEK_API_KEY" | haoyue provider add --id deepseek --kind openai \
+  --api-key-stdin \
   --base-url "https://api.deepseek.com" \
   --model "deepseek-flash" --model "deepseek-v4-pro"
+
+# Rotate the key the same way
+printf '%s' "$NEW_KEY" | haoyue provider edit deepseek --api-key-stdin
 
 haoyue provider test deepseek
 haoyue model list

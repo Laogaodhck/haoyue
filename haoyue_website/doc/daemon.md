@@ -147,4 +147,4 @@ Daemon 进程内维护一个集中式文件写锁协调器（Task Coordinator）
 
 打包版 Desktop 启动时先连接本地端点。若没有 Daemon，它会从 `resources/runtime` 启动自包含 Runtime，并在 24 次短间隔探测内等待端点就绪。Desktop 只记录自己创建的子进程；退出时向该实例发送 `shutdown`，等待其退出，超时后才终止进程。若启动时连接的是外部 Daemon，退出 Desktop 只断开连接。
 
-Desktop 会把自管 Runtime 的 stdout 与 stderr 落盘到 `<userData>/logs/daemon.log`（Windows 打包版即 `%APPDATA%\haoyue-desktop\logs\daemon.log`），每次启动写入一行分隔标记，进程退出时追加退出码与信号；单文件超过 8 MB 时滚动为 `daemon.prev.log`。原生层崩溃前的最后一条断言（例如显存不足）通常只出现在这两条流上，所以排查"发消息没有回复"应先看这个文件。自动重启多次失败时，通知会直接给出最后一行错误并指向该日志。
+Desktop 会把自管 Runtime 的 stdout 与 stderr 落盘到 `<userData>/logs/daemon.log`（Windows 打包版即 `%APPDATA%\haoyue-desktop\logs\daemon.log`），每次启动写入一行分隔标记，进程退出时追加退出码与信号；单文件超过 8 MB 时滚动为 `daemon.prev.log`。落盘前按整行拼接再脱敏，服务商 401 响应体或 curl 调试行里的 `Authorization` / `api_key`（即使被 stdout 分块切断）也不会以明文留在文件里；诊断包与 UI 出口仍做二次脱敏。原生层崩溃前的最后一条断言（例如显存不足）通常只出现在这两条流上，所以排查"发消息没有回复"应先看这个文件。自动重启多次失败时，通知会直接给出最后一行错误并指向该日志。

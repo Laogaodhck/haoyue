@@ -167,11 +167,14 @@ Profile 可固定 Provider / 模型，也可以只指定策略让 Runtime 构建
 # 查看 Provider
 haoyue provider list
 
-# 添加 OpenAI-compatible Provider（DeepSeek 为例）
-haoyue provider add --id deepseek --kind openai \
-  --api-key "sk-..." \
+# 添加 OpenAI-compatible Provider（DeepSeek 为例，密钥走标准输入）
+printf '%s' "$DEEPSEEK_API_KEY" | haoyue provider add --id deepseek --kind openai \
+  --api-key-stdin \
   --base-url "https://api.deepseek.com" \
   --model "deepseek-flash" --model "deepseek-v4-pro"
+
+# 轮换密钥同理
+printf '%s' "$NEW_KEY" | haoyue provider edit deepseek --api-key-stdin
 
 # 检查连通性
 haoyue provider test deepseek

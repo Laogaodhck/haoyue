@@ -18,6 +18,12 @@ Runtime 从当前目录向上查找 `.git`、`.haoyue`、`package.json`、`pypro
 
 Desktop 在任务顶栏显示完整工作区目录，并把打开位置、终端、Git 变更与 Git 历史限制在该目录。
 
+## 工作区信任
+
+工作区的 `.haoyue/config.json`（含其中声明的 MCP 服务器）与 `mcp/servers.json` 可以携带自动执行的命令（MCP stdio 启动、验证命令等），因此默认按「未受信」处理：这两份配置在加载时被整体忽略，工作区 Prompt、技能与 Memory 不受影响。
+
+信任清单保存在 `~/.haoyue/trusted-workspaces.json`，通过 daemon RPC `workspace.trust` / `workspace.untrust` 显式放行或收回；Desktop 在未受信工作区顶部给出提示，可一键放行。清单损坏时按「无受信工作区」处理（失败方向收紧）。
+
 ## `.haoyue` 目录
 
 新工作区执行 `haoyue init` 或 Desktop 初始化后，默认结构为：

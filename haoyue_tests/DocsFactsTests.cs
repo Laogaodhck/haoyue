@@ -78,14 +78,14 @@ public class DocsFactsTests
     {
         var n = CountXunitCases(Path.Combine(FindRepoRoot(), "haoyue_tests"));
         Assert.True(n >= 900, $"runtime 用例数异常：{n}");
-        AssertReadmeMentions([$"{n} 用例", $"{n}+18+"], [$"{n} cases", $"{n}+18+"]);
+        AssertReadmeMentions([$"{n} 用例", $"{n}+27+"], [$"{n} cases", $"{n}+27+"]);
     }
 
     [Fact]
     public void Cli_TestCount_MatchesReadme()
     {
         var n = CountXunitCases(Path.Combine(FindRepoRoot(), "haoyue_cli_tests"));
-        Assert.Equal(18, n);
+        Assert.Equal(27, n);
         AssertReadmeMentions([$"haoyue_cli_tests {n} 用例"], [$"haoyue_cli_tests {n} cases"]);
     }
 

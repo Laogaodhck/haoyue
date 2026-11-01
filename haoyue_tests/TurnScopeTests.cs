@@ -72,31 +72,27 @@ public sealed class TurnScopeTests : IDisposable
     [Fact]
     public async Task ApplyAsync_ContinuesAfterSingleFailure()
     {
-        var readOnlyPath = Path.Combine(_dir, "readonly.txt");
-        await File.WriteAllTextAsync(readOnlyPath, "current");
-        File.SetAttributes(readOnlyPath, FileAttributes.ReadOnly); // writes fail → compensation fails
-        try
-        {
-            var normalPath = Path.Combine(_dir, "normal.txt");
-            await File.WriteAllTextAsync(normalPath, "new");
+        // Use a directory in place of the file: atomic restore renames a temp file onto
+        // the target, which fails on every platform. A ReadOnly attribute only blocks
+        // this on Windows — on Unix rename replaces a read-only file when the directory
+        // is writable, so it cannot serve as a cross-platform failure source.
+        var blockedPath = Path.Combine(_dir, "blocked");
+        Directory.CreateDirectory(blockedPath);
+        var normalPath = Path.Combine(_dir, "normal.txt");
+        await File.WriteAllTextAsync(normalPath, "new");
 
-            var ledger = new TurnUndoLedger("s1", _dir, DateTimeOffset.UtcNow, true,
-            [
-                // LIFO: normal.txt reverts first, the read-only write fails second —
-                // proving a single failure never aborts the remaining compensations.
-                new UndoableFileChange(readOnlyPath, "stale", "编辑 readonly.txt"),
-                new UndoableFileChange(normalPath, "old", "编辑 normal.txt"),
-            ]);
+        var ledger = new TurnUndoLedger("s1", _dir, DateTimeOffset.UtcNow, true,
+        [
+            // LIFO: normal.txt reverts first, the blocked restore fails second —
+            // proving a single failure never aborts the remaining compensations.
+            new UndoableFileChange(blockedPath, "stale", "编辑 blocked"),
+            new UndoableFileChange(normalPath, "old", "编辑 normal.txt"),
+        ]);
 
-            var (restored, failed) = await ledger.ApplyAsync();
-            Assert.Single(failed);
-            Assert.Single(restored);
-            Assert.Equal("old", await File.ReadAllTextAsync(normalPath));
-        }
-        finally
-        {
-            File.SetAttributes(readOnlyPath, FileAttributes.Normal);
-        }
+        var (restored, failed) = await ledger.ApplyAsync();
+        Assert.Single(failed);
+        Assert.Single(restored);
+        Assert.Equal("old", await File.ReadAllTextAsync(normalPath));
     }
 
     [Fact]

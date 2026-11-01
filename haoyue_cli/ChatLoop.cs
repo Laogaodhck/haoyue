@@ -100,6 +100,7 @@ public sealed class ChatLoop (HaoyueRuntime runtime, string? expertId = null)
 
         Task? activeTurnTask = null;
         AgentSteeringQueue? activeSteering = null;
+        var lastTurnExitCode = 0;
 
         while (!_exitRequested)
         {
@@ -145,8 +146,10 @@ public sealed class ChatLoop (HaoyueRuntime runtime, string? expertId = null)
             {
                 try
                 {
-                    await runtime.Agent.RunTurnAsync(session, runtime.Workspace, currentPrompt, currentCts.Token, steering: currentSteering).ConfigureAwait(false);
+                    var result = await runtime.Agent.RunTurnAsync(session, runtime.Workspace, currentPrompt, currentCts.Token, steering: currentSteering).ConfigureAwait(false);
+                    if (result.Error is not null) lastTurnExitCode = 1;
                 }
+                catch (OperationCanceledException) { }
                 finally
                 {
                     renderer.Flush();
@@ -154,9 +157,19 @@ public sealed class ChatLoop (HaoyueRuntime runtime, string? expertId = null)
             });
         }
 
+        // 退出时正在跑的回合若被直接丢下，进程会在写会话文件的中途终止（半截 JSON、
+        // 丢失最后一轮）。先取消再等它收尾；退出码沿用最后一轮的成败。
+        if (activeTurnTask is { IsCompleted: false })
+        {
+            _turnCts?.Cancel();
+            try { await activeTurnTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+        _turnCts?.Dispose();
+
         renderer.WriteLine();
         renderer.WriteLine("bye.".Style(Ansi.Gray));
-        return 0;
+        return lastTurnExitCode;
     }
 
     // ---------------------------------------------------------------- helpers

@@ -20,7 +20,10 @@ public static partial class Ansi
 
     public static string Style(this string text, string style) => style + text + Reset;
 
-    [GeneratedRegex(@"\x1b\[[0-9;]*m")]
+    // 只认 SGR（…m）会漏掉光标控制、清行、OSC 标题等序列：模型的原始输出里混进
+    // \x1b[2K 这类字节时，Vim 式手动跳转（见 TruncateVisible）会连同后续文本一起算进
+    // 可见宽度，折行与截断因此错位。这里覆盖 CSI、OSC、以及两字节 ESC 序列。
+    [GeneratedRegex(@"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()#][0-9A-Za-z]|[@-Z\\-_])")]
     private static partial Regex EscapeSequences();
 
     public static string StripStyles(string text) =>
@@ -42,9 +45,9 @@ public static partial class Ansi
         {
             if (text[i] == '\x1b')
             {
-                var end = text.IndexOf('m', i);
-                if (end < 0) break;
-                i = end + 1;
+                var match = EscapeSequences().Match(text, i);
+                // 未匹配的孤立 ESC 直接跳过，免得把后续字符当成序列的一部分吞掉。
+                i = match.Success && match.Index == i ? i + match.Length : i + 1;
                 continue;
             }
             visible++;

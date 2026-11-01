@@ -65,13 +65,14 @@ public static class ProviderCommands
         var idOption = new Option<string?>("--id") { Description = "Provider id (e.g. openai, anthropic, ollama)" };
         var kindOption = new Option<string?>("--kind") { Description = "Wire protocol: openai | anthropic | local" };
         var baseUrlOption = new Option<string?>("--base-url") { Description = "API base URL" };
-        var apiKeyOption = new Option<string?>("--api-key") { Description = "API key (stored in config)" };
+        var apiKeyOption = new Option<string?>("--api-key") { Description = "API key (stored encrypted; prefer --api-key-stdin)" };
+        var apiKeyStdinOption = new Option<bool>("--api-key-stdin") { Description = "Read the API key from standard input so it stays out of shell history" };
         var directoryOption = new Option<string?>("--models-directory") { Description = "For --kind local: directory holding the GGUF files (default: auto-detected models folder)" };
         var modelOption = new Option<string[]>("--model") { Description = "Model id to register (repeatable)", AllowMultipleArgumentsPerToken = true };
 
         var command = new Command("add", "Add a provider (interactive when no options are given)");
         command.Add(idOption); command.Add(kindOption); command.Add(baseUrlOption);
-        command.Add(apiKeyOption); command.Add(directoryOption); command.Add(modelOption);
+        command.Add(apiKeyOption); command.Add(apiKeyStdinOption); command.Add(directoryOption); command.Add(modelOption);
 
         command.SetAction(parse =>
         {
@@ -131,7 +132,7 @@ public static class ProviderCommands
             {
                 kind = parse.GetValue(kindOption) ?? "openai";
                 baseUrl = parse.GetValue(baseUrlOption) ?? "";
-                apiKey = parse.GetValue(apiKeyOption);
+                apiKey = ResolveApiKeyArg(parse.GetValue(apiKeyOption), parse.GetValue(apiKeyStdinOption));
                 modelsDirectory = parse.GetValue(directoryOption);
                 if (string.IsNullOrWhiteSpace(baseUrl) && !kind.Equals("local", StringComparison.OrdinalIgnoreCase))
                 {
@@ -169,6 +170,23 @@ public static class ProviderCommands
             return 0;
         });
         return command;
+    }
+
+    /// <summary>
+    /// 命令行参数会留在 shell 历史与进程列表里（同机其他用户可通过 ps 看到）。
+    /// `--api-key-stdin` 从标准输入读一行；仍接受 `--api-key`，但明确提示其暴露面。
+    /// </summary>
+    private static string? ResolveApiKeyArg(string? apiKey, bool fromStdin)
+    {
+        if (fromStdin)
+        {
+            if (apiKey is not null)
+                AnsiConsole.MarkupLine("[yellow]同时给出了 --api-key 与 --api-key-stdin，以标准输入为准。[/]");
+            return Console.In.ReadLine()?.Trim();
+        }
+        if (apiKey is not null)
+            AnsiConsole.MarkupLine("[yellow]提示：--api-key 会留在 shell 历史与进程列表中，建议改用 --api-key-stdin。[/]");
+        return apiKey;
     }
 
     /// <summary>
@@ -218,7 +236,8 @@ public static class ProviderCommands
     {
         var idArg = new Argument<string>("id");
         var baseUrlOption = new Option<string?>("--base-url");
-        var apiKeyOption = new Option<string?>("--api-key");
+        var apiKeyOption = new Option<string?>("--api-key") { Description = "API key (stored encrypted; prefer --api-key-stdin)" };
+        var apiKeyStdinOption = new Option<bool>("--api-key-stdin") { Description = "Read the API key from standard input so it stays out of shell history" };
         var enabledOption = new Option<bool?>("--enabled");
         var priorityOption = new Option<int?>("--priority");
         var timeoutOption = new Option<int?>("--timeout") { Description = "Request timeout in seconds" };
@@ -227,7 +246,7 @@ public static class ProviderCommands
 
         var command = new Command("edit", "Edit provider fields");
         command.Add(idArg);
-        foreach (var opt in new Option[] { baseUrlOption, apiKeyOption, enabledOption, priorityOption, timeoutOption, proxyOption, modelsDirectoryOption })
+        foreach (var opt in new Option[] { baseUrlOption, apiKeyOption, apiKeyStdinOption, enabledOption, priorityOption, timeoutOption, proxyOption, modelsDirectoryOption })
             command.Add(opt);
 
         command.SetAction(parse =>
@@ -241,7 +260,7 @@ public static class ProviderCommands
             }
 
             if (parse.GetValue(baseUrlOption) is { } baseUrl) provider.BaseUrl = baseUrl;
-            if (parse.GetValue(apiKeyOption) is { } apiKey)
+            if (ResolveApiKeyArg(parse.GetValue(apiKeyOption), parse.GetValue(apiKeyStdinOption)) is { } apiKey)
                 provider.ApiKey = SecretResolver.Encrypt($"provider/{provider.Id}", apiKey);
             if (parse.GetValue(enabledOption) is { } enabled) provider.Enabled = enabled;
             if (parse.GetValue(priorityOption) is { } priority) provider.Priority = priority;

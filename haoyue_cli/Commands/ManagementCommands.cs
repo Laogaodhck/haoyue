@@ -411,7 +411,7 @@ public static class ConnectorCommands
         var idArg = new Argument<string>("id") { Description = "连接器 id（见 connectors list）" };
         var setOption = new Option<string[]>("--set")
         {
-            Description = "以 KEY=value 形式提供配置项（可多次出现；缺省时交互询问）",
+            Description = "以 KEY=value 形式提供配置项（可多次出现；value 写 - 则从标准输入读一行；缺省时交互询问）",
             AllowMultipleArgumentsPerToken = true,
         };
 
@@ -437,6 +437,10 @@ public static class ConnectorCommands
             }
 
             var values = new Dictionary<string, string>();
+            var secretKeys = new HashSet<string>(
+                (package.Inputs ?? []).Where(input => input.Secret).Select(input => input.Key),
+                StringComparer.OrdinalIgnoreCase);
+            var secretOnCommandLine = false;
             foreach (var raw in parse.GetValue(setOption) ?? [])
             {
                 var eq = raw.IndexOf('=');
@@ -445,8 +449,21 @@ public static class ConnectorCommands
                     AnsiConsole.MarkupLine($"[red]--set 需要 KEY=value 形式：{Markup.Escape(raw)}[/]");
                     return 1;
                 }
-                values[raw[..eq]] = raw[(eq + 1)..];
+                var key = raw[..eq].Trim();
+                var value = raw[(eq + 1)..];
+                if (value == "-")
+                {
+                    // 密钥写进 argv 就会留在 shell 历史与进程列表里；`KEY=-` 让它改走 stdin。
+                    value = Console.In.ReadLine() ?? "";
+                }
+                else if (secretKeys.Contains(key))
+                {
+                    secretOnCommandLine = true;
+                }
+                values[key] = value;
             }
+            if (secretOnCommandLine)
+                AnsiConsole.MarkupLine("[yellow]提示：--set 传入的密钥会留在 shell 历史与进程列表中；可写 --set KEY=- 从标准输入读取。[/]");
 
             // 缺失的必填项交互询问（secret 项回显为 *）；可选 secret 只在安装时可填，也一并询问。
             // 非交互（管道/脚本）下不问可选项，免得 `--set` 批处理卡在提示上。

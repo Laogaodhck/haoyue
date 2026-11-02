@@ -75,7 +75,7 @@ Project properties gain an **Agent tab**: model, provider, temperature, agent mo
 ## Start a conversation
 
 1. Select “New task,” then choose a project or use the directory-free global scope.
-2. Select an Agent mode and `provider/model` in the composer. The Agent mode is **global** (the dropdown carries a “global” marker) and writes to the current workspace's `.haoyue/config.json`; to pin a mode per project, set it as a project default in project properties → Agent tab.
+2. Select an Agent mode and `provider/model` in the composer. The Agent mode is **global** (the dropdown carries a “global” marker) and writes to the current workspace's `.haoyue/config.json`; to pin a mode per project, set it as a project default in project properties → Agent tab. The model trigger shows a short name without the provider prefix or quantization suffix, and the reasoning-depth trigger shows only the level; the full `provider/model`, level names, and explanations live in their menus and tooltips, so narrow windows never collapse them into an ellipsis.
 3. Enter a request and send it, or click a starter-prompt card. A card fills the composer but **does not send automatically**.
 4. Follow streaming text, reasoning status, tool activity, and complete error details.
 

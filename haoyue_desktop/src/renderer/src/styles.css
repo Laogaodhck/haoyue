@@ -2389,13 +2389,14 @@ select:focus-visible {
 .composer-shell {
   position: relative;
   min-width: 0;
-  width: min(100%, 940px);
+  /* 豆包式居中窄输入框：720px 胶囊，不再横贯内容区。 */
+  width: min(100%, 720px);
   margin: 0 auto;
-  padding: 13px 13px 10px;
+  padding: 15px 16px 11px;
   background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: 18px;
-  box-shadow: var(--composer-shadow);
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  box-shadow: 0 10px 32px rgb(0 0 0 / 10%), 0 1px 3px rgb(0 0 0 / 6%);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
@@ -2724,9 +2725,9 @@ select:focus-visible {
   display: block;
   width: 100%;
   max-height: 176px;
-  padding: 2px 7px 9px;
+  padding: 3px 4px 9px;
   overflow-y: auto;
-  line-height: 1.5;
+  line-height: 1.55;
   resize: none;
   background: transparent;
   border: 0;
@@ -2748,8 +2749,9 @@ select:focus-visible {
 }
 
 .composer-icon {
-  width: 31px;
-  height: 31px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
 }
 
 /* 语音输入：录音中按钮红色脉冲，与发送/停止语义区分。 */
@@ -2769,11 +2771,11 @@ select:focus-visible {
 }
 
 .composer-select .custom-select-trigger {
-  min-height: 31px;
-  padding: 0 7px 0 8px;
+  min-height: 32px;
+  padding: 0 8px 0 10px;
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 9px;
 }
 
 .composer-select .custom-select-trigger:hover:not(:disabled),
@@ -3033,22 +3035,24 @@ select:focus-visible {
 
 .send-button {
   display: grid;
-  width: 33px;
-  height: 33px;
+  width: 37px;
+  height: 37px;
   padding: 0;
   place-items: center;
   color: #ffffff;
   background: var(--accent);
   border-radius: 50%;
-  transition: background-color 140ms ease, transform 120ms ease;
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 34%, transparent);
+  transition: background-color 140ms ease, transform 120ms ease, box-shadow 140ms ease;
 }
 
 .send-button:not(:disabled):hover {
   background: color-mix(in srgb, var(--accent) 86%, #000);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 46%, transparent);
 }
 
 .send-button:not(:disabled):active {
-  transform: scale(.95);
+  transform: scale(.94);
 }
 
 .send-button:disabled {

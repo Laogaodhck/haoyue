@@ -1,7 +1,4 @@
 using System.Diagnostics;
-using System.Net.Http.Headers;
-using System.Text;
-using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 using LLama.Native;
 
@@ -16,8 +13,9 @@ public interface IHealthChecker
     IReadOnlyList<HealthCheckResult> RunChecks(Workspaces.WorkspaceInfo workspace);
 }
 
-/// <summary>Probes a provider's chat/completions or messages endpoint to measure availability and latency.</summary>
-public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.IConfigStore configStore) : IHealthChecker
+/// <summary>Probes a remote provider through the real client request pipeline to measure
+/// availability and latency; local providers check model files on disk.</summary>
+public sealed class HealthChecker(ILlmClientFactory clientFactory, Configuration.IConfigStore configStore) : IHealthChecker
 {
     public IReadOnlyList<HealthCheckResult> RunChecks(Workspaces.WorkspaceInfo workspace)
     {
@@ -114,62 +112,27 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
         if (ProviderKinds.IsLocal(provider.Kind))
             return CheckLocal(provider);
 
-        var isAnthropic = ProviderKinds.IsAnthropic(provider.Kind);
-        var url = isAnthropic
-            ? LlmUrl.JoinV1(provider.BaseUrl, "messages")
-            : LlmUrl.Join(provider.BaseUrl, "chat/completions");
-
-        var modelName = provider.Models.Count > 0 && !string.IsNullOrWhiteSpace(provider.Models[0].Id)
-            ? provider.Models[0].Id
-            : (isAnthropic ? "claude-3-haiku-20240307" : "gpt-4o-mini");
-
-        var payload = isAnthropic
-            ? new JsonObject
+        // 与 provider test（ProviderManager.TestModelAsync）完全同一条请求管线：
+        // 经 ILlmClientFactory 取客户端、构造 LlmRequest、走 client.StreamAsync。
+        // 禁止在此手写 HTTP payload —— 各端点的真实请求语义（方舟 reasoning 模型
+        // 的 max_completion_tokens、Anthropic 的 messages 端点等）只在客户端内正确，
+        // 手写 payload 曾导致对 ark 的 403 误报（doctor 显示 offline 而真实链路正常）。
+        var model = provider.Models.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m.Id))
+            ?? new ModelConfig
             {
-                ["model"] = modelName,
-                ["max_tokens"] = 1,
-                ["messages"] = new JsonArray { (JsonNode)new JsonObject { ["role"] = "user", ["content"] = "ping" } }
-            }
-            : new JsonObject
-            {
-                ["model"] = modelName,
-                ["max_tokens"] = 1,
-                ["messages"] = new JsonArray { (JsonNode)new JsonObject { ["role"] = "user", ["content"] = "ping" } },
-                ["stream"] = false
+                Id = ProviderKinds.IsAnthropic(provider.Kind)
+                    ? "claude-3-haiku-20240307"
+                    : "gpt-4o-mini",
             };
 
-        var http = httpFactory.GetClient(provider);
-        using var message = new HttpRequestMessage(HttpMethod.Post, url)
+        var request = new LlmRequest
         {
-            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+            Provider = provider,
+            Model = model,
+            Messages = [ChatMessage.User("Reply with the single word: ok")],
+            MaxTokens = 16,
+            Purpose = LlmPurpose.Auxiliary,
         };
-
-        var key = provider.ResolveApiKey();
-        if (isAnthropic)
-        {
-            if (!string.IsNullOrWhiteSpace(key)) message.Headers.TryAddWithoutValidation("x-api-key", key);
-            message.Headers.TryAddWithoutValidation("anthropic-version", ApiVersionContract.AnthropicApiVersion);
-        }
-        else
-        {
-            if (!string.IsNullOrWhiteSpace(key))
-            {
-                message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
-            }
-            if (!string.IsNullOrWhiteSpace(provider.Organization))
-            {
-                message.Headers.TryAddWithoutValidation("OpenAI-Organization", provider.Organization);
-            }
-        }
-
-        if (provider.Headers is { Count: > 0 })
-        {
-            foreach (var (headerKey, headerVal) in provider.Headers)
-            {
-                if (!string.IsNullOrWhiteSpace(headerKey))
-                    message.Headers.TryAddWithoutValidation(headerKey, headerVal);
-            }
-        }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(Math.Min(provider.TimeoutSeconds, 15)));
@@ -177,42 +140,27 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            using var response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cts.Token)
-                .ConfigureAwait(false);
+            var client = clientFactory.GetClient(ProviderKinds.ToClientKind(provider.Kind));
+            var text = "";
+            await foreach (var evt in client.StreamAsync(request, cts.Token).ConfigureAwait(false))
+                if (evt is LlmCompleted done)
+                    text = done.Completion.Text;
             stopwatch.Stop();
 
-            var status = (int)response.StatusCode;
-            if (response.IsSuccessStatusCode)
-            {
-                return new HealthReport(provider.Id, true, stopwatch.Elapsed.TotalMilliseconds, "ok");
-            }
-
-            if (status == 410)
-            {
-                return new HealthReport(provider.Id, false, stopwatch.Elapsed.TotalMilliseconds,
-                    "API 已退役（Breaking Change）：该模型或端点已停止服务，请更新 provider 配置或升级 haoyue");
-            }
-
-            if (status is 401 or 403)
-            {
-                return new HealthReport(provider.Id, false, stopwatch.Elapsed.TotalMilliseconds, $"reachable, auth failed (HTTP {status})");
-            }
-
-            // HTTP 400/422/429 means the endpoint is online and actively parsed our request
-            if (status is 400 or 422 or 429)
-            {
-                var tag = status == 429 ? "rate limited" : "reachable";
-                return new HealthReport(provider.Id, true, stopwatch.Elapsed.TotalMilliseconds, $"{tag} (HTTP {status})");
-            }
-
-            return new HealthReport(provider.Id, false, stopwatch.Elapsed.TotalMilliseconds, $"HTTP {status}");
+            return new HealthReport(provider.Id, true, stopwatch.Elapsed.TotalMilliseconds,
+                string.IsNullOrWhiteSpace(text) ? "ok (empty reply)" : "ok");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             return new HealthReport(provider.Id, false, stopwatch.Elapsed.TotalMilliseconds, "timeout");
         }
-        catch (HttpRequestException ex)
+        catch (OperationCanceledException)
         {
+            throw;
+        }
+        catch (Exception ex) when (ex is LlmException or HttpRequestException)
+        {
+            stopwatch.Stop();
             return new HealthReport(provider.Id, false, stopwatch.Elapsed.TotalMilliseconds, ex.Message);
         }
     }

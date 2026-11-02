@@ -162,7 +162,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
             Path.Combine(_tempDir, "state-conc.json"));
         _runtime = HaoyueRuntime.Create(
             workspaceRoot, configStore, Path.Combine(_tempDir, "haoyue-conc.db"),
-            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
+            new OfflineHealthChecker(new HealthChecker(new LlmClientFactory([]), configStore)));
         var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-conc"));
         var server = new DaemonServer(
             _runtime, (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)),
@@ -279,7 +279,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
             Path.Combine(_tempDir, "state.json"));
         _runtime = HaoyueRuntime.Create(
             workspace, configStore, Path.Combine(_tempDir, "haoyue.db"),
-            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
+            new OfflineHealthChecker(new HealthChecker(new LlmClientFactory([]), configStore)));
         var server = new DaemonServer(
             _runtime,
             (_, _, _, _) => Task.FromResult(new AgentTurnResult("后台完成", false, null)),
@@ -2159,7 +2159,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
             workspaceRoot,
             configStore,
             Path.Combine(_tempDir, "haoyue.db"),
-            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)));
+            new OfflineHealthChecker(new HealthChecker(new LlmClientFactory([]), configStore)));
         var workspace = new WorkspaceManager().Detect(workspaceRoot);
         var session = runtime.Sessions.Create(workspace);
         runtime.Sessions.Append(session, ChatMessage.User("帮我整理周报"));
@@ -2257,7 +2257,7 @@ public sealed class DaemonServerTests : IAsyncDisposable
             workspace,
             configStore,
             Path.Combine(_tempDir, "haoyue.db"),
-            new OfflineHealthChecker(new HealthChecker(new LlmHttpFactory(), configStore)),
+            new OfflineHealthChecker(new HealthChecker(new LlmClientFactory([]), configStore)),
             new WorkspaceTrustStore(Path.Combine(_tempDir, "trusted-workspaces.json")));
         var globalWorkspace = new WorkspaceManager().CreateGlobal(Path.Combine(_tempDir, "global-state"));
         var server = new DaemonServer(_runtime, runTurn, globalWorkspace, handshakeToken,

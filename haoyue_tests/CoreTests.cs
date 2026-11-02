@@ -552,11 +552,10 @@ public sealed class CoreTests : IDisposable
     public void HealthChecks_TreatMissingMemoryFileAsReady()
     {
         var workspace = NewWorkspace("health-memory");
-        using var httpFactory = new LlmHttpFactory();
         var configStore = new ConfigStore(
             Path.Combine(_dir, "health-config.json"),
             Path.Combine(_dir, "health-state.json"));
-        var checker = new HealthChecker(httpFactory, configStore);
+        var checker = new HealthChecker(new LlmClientFactory([]), configStore);
 
         var missing = Assert.Single(checker.RunChecks(workspace), c => c.Name == "Workspace Memory");
         Assert.True(missing.Ok);
@@ -574,7 +573,6 @@ public sealed class CoreTests : IDisposable
         // CPU 构建的后端 + GpuLayers>0：本地推理会全程 CPU 化（同机实测 11 倍差距），
         // 体检必须显式报错并附重建指引——不能只写进没人看的 stderr。
         var workspace = NewWorkspace("health-gpu");
-        using var httpFactory = new LlmHttpFactory();
         var configStore = new ConfigStore(
             Path.Combine(_dir, "health-gpu-config.json"),
             Path.Combine(_dir, "health-gpu-state.json"));
@@ -586,7 +584,7 @@ public sealed class CoreTests : IDisposable
             Models = [new ModelConfig { Id = "gemma" }]
         });
 
-        var checker = new HealthChecker(httpFactory, configStore);
+        var checker = new HealthChecker(new LlmClientFactory([]), configStore);
         var gpu = Assert.Single(checker.RunChecks(workspace), c => c.Name == "Local GPU Backend");
         Assert.False(gpu.Ok);
         Assert.Contains("GPU offload", gpu.Detail);
@@ -597,12 +595,11 @@ public sealed class CoreTests : IDisposable
     public void HealthChecks_PassGpuBackend_WithoutLocalProviderOrRequest()
     {
         var workspace = NewWorkspace("health-gpu-none");
-        using var httpFactory = new LlmHttpFactory();
         var configStore = new ConfigStore(
             Path.Combine(_dir, "health-gpu-none-config.json"),
             Path.Combine(_dir, "health-gpu-none-state.json"));
 
-        var checker = new HealthChecker(httpFactory, configStore);
+        var checker = new HealthChecker(new LlmClientFactory([]), configStore);
         // 纯云端配置：没有本地 provider，体检不应制造存在感。
         var none = Assert.Single(checker.RunChecks(workspace), c => c.Name == "Local GPU Backend");
         Assert.True(none.Ok);

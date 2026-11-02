@@ -6,6 +6,7 @@
 
 ### 桌面
 
+- **修复厂商前缀模型 ID 导致活动模型解析失败**：OpenAI 兼容网关常返回 `deepseek/deepseek-flash` 这类带斜杠的模型 ID，活动模型此前会被误拆成「提供商 deepseek + 模型 deepseek-flash」，解析失败后静默回退到全部模型（典型表现是调用落到本地 GGUF 并报文件不存在）。现在先按当前提供商拼接解析，再退回原值以兼容已存的全限定引用。
 - **新增提供商支持 cURL / Python 导入**：「新增模型提供商」顶部新增可折叠导入区，粘贴 cURL、Python（OpenAI SDK / requests）或 JSON 调用片段后一键解析 API 地址、Bearer / api_key 与模型 ID，并自动回填表单；识别到预设厂商域名时同步切换接口协议。导入只在本地解析、不上传代码，粘贴内容回填后立即清空；API Key 仍走原有加密引用保存。
 - **新增模型提供商支持国内云厂商预设**：「接口协议」下拉新增阿里云百炼、火山方舟、腾讯云混元、百度千帆、智谱 GLM 与 DeepSeek。选中后自动预填 OpenAI 兼容 Base URL，并按厂商给出模型 ID 与 API Key 示例；手动填过的地址不会被覆盖。运行时把这些厂商 kind 统一映射到 OpenAI 兼容客户端，健康检查、模型列表拉取与失败转移行为与普通 OpenAI 提供商一致；`provider.upsert` 校验并保留厂商 kind。
 - **子智能体配置（Qoder 式 Markdown）**：「设置 → 智能体」新增子智能体列表与编辑器，兼容 `~/.haoyue/agents/*.md`（用户级）与 `<项目>/.haoyue/agents/*.md`（项目级）。frontmatter 声明名称、描述、模型与工具白名单，正文即工作指令；项目级覆盖用户级、同名覆盖内置预设，保存后下一次委派立即生效。委派工具按当前工作区动态列出可用子智能体，指定模型只作用于该子智能体（留空继承活动模型）。新增 RPC `agent.subagents.list/save/delete`。

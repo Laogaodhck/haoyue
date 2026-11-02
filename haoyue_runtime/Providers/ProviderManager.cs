@@ -152,11 +152,11 @@ public sealed class ProviderManager(
 
         // 1. Workspace override beats everything.
         if (!string.IsNullOrWhiteSpace(workspace?.Model))
-            explicitRefs.Add(Qualify(workspace!.Model!, workspace.Provider ?? config.Provider));
+            explicitRefs.AddRange(QualifiedRefs(workspace!.Model!, workspace.Provider ?? config.Provider));
 
         // 2. Global active model selection.
         if (!string.IsNullOrWhiteSpace(config.Model))
-            explicitRefs.Add(Qualify(config.Model!, config.Provider));
+            explicitRefs.AddRange(QualifiedRefs(config.Model!, config.Provider));
 
         // 3. Global fallback chain.
         var chain = explicitRefs
@@ -719,7 +719,16 @@ public sealed class ProviderManager(
         return TimeSpan.FromSeconds(Math.Min(baseDelay * jitter, Math.Max(0, retry.MaxDelaySeconds)));
     }
 
-    private static string Qualify(string modelRef, string? providerId) =>
-        modelRef.Contains('/') || string.IsNullOrWhiteSpace(providerId) ? modelRef : $"{providerId}/{modelRef}";
+    /// <summary>
+    /// 模型 id 本身可能带 '/'（如 deepseek/deepseek-flash），与「提供商/模型」引用无法从字符串
+    /// 区分。先按当前提供商拼接解析，再退回原值兼容已存的全限定引用；若只按 '/' 前缀切分，
+    /// 带斜杠的模型 id 会被误判成另一个提供商下的模型，活动模型解析失败后静默回退到全部模型。
+    /// </summary>
+    private static IEnumerable<string> QualifiedRefs(string modelRef, string? providerId)
+    {
+        if (!string.IsNullOrWhiteSpace(providerId))
+            yield return $"{providerId}/{modelRef}";
+        yield return modelRef;
+    }
 
 }

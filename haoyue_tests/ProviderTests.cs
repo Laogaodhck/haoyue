@@ -794,6 +794,33 @@ public sealed class ProviderTests : IDisposable
     }
 
     [Fact]
+    public void Candidates_ActiveModel_WithSlashInId_ResolvesInsideConfiguredProvider()
+    {
+        // OpenAI 兼容网关常见 vendor 前缀模型 id（deepseek/deepseek-flash），不能被当成
+        // 「提供商 deepseek / 模型 deepseek-flash」；解析失败会静默回退到全部模型。
+        _store.Config.Providers.Add(new ProviderConfig
+        {
+            Id = "gateway", Kind = "openai", BaseUrl = "https://gateway.test", Priority = -1,
+            Models = [new ModelConfig { Id = "deepseek/deepseek-flash" }],
+        });
+        _store.Config.Provider = "gateway";
+        _store.Config.Model = "deepseek/deepseek-flash";
+
+        var chain = NewManager().BuildCandidates(null).Select(m => m.Ref).ToList();
+        Assert.Equal("gateway/deepseek/deepseek-flash", chain[0]);
+    }
+
+    [Fact]
+    public void Candidates_ActiveModel_AlreadyQualified_StillResolves()
+    {
+        _store.Config.Provider = "alpha";
+        _store.Config.Model = "beta/tiny";
+
+        var chain = NewManager().BuildCandidates(null).Select(m => m.Ref).ToList();
+        Assert.Equal("beta/tiny", chain[0]);
+    }
+
+    [Fact]
     public void Candidates_FallBackToAllModels_WhenNothingConfigured()
     {
         var manager = NewManager();

@@ -27,6 +27,8 @@ import {
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { confirmAction } from '../confirmation'
 import {
+  MCP_AUTH_OPTIONS,
+  MCP_CONNECTION_OPTIONS,
   MCP_PRESETS,
   MCP_SCOPE_OPTIONS,
   MCP_TRANSPORT_OPTIONS,
@@ -335,6 +337,10 @@ function setConnectionMode(mode: 'stdio' | 'remote'): void {
   form.transport = target ? 'http' : 'stdio'
 }
 
+function changeConnectionMode(mode: string): void {
+  if (mode === 'stdio' || mode === 'remote') setConnectionMode(mode)
+}
+
 function updateEnvRows(rows: CredentialRow[]): void {
   form.env = credentialRowsToText(rows)
 }
@@ -370,6 +376,16 @@ function setAuthMode(mode: 'auto' | 'token'): void {
     return
   }
   if (headerRows.value.length === 0) form.headers = 'Authorization='
+}
+
+const authModeOptions = computed(() =>
+  MCP_AUTH_OPTIONS.map((option) =>
+    option.value === 'auto' && form.oauthDisabled
+      ? { ...option, label: `${option.label}（已禁用）` }
+      : option))
+
+function changeAuthMode(mode: string): void {
+  if (mode === 'auto' || mode === 'token') setAuthMode(mode)
 }
 
 async function save(): Promise<void> {
@@ -601,10 +617,8 @@ watch(form, () => {
 
           <div class="form-field full-width">
             <FieldLabel en="Connection" zh="连接" help="选择连接到此服务器的方式。" required />
-            <div class="segmented-control mcp-connection-segmented">
-              <button type="button" :class="{ active: !remote }" @click="setConnectionMode('stdio')">在此电脑上</button>
-              <button type="button" :class="{ active: remote }" @click="setConnectionMode('remote')">网址</button>
-            </div>
+            <SelectMenu :model-value="remote ? 'remote' : 'stdio'" :options="MCP_CONNECTION_OPTIONS"
+              label="MCP 连接" @update:model-value="changeConnectionMode" />
             <input v-model="form.connection" class="form-input" autocomplete="off" spellcheck="false"
               :placeholder="remote ? 'https://example.com/mcp' : '@modelcontextprotocol/server-github 或启动命令'" />
             <small v-if="connectionSummary" class="mcp-connection-summary">{{ connectionSummary }}</small>
@@ -614,12 +628,8 @@ watch(form, () => {
             <FieldLabel en="Authentication" zh="身份验证" :help="remote
               ? '自动使用浏览器 OAuth 授权（支持的服务器）；或改用访问令牌。'
               : '通过环境变量传递凭据，值加密存储，保存后不会回显；留空表示保持原值不变。'" />
-            <div v-if="remote" class="segmented-control mcp-connection-segmented">
-              <button type="button" :class="{ active: authMode === 'auto' }" @click="setAuthMode('auto')">
-                自动<span v-if="form.oauthDisabled" class="mcp-auth-mode-note">（已禁用）</span>
-              </button>
-              <button type="button" :class="{ active: authMode === 'token' }" @click="setAuthMode('token')">访问令牌</button>
-            </div>
+            <SelectMenu v-if="remote" :model-value="authMode" :options="authModeOptions" label="身份验证方式"
+              @update:model-value="changeAuthMode" />
             <small v-if="remote && authMode === 'auto' && (detail as McpServerSummary)?.oauthConfigured" class="mcp-auth-note">
               此服务器已通过浏览器授权，令牌会自动续期。
             </small>
@@ -1192,15 +1202,6 @@ watch(form, () => {
 
 .form-input:disabled {
   opacity: .62;
-}
-
-.mcp-connection-segmented {
-  width: fit-content;
-}
-
-.mcp-auth-mode-note {
-  font-size: 10.5px;
-  opacity: .75;
 }
 
 .mcp-auth-note {

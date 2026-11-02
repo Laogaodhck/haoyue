@@ -142,16 +142,17 @@ Use “Test” immediately after saving. Failed model requests include the Provi
 
 The sidebar "Extensions" entry opens a Qoder-style hub with three categories:
 
-- **Connectors (MCP)**: manage connected MCP servers as cards with direct enable/disable and a detail view per server; one-click presets in the "Popular MCP" catalog, custom servers with local command / remote URL connections and OAuth / access-token auth; tools reload after saving;
+- **Connectors (MCP)**: manage connected MCP servers as cards with direct enable/disable and a detail view per server; one-click presets in the "Popular MCP" catalog, custom servers with local command / remote URL connections and OAuth / access-token auth (both are dropdowns); tools reload after saving;
 - **Skills**: toggle and import installed skills, or grab official skills from the built-in marketplace;
 - **Experts**: a catalog of built-in domain experts — bind one in a click from the detail page ("Start a new task with this expert", badge shown above the composer, removable anytime), or copy the prompt to the start of a conversation.
 
 The settings workbench also provides:
 
+- **General**: appearance, reply language, and the send shortcut are dropdowns; tool execution policy, the built-in dangerous-command guard, risk gating, and the Bash sandbox use toggle switches;
 - **Agent**: behavior boundaries — web search, the explorer agent (delegate_task delegation toggle), auto-verify & repair, plus the full expert-parameter set (max steps, thinking budget, tool-output cap, Bash timeout, session retention, memory consolidation, extra readable directories, personality and system prompt);
 - **Inference Acceleration**: per local model, the **effective parameters + provenance layer** (model-level / provider-level / adaptive tier) and measured throughput, with an explicit warning when model-level settings shadow provider-level ones; warm-up, unload, benchmark (TTFT / decode / prefill / cache hits), and VRAM governance (resident models, concurrency, idle unload). Parameters are written in exactly one place (“Models & Providers → Load Settings”); this page only edits provider-level defaults;
-- **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
-- **Evolution**: defect signals at a glance, manual or scheduled reflection, adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
+- **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md (the memory management mode is a dropdown) — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
+- **Evolution**: defect signals at a glance, manual or scheduled reflection (the reflection interval is a dropdown), adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
 - **Knowledge Center**: browse and revise what the agent saves as notebooks → sources → entries — attribution badges, cross-notebook search, tag filtering, Markdown export and the synonym editor — see the [Knowledge Center](/en/doc/knowledge);
 - **LAN connection**: switch between the local Runtime and a Runtime on another computer on the same network, or share this machine's Runtime with the LAN; the handshake uses a one-time nonce plus HMAC-SHA256, so the token never travels the wire (see “Runtime connection behavior” below);
 - **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, cache hits, and latency over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry;

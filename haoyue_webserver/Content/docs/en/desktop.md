@@ -117,15 +117,16 @@ Use “Test” immediately after saving. Failed model requests include the Provi
 
 The sidebar "Extensions" entry opens a Qoder-style extensions hub with three categories:
 
-- **Connectors (MCP)**: manage connected MCP servers as cards — status and tool count at a glance, with direct enable/disable and a detail view per server; the "Popular MCP" catalog offers one-click setup (GitHub, filesystem, web fetch, Playwright…), or add a custom server manually. The detail page covers local command / remote URL connections, automatic OAuth or access-token authentication, and advanced options (scope, timeout, tool trust) in a collapsible section; tools reload automatically after saving; the project properties dialog links straight here via "Manage connectors";
+- **Connectors (MCP)**: manage connected MCP servers as cards — status and tool count at a glance, with direct enable/disable and a detail view per server; the "Popular MCP" catalog offers one-click setup (GitHub, filesystem, web fetch, Playwright…), or add a custom server manually. The detail page covers local command / remote URL connections, automatic OAuth or access-token authentication (both are dropdowns), and advanced options (scope, timeout, tool trust) in a collapsible section; tools reload automatically after saving; the project properties dialog links straight here via "Manage connectors";
 - **Skills**: the "Installed" view inspects, imports (.md / .zip) and toggles discovered skills; the "Marketplace" view installs or disables official skills in one click;
 - **Experts**: browse the built-in domain-expert catalog (filter by domain). On the detail page, click "Start a new task with this expert" to bind it in one click — an expert badge appears above the composer and can be removed anytime; you can still copy the expert prompt into a new task manually.
 
 The settings workbench also provides:
 
+- **General**: appearance, reply language, and the send shortcut are dropdowns; tool execution policy, the built-in dangerous-command guard, risk gating, and the Bash sandbox use toggle switches;
 - **Agent**: centralize model selection and behavior boundaries — root model, vision sub-agent model (automatic or a specific vision-capable model), web search, the explorer agent (delegate_task delegation toggle), and auto-verify & repair;
-- **Rules & Memory**: toggle rule injection and the memory management mode; the editor maintains hierarchical AGENTS.md rule files and MEMORY.md — create rule files (Ctrl+N), delete them, reveal their folder, and save quickly with Ctrl+S;
-- **Evolution**: browse defect signals, run reflection turns manually or on an interval, and review the skill drafts it produces (see the [Evolution Engine](/en/doc/evolution));
+- **Rules & Memory**: toggle rule injection and the memory management mode (a dropdown); the editor maintains hierarchical AGENTS.md rule files and MEMORY.md — create rule files (Ctrl+N), delete them, reveal their folder, and save quickly with Ctrl+S;
+- **Evolution**: browse defect signals, run reflection turns manually or on an interval (a dropdown), and review the skill drafts it produces (see the [Evolution Engine](/en/doc/evolution));
 - **Knowledge Center**: manage what the agent saves automatically as notebooks → sources → entries — notebook grouping, text/URL/file sources, attribution badges, cross-notebook search, exact tag filtering, Markdown export and a synonym-table editor (see the [Knowledge Center](/en/doc/knowledge));
 - **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, latency, and cost over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry described below.
 

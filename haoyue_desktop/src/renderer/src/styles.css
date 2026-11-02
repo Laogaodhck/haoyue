@@ -4260,6 +4260,10 @@ select:focus-visible {
   max-width: 30vw;
 }
 
+.settings-select.select-compact {
+  width: 180px;
+}
+
 .model-actions .settings-select {
   width: min(250px, 28vw);
 }

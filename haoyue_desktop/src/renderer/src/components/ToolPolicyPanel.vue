@@ -127,49 +127,45 @@ onMounted(load)
     <p v-if="notice && !error" class="toolpolicy-hint ok">{{ notice }}</p>
 
     <template v-if="policy">
-      <div class="settings-row">
-        <div>
+      <label class="settings-row toolpolicy-toggle">
+        <span class="toolpolicy-toggle-copy">
           <strong>工具执行策略</strong>
           <small>运行时强制门：关闭后跳过 allow/deny 与内置 bash 守卫（仅保留模式层约束）</small>
-        </div>
-        <div class="segmented-control">
-          <button :class="{ active: policy.toolPolicy.enabled }" @click="savePolicyFlag('enabled', true, '工具执行策略')">开启</button>
-          <button :class="{ active: !policy.toolPolicy.enabled }" @click="savePolicyFlag('enabled', false, '工具执行策略')">关闭</button>
-        </div>
-      </div>
-      <div class="settings-row">
-        <div>
+        </span>
+        <input class="sr-only" type="checkbox" :checked="policy.toolPolicy.enabled" :disabled="saving"
+          @change="savePolicyFlag('enabled', ($event.target as HTMLInputElement).checked, '工具执行策略')" />
+        <span class="toggle-switch" aria-hidden="true"><span /></span>
+      </label>
+      <label class="settings-row toolpolicy-toggle">
+        <span class="toolpolicy-toggle-copy">
           <strong>内置高危命令守卫</strong>
           <small>拦截「像破坏性命令」的 shell 调用；命中后弹审批卡（可本次放行）</small>
-        </div>
-        <div class="segmented-control">
-          <button :class="{ active: policy.toolPolicy.builtinBashGuard }" @click="savePolicyFlag('builtinBashGuard', true, '内置高危命令守卫')">开启</button>
-          <button :class="{ active: !policy.toolPolicy.builtinBashGuard }" @click="savePolicyFlag('builtinBashGuard', false, '内置高危命令守卫')">关闭</button>
-        </div>
-      </div>
-      <div class="settings-row">
-        <div>
+        </span>
+        <input class="sr-only" type="checkbox" :checked="policy.toolPolicy.builtinBashGuard" :disabled="saving"
+          @change="savePolicyFlag('builtinBashGuard', ($event.target as HTMLInputElement).checked, '内置高危命令守卫')" />
+        <span class="toggle-switch" aria-hidden="true"><span /></span>
+      </label>
+      <label class="settings-row toolpolicy-toggle">
+        <span class="toolpolicy-toggle-copy">
           <strong>风险分级闸门</strong>
           <small>高风险操作本回合首次调用前弹审批卡。当前维度：<span
             v-for="tier in consentTierLabels" :key="tier" class="inline-badge">{{ tier }}</span>
           </small>
-        </div>
-        <div class="segmented-control">
-          <button :class="{ active: policy.toolPolicy.riskGating }" @click="savePolicyFlag('riskGating', true, '风险分级闸门')">开启</button>
-          <button :class="{ active: !policy.toolPolicy.riskGating }" @click="savePolicyFlag('riskGating', false, '风险分级闸门')">关闭</button>
-        </div>
-      </div>
+        </span>
+        <input class="sr-only" type="checkbox" :checked="policy.toolPolicy.riskGating" :disabled="saving"
+          @change="savePolicyFlag('riskGating', ($event.target as HTMLInputElement).checked, '风险分级闸门')" />
+        <span class="toggle-switch" aria-hidden="true"><span /></span>
+      </label>
 
-      <div class="settings-row">
-        <div>
+      <label class="settings-row toolpolicy-toggle">
+        <span class="toolpolicy-toggle-copy">
           <strong>Bash 沙箱（Job Object，仅 Windows）</strong>
           <small>启用后 bash 子进程树受内存/进程数/UI 限制并有 kill-on-close 兜底</small>
-        </div>
-        <div class="segmented-control">
-          <button :class="{ active: policy.bashSandbox.enabled }" @click="saveSandboxFlag('enabled', true)">启用</button>
-          <button :class="{ active: !policy.bashSandbox.enabled }" @click="saveSandboxFlag('enabled', false)">停用</button>
-        </div>
-      </div>
+        </span>
+        <input class="sr-only" type="checkbox" :checked="policy.bashSandbox.enabled" :disabled="saving"
+          @change="saveSandboxFlag('enabled', ($event.target as HTMLInputElement).checked)" />
+        <span class="toggle-switch" aria-hidden="true"><span /></span>
+      </label>
       <div v-if="policy.bashSandbox.enabled" class="settings-row">
         <div><strong>沙箱限额</strong><small>内存上限（MB）与活动进程数；0 = 不限制</small></div>
         <div class="toolpolicy-numbers">
@@ -212,6 +208,28 @@ onMounted(load)
 </template>
 
 <style scoped>
+.toolpolicy-toggle {
+  cursor: pointer;
+}
+.toolpolicy-toggle-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.toolpolicy-toggle input:checked + .toggle-switch {
+  background: var(--accent);
+}
+.toolpolicy-toggle input:checked + .toggle-switch > span {
+  transform: translateX(16px);
+}
+.toolpolicy-toggle input:focus-visible + .toggle-switch {
+  outline: 2px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  outline-offset: 2px;
+}
+.toolpolicy-toggle input:disabled + .toggle-switch {
+  opacity: .55;
+}
 .toolpolicy-hint {
   margin: 4px 0;
   font-size: 12px;

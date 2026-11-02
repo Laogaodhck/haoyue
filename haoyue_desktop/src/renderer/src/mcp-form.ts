@@ -71,6 +71,16 @@ export const MCP_SCOPE_OPTIONS: McpOption[] = [
   { value: 'workspace', label: '当前工作区', description: '仅在此工作区生效' }
 ]
 
+export const MCP_CONNECTION_OPTIONS: McpOption[] = [
+  { value: 'stdio', label: '在此电脑上', description: '启动本地子进程或命令' },
+  { value: 'remote', label: '网址', description: '连接远程 Streamable HTTP / SSE 服务' }
+]
+
+export const MCP_AUTH_OPTIONS: McpOption[] = [
+  { value: 'auto', label: '自动', description: '使用浏览器 OAuth 授权（支持的服务器）' },
+  { value: 'token', label: '访问令牌', description: '在请求头中携带令牌' }
+]
+
 /**
  * `stdio` runs a local subprocess; the two remote transports differ in how the
  * JSON-RPC stream travels: `sse` is the legacy HTTP+SSE transport, `http` is the

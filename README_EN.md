@@ -132,6 +132,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **Readable Process**: tool rows expand an argument summary and show duration; the streaming region is announced via aria-live; Esc stops the active turn; the conversation header shows context-window occupancy
 - **Drafts Survive**: unsent input (text + attachments) persists locally, so switching tasks or restarting loses nothing
 - **Findable Settings**: the settings page supports search by section name and keyword; when the daemon is offline the page turns read-only with an explicit "an empty list ≠ nothing configured" notice; global and per-task switches are scope-labeled (global / this task), and a switch suppressed by a global toggle explains why with a jump link instead of silently doing nothing
+- **Consistent Controls**: single-choice settings use dropdowns (appearance, reply language, send shortcut, memory management mode, reflection interval, MCP connection and authentication), while on/off settings use toggle switches (tool execution policy, built-in dangerous-command guard, risk gating, Bash sandbox) — no more side-by-side button groups
 - **Diagnostics Entry Points**: the settings page links straight to daemon.log and diagnostic-bundle export; packaged builds silently check for a new release at startup (a native prompt appears only when one exists), and the About page offers a manual "check for updates" with a link to the release page
 
 ### 💻 Modern Terminal Experience

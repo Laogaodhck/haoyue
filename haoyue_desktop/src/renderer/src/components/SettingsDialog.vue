@@ -13,8 +13,6 @@ import {
   GripVertical,
   KeyRound,
   LoaderCircle,
-  Moon,
-  Monitor,
   Plug,
   Plus,
   RefreshCw,
@@ -24,7 +22,6 @@ import {
   SlidersHorizontal,
   Sparkles,
   ScrollText,
-  Sun,
   Telescope,
   Trash2,
   Upload,
@@ -189,6 +186,38 @@ function setSendKey(key: 'enter' | 'ctrl-enter'): void {
 }
 const rulesEnabled = ref(true)
 const memoryMode = ref<'auto' | 'manual'>('auto')
+
+const THEME_OPTIONS = [
+  { value: 'system', label: '跟随系统' },
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' }
+]
+const REPLY_LANGUAGE_OPTIONS = [
+  { value: 'auto', label: '自动（跟随系统）', triggerLabel: '自动', description: '中文系统默认中文，其它系统默认英文' },
+  { value: 'zh', label: '简体中文', triggerLabel: '中文' },
+  { value: 'en', label: 'English' }
+]
+const SEND_KEY_OPTIONS = [
+  { value: 'enter', label: 'Enter 发送', description: 'Shift+Enter 换行' },
+  { value: 'ctrl-enter', label: 'Ctrl+Enter 发送', description: '裸 Enter 换行，适合多行输入' }
+]
+const MEMORY_MODE_OPTIONS = [
+  { value: 'auto', label: '自动', description: 'Agent 可在会话中把长期事实沉淀到 MEMORY.md' },
+  { value: 'manual', label: '手动', description: 'Agent 把记忆视为只读上下文，仅你能在编辑器中维护' }
+]
+
+function changeTheme(value: string): void {
+  emit('changeTheme', value as 'system' | 'light' | 'dark')
+}
+function changeReplyLanguage(value: string): void {
+  void setReplyLanguage(value as 'auto' | 'zh' | 'en')
+}
+function changeSendKey(value: string): void {
+  setSendKey(value as 'enter' | 'ctrl-enter')
+}
+function changeMemoryMode(value: string): void {
+  void setRulesMemory({ memoryMode: value as 'auto' | 'manual' })
+}
 
 const action = ref('')
 const error = ref('')
@@ -1136,42 +1165,25 @@ onBeforeUnmount(() => {
           <section class="settings-group">
             <div class="settings-row">
               <div><strong>外观</strong><small>界面主题</small></div>
-              <div class="segmented-control">
-                <button :class="{ active: theme === 'system' }" title="跟随系统" @click="emit('changeTheme', 'system')">
-                  <Monitor :size="16" />
-                </button>
-                <button :class="{ active: theme === 'light' }" title="浅色" @click="emit('changeTheme', 'light')">
-                  <Sun :size="16" />
-                </button>
-                <button :class="{ active: theme === 'dark' }" title="深色" @click="emit('changeTheme', 'dark')">
-                  <Moon :size="16" />
-                </button>
-              </div>
+              <SelectMenu :model-value="theme" class="settings-select select-compact" :options="THEME_OPTIONS"
+                label="外观" @update:model-value="changeTheme" />
             </div>
             <div class="settings-row">
               <div>
                 <strong>回复语言</strong>
                 <small>模型先识别输入语言，再以目标语言回复；跟随系统 = 中文系统默认中文</small>
               </div>
-              <div class="segmented-control">
-                <button :class="{ active: replyLanguage === 'auto' }" :disabled="action === 'language.set'"
-                  title="跟随系统语言（中文系统默认中文）" @click="setReplyLanguage('auto')">自动</button>
-                <button :class="{ active: replyLanguage === 'zh' }" :disabled="action === 'language.set'"
-                  title="简体中文" @click="setReplyLanguage('zh')">中文</button>
-                <button :class="{ active: replyLanguage === 'en' }" :disabled="action === 'language.set'"
-                  title="English" @click="setReplyLanguage('en')">English</button>
-              </div>
+              <SelectMenu :model-value="replyLanguage" class="settings-select select-compact"
+                :options="REPLY_LANGUAGE_OPTIONS" label="回复语言" :disabled="action === 'language.set'"
+                @update:model-value="changeReplyLanguage" />
             </div>
             <div class="settings-row">
               <div>
                 <strong>发送快捷键</strong>
                 <small>Enter 直接发送（Shift+Enter 换行）；Ctrl+Enter 发送时裸 Enter 换行，适合多行输入</small>
               </div>
-              <div class="segmented-control">
-                <button :class="{ active: sendKey === 'enter' }" title="Enter 发送" @click="setSendKey('enter')">Enter</button>
-                <button :class="{ active: sendKey === 'ctrl-enter' }" title="Ctrl+Enter 发送"
-                  @click="setSendKey('ctrl-enter')">Ctrl+Enter</button>
-              </div>
+              <SelectMenu :model-value="sendKey" class="settings-select select-compact" :options="SEND_KEY_OPTIONS"
+                label="发送快捷键" @update:model-value="changeSendKey" />
             </div>
             <div class="settings-row">
               <div><strong>运行时Runtime</strong><small>{{ daemonEndpoint }}</small></div>
@@ -1468,12 +1480,9 @@ onBeforeUnmount(() => {
                 <strong>记忆管理方式</strong>
                 <small>自动：Agent 可在会话中把长期事实沉淀到 MEMORY.md；手动：Agent 把记忆视为只读上下文，仅你能在编辑器中维护</small>
               </div>
-              <div class="segmented-control">
-                <button :class="{ active: memoryMode === 'auto' }" :disabled="action === 'rulesMemory.set'"
-                  title="Agent 可更新 MEMORY.md" @click="setRulesMemory({ memoryMode: 'auto' })">自动</button>
-                <button :class="{ active: memoryMode === 'manual' }" :disabled="action === 'rulesMemory.set'"
-                  title="MEMORY.md 仅用户可编辑" @click="setRulesMemory({ memoryMode: 'manual' })">手动</button>
-              </div>
+              <SelectMenu :model-value="memoryMode" class="settings-select select-compact"
+                :options="MEMORY_MODE_OPTIONS" label="记忆管理方式" :disabled="action === 'rulesMemory.set'"
+                @update:model-value="changeMemoryMode" />
             </div>
           </section>
         </template>

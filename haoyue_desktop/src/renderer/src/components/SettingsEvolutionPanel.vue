@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Check, Clock, History, LoaderCircle, RefreshCw, Telescope, Wrench, X, Zap } from '@lucide/vue'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { confirmAction } from '../confirmation'
 import { requestJson } from '../daemon-json'
 import {
@@ -27,6 +27,7 @@ import {
   type EvolutionStats,
   type EvolutionTrendPoint
 } from '../evolution-form'
+import SelectMenu from './SelectMenu.vue'
 
 /**
  * 设置 → 进化。面板自带一次加载与所有写操作，父级只负责把提示语放进全局 toast；
@@ -146,6 +147,21 @@ async function setEvolutionConfig(payload: {
   } finally {
     action.value = ''
   }
+}
+
+const intervalOptions = computed(() => {
+  const options: Array<{ value: string; label: string }> = EVOLUTION_INTERVAL_OPTIONS.map((option) => ({
+    value: String(option.value),
+    label: option.label
+  }))
+  const current = String(evolutionIntervalMinutes.value)
+  if (!options.some((option) => option.value === current))
+    options.push({ value: current, label: formatInterval(evolutionIntervalMinutes.value) })
+  return options
+})
+
+function changeInterval(value: string): void {
+  void setEvolutionConfig({ intervalMinutes: Number(value) })
 }
 
 async function runReflection(): Promise<void> {
@@ -321,12 +337,9 @@ defineExpose({ refreshAfterReflect })
         <strong>反思间隔</strong>
         <small>定时反思的触发周期，当前每 {{ formatInterval(evolutionIntervalMinutes) }} 复盘一次</small>
       </div>
-      <div class="segmented-control">
-        <button v-for="option in EVOLUTION_INTERVAL_OPTIONS" :key="option.value"
-          :class="{ active: evolutionIntervalMinutes === option.value }"
-          :disabled="action === 'evolution.config'"
-          @click="setEvolutionConfig({ intervalMinutes: option.value })">{{ option.label }}</button>
-      </div>
+      <SelectMenu :model-value="String(evolutionIntervalMinutes)" class="settings-select select-compact"
+        :options="intervalOptions" label="反思间隔" :disabled="action === 'evolution.config'"
+        @update:model-value="changeInterval" />
     </div>
     <label class="provider-enabled-row">
       <span>

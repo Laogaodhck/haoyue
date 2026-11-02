@@ -210,7 +210,7 @@ public sealed partial class Agent
         // and tool results such as capture_screen. Images from earlier turns must
         // not drag a text-only turn onto a vision model or re-upload on follow-ups.
         var turnHasImages = s.TurnHasImages;
-        var model = turnHasImages ? ResolveVisionModel(s.Workspace) : providerManager.ResolveActive(s.Workspace.Config);
+        var model = turnHasImages ? ResolveVisionModel(s.Workspace) : ResolveStepModel(s.Workspace);
         var requiresVision = turnHasImages && model.Model.Capabilities.Vision;
         var effectiveNetworkEnabled = s.Session.Header.NetworkEnabled && s.Config.NetworkEnabled;
         var tools = ActiveTools(s.Workspace, model, effectiveNetworkEnabled, s.SkillTriggerContext);

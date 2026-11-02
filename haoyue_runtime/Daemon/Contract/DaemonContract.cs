@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Haoyue.Runtime.Providers;
 
 namespace Haoyue.Runtime.Daemon;
 
@@ -250,7 +251,7 @@ public static class DaemonContract
 
     private static readonly JsonObject ProviderUpsert = SObject(
         ("id", SString("提供商标识"), true),
-        ("kind", SString("提供商类型", "openai", "anthropic", "local"), false),
+        ("kind", SString("提供商类型", ProviderKinds.All), false),
         ("name", SString("显示名"), false),
         ("baseUrl", SString("API 基础地址"), false),
         ("proxy", SString("代理地址"), false),
@@ -430,7 +431,7 @@ public static class DaemonContract
     private static readonly JsonObject ProviderResult = RObject(
         ("id", SString("提供商 id")),
         ("name", SString("显示名")),
-        ("kind", SString("类型", "openai", "anthropic", "local")),
+        ("kind", SString("类型", ProviderKinds.All)),
         ("baseUrl", SString("API 地址")),
         ("apiKeyConfigured", SBoolean("是否已配置 API Key（不回传明文）")),
         ("models", SArray("模型 id 清单")),
@@ -712,6 +713,23 @@ public static class DaemonContract
         ("isRoot", SBoolean("是否根 AGENTS.md")),
         ("content", SString("文件全文")),
         ("files", RArray(SString("规则文件清单"))));
+
+    /// <summary>一个子智能体定义（内置或 Markdown 文件）。</summary>
+    private static readonly JsonObject SubAgentResult = RObject(
+        ("id", SString("子智能体 id/名称（delegate_task 的 role 取值）")),
+        ("name", SString("显示名称")),
+        ("description", SString("适用场景（模型据此判断是否委派）")),
+        ("prompt", SString("工作指令（Markdown 正文）")),
+        ("model", SString("模型覆盖；空表示继承活动模型")),
+        ("tools", RArray(SString("工具白名单；空表示不限制"))),
+        ("scope", SString("来源", "builtin", "user", "project")),
+        ("path", SString("Markdown 文件绝对路径；内置为空")),
+        ("readOnly", SBoolean("内置条目只读")));
+
+    private static readonly JsonObject SubAgentsResult = RObject(
+        ("workspace", SString("工作区根目录")),
+        ("isGlobal", SBoolean("是否全局范围")),
+        ("agents", RArray(SubAgentResult)));
 
     /// <summary>用量聚合行（usage.get 返回按 provider/model 分组的数组）。</summary>
     private static readonly JsonObject UsageResult = RArray(RObject(
@@ -1573,6 +1591,30 @@ public static class DaemonContract
         M("rules.delete", "memory", "删除工作区规则文件", parameters: Scope(
             ("path", SString("目标规则文件相对路径，缺省根 AGENTS.md"), false)),
             result: RObject(("path", SString("删除的规则文件路径"))),
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("agent.subagents.list", "config", "列出子智能体（内置预设 + 用户级/项目级 Markdown 定义）",
+            parameters: KnowledgeScope,
+            result: SubAgentsResult, errors: E()),
+        M("agent.subagents.save", "config", "保存用户级或项目级子智能体（Markdown frontmatter）", parameters: Scope(
+            ("scope", SString("保存位置", "user", "project"), false),
+            ("name", SString("子智能体名称（delegate_task 的 role 取值）"), true),
+            ("description", SString("适用场景，供模型判断何时委派"), false),
+            ("model", SString("模型覆盖（provider/model、模型 id 或别名）；空 = 继承活动模型"), false),
+            ("tools", SArray("工具白名单；空 = 不限制", SString("工具名")), false),
+            ("prompt", SString("工作指令（Markdown 正文）"), true),
+            ("previousName", SString("重命名前名称；改名时删除旧文件"), false)),
+            result: RObject(
+                ("path", SString("写入的 Markdown 文件绝对路径")),
+                ("name", SString("保存后的名称")),
+                ("scope", SString("保存位置", "user", "project"))),
+            errors: E(DaemonErrorCode.InvalidParams)),
+        M("agent.subagents.delete", "config", "删除用户级或项目级子智能体（内置不可删）", parameters: Scope(
+            ("scope", SString("删除位置", "user", "project"), false),
+            ("name", SString("子智能体名称"), true)),
+            result: RObject(
+                ("deleted", SBoolean("是否实际删除（文件不存在为 false）")),
+                ("name", SString("子智能体名称")),
+                ("scope", SString("删除位置", "user", "project"))),
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
 
         // usage

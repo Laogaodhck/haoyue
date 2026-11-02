@@ -70,8 +70,10 @@ public sealed partial class Agent
             Func<ModelInfo, bool>? candidateFilter = requiresVision
                 ? static candidate => candidate.Model.Capabilities.Vision
                 : null;
-            await foreach (var evt in providerManager.StreamAsync(
-                               RequestFor, workspace.Config, ct, candidateFilter).ConfigureAwait(false))
+            // StreamModelAsync pins the step's model (sub-agent override, vision choice, or
+            // active) and keeps the normal failover chain behind it.
+            await foreach (var evt in providerManager.StreamModelAsync(
+                               activeModel, RequestFor, workspace.Config, ct, candidateFilter).ConfigureAwait(false))
             {
                 switch (evt)
                 {

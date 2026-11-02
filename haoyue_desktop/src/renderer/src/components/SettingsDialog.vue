@@ -38,7 +38,6 @@ import ExpertsPanel from './ExpertsPanel.vue'
 import McpPanel from './McpPanel.vue'
 import ConnectorsPanel from './ConnectorsPanel.vue'
 import type { ModelDetailConfig } from './ModelConfigModal.vue'
-import FieldLabel from './FieldLabel.vue'
 import OfficialSkillsPanel from './OfficialSkillsPanel.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import SelectMenu from './SelectMenu.vue'
@@ -46,11 +45,12 @@ import UsageTrendChart, { type TimelinePoint } from './UsageTrendChart.vue'
 import UsageModelBarChart from './UsageModelBarChart.vue'
 import { buildDiagnosticsBundle, diagnosticsFileName } from '../diagnostics-bundle'
 import { readSendKeyPreference } from '../app-helpers'
-import { clampCompactionTailRatio } from '../agent-form'
+import { providerKindLabel, type ProviderKind } from '../provider-presets'
 import { requestJson } from '../daemon-json'
 import ToolPolicyPanel from './ToolPolicyPanel.vue'
 import SettingsRoutingPanel from './SettingsRoutingPanel.vue'
 import SettingsInferencePanel from './SettingsInferencePanel.vue'
+import SettingsSubAgentsPanel from './SettingsSubAgentsPanel.vue'
 import SettingsAgentExpertPanel from './SettingsAgentExpertPanel.vue'
 import ConfigJsonEditor from './ConfigJsonEditor.vue'
 import SettingsIntegrationsPanel from './SettingsIntegrationsPanel.vue'
@@ -64,7 +64,7 @@ type SettingsSection = 'general' | 'network' | 'models' | 'agent' | 'mcp' | 'ski
 interface ProviderInfo {
   id: string
   name: string
-  kind: 'openai' | 'anthropic' | 'local'
+  kind: ProviderKind
   baseUrl: string
   modelListUrl?: string
   modelsDirectory?: string
@@ -88,7 +88,7 @@ interface ProviderInfo {
 interface ProviderFormValue {
   id: string
   name: string
-  kind: 'openai' | 'anthropic' | 'local'
+  kind: ProviderKind
   baseUrl: string
   modelListUrl: string
   apiKey: string
@@ -270,15 +270,11 @@ const visionModelOptions = computed(() => [
 
 const showModelCatalog = ref(false)
 
-/** 智能体设置：视觉子智能体模型、探索者委派、自动验证与回合预算。visionModel 为空表示自动选择。 */
+/** 智能体设置：视觉子智能体模型、探索者委派与自动验证。visionModel 为空表示自动选择。 */
 const agentConfig = reactive({
   visionModel: '',
   delegationEnabled: true,
-  autoVerify: false,
-  turnTokenBudget: 0,
-  turnCostBudget: 0,
-  turnWallClockSeconds: 0,
-  compactionTailRatio: 0.5
+  autoVerify: false
 })
 
 const CAPABILITY_LABELS: Record<string, string> = {
@@ -377,14 +373,14 @@ const SECTION_KEYWORDS: Record<SettingsSection, string> = {
   general: '外观 主题 语言 快捷键 发送 工具策略 权限 运行时 连接',
   network: '局域网 远程 连接 lan 主机 端口 令牌 配对 共享 runtime',
   models: '模型 提供商 provider api key base url 上下文 定价 路由链 活动模型',
-  agent: '智能体 网页搜索 联网 委派 子智能体 自动验证 回合预算 上下文压缩 视觉',
+  agent: '智能体 网页搜索 联网 委派 子智能体 自动验证 视觉',
   mcp: 'mcp 连接器 服务器 connector 工具',
   skills: '技能 skill 导入 市场 官方',
   experts: '专家 expert 角色 子代理 参数 步数 思考预算 工具输出 bash 超时 自动修复 续写 委派 事实 会话保留 记忆固化 人格 系统提示词 可读目录 回调 json 原始配置 配置文档',
   'rules-memory': '规则 记忆 AGENTS.md MEMORY.md 注入',
   evolution: '进化 反思 缺陷 草稿 趋势',
   diagnostics: '诊断 用量 日志 token 费用 健康检查 导出',
-  inference: '推理 加速 GPU 卸载 显存 KV 量化 flash attention 预热 卸载 驻留 基准',
+  inference: '推理 加速 GPU 卸载 显存 KV 量化 flash attention 预热 卸载 驻留 基准 回合预算 token 费用 时长 上下文压缩 保留比例',
   advanced: '高级 网络 白名单 电脑操作 computer use 网络运维 故障转移 容灾 负载均衡 重试 出厂'
 }
 
@@ -545,10 +541,6 @@ async function loadAgent(): Promise<void> {
       delegationEnabled: boolean
       visionModel: string
       autoVerify: boolean
-      turnTokenBudget: number
-      turnCostBudget: number
-      turnWallClockSeconds: number
-      compactionTailRatio: number
     }>('agent.config.get'),
     loadModels()
   ])
@@ -556,10 +548,6 @@ async function loadAgent(): Promise<void> {
   agentConfig.delegationEnabled = config.delegationEnabled
   agentConfig.visionModel = config.visionModel
   agentConfig.autoVerify = config.autoVerify
-  agentConfig.turnTokenBudget = config.turnTokenBudget ?? 0
-  agentConfig.turnCostBudget = config.turnCostBudget ?? 0
-  agentConfig.turnWallClockSeconds = config.turnWallClockSeconds ?? 0
-  agentConfig.compactionTailRatio = config.compactionTailRatio ?? 0.5
 }
 
 async function saveAgentConfig(params: Record<string, unknown>): Promise<{
@@ -567,10 +555,6 @@ async function saveAgentConfig(params: Record<string, unknown>): Promise<{
   delegationEnabled: boolean
   visionModel: string
   autoVerify: boolean
-  turnTokenBudget: number
-  turnCostBudget: number
-  turnWallClockSeconds: number
-  compactionTailRatio: number
 }> {
   return requestJson('agent.config.set', params)
 }
@@ -626,54 +610,6 @@ async function toggleAgentAutoVerify(): Promise<void> {
     try {
       const config = await requestJson<{ autoVerify: boolean }>('agent.config.get')
       agentConfig.autoVerify = config.autoVerify
-    } catch { /* keep last known state */ }
-  } finally {
-    endAction()
-  }
-}
-
-async function saveTurnBudgets(): Promise<void> {
-  beginAction('agent.config.set:budget')
-  try {
-    const config = await saveAgentConfig({
-      turnTokenBudget: Math.max(0, Math.trunc(agentConfig.turnTokenBudget || 0)),
-      turnCostBudget: Math.max(0, Math.round((agentConfig.turnCostBudget || 0) * 10000) / 10000),
-      turnWallClockSeconds: Math.max(0, Math.trunc(agentConfig.turnWallClockSeconds || 0))
-    })
-    agentConfig.turnTokenBudget = config.turnTokenBudget
-    agentConfig.turnCostBudget = config.turnCostBudget
-    agentConfig.turnWallClockSeconds = config.turnWallClockSeconds
-    notice.value = '已保存回合预算（0 = 不限）。超限的回合会先用一步给出进展总结再结束，并标记为「预算耗尽」而非「任务完成」。'
-  } catch (reason) {
-    fail(reason)
-    try {
-      const config = await requestJson<{
-        turnTokenBudget: number
-        turnCostBudget: number
-        turnWallClockSeconds: number
-      }>('agent.config.get')
-      agentConfig.turnTokenBudget = config.turnTokenBudget
-      agentConfig.turnCostBudget = config.turnCostBudget
-      agentConfig.turnWallClockSeconds = config.turnWallClockSeconds
-    } catch { /* keep last known state */ }
-  } finally {
-    endAction()
-  }
-}
-
-async function saveCompactionRatio(): Promise<void> {
-  beginAction('agent.config.set:compaction')
-  try {
-    const raw = Number(agentConfig.compactionTailRatio)
-    const ratio = clampCompactionTailRatio(raw)
-    const config = await saveAgentConfig({ compactionTailRatio: ratio })
-    agentConfig.compactionTailRatio = config.compactionTailRatio
-    notice.value = `已保存上下文压缩保留比例：最近对话保留窗口预算的 ${Math.round(config.compactionTailRatio * 100)}%，更早的对话由摘要代替。`
-  } catch (reason) {
-    fail(reason)
-    try {
-      const config = await requestJson<{ compactionTailRatio: number }>('agent.config.get')
-      agentConfig.compactionTailRatio = config.compactionTailRatio ?? 0.5
     } catch { /* keep last known state */ }
   } finally {
     endAction()
@@ -1332,7 +1268,7 @@ onBeforeUnmount(() => {
                     <span class="provider-bullet">·</span>
                     <span class="provider-meta-tag">{{ provider.models.length }} 个模型</span>
                     <span class="provider-bullet">·</span>
-                    <span class="provider-meta-tag">{{ provider.kind === 'local' ? '本地 GGUF' : provider.kind === 'anthropic' ? 'Anthropic' : 'OpenAI' }}</span>
+                    <span class="provider-meta-tag">{{ providerKindLabel(provider.kind) }}</span>
                   </div>
                 </div>
               </div>
@@ -1710,7 +1646,7 @@ onBeforeUnmount(() => {
           <div class="settings-section-heading">
             <div>
               <h3>推理加速</h3>
-              <p>每个本地模型最终生效的加载参数、来源层级与实测性能；写入口统一在「模型与提供商」</p>
+              <p>本地加载参数、驻留与显存治理，以及单回合预算与上下文压缩保留比例；加载参数的写入口统一在「模型与提供商」</p>
             </div>
           </div>
           <SettingsInferencePanel :connected="daemonConnected" />
@@ -1720,7 +1656,7 @@ onBeforeUnmount(() => {
           <div class="settings-section-heading">
             <div>
               <h3>智能体</h3>
-              <p>配置智能体的模型选择与自主行为边界</p>
+              <p>配置智能体的模型选择、自主行为边界与可委派的子智能体</p>
             </div>
           </div>
 
@@ -1771,43 +1707,7 @@ onBeforeUnmount(() => {
             </label>
           </section>
 
-          <section class="settings-group" aria-label="回合预算">
-            <div class="local-inference-grid">
-              <label>
-                <FieldLabel en="Turn Token Budget" zh="单回合 token 上限"
-                  help="本回合输入+输出 token 总量上限（0 = 不限）。只对回传用量的模型有效；达到上限后先用一步给出进展总结，仍不收尾则强制结束。" />
-                <input v-model.number="agentConfig.turnTokenBudget" type="number" min="0" max="100000000" step="10000" />
-              </label>
-              <label>
-                <FieldLabel en="Turn Cost Budget" zh="单回合费用上限"
-                  help="按模型 input/output 定价折算的本回合费用上限（0 = 不限），与用量统计同口径。" />
-                <input v-model.number="agentConfig.turnCostBudget" type="number" min="0" max="100000" step="0.01" />
-              </label>
-              <label>
-                <FieldLabel en="Turn Time Limit" zh="单回合时长上限（秒）"
-                  help="从发起到结束的墙钟时间上限（0 = 不限）。不依赖模型回传用量，本地模型也能靠它刹车。" />
-                <input v-model.number="agentConfig.turnWallClockSeconds" type="number" min="0" max="86400" step="30" />
-              </label>
-            </div>
-            <button class="secondary-button primary-action" :disabled="action === 'agent.config.set:budget'"
-              @click="saveTurnBudgets">
-              {{ action === 'agent.config.set:budget' ? '保存中…' : '保存回合预算' }}
-            </button>
-          </section>
-
-          <section class="settings-group" aria-label="上下文压缩">
-            <div class="local-inference-grid">
-              <label>
-                <FieldLabel en="Compaction Tail Ratio" zh="压缩时保留的最近对话比例"
-                  help="上下文即将超出窗口时，最近对话按此比例逐字保留，更早部分交给摘要代替（0.1–0.9，默认 0.5）。大窗口云端模型可调小（多压缩，摘要调用命中前缀缓存更便宜）；小窗口本地模型可调大（多保留原文，少依赖摘要保真度）。" />
-                <input v-model.number="agentConfig.compactionTailRatio" type="number" min="0.1" max="0.9" step="0.05" />
-              </label>
-            </div>
-            <button class="secondary-button primary-action" :disabled="action === 'agent.config.set:compaction'"
-              @click="saveCompactionRatio">
-              {{ action === 'agent.config.set:compaction' ? '保存中…' : '保存压缩比例' }}
-            </button>
-          </section>
+          <SettingsSubAgentsPanel :connected="daemonConnected" :workspace-path="workspacePath" />
         </template>
 
         <template v-else-if="section === 'advanced'">

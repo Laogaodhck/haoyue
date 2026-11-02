@@ -318,6 +318,24 @@ export class DaemonClient {
      */
     promptOptimize: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("prompt.optimize", params),
+    /**
+     * 列出子智能体（内置预设 + 用户级/项目级 Markdown 定义）
+     * 终态事件：result, error
+     */
+    agentSubagentsList: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("agent.subagents.list", params),
+    /**
+     * 保存用户级或项目级子智能体（Markdown frontmatter）
+     * 终态事件：result, error
+     */
+    agentSubagentsSave: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("agent.subagents.save", params),
+    /**
+     * 删除用户级或项目级子智能体（内置不可删）
+     * 终态事件：result, error
+     */
+    agentSubagentsDelete: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("agent.subagents.delete", params),
   };
 
   /** connectors 类别方法。 */

@@ -7,7 +7,7 @@
 export const CONTRACT_VERSION = "1.0";
 export const PROTOCOL_VERSION = "2.2";
 
-/** 契约声明的全部 RPC 方法名（129 个）。 */
+/** 契约声明的全部 RPC 方法名（132 个）。 */
 export type MethodName =
   "ping" | "protocol.info" | "contract.export" | "daemon.lan.get"
   | "daemon.lan.set" | "events.recent" | "shutdown" | "chat"
@@ -34,14 +34,14 @@ export type MethodName =
   | "knowledge.source.add" | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete"
   | "knowledge.source.refresh" | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build"
   | "memory.get" | "memory.save" | "rules.list" | "rules.save"
-  | "rules.delete" | "usage.get" | "usage.timeline" | "session.list"
-  | "session.search" | "session.get" | "session.image" | "session.truncate"
-  | "session.fork" | "session.update" | "session.archive" | "session.delete"
-  | "session.resume" | "session.new" | "project.list" | "project.upsert"
-  | "project.remove" | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list"
-  | "evolution.decide" | "evolution.history" | "evolution.stats" | "evolution.config.get"
-  | "evolution.config.set" | "doctor" | "doctor.run" | "lock.list"
-  | "factory.reset"
+  | "rules.delete" | "agent.subagents.list" | "agent.subagents.save" | "agent.subagents.delete"
+  | "usage.get" | "usage.timeline" | "session.list" | "session.search"
+  | "session.get" | "session.image" | "session.truncate" | "session.fork"
+  | "session.update" | "session.archive" | "session.delete" | "session.resume"
+  | "session.new" | "project.list" | "project.upsert" | "project.remove"
+  | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list" | "evolution.decide"
+  | "evolution.history" | "evolution.stats" | "evolution.config.get" | "evolution.config.set"
+  | "doctor" | "doctor.run" | "lock.list" | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -316,7 +316,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "provider.upsert",
     category: "provider",
     description: "\u521b\u5efa\u6216\u66f4\u65b0\u63d0\u4f9b\u5546",
-    paramsSchema: {"properties": {"apiKey": {"description": "API Key（留空保持已存值；响应不回传明文）", "type": "string"}, "baseUrl": {"description": "API 基础地址", "type": "string"}, "clearApiKey": {"description": "清除已存 API Key", "type": "boolean"}, "enabled": {"description": "是否启用", "type": "boolean"}, "headers": {"additionalProperties": {"type": "string"}, "description": "自定义请求头；值为空串表示保持已存值", "type": "object"}, "id": {"description": "提供商标识", "type": "string"}, "kind": {"description": "提供商类型", "enum": ["openai", "anthropic", "local"], "type": "string"}, "localPrefixReuse": {"description": "本地模型复用 KV 前缀", "type": "boolean"}, "modelDetails": {"description": "模型明细列表", "items": {"properties": {"alias": {"description": "显示别名", "type": "string"}, "contextWindow": {"description": "上下文窗口", "type": "integer"}, "fallbackModelId": {"description": "备用回退模型 id", "type": "string"}, "id": {"description": "模型 id", "type": "string"}, "inputPricePerMTok": {"description": "输入价（每百万 token）", "type": "number"}, "maxOutput": {"description": "最大输出 token", "type": "integer"}, "outputPricePerMTok": {"description": "输出价（每百万 token）", "type": "number"}, "vision": {"description": "是否支持视觉", "type": "boolean"}}, "required": ["id"], "type": "object"}, "type": "array"}, "modelListUrl": {"description": "模型列表地址", "type": "string"}, "modelsDirectory": {"description": "本地模型目录", "type": "string"}, "name": {"description": "显示名", "type": "string"}, "organization": {"description": "组织标识（OpenAI organization 头）", "type": "string"}, "priority": {"description": "路由优先级", "type": "integer"}, "promptCaching": {"description": "提示缓存开关", "type": "boolean"}, "proxy": {"description": "代理地址", "type": "string"}, "reasoningEffortMap": {"additionalProperties": {"type": "string"}, "description": "思考档位 → 供应商 wire 值的映射", "type": "object"}, "threads": {"description": "本地推理线程数；0/缺省 = 自动", "type": "integer"}, "timeoutSeconds": {"description": "请求超时（秒）", "type": "integer"}}, "required": ["id"], "type": "object"},
+    paramsSchema: {"properties": {"apiKey": {"description": "API Key（留空保持已存值；响应不回传明文）", "type": "string"}, "baseUrl": {"description": "API 基础地址", "type": "string"}, "clearApiKey": {"description": "清除已存 API Key", "type": "boolean"}, "enabled": {"description": "是否启用", "type": "boolean"}, "headers": {"additionalProperties": {"type": "string"}, "description": "自定义请求头；值为空串表示保持已存值", "type": "object"}, "id": {"description": "提供商标识", "type": "string"}, "kind": {"description": "提供商类型", "enum": ["openai", "anthropic", "aliyun", "volcengine", "tencent", "baidu", "zhipu", "deepseek", "local"], "type": "string"}, "localPrefixReuse": {"description": "本地模型复用 KV 前缀", "type": "boolean"}, "modelDetails": {"description": "模型明细列表", "items": {"properties": {"alias": {"description": "显示别名", "type": "string"}, "contextWindow": {"description": "上下文窗口", "type": "integer"}, "fallbackModelId": {"description": "备用回退模型 id", "type": "string"}, "id": {"description": "模型 id", "type": "string"}, "inputPricePerMTok": {"description": "输入价（每百万 token）", "type": "number"}, "maxOutput": {"description": "最大输出 token", "type": "integer"}, "outputPricePerMTok": {"description": "输出价（每百万 token）", "type": "number"}, "vision": {"description": "是否支持视觉", "type": "boolean"}}, "required": ["id"], "type": "object"}, "type": "array"}, "modelListUrl": {"description": "模型列表地址", "type": "string"}, "modelsDirectory": {"description": "本地模型目录", "type": "string"}, "name": {"description": "显示名", "type": "string"}, "organization": {"description": "组织标识（OpenAI organization 头）", "type": "string"}, "priority": {"description": "路由优先级", "type": "integer"}, "promptCaching": {"description": "提示缓存开关", "type": "boolean"}, "proxy": {"description": "代理地址", "type": "string"}, "reasoningEffortMap": {"additionalProperties": {"type": "string"}, "description": "思考档位 → 供应商 wire 值的映射", "type": "object"}, "threads": {"description": "本地推理线程数；0/缺省 = 自动", "type": "integer"}, "timeoutSeconds": {"description": "请求超时（秒）", "type": "integer"}}, "required": ["id"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -758,6 +758,27 @@ export const METHODS: readonly MethodInfo[] = [
     category: "memory",
     description: "\u5220\u9664\u5de5\u4f5c\u533a\u89c4\u5219\u6587\u4ef6",
     paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "path": {"description": "目标规则文件相对路径，缺省根 AGENTS.md", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "agent.subagents.list",
+    category: "config",
+    description: "\u5217\u51fa\u5b50\u667a\u80fd\u4f53\uff08\u5185\u7f6e\u9884\u8bbe + \u7528\u6237\u7ea7/\u9879\u76ee\u7ea7 Markdown \u5b9a\u4e49\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "agent.subagents.save",
+    category: "config",
+    description: "\u4fdd\u5b58\u7528\u6237\u7ea7\u6216\u9879\u76ee\u7ea7\u5b50\u667a\u80fd\u4f53\uff08Markdown frontmatter\uff09",
+    paramsSchema: {"properties": {"description": {"description": "适用场景，供模型判断何时委派", "type": "string"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "model": {"description": "模型覆盖（provider/model、模型 id 或别名）；空 = 继承活动模型", "type": "string"}, "name": {"description": "子智能体名称（delegate_task 的 role 取值）", "type": "string"}, "previousName": {"description": "重命名前名称；改名时删除旧文件", "type": "string"}, "prompt": {"description": "工作指令（Markdown 正文）", "type": "string"}, "scope": {"description": "保存位置", "enum": ["user", "project"], "type": "string"}, "tools": {"description": "工具白名单；空 = 不限制", "items": {"description": "工具名", "type": "string"}, "type": "array"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["name", "prompt"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "agent.subagents.delete",
+    category: "config",
+    description: "\u5220\u9664\u7528\u6237\u7ea7\u6216\u9879\u76ee\u7ea7\u5b50\u667a\u80fd\u4f53\uff08\u5185\u7f6e\u4e0d\u53ef\u5220\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "name": {"description": "子智能体名称", "type": "string"}, "scope": {"description": "删除位置", "enum": ["user", "project"], "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["name"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

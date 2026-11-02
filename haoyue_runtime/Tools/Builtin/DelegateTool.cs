@@ -29,8 +29,19 @@ public sealed class DelegateTool(IPromptProvider prompts, IAgentDelegator delega
 
     public JsonObject ParameterSchema => ToolSchema.Object(
         ("task", ToolSchema.String("完整、自包含的子任务描述。子代理看不到当前对话历史，描述必须包含它需要的全部信息（文件、约束、期望产出）。"), true),
-        ("role", ToolSchema.String($"可选角色预设：{AgentRole.ValidRoles}。命中时子代理注入角色纪律提示词并收敛工具白名单（如 reviewer 只读）。"), false),
+        ("role", ToolSchema.String(RoleHint()), false),
         ("timeout_seconds", ToolSchema.Integer($"可选子任务独立超时（{MinTimeoutSeconds}-{MaxTimeoutSeconds} 秒）。缺省时跟随父回合的取消信号——单个可能卡死的子任务建议显式设置，超时只损失该子任务。"), false));
+
+    /// <summary>
+    /// 可选子智能体清单（内置 + 用户级；项目级只对具体工作区可见，执行时同样接受）。
+    /// 每次读取 schema 都重新扫描目录，因此在设置里新建条目后无需重启即可使用。
+    /// </summary>
+    private string RoleHint()
+    {
+        var names = string.Join(" / ", delegator.Roles().Select(role => role.Id));
+        return $"可选子智能体：{names}，以及「设置 → 智能体」中自定义的条目（用户级或项目级）。"
+               + "命中时注入其指令、收敛工具白名单，并使用它配置的模型（未配置则继承活动模型）。";
+    }
 
     public bool Mutating => true;
 
@@ -42,8 +53,11 @@ public sealed class DelegateTool(IPromptProvider prompts, IAgentDelegator delega
         if (string.IsNullOrWhiteSpace(task))
             return ToolResult.Fail("delegate_task 需要 task 参数：描述要委派的完整子任务。");
         var role = arguments["role"]?.GetValue<string>()?.Trim();
-        if (role is { Length: > 0 } && !AgentRole.Builtins.ContainsKey(role))
-            return ToolResult.Fail($"未知角色「{role}」。可选：{AgentRole.ValidRoles}。");
+        var roles = delegator.Roles(context.Workspace);
+        if (role is { Length: > 0 }
+            && !roles.Any(candidate => candidate.Id.Equals(role, StringComparison.OrdinalIgnoreCase)))
+            return ToolResult.Fail(
+                $"未知子智能体「{role}」。可选：{string.Join(" / ", roles.Select(candidate => candidate.Id))}。");
 
         var scope = context.TurnScope;
         var quota = context.Agent.DelegationMaxPerTurn;

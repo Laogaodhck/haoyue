@@ -41,9 +41,10 @@ internal sealed partial class DaemonAdminApi
         }
 
         var kind = OptionalString(parameters, "kind") ?? provider.Kind;
-        if (kind is not ("openai" or "anthropic" or "local"))
-            throw new DaemonRequestException("Provider kind must be openai, anthropic or local");
-        provider.Kind = kind;
+        if (!ProviderKinds.IsKnown(kind))
+            throw new DaemonRequestException(
+                $"Provider kind must be one of: {string.Join(", ", ProviderKinds.All)}");
+        provider.Kind = kind.ToLowerInvariant();
         provider.Name = OptionalString(parameters, "name") ?? provider.Name;
         provider.BaseUrl = OptionalString(parameters, "baseUrl") ?? provider.BaseUrl;
         provider.Proxy = OptionalString(parameters, "proxy") ?? provider.Proxy;

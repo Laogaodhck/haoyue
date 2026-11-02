@@ -4,6 +4,7 @@ using System.Text;
 using System.IO;
 using System;
 using Cronos;
+using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
 using Haoyue.Runtime.Connectors;
@@ -33,8 +34,10 @@ internal sealed partial class DaemonAdminApi(
     IFileLockCoordinator fileLocks,
     IScheduleService? scheduler = null,
     CancellationToken lifetime = default,
-    LocalModelCache? sharedLocalModels = null)
+    LocalModelCache? sharedLocalModels = null,
+    SubAgentCatalog? subAgents = null)
 {
+    private readonly SubAgentCatalog _subAgents = subAgents ?? new SubAgentCatalog();
     /// <summary>
     /// Raised after a background MCP reconnect finishes so clients can refresh the
     /// server list without polling.

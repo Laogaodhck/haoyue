@@ -4,10 +4,23 @@ Haoyue 把“服务地址与凭据”和“模型能力”都作为可编辑配�
 
 ## 协议与预置 Provider
 
-Runtime 当前实现两种线协议：
+Runtime 的请求实现只有两种线协议：
 
 - `anthropic`：Anthropic Messages API；
 - `openai`：OpenAI Chat Completions API，也用于所有 OpenAI-compatible 服务。
+
+Desktop 的「接口协议」下拉额外提供国内云厂商预设（`aliyun`、`volcengine`、`tencent`、`baidu`、`zhipu`、`deepseek`）。这些厂商都提供 OpenAI 兼容端点，选中后会预填对应的 Base URL 与模型示例；运行时仍统一使用 OpenAI 兼容客户端发送请求，厂商 kind 只影响预填与界面标签。
+
+| 接口协议 | 默认地址 |
+| --- | --- |
+| `aliyun`（阿里云百炼） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `volcengine`（火山方舟） | `https://ark.cn-beijing.volces.com/api/v3` |
+| `tencent`（腾讯云混元） | `https://api.hunyuan.cloud.tencent.com/v1` |
+| `baidu`（百度千帆） | `https://qianfan.baidubce.com/v2` |
+| `zhipu`（智谱 GLM） | `https://open.bigmodel.cn/api/paas/v4` |
+| `deepseek`（DeepSeek） | `https://api.deepseek.com/v1` |
+
+部分云厂商不提供 OpenAI 兼容的 `/models` 列表接口（例如火山方舟需要使用推理接入点 ID），此时在模型列表中手动添加模型即可。
 
 首次初始化的模板包括：
 
@@ -30,7 +43,7 @@ DeepSeek、Azure OpenAI、企业网关或其他兼容服务可以通过新增 `k
 ![Desktop 模型与 Provider 管理](/screenshots/desktop/providers-and-models.png)
 
 1. 点击“+ Provider”或编辑现有项。
-2. 选择 `openai` 或 `anthropic` 协议，填写 ID、名称、Base URL 和模型 ID。
+2. 选择 `openai`、`anthropic` 或任一云厂商预设，填写 ID、名称、Base URL 和模型 ID；云厂商预设会自动带出 Base URL。
 3. 直接填写 API Key；该 Key 会以 `secret:` 加密引用保存到配置文件中。
 4. 根据需要配置代理、超时、优先级、提示词缓存和启用状态。
 5. 保存后点击“测试”；确认可用后切换活动 Provider 或模型。

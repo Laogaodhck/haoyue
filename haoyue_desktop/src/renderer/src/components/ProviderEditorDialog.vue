@@ -7,11 +7,12 @@ import SelectMenu from './SelectMenu.vue'
 import ModelConfigModal, { type ModelDetailConfig } from './ModelConfigModal.vue'
 import ModelLoadSettingsDialog, { type LocalModelLoadSettings } from './ModelLoadSettingsDialog.vue'
 import { formatTokenCount } from '../app-helpers'
+import { PROVIDER_PROTOCOLS, providerProtocol, type ProviderKind } from '../provider-presets'
 
 export interface ProviderFormValue {
   id: string
   name: string
-  kind: 'openai' | 'anthropic' | 'local'
+  kind: ProviderKind
   baseUrl: string
   modelListUrl: string
   apiKey: string
@@ -75,13 +76,27 @@ const loadSettingsOpen = ref(false)
 const loadSettingsModel = ref<ModelDetailConfig | null>(null)
 const firstInput = ref<HTMLInputElement | null>(null)
 const revealKey = ref(false)
-const protocolOptions = [
-  { value: 'openai', label: 'OpenAI 兼容', description: '兼容 OpenAI Chat Completions 接口' },
-  { value: 'anthropic', label: 'Anthropic', description: '使用 Anthropic Messages API' },
-  { value: 'local', label: '本地 GGUF', description: '模型在本进程内直接运行，无需网络与 API Key' }
-]
+const protocolOptions = PROVIDER_PROTOCOLS
 
 const showAdvanced = ref(false)
+/** 打开编辑时回填表单会改写 kind；此间不应用协议预设，避免覆盖已存 Base URL。 */
+const hydrating = ref(false)
+
+const apiKeyPlaceholder = computed((): string =>
+  props.keyConfigured
+    ? '已保存 · 留空保持不变'
+    : (providerProtocol(form.kind)?.keyHint ?? 'sk-…')
+)
+
+const modelInputPlaceholder = computed((): string => {
+  if (form.kind === 'local') {
+    return '也可手动输入 GGUF 文件名，如 DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf'
+  }
+  const hint = providerProtocol(form.kind)?.modelHint
+  return hint
+    ? `输入模型 ID，如 ${hint}，支持逗号或换行粘贴批量输入`
+    : '输入模型 ID，如 gpt-5，支持逗号或换行粘贴批量输入'
+})
 
 const scannedModels = ref<ScannedLocalModel[]>([])
 const scanningModels = ref(false)
@@ -328,6 +343,7 @@ function handleKeydown(event: KeyboardEvent): void {
 
 watch(() => props.open, (open) => {
   if (!open) return
+  hydrating.value = true
   Object.assign(form, props.value)
   syncModelsFromProps()
   newModelInput.value = ''
@@ -344,10 +360,22 @@ watch(() => props.open, (open) => {
     : ''
   if (isLocalKind()) void scanLocalModels()
   document.addEventListener('keydown', handleKeydown)
-  void nextTick(() => firstInput.value?.focus())
+  void nextTick(() => {
+    hydrating.value = false
+    firstInput.value?.focus()
+  })
 }, { immediate: true })
 
-watch(() => form.kind, (kind) => {
+watch(() => form.kind, (kind, previous) => {
+  // 用户切换协议时按预设补 Base URL：只在当前地址为空、或仍是上一份预设地址时覆盖，
+  // 手填过的地址（网关 / 代理）保持不变。打开编辑时的回填由 hydrating 挡住。
+  if (!hydrating.value && previous && previous !== kind) {
+    const current = form.baseUrl.trim()
+    const previousBase = providerProtocol(previous)?.baseUrl ?? ''
+    if (!current || current === previousBase) {
+      form.baseUrl = providerProtocol(kind)?.baseUrl ?? ''
+    }
+  }
   if (kind !== 'local') return
   scannedModels.value = []
   scanError.value = ''
@@ -385,12 +413,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
               <div class="provider-form-grid">
                 <label>
                   <FieldLabel en="Provider ID" zh="提供商 ID" help="用于模型引用和配置文件的唯一标识，例如 openai。创建后不可修改。" required />
-                  <input ref="firstInput" v-model="form.id" :disabled="!!editingId" placeholder="openai"
+                  <input ref="firstInput" v-model="form.id" :disabled="!!editingId"
+                    :placeholder="providerProtocol(form.kind)?.value ?? 'openai'"
                     autocomplete="off" />
                 </label>
                 <label>
                   <FieldLabel en="Display Name" zh="显示名称" help="仅用于界面展示；留空时会使用提供商 ID。" />
-                  <input v-model="form.name" placeholder="OpenAI" autocomplete="off" />
+                  <input v-model="form.name" :placeholder="providerProtocol(form.kind)?.label ?? 'OpenAI'" autocomplete="off" />
                 </label>
                 <label>
                   <FieldLabel en="Protocol" zh="接口协议" help="选择服务端实际兼容的请求格式；协议与 API 地址必须匹配。" required />
@@ -432,7 +461,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
                       help="已保存的密钥加密落盘且界面永不回显。留空保存表示保持不变；只有勾选删除才会清除。" />
                     <span class="password-control">
                       <input v-model="form.apiKey" :type="revealKey ? 'text' : 'password'"
-                        :placeholder="keyConfigured ? '已保存 · 留空保持不变' : 'sk-…'" autocomplete="new-password" />
+                        :placeholder="apiKeyPlaceholder" autocomplete="new-password" />
                       <button type="button" :title="revealKey ? '隐藏输入内容' : '显示输入内容'" @click="revealKey = !revealKey">
                         <EyeOff v-if="revealKey" :size="16" />
                         <Eye v-else :size="16" />
@@ -455,7 +484,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
 
                   <div class="model-add-bar">
                     <input v-model="newModelInput" class="model-add-input"
-                      :placeholder="form.kind === 'local' ? '也可手动输入 GGUF 文件名，如 DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf' : '输入模型 ID，如 gpt-5，支持逗号或换行粘贴批量输入'"
+                      :placeholder="modelInputPlaceholder"
                       @keydown.enter.prevent="addModel" />
                     <button type="button" class="secondary-button compact-button add-model-btn"
                       :disabled="!newModelInput.trim()" @click="addModel">

@@ -35,7 +35,12 @@ public sealed class ProviderConfig
 {
     public string Id { get; set; } = "";
     public string? Name { get; set; }
-    /// <summary>Wire protocol: openai | anthropic | local. Every OpenAI-compatible service (Ollama, LM Studio, OpenRouter, Azure…) uses "openai"; "local" runs GGUF models in-process without any server.</summary>
+    /// <summary>
+    /// Wire protocol: openai | anthropic | aliyun | volcengine | tencent | baidu | zhipu |
+    /// deepseek | local. The domestic cloud vendors expose OpenAI-compatible endpoints, so
+    /// they share the OpenAI implementation while keeping a vendor id for Desktop presets
+    /// and labels; "local" runs GGUF models in-process without any server.
+    /// </summary>
     public string Kind { get; set; } = "openai";
     public string BaseUrl { get; set; } = "";
     public string? ApiKey { get; set; }

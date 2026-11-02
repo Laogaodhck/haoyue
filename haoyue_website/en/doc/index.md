@@ -10,7 +10,7 @@ Haoyue is a local-first, extensible general-purpose AI Agent Runtime built on **
 | --- | --- |
 | **Desktop and CLI clients** | Desktop provides project navigation, global tasks, archives, model settings, Git, and terminal shortcuts. CLI retains the full terminal and administration workflow. |
 | **Project and global tasks** | Project tasks connect files, terminals, Git, and dedicated Memory. Directory-free global tasks support research, writing, knowledge work, and everyday tasks. |
-| **Providers and routing** | Supports Anthropic and OpenAI wire protocols plus OpenAI-compatible services such as Google, OpenRouter, Ollama, MiMo, and LM Studio. |
+| **Providers and routing** | Supports Anthropic and OpenAI wire protocols plus OpenAI-compatible services such as Google, OpenRouter, Ollama, MiMo, LM Studio, and Chinese cloud presets including Alibaba Cloud Bailian, Volcengine Ark, Tencent Hunyuan, Baidu Qianfan, Zhipu GLM, and DeepSeek. |
 | **Tools, Skills, and MCP** | Includes file, search, shell, and web tools and can be extended with Skills and stdio / SSE MCP servers. |
 | **Session and workspace state** | Sessions are stored per workspace as JSONL and can be resumed, archived, or removed. Project metadata is isolated under `.haoyue/`. |
 | **Verification and repair** | Code changes can trigger checks for .NET, Node, Rust, Go, Python, and other projects, with failures returned to the Agent for repair. |

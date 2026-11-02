@@ -45,7 +45,7 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
         // 本地推理全程拖到 CPU（同机实测 11 倍差距）。体检显式报出并附重建指引，桌面
         // 设置页的诊断区直接渲染本项；与 LocalLlmClient 运行时警告同一判断源。
         var localProviders = configStore.Config.Providers
-            .Where(provider => provider.Kind.Equals("local", StringComparison.OrdinalIgnoreCase))
+            .Where(provider => ProviderKinds.IsLocal(provider.Kind))
             .ToList();
         if (localProviders.Count == 0)
         {
@@ -111,10 +111,10 @@ public sealed class HealthChecker(ILlmHttpFactory httpFactory, Configuration.ICo
 
     public async Task<HealthReport> CheckAsync(ProviderConfig provider, CancellationToken ct = default)
     {
-        if (provider.Kind.Equals("local", StringComparison.OrdinalIgnoreCase))
+        if (ProviderKinds.IsLocal(provider.Kind))
             return CheckLocal(provider);
 
-        var isAnthropic = provider.Kind.Equals("anthropic", StringComparison.OrdinalIgnoreCase);
+        var isAnthropic = ProviderKinds.IsAnthropic(provider.Kind);
         var url = isAnthropic
             ? LlmUrl.JoinV1(provider.BaseUrl, "messages")
             : LlmUrl.Join(provider.BaseUrl, "chat/completions");

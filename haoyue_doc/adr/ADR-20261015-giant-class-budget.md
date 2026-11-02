@@ -21,6 +21,12 @@ partial 拆分（决策 3 的 providers 域拆分）留待预算再次触顶）�
   `DaemonServer` 3150 → **3250**（新增 `Forwarding` partial 后聚合 3210，约 1.2% 余量，
   事件泵部分本已按决策 3 抽离）。
 
+2026-11-02 显式评审上调 `DaemonAdminApi` 预算 4050 → **4200**（子智能体 Markdown 目录：
+`agent.subagents.list/save/delete` 三支 RPC、frontmatter 参数校验与 scope 映射，新增
+`DaemonAdminApi.SubAgents.cs` 124 行；聚合实测 4107，约 2.3% 余量。按决策 3 的按域
+partial 模式落地，未并入主文件）。同日 `DaemonServer` 预算 3250 → **3300**（同一功能的
+三支分发 case 共 +15 行，聚合实测 3265；分发 switch 保持既有逐条写法，未做非常规压缩）。
+
 ## 背景
 
 评估文档（haoyue_doc/Agent能力与工程缺口评估-2026-10-14.md）指出四个巨型文件已成为
@@ -43,8 +49,8 @@ partial 拆分（决策 3 的 providers 域拆分）留待预算再次触顶）�
    搬迁式重构的风险（契约漂移、缓存契约破坏、Electron 验证盲区）大于当前收益。
 2. **冻结增长：行数预算护栏**。四个文件各设行数上限，由
    `haoyue_tests/DocsFactsTests.cs` 的 `GiantClass_LineBudget_Maintained` 强制：
-   `DaemonAdminApi ≤ 4050`（含全部 partial 文件的类级总量）、`DaemonServer ≤ 3250`（同口径；
-   2026-10-21 自 3100 上调、2026-10-31 改聚合口径后上调，见状态行）、
+   `DaemonAdminApi ≤ 4200`（含全部 partial 文件的类级总量）、`DaemonServer ≤ 3300`（同口径；
+   2026-10-21 自 3100 上调、2026-10-31 改聚合口径后上调，2026-11-02 再次上调，见状态行）、
    `SettingsDialog.vue ≤ 2700`、`App.vue ≤ 2400`。超额即测试失败——这是刻意设计：**任何继续膨胀必须先经历一次
    显式的预算上调评审（改本 ADR 状态行 + 预算数字），而不是默认允许**。
 3. **拆分路径登记（触发条件式，非排期）**：

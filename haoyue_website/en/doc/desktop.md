@@ -122,7 +122,7 @@ Open “Settings → Models & Providers” to:
 - create, edit, test, enable, or remove Providers;
 - view and edit API keys stored in the configuration (resolved for display, encrypted at rest);
 - store and manage the API key in the configuration;
-- manage models, Base URL, proxy, timeout, and priority;
+- manage models, Base URL, proxy, timeout, and priority; the “Protocol” menu offers Alibaba Cloud Bailian, Volcengine Ark, Tencent Hunyuan, Baidu Qianfan, Zhipu GLM, and DeepSeek presets that pre-fill the compatible endpoint;
 - configure advanced provider fields: organization and project, concurrency threads (local inference), KV prefix reuse (local inference), custom request headers (secret header values are never echoed — leave blank to keep), and reasoning-effort maps;
 - set a fallback model and input / output pricing per model (the Runtime accumulates cost from usage records);
 - pick the vision sub-agent model (automatic or a specific vision-capable model);
@@ -149,9 +149,9 @@ The sidebar "Extensions" entry opens a Qoder-style hub with three categories:
 The settings workbench also provides:
 
 - **General**: appearance, reply language, and the send shortcut are dropdowns; tool execution policy, the built-in dangerous-command guard, risk gating, and the Bash sandbox use toggle switches;
-- **Agent**: behavior boundaries — web search, the explorer agent (delegate_task delegation toggle), and auto-verify & repair;
+- **Agent**: behavior boundaries — web search, the explorer agent (delegate_task delegation toggle), and auto-verify & repair; the same page manages custom sub-agents (Qoder-style Markdown under user-level `~/.haoyue/agents` and project-level `<project>/.haoyue/agents`, with name / description / model / tool whitelist, project overriding user);
 - **Experts**: expert parameters in one place — max steps, thinking and tool-output budgets, Bash and scheduled-turn timeouts, auto-repair and output-continuation limits, delegation quotas, fact injection, session retention, memory consolidation, personality, system prompt, extra readable roots, the scheduled-task result callback, and a raw JSON editor for the config document;
-- **Inference Acceleration**: per local model, the **effective parameters + provenance layer** (model-level / provider-level / adaptive tier) and measured throughput, with an explicit warning when model-level settings shadow provider-level ones; warm-up, unload, benchmark (TTFT / decode / prefill / cache hits), and VRAM governance (resident models, concurrency, idle unload). Parameters are written in exactly one place (“Models & Providers → Load Settings”); this page only edits provider-level defaults;
+- **Inference Acceleration**: per local model, the **effective parameters + provenance layer** (model-level / provider-level / adaptive tier) and measured throughput, with an explicit warning when model-level settings shadow provider-level ones; warm-up, unload, benchmark (TTFT / decode / prefill / cache hits), and VRAM governance (resident models, concurrency, idle unload), plus per-turn token / cost / time budgets and the compaction tail ratio. Parameters are written in exactly one place (“Models & Providers → Load Settings”); this page only edits provider-level defaults;
 - **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md (the memory management mode is a dropdown) — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
 - **Evolution**: defect signals at a glance, manual or scheduled reflection (the reflection interval is a dropdown), adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
 - **Knowledge Center**: browse and revise what the agent saves as notebooks → sources → entries — attribution badges, cross-notebook search, tag filtering, Markdown export and the synonym editor — see the [Knowledge Center](/en/doc/knowledge);

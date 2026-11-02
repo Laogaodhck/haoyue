@@ -32,6 +32,21 @@ public interface IProviderManager
         CancellationToken ct,
         Func<ModelInfo, bool>? candidateFilter = null);
 
+    /// <summary>
+    /// Streams with <paramref name="model"/> pinned first (sub-agent model override), then
+    /// the regular failover chain when failover is enabled. The default implementation
+    /// narrows <see cref="StreamAsync"/> to that model so test stubs keep compiling.
+    /// </summary>
+    IAsyncEnumerable<LlmStreamEvent> StreamModelAsync(
+        ModelInfo model,
+        Func<ModelInfo, LlmRequest> requestFactory,
+        WorkspaceConfig? workspace,
+        CancellationToken ct,
+        Func<ModelInfo, bool>? candidateFilter = null) =>
+        StreamAsync(requestFactory, workspace, ct, candidate =>
+            candidate.Ref.Equals(model.Ref, StringComparison.OrdinalIgnoreCase)
+            && (candidateFilter?.Invoke(candidate) ?? true));
+
     /// <summary>Sends a minimal real completion to verify a model end-to-end.</summary>
     Task<(bool Success, string Detail, double LatencyMs)> TestModelAsync(ModelInfo model, CancellationToken ct = default);
 
@@ -180,6 +195,42 @@ public sealed class ProviderManager(
         if (!configStore.Config.Routing.FailoverEnabled && candidates.Count > 1)
             candidates = candidates.Take(1).ToList();
 
+        await foreach (var evt in StreamChainAsync(requestFactory, candidates, ct).ConfigureAwait(false))
+            yield return evt;
+    }
+
+    /// <summary>
+    /// Sub-agent model override: the configured model is served first, then the ordinary
+    /// failover chain (when enabled) so a broken override still degrades like a normal turn.
+    /// </summary>
+    public async IAsyncEnumerable<LlmStreamEvent> StreamModelAsync(
+        ModelInfo model,
+        Func<ModelInfo, LlmRequest> requestFactory,
+        WorkspaceConfig? workspace,
+        [EnumeratorCancellation] CancellationToken ct,
+        Func<ModelInfo, bool>? candidateFilter = null)
+    {
+        var candidates = new List<ModelInfo>();
+        if (candidateFilter is null || candidateFilter(model))
+            candidates.Add(model);
+        if (configStore.Config.Routing.FailoverEnabled)
+        {
+            candidates.AddRange(BuildCandidates(workspace).Where(candidate =>
+                !candidate.Ref.Equals(model.Ref, StringComparison.OrdinalIgnoreCase)
+                && (candidateFilter?.Invoke(candidate) ?? true)));
+        }
+        if (candidates.Count == 0)
+            throw new LlmException("No compatible models configured.", retryable: false);
+
+        await foreach (var evt in StreamChainAsync(requestFactory, candidates, ct).ConfigureAwait(false))
+            yield return evt;
+    }
+
+    private async IAsyncEnumerable<LlmStreamEvent> StreamChainAsync(
+        Func<ModelInfo, LlmRequest> requestFactory,
+        IReadOnlyList<ModelInfo> candidates,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
         LlmException? lastError = null;
         // Every candidate failure is remembered so the final error can explain each model
         // that was tried (the active model first) instead of surfacing only the last
@@ -374,7 +425,7 @@ public sealed class ProviderManager(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var client = clientFactory.GetClient(model.Provider.Kind);
+            var client = clientFactory.GetClient(ProviderKinds.ToClientKind(model.Provider.Kind));
             var request = new LlmRequest
             {
                 Provider = model.Provider,
@@ -409,7 +460,7 @@ public sealed class ProviderManager(
             return LocalModels.ScanIds(provider.ModelsDirectory);
 
         var endpoint = string.IsNullOrWhiteSpace(url)
-            ? provider.Kind.Equals("anthropic", StringComparison.OrdinalIgnoreCase)
+            ? ProviderKinds.IsAnthropic(provider.Kind)
                 ? LlmUrl.JoinV1(provider.BaseUrl, "models")
                 : LlmUrl.Join(provider.BaseUrl, "models")
             : url.Trim();
@@ -502,7 +553,7 @@ public sealed class ProviderManager(
         var target = ResolveEmbeddingTarget(modelRef);
         if (target is null) return null; // nothing embedding-capable configured — caller degrades
 
-        var client = clientFactory.GetClient(target.Provider.Kind);
+        var client = clientFactory.GetClient(ProviderKinds.ToClientKind(target.Provider.Kind));
         return await client.EmbedAsync(target.Provider, inputs, target.Model.Id, ct).ConfigureAwait(false);
     }
 
@@ -537,7 +588,7 @@ public sealed class ProviderManager(
 
         // 本地 GGUF 通道完全忽略 request.Tools（没有原生工具协议解析），
         // 注入 schema 只会消耗上下文且让模型"空谈工具"。
-        if (model.Provider.Kind.Equals("local", StringComparison.OrdinalIgnoreCase))
+        if (ProviderKinds.IsLocal(model.Provider.Kind))
             return Task.FromResult(Cache(model.Ref, ToolCallingSupport.Unsupported));
 
         return Task.FromResult(ToolCallingSupport.Unknown);
@@ -572,7 +623,7 @@ public sealed class ProviderManager(
     private IAsyncEnumerator<LlmStreamEvent> TryOpenStream(
         ModelInfo model, Func<ModelInfo, LlmRequest> requestFactory, CancellationToken ct, out LlmRequest request)
     {
-        var client = clientFactory.GetClient(model.Provider.Kind);
+        var client = clientFactory.GetClient(ProviderKinds.ToClientKind(model.Provider.Kind));
         request = requestFactory(model);
         return client.StreamAsync(request, ct).GetAsyncEnumerator(ct);
     }
@@ -580,7 +631,7 @@ public sealed class ProviderManager(
     private static void ApplyModelListHeaders(HttpRequestMessage request, ProviderConfig provider)
     {
         var key = provider.ResolveApiKey();
-        if (provider.Kind.Equals("anthropic", StringComparison.OrdinalIgnoreCase))
+        if (ProviderKinds.IsAnthropic(provider.Kind))
         {
             if (!string.IsNullOrWhiteSpace(key)) request.Headers.TryAddWithoutValidation("x-api-key", key);
             request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");

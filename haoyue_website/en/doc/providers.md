@@ -4,10 +4,23 @@ Haoyue treats service endpoints, credentials, and model capabilities as editable
 
 ## Wire protocols and built-in templates
 
-The Runtime currently implements two wire protocols:
+The Runtime implements two wire protocols:
 
 - `anthropic`: Anthropic Messages API;
 - `openai`: OpenAI Chat Completions API, also used for OpenAI-compatible services.
+
+Desktop's “Protocol” menu additionally offers Chinese cloud-vendor presets (`aliyun`, `volcengine`, `tencent`, `baidu`, `zhipu`, `deepseek`). All of them expose OpenAI-compatible endpoints: selecting one pre-fills the Base URL and model examples, while the Runtime still sends requests through the OpenAI-compatible client — the vendor kind only drives presets and UI labels.
+
+| Protocol | Default endpoint |
+| --- | --- |
+| `aliyun` (Alibaba Cloud Bailian) | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `volcengine` (Volcengine Ark) | `https://ark.cn-beijing.volces.com/api/v3` |
+| `tencent` (Tencent Cloud Hunyuan) | `https://api.hunyuan.cloud.tencent.com/v1` |
+| `baidu` (Baidu Qianfan) | `https://qianfan.baidubce.com/v2` |
+| `zhipu` (Zhipu GLM) | `https://open.bigmodel.cn/api/paas/v4` |
+| `deepseek` (DeepSeek) | `https://api.deepseek.com/v1` |
+
+Some vendors do not expose an OpenAI-compatible `/models` endpoint (Volcengine Ark, for example, uses inference endpoint IDs); in that case add the model IDs manually.
 
 The initial templates include:
 
@@ -30,7 +43,7 @@ Open “Settings → Models & Providers” to manage Providers, Profiles, and th
 ![Desktop model and Provider management](/screenshots/desktop/providers-and-models.png)
 
 1. Select “+ Provider” or edit an existing entry.
-2. Choose the `openai` or `anthropic` protocol and enter the ID, name, Base URL, and model IDs.
+2. Choose `openai`, `anthropic`, or a cloud-vendor preset and enter the ID, name, Base URL, and model IDs; vendor presets fill in the Base URL for you.
 3. Enter the API key directly; it is stored in the configuration file as an encrypted `secret:` reference.
 4. Configure proxy, timeout, priority, prompt caching, and enabled state as needed.
 5. Save and select “Test,” then activate the Provider or model.

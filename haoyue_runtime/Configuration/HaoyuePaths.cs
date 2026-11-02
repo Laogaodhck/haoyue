@@ -27,6 +27,8 @@ public static class HaoyuePaths
     public static string UsageFile => Path.Combine(Home, "usage.jsonl");
     public static string LogsDir => Path.Combine(Home, "logs");
     public static string SkillsDir => Path.Combine(Home, "skills");
+    /// <summary>User-level sub-agent definitions (one Markdown file per agent).</summary>
+    public static string AgentsDir => Path.Combine(Home, "agents");
     /// <summary>Candidate skill drafts produced by the evolution engine. Deliberately NOT
     /// a skill scan root: drafts stay inert until a human adopts them into SkillsDir.</summary>
     public static string SkillsCandidatesDir => Path.Combine(Home, "skills-candidates");
@@ -74,5 +76,6 @@ public static class HaoyuePaths
             File.SetUnixFileMode(Home, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         Directory.CreateDirectory(LogsDir);
         Directory.CreateDirectory(SkillsDir);
+        Directory.CreateDirectory(AgentsDir);
     }
 }

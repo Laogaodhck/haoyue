@@ -12,7 +12,9 @@ public sealed record AgentRole(
     /// <summary>注入子任务前的角色提示词（说明视角、方法与纪律）。</summary>
     string Prompt,
     /// <summary>工具白名单；null = 不限制（继承默认工具视图）。</summary>
-    IReadOnlyList<string>? AllowedTools)
+    IReadOnlyList<string>? AllowedTools,
+    /// <summary>可选模型覆盖（provider/model、模型 id 或别名）；null = 继承活动模型。</summary>
+    string? Model = null)
 {
     /// <summary>统一汇报模板：所有角色返回同一结构，聚合方稳定解析。</summary>
     public const string ReportTemplate = """

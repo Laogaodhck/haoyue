@@ -3,6 +3,7 @@ import { Download, Gauge, LoaderCircle, Save, Trash2, TriangleAlert, Zap } from 
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { requestJson } from '../daemon-json'
 import { confirmAction } from '../confirmation'
+import { clampCompactionTailRatio } from '../agent-form'
 import FieldLabel from './FieldLabel.vue'
 import SelectMenu from './SelectMenu.vue'
 
@@ -19,6 +20,9 @@ import SelectMenu from './SelectMenu.vue'
  * - **写入口唯一**：模型级参数在「模型与提供商 → 模型加载设置」，本页只写「提供商级默认」
  *   并明确标注它会被模型级覆盖；
  * - **运维动作**：预热 / 卸载 / 基准测试，以及显存治理的四个配置项。
+ *
+ * 回合预算（token / 费用 / 墙钟时长）与上下文压缩保留比例也从「智能体」搬到这里：
+ * 它们决定单回合能烧多少推理资源、压缩时保留多少原文，和推理成本是同一件事。
  */
 const props = defineProps<{ connected: boolean }>()
 
@@ -98,6 +102,14 @@ const governance = reactive({
   localModelMaxResident: 2,
   localModelConcurrency: 1,
   localModelIdleUnloadMinutes: 20
+})
+
+/** 回合预算与压缩保留比例（Agent 的 Turn 与 Compaction 配置）：从「智能体」迁入。 */
+const budgets = reactive({
+  turnTokenBudget: 0,
+  turnCostBudget: 0,
+  turnWallClockSeconds: 0,
+  compactionTailRatio: 0.5
 })
 
 /** 提供商级默认（会写回 provider.*，被模型级覆盖）。 */
@@ -249,11 +261,24 @@ async function loadDetail(): Promise<void> {
 async function loadGovernance(): Promise<void> {
   if (!props.connected) return
   try {
-    const config = await requestJson<typeof governance>('agent.config.get')
+    const config = await requestJson<{
+      localModelPreload?: boolean
+      localModelMaxResident?: number
+      localModelConcurrency?: number
+      localModelIdleUnloadMinutes?: number
+      turnTokenBudget?: number
+      turnCostBudget?: number
+      turnWallClockSeconds?: number
+      compactionTailRatio?: number
+    }>('agent.config.get')
     governance.localModelPreload = config.localModelPreload ?? true
     governance.localModelMaxResident = config.localModelMaxResident ?? 2
     governance.localModelConcurrency = config.localModelConcurrency ?? 1
     governance.localModelIdleUnloadMinutes = config.localModelIdleUnloadMinutes ?? 20
+    budgets.turnTokenBudget = config.turnTokenBudget ?? 0
+    budgets.turnCostBudget = config.turnCostBudget ?? 0
+    budgets.turnWallClockSeconds = config.turnWallClockSeconds ?? 0
+    budgets.compactionTailRatio = config.compactionTailRatio ?? 0.5
   } catch {
     // 老版本 daemon 未暴露这些字段时保留默认展示
   }
@@ -296,6 +321,61 @@ async function saveGovernance(): Promise<void> {
     note.value = '驻留策略已保存；并发槽与空闲回收由运行时在数百毫秒内接管'
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function saveTurnBudgets(): Promise<void> {
+  busy.value = 'budget'
+  note.value = ''
+  error.value = ''
+  try {
+    const config = await requestJson<{
+      turnTokenBudget: number
+      turnCostBudget: number
+      turnWallClockSeconds: number
+    }>('agent.config.set', {
+      turnTokenBudget: Math.max(0, Math.trunc(budgets.turnTokenBudget || 0)),
+      turnCostBudget: Math.max(0, Math.round((budgets.turnCostBudget || 0) * 10000) / 10000),
+      turnWallClockSeconds: Math.max(0, Math.trunc(budgets.turnWallClockSeconds || 0))
+    })
+    budgets.turnTokenBudget = config.turnTokenBudget
+    budgets.turnCostBudget = config.turnCostBudget
+    budgets.turnWallClockSeconds = config.turnWallClockSeconds
+    note.value = '已保存回合预算（0 = 不限）。超限的回合会先用一步给出进展总结再结束，并标记为「预算耗尽」而非「任务完成」。'
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason)
+    try {
+      const config = await requestJson<{
+        turnTokenBudget: number
+        turnCostBudget: number
+        turnWallClockSeconds: number
+      }>('agent.config.get')
+      budgets.turnTokenBudget = config.turnTokenBudget
+      budgets.turnCostBudget = config.turnCostBudget
+      budgets.turnWallClockSeconds = config.turnWallClockSeconds
+    } catch { /* keep last known state */ }
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function saveCompactionRatio(): Promise<void> {
+  busy.value = 'compaction'
+  note.value = ''
+  error.value = ''
+  try {
+    const ratio = clampCompactionTailRatio(Number(budgets.compactionTailRatio))
+    const config = await requestJson<{ compactionTailRatio: number }>('agent.config.set', { compactionTailRatio: ratio })
+    budgets.compactionTailRatio = config.compactionTailRatio
+    note.value = `已保存上下文压缩保留比例：最近对话保留窗口预算的 ${Math.round(config.compactionTailRatio * 100)}%，更早的对话由摘要代替。`
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason)
+    try {
+      const config = await requestJson<{ compactionTailRatio: number }>('agent.config.get')
+      budgets.compactionTailRatio = config.compactionTailRatio ?? 0.5
+    } catch { /* keep last known state */ }
   } finally {
     busy.value = ''
   }
@@ -474,6 +554,52 @@ watch(selected, () => { void loadDetail() })
   <div class="inference-panel">
     <p v-if="error" class="inference-note is-error">{{ error }}</p>
     <p v-else-if="note" class="inference-note is-ok">{{ note }}</p>
+
+    <section class="settings-group" aria-label="回合预算">
+      <div class="settings-group-title">
+        <strong>回合预算</strong>
+        <small>单回合的 token、费用与墙钟时间上限（0 = 不限）。超限的回合会先用一步给出进展总结再结束，并标记为「预算耗尽」。</small>
+      </div>
+      <div class="inference-grid">
+        <label>
+          <FieldLabel en="Turn Token Budget" zh="单回合 token 上限"
+            help="本回合输入+输出 token 总量上限（0 = 不限）。只对回传用量的模型有效；达到上限后先用一步给出进展总结，仍不收尾则强制结束。" />
+          <input v-model.number="budgets.turnTokenBudget" type="number" min="0" max="100000000" step="10000" />
+        </label>
+        <label>
+          <FieldLabel en="Turn Cost Budget" zh="单回合费用上限"
+            help="按模型 input/output 定价折算的本回合费用上限（0 = 不限），与用量统计同口径。" />
+          <input v-model.number="budgets.turnCostBudget" type="number" min="0" max="100000" step="0.01" />
+        </label>
+        <label>
+          <FieldLabel en="Turn Time Limit" zh="单回合时长上限（秒）"
+            help="从发起到结束的墙钟时间上限（0 = 不限）。不依赖模型回传用量，本地模型也能靠它刹车。" />
+          <input v-model.number="budgets.turnWallClockSeconds" type="number" min="0" max="86400" step="30" />
+        </label>
+      </div>
+      <button type="button" class="secondary-button primary-action" :disabled="busy !== ''" @click="saveTurnBudgets">
+        <LoaderCircle v-if="busy === 'budget'" class="spin" :size="14" />
+        <Save v-else :size="14" /> 保存回合预算
+      </button>
+    </section>
+
+    <section class="settings-group" aria-label="上下文压缩">
+      <div class="settings-group-title">
+        <strong>上下文压缩</strong>
+        <small>上下文即将超出窗口时，最近对话按比例逐字保留，更早部分交给摘要代替。</small>
+      </div>
+      <div class="inference-grid">
+        <label>
+          <FieldLabel en="Compaction Tail Ratio" zh="压缩时保留的最近对话比例"
+            help="上下文即将超出窗口时，最近对话按此比例逐字保留，更早部分交给摘要代替（0.1–0.9，默认 0.5）。大窗口云端模型可调小（多压缩，摘要调用命中前缀缓存更便宜）；小窗口本地模型可调大（多保留原文，少依赖摘要保真度）。" />
+          <input v-model.number="budgets.compactionTailRatio" type="number" min="0.1" max="0.9" step="0.05" />
+        </label>
+      </div>
+      <button type="button" class="secondary-button primary-action" :disabled="busy !== ''" @click="saveCompactionRatio">
+        <LoaderCircle v-if="busy === 'compaction'" class="spin" :size="14" />
+        <Save v-else :size="14" /> 保存压缩比例
+      </button>
+    </section>
 
     <section v-if="models.length === 0" class="settings-group">
       <label class="provider-enabled-row">

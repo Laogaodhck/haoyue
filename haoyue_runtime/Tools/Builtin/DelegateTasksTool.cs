@@ -30,12 +30,20 @@ public sealed class DelegateTasksTool(IPromptProvider prompts, IAgentDelegator d
         ("tasks", ToolSchema.Array(
             $"完整、自包含的子任务描述列表（{MinTasks}-{MaxTasks} 个）。每个子代理都看不到当前对话历史，描述必须自包含。",
             ToolSchema.String("子任务描述")), true),
-        ("role", ToolSchema.String($"可选角色预设，应用到全部子任务：{AgentRole.ValidRoles}。命中时每个子代理注入角色纪律提示词并收敛工具白名单。"), false),
+        ("role", ToolSchema.String(RoleHint()), false),
         ("timeout_seconds", ToolSchema.Integer($"可选：每个子任务的独立超时（{DelegateTool.MinTimeoutSeconds}-{DelegateTool.MaxTimeoutSeconds} 秒）。缺省时跟随父回合——可能卡死的子任务建议显式设置。"), false));
 
     public bool Mutating => true;
 
     public string StatusLabel => "Delegating subtasks in parallel";
+
+    /// <summary>可选子智能体清单，语义同 <see cref="DelegateTool"/>。</summary>
+    private string RoleHint()
+    {
+        var names = string.Join(" / ", delegator.Roles().Select(role => role.Id));
+        return $"可选子智能体，应用到全部子任务：{names}，以及「设置 → 智能体」中自定义的条目。"
+               + "命中时每个子代理注入其指令、收敛工具白名单，并使用它配置的模型（未配置则继承活动模型）。";
+    }
 
     public async Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
     {
@@ -43,8 +51,11 @@ public sealed class DelegateTasksTool(IPromptProvider prompts, IAgentDelegator d
             return ToolResult.Fail($"delegate_tasks 需要 tasks 参数：{MinTasks}-{MaxTasks} 个子任务描述的数组。");
 
         var role = arguments["role"]?.GetValue<string>()?.Trim();
-        if (role is { Length: > 0 } && !AgentRole.Builtins.ContainsKey(role))
-            return ToolResult.Fail($"未知角色「{role}」。可选：{AgentRole.ValidRoles}。");
+        var roles = delegator.Roles(context.Workspace);
+        if (role is { Length: > 0 }
+            && !roles.Any(candidate => candidate.Id.Equals(role, StringComparison.OrdinalIgnoreCase)))
+            return ToolResult.Fail(
+                $"未知子智能体「{role}」。可选：{string.Join(" / ", roles.Select(candidate => candidate.Id))}。");
 
         var tasks = array
             .Select(node => node?.GetValue<string>()?.Trim())

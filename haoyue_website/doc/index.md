@@ -10,7 +10,7 @@ Haoyue 是基于 **.NET 10**、本地优先且可扩展的通用 AI Agent Runtim
 | --- | --- |
 | **Desktop 与 CLI 双前端** | Desktop 提供项目与任务侧栏、归档、模型设置、Git 与终端入口；CLI 保留完整的终端交互和管理命令。 |
 | **项目任务与不绑定项目的任务** | 项目任务可连接文件、终端、Git 与专属 Memory；不绑定目录的任务适合调研、写作、知识整理及日常工作。 |
-| **多 Provider 与路由** | 支持 Anthropic 与 OpenAI 两种线协议，并可接入 OpenAI-compatible 服务，包括 Google、OpenRouter、Ollama、MiMo 和 LM Studio。 |
+| **多 Provider 与路由** | 支持 Anthropic 与 OpenAI 两种线协议，并可接入 OpenAI-compatible 服务，包括 Google、OpenRouter、Ollama、MiMo、LM Studio，以及阿里云百炼、火山方舟、腾讯云混元、百度千帆、智谱 GLM、DeepSeek 等国内云厂商预设。 |
 | **Tools、Skills 与 MCP** | 内置文件、搜索、Shell 和网络工具，可通过 Skills 与 stdio / SSE MCP Server 扩展。 |
 | **会话与工作区持久化** | 会话按工作区保存为 JSONL，支持恢复、归档和删除；项目元数据隔离在 `.haoyue/`。 |
 | **自动验证与修复** | 文件修改后可触发 .NET、Node、Rust、Go 或 Python 等项目的构建检查，并把错误反馈给 Agent 修复。 |

@@ -136,6 +136,24 @@ public sealed partial class Agent
         return candidates.FirstOrDefault(candidate => candidate.Model.Capabilities.Vision);
     }
 
+    /// <summary>
+    /// 普通步骤的模型：子智能体显式配置了模型时优先使用它（配置失效时报错而不是
+    /// 静默退回活动模型——否则「子智能体用另一个模型」会看起来生效却没有）。
+    /// </summary>
+    private ModelInfo ResolveStepModel(WorkspaceInfo workspace)
+    {
+        if (_modelOverride is null) return providerManager.ResolveActive(workspace.Config);
+        var pinned = providerManager.ResolveModel(_modelOverride)
+            ?? throw new LlmException(
+                $"子智能体指定的模型「{_modelOverride}」不存在。请在「设置 → 智能体」中检查该子智能体的模型配置。",
+                retryable: false);
+        if (!pinned.Provider.Enabled)
+            throw new LlmException(
+                $"子智能体指定的模型「{pinned.Ref}」所在提供商已禁用。",
+                retryable: false);
+        return pinned;
+    }
+
     private ModelInfo ResolveVisionModel(WorkspaceInfo workspace)
     {
         var preferredRef = configStore.Config.Agent.VisionModel;

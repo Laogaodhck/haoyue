@@ -138,6 +138,68 @@ public class AgentDelegationTests : IDisposable
         Assert.Contains("sub-answer", mainHistoryText);
     }
 
+    // ---------------------------------------------------------------- 项目级子智能体（模型/工具覆盖）
+
+    [Fact]
+    public async Task Delegation_ProjectSubAgent_PinsModelAndNarrowsToolView()
+    {
+        // 项目级 Markdown 定义覆盖内置 reviewer：模型钉到 strong、工具收敛到白名单，
+        // 主代理仍走活动模型——三者互不串线才说明覆盖链路真的生效。
+        var workspace = ProjectWorkspace("subagent-model");
+        var agentsDir = SubAgentCatalog.ProjectAgentsDir(workspace.Root);
+        Directory.CreateDirectory(agentsDir);
+        File.WriteAllText(Path.Combine(agentsDir, "reviewer.md"), """
+            ---
+            name: "reviewer"
+            description: "项目评审员"
+            model: "openai/strong"
+            tools:
+              - "read_file"
+            ---
+
+            你以项目评审员身份复核改动。
+            """);
+
+        var store = new ConfigStore(Path.Combine(_dir, "config.json"), Path.Combine(_dir, "state.json"));
+        store.Config.Providers.Clear();
+        store.Config.Providers.Add(new ProviderConfig
+        {
+            Id = "openai", Kind = "openai", BaseUrl = "https://test.local/v1",
+            Models =
+            [
+                new ModelConfig { Id = "text-only", ContextWindow = 8_000, MaxOutput = 256 },
+                new ModelConfig { Id = "strong", ContextWindow = 8_000, MaxOutput = 256 },
+            ],
+        });
+        store.Config.Provider = "openai";
+        store.Config.Model = "text-only";
+        store.Config.Routing.Fallback = ["openai/text-only"];
+
+        var capture = new RoleDelegationFactory();
+        await using var runtime = HaoyueRuntime.CreateIsolated(workspace, configureServices: services =>
+        {
+            services.AddSingleton<IConfigStore>(store);
+            services.AddSingleton(new HaoyueDatabase(Path.Combine(_dir, "state.db")));
+            services.AddSingleton<ILlmHttpFactory>(new LlmHttpFactory());
+            services.AddSingleton<ILlmClientFactory>(capture);
+            services.AddSingleton(new CircuitBreaker(store.Config.Routing.Retry));
+            services.AddSingleton(new SubAgentCatalog(Path.Combine(_dir, "user-agents")));
+        });
+
+        var session = runtime.Sessions.Create(workspace);
+        var result = await runtime.Agent.RunTurnAsync(session, workspace, "让评审员复核", CancellationToken.None);
+        Assert.True(result.Error is null, result.Error ?? "ok");
+
+        Assert.Equal(3, capture.Requests.Count);
+        Assert.Equal("text-only", capture.Requests[0].Model.Id);
+        Assert.Equal("strong", capture.Requests[1].Model.Id);
+
+        var subUser = string.Join("\n",
+            capture.Requests[1].Messages.Where(m => m.Role == ChatRole.User).Select(m => m.Text));
+        Assert.Contains("项目评审员", subUser);
+        Assert.Equal(["read_file"], capture.Requests[1].Tools.Select(tool => tool.Name).ToArray());
+    }
+
     // ---------------------------------------------------------------- 台账继承（B4）
 
     [Fact]
@@ -443,6 +505,41 @@ public class AgentDelegationTests : IDisposable
                     throw new InvalidOperationException(
                         $"脚本只有 {owner.Completions.Count} 步，第 {index + 1} 次模型请求没有预置应答");
                 yield return new LlmCompleted(owner.Completions[index]);
+            }
+        }
+    }
+
+    /// <summary>委派时带 role：主回合 → 角色子代理 → 主回合收尾。</summary>
+    private sealed class RoleDelegationFactory : ILlmClientFactory
+    {
+        public List<LlmRequest> Requests { get; } = [];
+        private int _call;
+
+        public ILlmClient GetClient(string kind) => new ScriptedClient(this);
+
+        private sealed class ScriptedClient(RoleDelegationFactory owner) : ILlmClient
+        {
+            public string Kind => "openai";
+
+            public Task<EmbeddingResult?> EmbedAsync(
+                ProviderConfig provider, IReadOnlyList<string> inputs, string? model = null, CancellationToken ct = default)
+                => Task.FromResult<EmbeddingResult?>(null);
+
+            public async IAsyncEnumerable<LlmStreamEvent> StreamAsync(
+                LlmRequest request, [EnumeratorCancellation] CancellationToken ct)
+            {
+                owner.Requests.Add(request);
+                await Task.Yield();
+                var call = Interlocked.Increment(ref owner._call);
+                yield return call switch
+                {
+                    1 => new LlmCompleted(new LlmCompletion
+                    {
+                        ToolCalls = [new ToolCallRequest("c1", "delegate_task", """{"task":"复核改动","role":"reviewer"}""")],
+                    }),
+                    2 => new LlmCompleted(new LlmCompletion { Text = "sub-answer", FinishReason = "stop" }),
+                    _ => new LlmCompleted(new LlmCompletion { Text = "done", FinishReason = "stop" }),
+                };
             }
         }
     }

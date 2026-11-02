@@ -1864,6 +1864,21 @@ public sealed partial class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.DeleteRules(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "agent.subagents.list":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListSubAgents(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "agent.subagents.save":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SaveSubAgent(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "agent.subagents.delete":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.DeleteSubAgent(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "usage.get":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, false,
                             _ => Task.FromResult(_admin.Usage(Params(request))), context.ConnectionCt).ConfigureAwait(false);

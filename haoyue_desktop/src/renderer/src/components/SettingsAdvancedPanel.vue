@@ -4,7 +4,6 @@ import { onMounted, ref } from 'vue'
 import { confirmAction } from '../confirmation'
 import { requestJson } from '../daemon-json'
 import AllowedSitesDialog from './AllowedSitesDialog.vue'
-import ConfigJsonEditor from './ConfigJsonEditor.vue'
 
 /**
  * 设置 → 高级。全局网络开关的写入口在「智能体 → 网页搜索」，这里只读回显，
@@ -167,7 +166,7 @@ function closeAllowedSites(): void {
   <div class="settings-section-heading">
     <div>
       <h3>高级设置</h3>
-      <p>网络与桌面权限、路由容灾、专家参数与原始配置文档</p>
+      <p>网络与桌面权限、网络运维与出厂重置</p>
     </div>
   </div>
 
@@ -226,14 +225,6 @@ function closeAllowedSites(): void {
         :disabled="action === 'advanced.set:networkOpsMutating'" @change="toggleNetworkOpsMutating" />
       <span class="toggle-switch" aria-hidden="true"><span /></span>
     </label>
-  </section>
-
-  <section class="settings-group">
-    <div class="settings-group-title">
-      <strong>专家参数（直接编辑配置文档）</strong>
-      <small>上面没有覆盖到的字段都在这里：只提交你实际改动的叶子节点，没动过的配置不会被写回。</small>
-    </div>
-    <ConfigJsonEditor :connected="daemonConnected" />
   </section>
 
   <!-- 危险区永远放最后：恢复出厂是唯一会摧毁数据的按钮，不该待在「常规」首屏。 -->

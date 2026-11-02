@@ -107,7 +107,7 @@ A stopped turn reads “Stopped by you; the reply may be incomplete” and write
 
 The **Background Tasks** tab in the right dock exposes the daemon's whole background-task chain: dispatch a full agent turn for background execution (concurrency cap 4), watch live status and progress, cancel it, and jump back to the owning session. Closing the window or reconnecting loses nothing — progress replays from the event ledger.
 
-**Scheduled Tasks** is a right-pane sibling view of Settings and Archive for cron-driven turns: each row shows the last run's status, time, error, and an output excerpt; “View output” expands the full text and “Open this session” jumps to the session that run produced. Failures raise a desktop notification, and when you need an external callback, the page points to Settings → Agent → Expert parameters for the Webhook URL.
+**Scheduled Tasks** is a right-pane sibling view of Settings and Archive for cron-driven turns: each row shows the last run's status, time, error, and an output excerpt; “View output” expands the full text and “Open this session” jumps to the session that run produced. Failures raise a desktop notification, and when you need an external callback, the page points to Settings → Experts → Scheduled-task result callback for the Webhook URL.
 
 ## History and search
 
@@ -149,14 +149,15 @@ The sidebar "Extensions" entry opens a Qoder-style hub with three categories:
 The settings workbench also provides:
 
 - **General**: appearance, reply language, and the send shortcut are dropdowns; tool execution policy, the built-in dangerous-command guard, risk gating, and the Bash sandbox use toggle switches;
-- **Agent**: behavior boundaries — web search, the explorer agent (delegate_task delegation toggle), auto-verify & repair, plus the full expert-parameter set (max steps, thinking budget, tool-output cap, Bash timeout, session retention, memory consolidation, extra readable directories, personality and system prompt);
+- **Agent**: behavior boundaries — web search, the explorer agent (delegate_task delegation toggle), and auto-verify & repair;
+- **Experts**: expert parameters in one place — max steps, thinking and tool-output budgets, Bash and scheduled-turn timeouts, auto-repair and output-continuation limits, delegation quotas, fact injection, session retention, memory consolidation, personality, system prompt, extra readable roots, the scheduled-task result callback, and a raw JSON editor for the config document;
 - **Inference Acceleration**: per local model, the **effective parameters + provenance layer** (model-level / provider-level / adaptive tier) and measured throughput, with an explicit warning when model-level settings shadow provider-level ones; warm-up, unload, benchmark (TTFT / decode / prefill / cache hits), and VRAM governance (resident models, concurrency, idle unload). Parameters are written in exactly one place (“Models & Providers → Load Settings”); this page only edits provider-level defaults;
 - **Rules & Memory**: manage hierarchical AGENTS.md rule files and the long-term MEMORY.md (the memory management mode is a dropdown) — the editor creates rule files (Ctrl+N), deletes them, reveals their folder, saves with Ctrl+S and guards unsaved edits;
 - **Evolution**: defect signals at a glance, manual or scheduled reflection (the reflection interval is a dropdown), adopt/reject for skill drafts — see the [Evolution Engine](/en/doc/evolution);
 - **Knowledge Center**: browse and revise what the agent saves as notebooks → sources → entries — attribution badges, cross-notebook search, tag filtering, Markdown export and the synonym editor — see the [Knowledge Center](/en/doc/knowledge);
 - **LAN connection**: switch between the local Runtime and a Runtime on another computer on the same network, or share this machine's Runtime with the LAN; the handshake uses a one-time nonce plus HMAC-SHA256, so the token never travels the wire (see “Runtime connection behavior” below);
 - **Diagnostics & Usage**: inspect workspace, configuration, and Provider health plus calls, tokens, cache hits, and latency over a 7/14/30-day window, with the Daemon log and diagnostics bundle entry;
-- **Advanced**: extra readable-directory allowlist, Computer Use and network-operation switches, a JSON editor for the global configuration (redacted on read, submitting only changed fields), and a factory-reset danger zone at the bottom.
+- **Advanced**: Computer Use and network-operation switches, and a factory-reset danger zone at the bottom.
 
 The settings page has a search box that jumps to a switch by section name or keyword. While the daemon is disconnected the whole page turns read-only with an explanation (an empty list then means “could not read”, not “nothing configured”), and notices dismiss themselves after four seconds.
 

@@ -290,7 +290,7 @@ onBeforeUnmount(() => {
 
       <template v-else-if="!editorOpen">
         <p class="scheduled-tasks-hint">
-          运行结果通知：无桌面连接时只会写进任务记录；要外部通知请到「设置 → 智能体 → 专家参数」配置 Schedule Webhook。
+          运行结果通知：无桌面连接时只会写进任务记录；要外部通知请到「设置 → 专家 → 计划任务结果回调」配置 Webhook。
         </p>
         <div v-if="tasks.length === 0" class="scheduled-tasks-empty">
           <CalendarClock :size="28" />

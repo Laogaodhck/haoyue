@@ -52,6 +52,7 @@ import ToolPolicyPanel from './ToolPolicyPanel.vue'
 import SettingsRoutingPanel from './SettingsRoutingPanel.vue'
 import SettingsInferencePanel from './SettingsInferencePanel.vue'
 import SettingsAgentExpertPanel from './SettingsAgentExpertPanel.vue'
+import ConfigJsonEditor from './ConfigJsonEditor.vue'
 import SettingsIntegrationsPanel from './SettingsIntegrationsPanel.vue'
 import SettingsEvolutionPanel from './SettingsEvolutionPanel.vue'
 import SettingsAdvancedPanel from './SettingsAdvancedPanel.vue'
@@ -347,6 +348,7 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'network', label: '局域网连接', icon: Wifi },
   { id: 'models', label: '模型与提供商', icon: Bot },
   { id: 'agent', label: '智能体', icon: Sparkles },
+  { id: 'experts', label: '专家', icon: Users },
   { id: 'mcp', label: 'MCP', icon: Blocks },
   { id: 'skills', label: '技能', icon: Wrench },
   { id: 'rules-memory', label: '规则与记忆', icon: ScrollText },
@@ -378,12 +380,12 @@ const SECTION_KEYWORDS: Record<SettingsSection, string> = {
   agent: '智能体 网页搜索 联网 委派 子智能体 自动验证 回合预算 上下文压缩 视觉',
   mcp: 'mcp 连接器 服务器 connector 工具',
   skills: '技能 skill 导入 市场 官方',
-  experts: '专家 expert 角色 子代理',
+  experts: '专家 expert 角色 子代理 参数 步数 思考预算 工具输出 bash 超时 自动修复 续写 委派 事实 会话保留 记忆固化 人格 系统提示词 可读目录 回调 json 原始配置 配置文档',
   'rules-memory': '规则 记忆 AGENTS.md MEMORY.md 注入',
   evolution: '进化 反思 缺陷 草稿 趋势',
   diagnostics: '诊断 用量 日志 token 费用 健康检查 导出',
   inference: '推理 加速 GPU 卸载 显存 KV 量化 flash attention 预热 卸载 驻留 基准',
-  advanced: '高级 网络 白名单 电脑操作 computer use 网络运维 故障转移 容灾 负载均衡 重试 专家参数 JSON 出厂'
+  advanced: '高级 网络 白名单 电脑操作 computer use 网络运维 故障转移 容灾 负载均衡 重试 出厂'
 }
 
 const search = ref('')
@@ -440,7 +442,7 @@ function showPath(path: string): void {
 
 async function loadCurrentSection(): Promise<void> {
   if (!props.open || !props.daemonConnected) return
-  if (section.value === 'experts') return // 专家目录由 ExpertsPanel 自行加载
+  if (section.value === 'experts') return // 专家目录与专家参数面板自行加载
   loading.value = true
   error.value = ''
   notice.value = ''
@@ -1440,13 +1442,31 @@ onBeforeUnmount(() => {
         </template>
 
         <template v-else-if="section === 'experts'">
-          <div class="settings-section-heading">
-            <div>
-              <h3>专家</h3>
-              <p>内置领域专家：一键绑定到新任务，或将提示词粘贴到对话开头</p>
+          <template v-if="page === 'extensions'">
+            <div class="settings-section-heading">
+              <div>
+                <h3>专家</h3>
+                <p>内置领域专家：一键绑定到新任务，或将提示词粘贴到对话开头</p>
+              </div>
             </div>
-          </div>
-          <ExpertsPanel @start="(expert) => emit('startExpert', expert)" />
+            <ExpertsPanel @start="(expert) => emit('startExpert', expert)" />
+          </template>
+          <template v-else>
+            <div class="settings-section-heading">
+              <div>
+                <h3>专家</h3>
+                <p>专家参数：回合步数与工具预算、超时与重试、委派配额，以及人格、系统提示词与额外可读目录</p>
+              </div>
+            </div>
+            <SettingsAgentExpertPanel :connected="daemonConnected" />
+            <section class="settings-group">
+              <div class="settings-group-title">
+                <strong>直接编辑配置文档（JSON）</strong>
+                <small>上面没有覆盖到的字段都在这里：只提交你实际改动的叶子节点，没动过的配置不会被写回。</small>
+              </div>
+              <ConfigJsonEditor :connected="daemonConnected" />
+            </section>
+          </template>
         </template>
 
         <template v-else-if="section === 'rules-memory'">
@@ -1788,8 +1808,6 @@ onBeforeUnmount(() => {
               {{ action === 'agent.config.set:compaction' ? '保存中…' : '保存压缩比例' }}
             </button>
           </section>
-
-          <SettingsAgentExpertPanel :connected="daemonConnected" />
         </template>
 
         <template v-else-if="section === 'advanced'">

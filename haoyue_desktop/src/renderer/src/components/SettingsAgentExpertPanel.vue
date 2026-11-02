@@ -5,7 +5,7 @@ import { requestJson } from '../daemon-json'
 import FieldLabel from './FieldLabel.vue'
 
 /**
- * 智能体 → 专家参数。
+ * 设置 → 专家 → 专家参数。
  *
  * 这批字段（步数上限、思考预算、工具输出上限、bash 超时、计划任务超时、修复/续写次数、
  * 委派配额、事实注入条数、额外可读目录、会话保留期、记忆固化、计划任务回调）此前既无

@@ -51,10 +51,30 @@ class DocxRenderer(BaseRenderer):
                 case BlockType.DIVIDER:
                     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     para.add_run("────────")
+                case BlockType.TABLE:
+                    _add_table(docx, block.cells)
                 case _:  # 未知类型降级为段落，保证转换不中断
                     _append_multiline(para, block.text)
         docx.save(str(out_path))
         return out_path
+
+
+def _add_table(docx, cells: list[list[str]]) -> None:
+    """把 TABLE 块渲染为真实 Word 表格：首行表头加粗，套用 Table Grid 边框。"""
+    if not cells:
+        return
+    cols = max(len(row) for row in cells)
+    table = docx.add_table(rows=len(cells), cols=cols)
+    if "Table Grid" in docx.styles:
+        table.style = docx.styles["Table Grid"]
+    for r, row in enumerate(cells):
+        for c in range(cols):
+            value = row[c] if c < len(row) else ""
+            run = table.cell(r, c).paragraphs[0].add_run(value)
+            if r == 0:
+                run.bold = True
+    # Word 表格后必须跟一个段落，否则后续块会与表格粘连。
+    docx.add_paragraph()
 
 
 def _append_multiline(para, text: str) -> None:

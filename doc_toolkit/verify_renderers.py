@@ -70,6 +70,14 @@ def verify_docx(path: Path) -> None:
     check("docx: 代码块使用等宽字体",
           any(run.font.name == "Consolas" for p in doc.paragraphs for run in p.runs))
     check("docx: 分隔线渲染", any("────" in t for t in texts))
+    check("docx: Markdown 表格渲染为真实 Word 表格",
+          len(doc.tables) == 1 and len(doc.tables[0].rows) == 3 and len(doc.tables[0].columns) == 3)
+    if doc.tables:
+        t = doc.tables[0]
+        check("docx: 表头单元格内容正确", t.cell(0, 0).text == "指标" and t.cell(0, 2).text == "优化后")
+        check("docx: 表格数据行落格", t.cell(1, 0).text == "解码 tok/s" and t.cell(2, 2).text == "0.61s")
+        check("docx: 表头行加粗",
+              all(run.bold for c in range(3) for run in t.cell(0, c).paragraphs[0].runs))
 
 
 def verify_xlsx(path: Path) -> None:
@@ -84,6 +92,10 @@ def verify_xlsx(path: Path) -> None:
           any(row[:3] == ["指标", "基线", "优化后"] for row in rows))
     check("xlsx: 表头分隔行被跳过", not any(cell.startswith("-") and cell.endswith("-") for row in rows for cell in row))
     check("xlsx: 表格数据行切分正确", any(row[:3] == ["解码 tok/s", "7.6", "84.9"] for row in rows))
+    check("xlsx: 表格表头行加粗",
+          any([str(c.value) for c in row[:3]] == ["指标", "基线", "优化后"]
+              and all(c.font.bold for c in row[:3])
+              for row in sheet.iter_rows()))
     check("xlsx: 引用块带注释前缀", any(cell.startswith("# ") for cell in flat))
     check("xlsx: 代码块逐行落格", "def add(a, b):" in flat)
     bold_rows = [row for row in sheet.iter_rows()
@@ -108,6 +120,14 @@ def verify_pptx(path: Path) -> None:
     check("pptx: 列表项进入正文", "事件溯源层" in all_text)
     check("pptx: 引用块进入正文", "696 项单测" in all_text)
     check("pptx: 代码块进入正文", "def add(a, b):" in all_text)
+    check("pptx: Markdown 表格渲染为表格形状",
+          any(shape.has_table for slide in slides for shape in slide.shapes))
+    if any(shape.has_table for slide in slides for shape in slide.shapes):
+        table = next(shape.table for slide in slides for shape in slide.shapes if shape.has_table)
+        check("pptx: 表格表头单元格正确",
+              table.cell(0, 0).text == "指标" and table.cell(0, 2).text == "优化后")
+        check("pptx: 表格数据行落格",
+              table.cell(1, 0).text == "解码 tok/s" and table.cell(2, 2).text == "0.61s")
 
 
 def main() -> int:

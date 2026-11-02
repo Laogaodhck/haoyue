@@ -35,4 +35,15 @@ class MarkdownRenderer(BaseRenderer):
                     parts.append(f"```\n{block.text}\n```")
                 case BlockType.DIVIDER:
                     parts.append("---")
+                case BlockType.TABLE:
+                    if not block.cells:
+                        continue
+                    header = block.cells[0]
+                    lines_out = [
+                        "| " + " | ".join(header) + " |",
+                        "|" + "|".join("---" for _ in header) + "|",
+                    ]
+                    for row in block.cells[1:]:
+                        lines_out.append("| " + " | ".join(row) + " |")
+                    parts.append("\n".join(lines_out))
         return "\n\n".join(parts)

@@ -69,6 +69,10 @@ class XlsxRenderer(BaseRenderer):
             match block.type:
                 case BlockType.HEADING:
                     put(next_row(), [block.text], font=bold)
+                case BlockType.TABLE:
+                    # 结构化表格块：整表落为行列，表头行加粗；parser 已剔除分隔行。
+                    for r, row in enumerate(block.cells):
+                        put(next_row(), row, font=bold if r == 0 else None)
                 case BlockType.QUOTE:
                     put(next_row(), [f"# {block.text}"])
                 case BlockType.CODE:

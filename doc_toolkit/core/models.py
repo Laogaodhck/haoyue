@@ -20,6 +20,7 @@ class BlockType(str, Enum):
     QUOTE = "quote"            # 引用块
     CODE = "code"              # 代码块
     DIVIDER = "divider"        # 分隔线（无文本内容）
+    TABLE = "table"            # 表格，cells 为行×列二维列表（首行为表头）
 
 
 @dataclass
@@ -32,6 +33,7 @@ class DocumentBlock:
         level: 标题级别（1-6），非标题块忽略。
         ordered: 是否有序列表项，仅 LIST_ITEM 使用。
         indent: 列表嵌套层级，0 为顶层。
+        cells: 表格单元格二维列表，仅 TABLE 使用；渲染器按列数自行补齐空位。
     """
 
     type: BlockType
@@ -39,6 +41,7 @@ class DocumentBlock:
     level: int = 1
     ordered: bool = False
     indent: int = 0
+    cells: list[list[str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -47,6 +50,7 @@ class DocumentBlock:
             "level": self.level,
             "ordered": self.ordered,
             "indent": self.indent,
+            "cells": self.cells,
         }
 
     @classmethod
@@ -57,6 +61,7 @@ class DocumentBlock:
             level=int(data.get("level", 1)),
             ordered=bool(data.get("ordered", False)),
             indent=int(data.get("indent", 0)),
+            cells=[list(row) for row in data.get("cells", [])],
         )
 
 
@@ -82,7 +87,10 @@ class Document:
     # ---- 常用查询 -------------------------------------------------------
     @property
     def is_empty(self) -> bool:
-        return not any(block.text.strip() for block in self.blocks)
+        return not any(
+            block.text.strip() or (block.type is BlockType.TABLE and bool(block.cells))
+            for block in self.blocks
+        )
 
     def plain_text(self, separator: str = "\n\n") -> str:
         """提取为纯文本（列表项合并为连续行），供 extract_text 使用。"""
@@ -93,6 +101,9 @@ class Document:
             elif block.type is BlockType.LIST_ITEM:
                 bullet = f"{block.indent * '  '}- " if not block.ordered else ""
                 lines.append(f"{bullet}{block.text}")
+            elif block.type is BlockType.TABLE:
+                for row in block.cells:
+                    lines.append("| " + " | ".join(row) + " |")
             else:
                 lines.append(block.text)
         return separator.join(lines)

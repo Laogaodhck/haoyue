@@ -6,8 +6,8 @@ Render a Markdown document into a finished docx / xlsx / pptx artifact and save 
 - file_name (optional): output file name without extension; a timestamped default is used otherwise.
 
 Mapping semantics:
-- docx — headings become Heading styles, lists become List Bullet/Number, quotes become Intense Quote, code blocks keep a monospace font.
-- xlsx — heading lines become bold section rows; markdown pipe tables (| a | b |) become real spreadsheet rows/columns (separator rows are skipped); other lines land one per row. Prefer a pipe table when the data is tabular.
-- pptx — H1 headings split slides (slide title), H2+ become bold body lines, list items become bullets with indentation, code blocks render in Consolas.
+- docx — headings become Heading styles, lists become List Bullet/Number, quotes become Intense Quote, code blocks keep a monospace font, and markdown pipe tables (| a | b |) become real Word tables with a bold header row.
+- xlsx — heading lines become bold section rows; markdown pipe tables (| a | b |) become real spreadsheet rows/columns with a bold header row (separator rows are skipped); other lines land one per row. Prefer a pipe table when the data is tabular.
+- pptx — H1 headings split slides (slide title), H2+ become bold body lines, list items become bullets with indentation, code blocks render in Consolas, and markdown pipe tables become PowerPoint table shapes on the current slide.
 
 The output is written under .haoyue/outputs/documents/ and the result message contains its absolute path. Requires a local Python with the doc_toolkit package (plus python-docx / openpyxl / python-pptx); the tool is hidden when that runtime is unavailable.

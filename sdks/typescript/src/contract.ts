@@ -7,41 +7,42 @@
 export const CONTRACT_VERSION = "1.0";
 export const PROTOCOL_VERSION = "2.2";
 
-/** 契约声明的全部 RPC 方法名（132 个）。 */
+/** 契约声明的全部 RPC 方法名（134 个）。 */
 export type MethodName =
   "ping" | "protocol.info" | "contract.export" | "daemon.lan.get"
   | "daemon.lan.set" | "events.recent" | "shutdown" | "chat"
   | "agent.runTurn" | "agent.steer" | "agent.respondApproval" | "agent.cancel"
-  | "agent.undo" | "agent.interrupted" | "feedback.turn" | "workspace.get"
-  | "workspace.open" | "workspace.trust" | "workspace.untrust" | "workspace.files"
-  | "workspace.init" | "agent.mode.get" | "agent.mode.switch" | "config.save"
-  | "config.get" | "config.status" | "config.rebuild" | "routing.get"
-  | "routing.set" | "advanced.get" | "advanced.set" | "web.allowedGet"
-  | "web.allowedSet" | "agent.config.get" | "agent.config.set" | "prompt.optimize"
-  | "provider.list" | "provider.upsert" | "provider.use" | "provider.remove"
-  | "provider.test" | "provider.models.fetch" | "local.models" | "model.list"
-  | "model.catalog" | "model.switch" | "model.test" | "model.status"
-  | "model.preload" | "model.unload" | "model.config.get" | "model.update"
-  | "model.benchmark" | "schedule.list" | "schedule.create" | "schedule.update"
-  | "schedule.toggle" | "schedule.delete" | "schedule.run" | "task.start"
-  | "task.get" | "task.list" | "task.cancel" | "mcp.list"
-  | "mcp.upsert" | "mcp.remove" | "mcp.reload" | "connectors.list"
-  | "connectors.install" | "connectors.uninstall" | "skill.list" | "skill.import"
-  | "skill.toggle" | "skill.official.list" | "skill.official.install" | "expert.list"
-  | "knowledge.list" | "knowledge.search" | "knowledge.save" | "knowledge.delete"
-  | "knowledge.import" | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get"
-  | "knowledge.synonyms.save" | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete"
-  | "knowledge.source.add" | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete"
-  | "knowledge.source.refresh" | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build"
-  | "memory.get" | "memory.save" | "rules.list" | "rules.save"
-  | "rules.delete" | "agent.subagents.list" | "agent.subagents.save" | "agent.subagents.delete"
-  | "usage.get" | "usage.timeline" | "session.list" | "session.search"
-  | "session.get" | "session.image" | "session.truncate" | "session.fork"
-  | "session.update" | "session.archive" | "session.delete" | "session.resume"
-  | "session.new" | "project.list" | "project.upsert" | "project.remove"
-  | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list" | "evolution.decide"
-  | "evolution.history" | "evolution.stats" | "evolution.config.get" | "evolution.config.set"
-  | "doctor" | "doctor.run" | "lock.list" | "factory.reset"
+  | "agent.undo" | "agent.interrupted" | "feedback.turn" | "speech.transcribe"
+  | "speech.synthesize" | "workspace.get" | "workspace.open" | "workspace.trust"
+  | "workspace.untrust" | "workspace.files" | "workspace.init" | "agent.mode.get"
+  | "agent.mode.switch" | "config.save" | "config.get" | "config.status"
+  | "config.rebuild" | "routing.get" | "routing.set" | "advanced.get"
+  | "advanced.set" | "web.allowedGet" | "web.allowedSet" | "agent.config.get"
+  | "agent.config.set" | "prompt.optimize" | "provider.list" | "provider.upsert"
+  | "provider.use" | "provider.remove" | "provider.test" | "provider.models.fetch"
+  | "local.models" | "model.list" | "model.catalog" | "model.switch"
+  | "model.test" | "model.status" | "model.preload" | "model.unload"
+  | "model.config.get" | "model.update" | "model.benchmark" | "schedule.list"
+  | "schedule.create" | "schedule.update" | "schedule.toggle" | "schedule.delete"
+  | "schedule.run" | "task.start" | "task.get" | "task.list"
+  | "task.cancel" | "mcp.list" | "mcp.upsert" | "mcp.remove"
+  | "mcp.reload" | "connectors.list" | "connectors.install" | "connectors.uninstall"
+  | "skill.list" | "skill.import" | "skill.toggle" | "skill.official.list"
+  | "skill.official.install" | "expert.list" | "knowledge.list" | "knowledge.search"
+  | "knowledge.save" | "knowledge.delete" | "knowledge.import" | "knowledge.tags"
+  | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list"
+  | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list"
+  | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve"
+  | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get" | "memory.save"
+  | "rules.list" | "rules.save" | "rules.delete" | "agent.subagents.list"
+  | "agent.subagents.save" | "agent.subagents.delete" | "usage.get" | "usage.timeline"
+  | "session.list" | "session.search" | "session.get" | "session.image"
+  | "session.truncate" | "session.fork" | "session.update" | "session.archive"
+  | "session.delete" | "session.resume" | "session.new" | "project.list"
+  | "project.upsert" | "project.remove" | "evolution.inspect" | "evolution.reflect"
+  | "evolution.pending-list" | "evolution.decide" | "evolution.history" | "evolution.stats"
+  | "evolution.config.get" | "evolution.config.set" | "doctor" | "doctor.run"
+  | "lock.list" | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -156,6 +157,20 @@ export const METHODS: readonly MethodInfo[] = [
     category: "chat",
     description: "\u63d0\u4ea4\u56de\u5408\u8d1f\u53cd\u9988\uff0c\u8fdb\u5165\u8fdb\u5316\u4fe1\u53f7",
     paramsSchema: {"properties": {"kind": {"description": "反馈类型，缺省 negative", "type": "string"}, "reason": {"description": "负反馈原因", "type": "string"}, "sessionId": {"description": "回合所属会话 id", "type": "string"}}, "required": ["sessionId"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "speech.transcribe",
+    category: "speech",
+    description: "\u8f6c\u5199\u8bed\u97f3\u4e3a\u6587\u672c\uff08ASR\uff0c\u5f55\u97f3\u6587\u4ef6\u6781\u901f\u7248\uff09",
+    paramsSchema: {"properties": {"audioData": {"description": "音频 base64（wav/mp3/ogg，≤100MB），与 audioPath/audioUrl 互斥", "type": "string"}, "audioPath": {"description": "本地音频文件绝对路径（wav/mp3/ogg，≤100MB）", "type": "string"}, "audioUrl": {"description": "公网音频 URL", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "speech.synthesize",
+    category: "speech",
+    description: "\u5408\u6210\u8bed\u97f3\u97f3\u9891\uff08TTS\uff0c\u5927\u6a21\u578b\u8bed\u97f3\u5408\u6210\uff1b\u843d\u76d8\u5230\u5f53\u524d\u5de5\u4f5c\u533a .haoyue/outputs/audio/\uff09",
+    paramsSchema: {"properties": {"speaker": {"description": "音色 ID；缺省 speech.ttsSpeaker", "type": "string"}, "text": {"description": "待合成文本", "type": "string"}}, "required": ["text"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

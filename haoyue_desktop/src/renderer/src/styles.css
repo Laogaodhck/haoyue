@@ -2752,6 +2752,17 @@ select:focus-visible {
   height: 31px;
 }
 
+/* 语音输入：录音中按钮红色脉冲，与发送/停止语义区分。 */
+.composer-icon.is-recording {
+  color: var(--danger, #e5484d);
+  animation: haoyue-record-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes haoyue-record-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 .composer-select {
   flex: 0 1 auto;
   color: var(--text-secondary);

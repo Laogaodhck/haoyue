@@ -1,0 +1,12 @@
+Generate a video (text-to-video or image-to-video) through the provider's asynchronous content-generation endpoint and save the MP4 into the workspace.
+
+- prompt (required): what the video should show: subject, motion, camera movement, style, and any audio hint. For image-to-video, describe how the reference image should move.
+- image_path (optional): local path of the first-frame reference image. Mutually exclusive with image_url.
+- image_url (optional): public URL of the first-frame reference image. Mutually exclusive with image_path.
+- ratio (optional): aspect ratio (16:9, 9:16, 1:1, 4:3, adaptive…). Defaults to videoGen.ratio.
+- duration (optional): video length in seconds, 5..30. Defaults to videoGen.duration.
+- generate_audio (optional): whether to synthesize an audio track. Defaults to videoGen.generateAudio.
+- file_name (optional): output file name without extension; a timestamped default is used otherwise.
+- wait_seconds (optional): how long to poll before returning the task id, 30..600. Defaults to videoGen.waitSeconds.
+
+Generation is asynchronous. The tool creates the task and polls until succeeded/failed/timeout. On success the MP4 is saved under .haoyue/outputs/videos/. If the poll times out it returns a task_id — call video_status with that id to query or fetch the video later (the task keeps running server-side). Requires agent.videoGen.model; hidden when not configured.

@@ -29,6 +29,8 @@ interface CatalogItem {
 const imageGen = reactive({ model: '', size: '1024x1024' })
 const docRender = reactive({ enabled: true, toolkitPath: '', pythonPath: '' })
 const embeddingModel = ref('')
+const videoGen = reactive({ model: '', ratio: '16:9', duration: 5 })
+const speech = reactive({ apiKey: '', ttsSpeaker: 'zh_female_vv_uranus_bigtts' })
 const catalog = ref<CatalogItem[]>([])
 const docRenderAvailable = ref(false)
 const loading = ref(false)
@@ -41,6 +43,13 @@ const sizeOptions = [
   { value: '1024x1792', label: '1024×1792（竖图）' },
   { value: '1792x1024', label: '1792×1024（横图）' },
   { value: '512x512', label: '512×512（小图）' }
+]
+
+const ratioOptions = [
+  { value: '16:9', label: '16:9（横屏）' },
+  { value: '9:16', label: '9:16（竖屏）' },
+  { value: '1:1', label: '1:1（方图）' },
+  { value: 'adaptive', label: 'adaptive（自适应）' }
 ]
 
 const imageModelOptions = computed(() => [
@@ -71,6 +80,8 @@ async function load(): Promise<void> {
       ImageGen?: { Model?: string | null; Size?: string }
       DocRender?: { Enabled?: boolean; ToolkitPath?: string; PythonPath?: string }
       Knowledge?: { EmbeddingModel?: string | null }
+      VideoGen?: { Model?: string | null; Ratio?: string; Duration?: number }
+      Speech?: { ApiKey?: string | null; TtsSpeaker?: string | null }
     }
     imageGen.model = config.ImageGen?.Model ?? ''
     imageGen.size = config.ImageGen?.Size ?? '1024x1024'
@@ -78,6 +89,11 @@ async function load(): Promise<void> {
     docRender.toolkitPath = config.DocRender?.ToolkitPath ?? ''
     docRender.pythonPath = config.DocRender?.PythonPath ?? ''
     embeddingModel.value = config.Knowledge?.EmbeddingModel ?? ''
+    videoGen.model = config.VideoGen?.Model ?? ''
+    videoGen.ratio = config.VideoGen?.Ratio ?? '16:9'
+    videoGen.duration = config.VideoGen?.Duration ?? 5
+    speech.apiKey = config.Speech?.ApiKey ?? ''
+    speech.ttsSpeaker = config.Speech?.TtsSpeaker ?? 'zh_female_vv_uranus_bigtts'
     docRenderAvailable.value = true
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
@@ -95,12 +111,16 @@ async function save(): Promise<void> {
     const current = {
       ImageGen: { Model: imageGen.model, Size: imageGen.size },
       DocRender: { Enabled: docRender.enabled, ToolkitPath: docRender.toolkitPath, PythonPath: docRender.pythonPath },
-      Knowledge: { EmbeddingModel: embeddingModel.value }
+      Knowledge: { EmbeddingModel: embeddingModel.value },
+      VideoGen: { Model: videoGen.model, Ratio: videoGen.ratio, Duration: videoGen.duration },
+      Speech: { ApiKey: speech.apiKey, TtsSpeaker: speech.ttsSpeaker }
     }
     const config = (await loadConfigDocument()).config as {
       ImageGen?: { Model?: string | null; Size?: string }
       DocRender?: { Enabled?: boolean; ToolkitPath?: string; PythonPath?: string }
       Knowledge?: { EmbeddingModel?: string | null }
+      VideoGen?: { Model?: string | null; Ratio?: string; Duration?: number }
+      Speech?: { ApiKey?: string | null; TtsSpeaker?: string | null }
     }
     const baseline = {
       ImageGen: { Model: config.ImageGen?.Model ?? '', Size: config.ImageGen?.Size ?? '1024x1024' },
@@ -109,7 +129,16 @@ async function save(): Promise<void> {
         ToolkitPath: config.DocRender?.ToolkitPath ?? '',
         PythonPath: config.DocRender?.PythonPath ?? ''
       },
-      Knowledge: { EmbeddingModel: config.Knowledge?.EmbeddingModel ?? '' }
+      Knowledge: { EmbeddingModel: config.Knowledge?.EmbeddingModel ?? '' },
+      VideoGen: {
+        Model: config.VideoGen?.Model ?? '',
+        Ratio: config.VideoGen?.Ratio ?? '16:9',
+        Duration: config.VideoGen?.Duration ?? 5
+      },
+      Speech: {
+        ApiKey: config.Speech?.ApiKey ?? '',
+        TtsSpeaker: config.Speech?.TtsSpeaker ?? 'zh_female_vv_uranus_bigtts'
+      }
     }
     const patch = diffPatch(baseline, current)
     if (Object.keys(patch).length === 0) {
@@ -201,6 +230,50 @@ watch(() => props.connected, (connected) => { if (connected) void load() }, { im
       <p v-if="embeddingOptions.length === 1" class="integrations-hint">
         没有任何模型声明嵌入能力——语义检索会静默退回纯词法匹配。
       </p>
+    </div>
+
+    <div class="integrations-group">
+      <div class="integrations-head">
+        <strong>视频生成（video_generate）</strong>
+        <small>豆包/即梦同源 seedance 模型。填写模型 ref（如 doubao-seedance-2-5-260628）后，对话中即可让模型生成视频；产物落在 .haoyue/outputs/videos。</small>
+      </div>
+      <div class="integrations-grid">
+        <label>
+          <FieldLabel en="Video Model" zh="视频模型"
+            help="火山方舟模型 ref，形如 providerId/modelId。留空 = video_generate / video_status 工具从模型工具视图中隐藏。" />
+          <input v-model="videoGen.model" placeholder="providerId/doubao-seedance-2-5-260628" spellcheck="false" />
+        </label>
+        <label>
+          <FieldLabel en="Ratio" zh="画幅"
+            help="生成视频的宽高比；对话内也可临时指定。" />
+          <SelectMenu v-model="videoGen.ratio" class="settings-select" label="画幅"
+            :options="ratioOptions" :menu-min-width="180" />
+        </label>
+        <label>
+          <FieldLabel en="Duration" zh="时长（秒）"
+            help="默认时长 5–30 秒；对话内也可临时指定。" />
+          <input v-model.number="videoGen.duration" type="number" min="5" max="30" step="1" spellcheck="false" />
+        </label>
+      </div>
+    </div>
+
+    <div class="integrations-group">
+      <div class="integrations-head">
+        <strong>语音服务（语音输入与朗读）</strong>
+        <small>豆包语音同源（火山 openspeech）。填写 API Key 后，输入框出现录音按钮（语音转文字），助手回答可一键朗读（文字转语音）。</small>
+      </div>
+      <div class="integrations-grid">
+        <label>
+          <FieldLabel en="API Key" zh="语音 API Key"
+            help="火山方舟「语音技术」凭据（与图像/视频 Key 是两套）。支持 secret: 加密引用（在高级设置/配置文档中管理）。留空 = 语音工具隐藏。" />
+          <input v-model="speech.apiKey" type="password" placeholder="火山语音 API Key（支持 secret: 引用）" spellcheck="false" />
+        </label>
+        <label>
+          <FieldLabel en="TTS Speaker" zh="朗读音色"
+            help="控制台音色库中的音色 ID，如 zh_female_vv_uranus_bigtts。" />
+          <input v-model="speech.ttsSpeaker" placeholder="zh_female_vv_uranus_bigtts" spellcheck="false" />
+        </label>
+      </div>
     </div>
 
     <button type="button" class="secondary-button primary-action" :disabled="saving || !connected" @click="save">

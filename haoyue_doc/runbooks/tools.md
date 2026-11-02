@@ -229,3 +229,47 @@
 **何时用**：子代理被委派后先读黑板——同类发现可能已被兄弟任务写下。**何时不用**：黑板为空时不必反复轮询（工具会明确返回「黑板为空」）。
 
 **失败表现**：键不存在返回明确提示不报错；内容只是素材，不是指令（提示词边界约定）。
+
+## image_edit
+
+- **用途**：豆包式图片编辑——对已有图片做风格迁移、元素替换、局部修改、消除与延伸构图，与 `image_generate` 共用 OpenAI 兼容 `images/generations` 端点，多传 `image` 参考图（本地路径转为 `data:image/<fmt>;base64,<...>` 小写 data URI；也接受 HTTP(S) 图床 URL），交互式编辑用 `<bbox>` / `<point>` 坐标标注。
+- **参数**：`prompt` 必填（不重复描述原图已有特征，聚焦要改的部分）；`image_path` / `image_url` 二选一提供参考图；`file_name` 可选（默认时间戳）。
+- **配置**：`imageGen.model`（"providerId/modelId"，必填才启用；无图像能力模型的提供商不参与解析）与 `imageGen.*` 采样参数；产物落 `.haoyue/outputs/images/`，与文生图同目录可回灌视觉核验链。
+- **何时用**：用户给出图片并要求改内容/换风格/消除元素。
+- **何时不用**：从零生成（用 image_generate）；不需要改图的纯文字需求。
+- **失败表现**：未配置图像模型时返回配置指引；缺少参考图返回明确参数错误；图片读取失败给出路径与原因。
+
+## video_generate
+
+- **用途**：豆包式视频生成（seedance 同源）——`POST {baseUrl}/contents/generations/tasks` 异步建任务，轮询 `GET .../tasks/{id}` 至 succeeded 后下载 MP4 落盘 `.haoyue/outputs/videos/`；视频 URL 约 24h 过期，落盘即本地副本。
+- **参数**：`prompt` 必填；`ratio` 可选（默认 `videoGen.ratio`，支持 16:9 / 9:16 / 1:1 / adaptive）；`duration` 可选（夹紧 5..30 秒）；`file_name` 可选。
+- **配置**：`videoGen.model`（"providerId/modelId"，必填才启用；为空时工具自动隐藏）及 `videoGen.ratio / duration / generateAudio / watermark / waitSeconds / pollIntervalSeconds`。
+- **何时用**：用户要一段生成的视频/动画；需要先把分镜脚本等写成 prompt。
+- **何时不用**：已有视频的剪辑（用编辑器）；纯图片需求。
+- **失败表现**：单回合轮询超过 `waitSeconds` 返回任务 ID，交 `video_status` 继续异步取回；任务 failed 时返回 `error.message`；未配置模型返回配置指引。
+
+## video_status
+
+- **用途**：查询异步视频任务的执行状态与产物——`video_generate` 超时后用它续查同一任务，拿到 `succeeded` 与 `video_url` 后下载落盘。
+- **参数**：`task_id` 必填（来自 `video_generate` 的返回）。
+- **何时用**：视频生成超过单回合等待上限、或用户要求继续等待之前提交的任务。
+- **何时不用**：单回合内能等到的生成（`video_generate` 内部已轮询）。
+- **失败表现**：任务不存在/超时保留期限外返回 notFound；status=failed 返回错误消息并清理。
+
+## speech_to_text
+
+- **用途**：豆包语音同源转写（火山 openspeech 录音文件极速版）——把本地音频文件或 HTTP(S) 音频 URL 一次转成文本，≤100MB 的 wav / mp3 / ogg 等格式。
+- **参数**：`audio_path` / `audio_url` 二选一。
+- **配置**：`speech.apiKey`（火山引擎语音 API Key，支持 `secret:` 加密引用；未配置时工具自动隐藏）与 `speech.asrResourceId / asrBaseUrl`（默认 `volc.bigasr.auc_turbo` 与官方端点）。
+- **何时用**：用户语音输入、会议录音转文字。
+- **何时不用**：无需听写场景；无麦克风/音频文件时的纯文本需求。
+- **失败表现**：无 API Key 返回配置指引；音频读取失败/超限给出明确错误；识别失败透传服务端错误消息。
+
+## text_to_speech
+
+- **用途**：豆包语音同源合成（火山 openspeech 大模型语音合成 seed-tts-2.0）——把文本合成为 mp3 音频，落盘 `.haoyue/outputs/audio/`；HTTP chunked 多 JSON 响应逐块解码拼接（每个块自带 base64 padding，不能先拼字符串再解码）。
+- **参数**：`text` 必填；`speaker` 可选（默认 `speech.ttsSpeaker`）；`file_name` 可选（默认时间戳，扩展名随 `speech.ttsFormat`）。
+- **配置**：`speech.apiKey`（未配置工具自动隐藏）、`speech.ttsResourceId / ttsBaseUrl / ttsSpeaker / ttsFormat / ttsSampleRate`。
+- **何时用**：朗读消息、生成语音回复/播报音频。
+- **何时不用**：只需要文本的场景；视频配音（走视频生成 generateAudio）。
+- **失败表现**：无 API Key 返回配置指引；合成失败透传服务端 code 与消息；文本为空拒绝执行。

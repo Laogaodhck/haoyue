@@ -130,6 +130,27 @@ public static class ConfigSchema
         New("imageGen.model", "string", null),
         New("imageGen.size", "string", "1024x1024"),
 
+        // 视频生成（video_generate / video_status 工具，OpenAI 兼容异步任务端点）。
+        // model 必填才启用；其余为默认值，可被工具参数覆盖。
+        New("videoGen.model", "string", null),
+        New("videoGen.ratio", "string", "16:9"),
+        New("videoGen.duration", "int", 5, min: 5, max: 30),
+        New("videoGen.generateAudio", "bool", true),
+        New("videoGen.watermark", "bool", true),
+        New("videoGen.waitSeconds", "int", 120, min: 30, max: 600),
+        New("videoGen.pollIntervalSeconds", "int", 10, min: 5, max: 60),
+
+        // 语音服务（speech_to_text / text_to_speech 工具，豆包语音同源 openspeech）。
+        // apiKey 必填才启用；支持 secret: 加密引用。
+        New("speech.apiKey", "string", null),
+        New("speech.asrResourceId", "string", "volc.bigasr.auc_turbo"),
+        New("speech.asrBaseUrl", "string", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"),
+        New("speech.ttsResourceId", "string", "seed-tts-2.0"),
+        New("speech.ttsBaseUrl", "string", "https://openspeech.bytedance.com/api/v3/tts/unidirectional"),
+        New("speech.ttsSpeaker", "string", "zh_female_vv_uranus_bigtts"),
+        New("speech.ttsFormat", "string", "mp3"),
+        New("speech.ttsSampleRate", "int", 24000, min: 8000, max: 48000),
+
         // 文档渲染（doc_render 工具）：空路径 = 按内置探测链自动定位。
         New("docRender.enabled", "bool", true),
         New("docRender.toolkitPath", "string", ""),

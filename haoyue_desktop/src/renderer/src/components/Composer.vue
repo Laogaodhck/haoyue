@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ArrowUp, Globe, GlobeOff, LoaderCircle, Paperclip, Sparkles, Square, X } from '@lucide/vue'
+import { ArrowUp, Globe, GlobeOff, LoaderCircle, Mic, Paperclip, Sparkles, Square, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { isSpeechUnavailableError, startRecording, transcribeAudio, type RecordingSession } from '../speech-client'
 import type { FileAttachment, ImageAttachment, ReasoningLevel } from '../types'
 import { confirmAction } from '../confirmation'
 import { fileBadgeText, fileExtClass, getFileExtension, readSendKeyPreference } from '../app-helpers'
@@ -61,6 +62,11 @@ const selectingFiles = ref(false)
 const imageNotice = ref('')
 const optimizing = ref(false)
 const previewImage = ref<ImageAttachment | null>(null)
+const recording = ref(false)
+const recordingBusy = ref(false)
+const recordingSeconds = ref(0)
+let recordingSession: RecordingSession | null = null
+let recordingTimer: number | undefined
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const mention = ref<MentionToken | null>(null)
 const mentionFiles = ref<string[]>([])
@@ -258,6 +264,52 @@ function addFileByPath(filePath: string, sizeBytes = 0): boolean {
 
 function removeAttachedFile(id: string): void {
   attachedFiles.value = attachedFiles.value.filter((file) => file.id !== id)
+}
+
+/** 语音输入：点击开始录音，再点停止并转写为文本填入输入框（豆包语音同源 ASR）。 */
+async function toggleRecording(): Promise<void> {
+  if (props.disabled || props.busy || recordingBusy.value) return
+  if (recording.value) {
+    await stopRecordingAndTranscribe()
+    return
+  }
+  imageNotice.value = ''
+  try {
+    recordingSession = startRecording()
+  } catch (error) {
+    imageNotice.value = error instanceof Error ? error.message : '无法启动录音'
+    return
+  }
+  recording.value = true
+  recordingSeconds.value = 0
+  recordingTimer = window.setInterval(() => {
+    recordingSeconds.value = recordingSession?.seconds() ?? 0
+  }, 500)
+}
+
+async function stopRecordingAndTranscribe(): Promise<void> {
+  const session = recordingSession
+  if (!session) return
+  recordingSession = null
+  recording.value = false
+  if (recordingTimer !== undefined) window.clearInterval(recordingTimer)
+  recordingBusy.value = true
+  imageNotice.value = '正在转写语音…'
+  try {
+    const wavBase64 = await session.stop()
+    const text = await transcribeAudio(wavBase64)
+    value.value = (value.value.trim() ? value.value.trim() + ' ' : '') + text
+    imageNotice.value = '语音已转写为文本。'
+    window.setTimeout(() => {
+      if (imageNotice.value === '语音已转写为文本。') imageNotice.value = ''
+    }, 3000)
+  } catch (error) {
+    imageNotice.value = isSpeechUnavailableError(error)
+      ? '尚未配置语音服务（speech.apiKey）。请到「设置 → 语音服务」填写火山方舟语音 Key。'
+      : (error instanceof Error ? error.message : '语音转写失败')
+  } finally {
+    recordingBusy.value = false
+  }
 }
 
 async function selectFiles(): Promise<void> {
@@ -699,6 +751,11 @@ defineExpose({ focus, setValue, getValue, getState, populate })
 watch(value, resize)
 onBeforeUnmount(() => {
   if (mentionTimer !== undefined) window.clearTimeout(mentionTimer)
+  if (recordingTimer !== undefined) window.clearInterval(recordingTimer)
+  if (recordingSession) {
+    recordingSession.stop().catch(() => undefined)
+    recordingSession = null
+  }
 })
 watch(() => props.taskId, () => {
   closeMention()
@@ -813,6 +870,13 @@ watch(() => props.supportsImages, async (supported) => {
       :placeholder="disabled ? '正在加载会话…' : '交给 Haoyue（@ 引用工作区文件 · / 查看命令）'" aria-label="消息" @keydown="handleKeydown"
       @keyup="refreshPanels" @click="refreshPanels" @paste="handlePaste" @blur="closeMention(); closeSlash()" />
     <div class="composer-toolbar">
+      <button class="icon-button composer-icon" type="button"
+        :class="{ 'is-recording': recording }"
+        :title="recording ? `停止录音并转写（${recordingSeconds}s）` : '语音输入：录音转文字（需在设置中配置语音服务）'"
+        :disabled="disabled || busy || recordingBusy" @click="toggleRecording">
+        <Square v-if="recording" :size="13" fill="currentColor" />
+        <Mic v-else :size="17" />
+      </button>
       <button class="icon-button composer-icon" type="button" title="添加文件附件（可直接拖拽任意文件或文件夹）"
         :disabled="disabled || selectingFiles" @click="selectFiles">
         <Paperclip :size="17" />

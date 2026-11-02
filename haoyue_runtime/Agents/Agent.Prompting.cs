@@ -104,10 +104,18 @@ public sealed partial class Agent
                 tool.Name != AgentDelegator.DelegateToolName
                 && tool.Name != AgentDelegator.ParallelDelegateToolName).ToList();
 
-        // 多模态输出：没有任何图像能力提供商时隐藏 image_generate，模型不会看到
-        // 一个必然失败的工具。
+        // 多模态输出：没有任何图像能力提供商时隐藏 image_generate / image_edit，
+        // 模型不会看到一个必然失败的工具。
         if (Tools.Builtin.ImageGenTool.ResolveEndpoint(configStore.Config) is null)
-            available = available.Where(tool => tool.Name != "image_generate").ToList();
+            available = available.Where(tool => tool.Name is not ("image_generate" or "image_edit")).ToList();
+
+        // 视频生成：未配置 videoGen.model 时隐藏 video_generate / video_status。
+        if (Tools.Builtin.VideoGenTool.ResolveVideoEndpoint(configStore.Config) is null)
+            available = available.Where(tool => tool.Name is not ("video_generate" or "video_status")).ToList();
+
+        // 语音服务：speech.apiKey 未配置时隐藏 speech_to_text / text_to_speech。
+        if (!Tools.Builtin.SpeechToTextTool.IsAvailable(configStore.Config.Speech))
+            available = available.Where(tool => tool.Name is not ("speech_to_text" or "text_to_speech")).ToList();
 
         // 文档创作链：Python 或 doc_toolkit 不可用时隐藏 doc_render，同理不可用即不可见。
         if (!Tools.Builtin.DocRenderTool.IsAvailable(configStore.Config.DocRender))

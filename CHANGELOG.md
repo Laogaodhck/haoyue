@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+### 新增
+
+- **豆包式多模态能力**：新增 `image_edit`（图片编辑，与文生图共用 OpenAI 兼容 `images/generations` 端点，多传参考图——本地图转 `data:image/<fmt>;base64,<...>` data URI 或 HTTP(S) 图床 URL，交互式编辑支持 `<bbox>` / `<point>`，风格迁移 / 元素替换 / 局部修改 / 消除 / 延伸构图；未配置图像模型时工具自动隐藏）、`video_generate`（视频生成，seedance 同源异步任务：`POST {baseUrl}/contents/generations/tasks` 建任务 → 轮询 `GET .../tasks/{id}` → 下载 MP4 落 `.haoyue/outputs/videos/`，超时返回任务 ID 交 `video_status` 续查；`videoGen.model` 未配置时隐藏）、`speech_to_text` / `text_to_speech`（语音转写与合成，火山 openspeech 同源：ASR 录音文件极速版 `volc.bigasr.auc_turbo`、大模型语音合成 seed-tts-2.0，`speech.apiKey` 支持 `secret:` 加密引用，未配置时两个语音工具自动隐藏；TTS 流式多 JSON 响应逐块解码拼接）。全部复用现有 OpenAI 兼容 provider 配置体系与「产物落盘 + 视觉核验回灌」链路。
+- **语音与媒体 RPC**：`speech.transcribe`（audioPath / audioUrl / audioData base64 三通道 → 文本）与 `speech.synthesize`（text / speaker → 落盘音频文件），契约方法 132 → 134，TS SDK 与桌面端契约类型同步重生成。
+- **桌面端语音与媒体播放**：输入框工具条新增录音按钮（MediaRecorder 录音 → 16kHz 单声道 PCM WAV → daemon 转写，文本追加进输入框）；助手消息操作区新增朗读按钮（`speech.synthesize` → 主进程读媒体 → 就地播放）；消息内容中的视频 / 音频产物（`.mp4/.webm/.mov/.m4v/.mp3/.wav/.ogg/.opus/.m4a/.flac` 绝对路径）自动渲染为内联播放器（上限 4 个，经新增 IPC `app:read-media-base64` 读入，扩展名白名单 + 体积上限 audio≤30MB / video≤150MB）。
+- **设置面板**：「设置 → 模型与提供商 → 外部能力」新增「视频生成」（模型引用 / 画幅 / 时长）与「语音服务」（API Key / 音色）两组配置，读写走既有配置文档加载与 diffPatch 保存。
+
 ### 桌面
 
 - **修复厂商前缀模型 ID 导致活动模型解析失败**：OpenAI 兼容网关常返回 `deepseek/deepseek-flash` 这类带斜杠的模型 ID，活动模型此前会被误拆成「提供商 deepseek + 模型 deepseek-flash」，解析失败后静默回退到全部模型（典型表现是调用落到本地 GGUF 并报文件不存在）。现在先按当前提供商拼接解析，再退回原值以兼容已存的全限定引用。

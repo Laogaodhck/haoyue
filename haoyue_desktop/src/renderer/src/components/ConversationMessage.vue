@@ -14,11 +14,14 @@ import {
   Pencil,
   RefreshCw,
   Split,
+  Square,
   ThumbsDown,
   Trash2,
+  Volume2,
   Wrench
 } from '@lucide/vue'
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { isSpeechUnavailableError, loadPlayableAudio, synthesizeSpeech } from '../speech-client'
 import type { ChatMessage, ToolActivity } from '../types'
 import {
   classifyModelError,
@@ -75,10 +78,49 @@ const preview = ref<{ src: string; name: string } | null>(null)
 const isCopied = ref(false)
 const isDisliked = ref(false)
 let copyTimer: ReturnType<typeof setTimeout> | undefined
+// 朗读（豆包语音同源 TTS）：合成 → 播放，再次点击停止。
+const speaking = ref(false)
+const speakError = ref('')
+let speakAudio: HTMLAudioElement | null = null
 
 onBeforeUnmount(() => {
   if (copyTimer) clearTimeout(copyTimer)
+  speakAudio?.pause()
+  speakAudio = null
 })
+
+async function speakContent(): Promise<void> {
+  if (speaking.value) {
+    speakAudio?.pause()
+    speakAudio = null
+    speaking.value = false
+    return
+  }
+  const text = props.message.content
+  if (!text.trim()) return
+  speakError.value = ''
+  try {
+    const { file } = await synthesizeSpeech(text)
+    const audio = await loadPlayableAudio(file)
+    audio.onended = () => {
+      speaking.value = false
+      speakAudio = null
+    }
+    audio.onerror = () => {
+      speaking.value = false
+      speakError.value = '播放失败'
+      speakAudio = null
+    }
+    speakAudio = audio
+    speaking.value = true
+    await audio.play()
+  } catch (error) {
+    speaking.value = false
+    speakError.value = isSpeechUnavailableError(error)
+      ? '未配置语音服务（speech.apiKey）'
+      : (error instanceof Error ? error.message : '朗读失败')
+  }
+}
 
 async function copyContent(): Promise<void> {
   if (!props.message.content) return
@@ -169,6 +211,44 @@ const errorMeta = computed(() => {
 /** Failed turns keep the technical block in content for persistence; hide it here. */
 const displayContent = computed(() =>
   props.message.state === 'error' ? stripModelErrorBlock(props.message.content) : props.message.content)
+
+/**
+ * 工具产出的媒体（.haoyue/outputs 下的视频/音频）在消息文本中以绝对路径呈现，
+ * 这里识别路径并加载为可播放的 data URI，渲染成内联播放器（同图片附件的展示思路）。
+ */
+interface MediaArtifact { kind: 'video' | 'audio'; path: string; src: string }
+
+const mediaArtifacts = ref<MediaArtifact[]>([])
+const MEDIA_PATH_RE = /([A-Za-z]:\\[^"'<>|?*\r\n]+?\.(?:mp4|webm|mov|m4v|mp3|wav|ogg|opus|m4a|flac))/gi
+const AUDIO_EXT_RE = /\.(?:mp3|wav|ogg|opus|m4a|flac)$/i
+
+function cleanMediaPath(raw: string): string {
+  return raw.replace(/[)\]}，。、；;：:\s]+$/g, '')
+}
+
+watch(() => props.message.content, async (content) => {
+  mediaArtifacts.value = []
+  if (!content) return
+  const seen = new Set<string>()
+  const artifacts: MediaArtifact[] = []
+  const re = new RegExp(MEDIA_PATH_RE.source, 'gi')
+  for (const match of content.matchAll(re)) {
+    const raw = match[1] ?? ''
+    const path = cleanMediaPath(raw)
+    if (!path || seen.has(path)) continue
+    seen.add(path)
+    if (artifacts.length >= 4) break
+    const media = await window.haoyue.readMediaBase64(path)
+    if (media) {
+      artifacts.push({
+        kind: AUDIO_EXT_RE.test(path) ? 'audio' : 'video',
+        path,
+        src: `data:${media.mediaType};base64,${media.data}`
+      })
+    }
+  }
+  mediaArtifacts.value = artifacts
+}, { immediate: true })
 
 function imageUrl(id: string): string | undefined {
   return props.imageSources[id]
@@ -381,6 +461,12 @@ function openFileLocation(path?: string): void {
 
       <MarkdownMessage v-if="displayContent" :content="displayContent"
         :streaming="streaming && message.state === 'streaming'" />
+      <div v-if="mediaArtifacts.length" class="message-media">
+        <video v-for="media in mediaArtifacts.filter((media) => media.kind === 'video')" :key="media.path"
+          :src="media.src" controls preload="metadata" class="message-media-video" />
+        <audio v-for="media in mediaArtifacts.filter((media) => media.kind === 'audio')" :key="media.path"
+          :src="media.src" controls class="message-media-audio" />
+      </div>
       <div v-if="message.state === 'error' && !streaming" class="error-card" role="alert">
         <div class="error-card-header">
           <span class="error-card-icon">
@@ -434,6 +520,18 @@ function openFileLocation(path?: string): void {
         :class="{ active: isCopied, always: showFooter }"
       >
         <div class="assistant-actions">
+          <button
+            v-if="!systemKind"
+            type="button"
+            class="action-btn"
+            :class="{ active: speaking }"
+            :title="speaking ? '停止朗读' : (speakError || '朗读此回答（需在设置中配置语音服务）')"
+            aria-label="朗读回答"
+            @click="speakContent"
+          >
+            <Square v-if="speaking" :size="11" fill="currentColor" />
+            <Volume2 v-else :size="13" class="action-icon" />
+          </button>
           <button
             type="button"
             class="action-btn"
@@ -507,6 +605,24 @@ function openFileLocation(path?: string): void {
 .dimmed {
   opacity: .32;
   transition: opacity 160ms ease;
+}
+
+.message-media {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.message-media-video {
+  width: min(100%, 520px);
+  max-height: 320px;
+  border-radius: 10px;
+  background: #000;
+}
+
+.message-media-audio {
+  width: min(100%, 420px);
 }
 
 .system-card {

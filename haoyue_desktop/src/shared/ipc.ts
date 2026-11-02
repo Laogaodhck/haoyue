@@ -229,6 +229,8 @@ export interface DesktopApi {
   selectWorkspace(): Promise<string | null>
   selectFiles(): Promise<string[]>
   readFileBase64(path: string): Promise<{ data: string; mediaType: string; sizeBytes: number } | null>
+  /** 读取语音/视频产物（仅放行媒体扩展名，体积受限），供朗读与视频预览播放。 */
+  readMediaBase64(path: string): Promise<{ data: string; mediaType: string; sizeBytes: number } | null>
   getPathForFile(file: File): string
   selectSkillFiles(): Promise<DesktopSkillFileSelection>
   selectModelDirectory(): Promise<string | null>

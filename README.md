@@ -60,7 +60,8 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **MCP**：stdio 与 SSE 传输，自动发现工具/提示/资源；提示注入有每服务器 24 个、总量 48 个的限额，超限原因在 MCP 状态中可见
 - **连接器生态**：连接器包规范（`connectors/schema/connector.schema.json`）+ 首批 11 个官方连接器——浏览器（Playwright）、Git、GitHub、邮箱（IMAP/SMTP）、日历 ICS、RSS、剪贴板、Notion、SQLite、HTTP API 通用器、系统通知；后六个由随包分发的单文件本地 MCP 服务器承载（纯 Python 标准库、零外部依赖），secret 配置项加密落盘。`haoyue connectors list / install / uninstall` 两步完成「发现 → 可用」，规范见 [connectors README](connectors/README.md)；安装后随包迁移仍可用——内置本地服务器路径失效时连接前自动重解析并持久化（自愈），无需手动重装
 - **技能系统**：目录式技能（`skill.yaml` + `prompt.txt`），manifest v2 支持触发关键词、工具白名单与参数收集；技能变更后扫描热加载，无需重启；**30 个官方技能**随目录分发（深度研究、周报、数据清洗、截图 OCR 入库、依赖审计、竞品扫描、文档三件套等），桌面端技能市场一键安装
-- **多模态输出**：`image_generate` 图像生成（OpenAI 兼容 images/generations 端点，b64/url 双通道），产物落 `.haoyue/outputs/images/` 并可回灌视觉核验链；未配置图像模型时工具自动隐藏（本地扩散模型不在进程内推理能力内，可接 ComfyUI/SD 兼容网关，见 [部署与隔离 Runbook](haoyue_doc/runbooks/deployment-isolation.md)）
+- **多模态输出**：`image_generate` 图像生成（OpenAI 兼容 images/generations 端点，b64/url 双通道）、`image_edit` 图片编辑（同端点多传参考图，本地图转 `data:image/<fmt>;base64,<...>` data URI，支持风格迁移/元素替换/局部修改/消除）、`video_generate` 视频生成（seedance 同源异步任务——创建 → 轮询 → 下载 MP4，超时交 `video_status` 续查；单回合默认等待 120s），产物分别落 `.haoyue/outputs/images/` 与 `.haoyue/outputs/videos/` 并可回灌视觉核验链；未配置图像模型时图像工具自动隐藏、未配置 `videoGen.model` 时视频工具自动隐藏（本地扩散/视频模型不在进程内推理能力内，可接 ComfyUI/SD 兼容网关，见 [部署与隔离 Runbook](haoyue_doc/runbooks/deployment-isolation.md)）
+- **语音输入与朗读**：`speech_to_text` 语音转写与 `text_to_speech` 语音合成（豆包语音同源，火山 openspeech——ASR 录音文件极速版 `volc.bigasr.auc_turbo`、大模型语音合成 seed-tts-2.0），桌面端输入框一键录音转写、消息朗读按钮合成播放，视频/音频产物在消息流内联播放；`speech.apiKey`（支持 `secret:` 加密引用）未配置时两个语音工具自动隐藏
 - **允许的网站（外部网站访问白名单）**：`web.allowedSites` 配置后 `web_fetch` 仅能抓取列表中的站点与 localhost（127.x / ::1 始终可用），支持 `https://*.example.com` 子域通配（根域需单独添加）；运行时强制、每次执行现读配置，桌面端「设置 → 允许的网站」卡片可视化增删（RPC `web.allowedGet` / `web.allowedSet`），变更立即生效无需重启。**留空时 `web_fetch` 视为未启用白名单（不限制外部站点），桌面端内置浏览器则默认只允许 localhost**——承载任意站点脚本的浏览器视图不会因留空而对全网敞开，外网站点需显式加入
 
 ### 🧠 知识库与记忆
@@ -104,7 +105,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 📋 后台任务队列
 
 - **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度；桌面端右栏「后台任务」页签是该链路的完整界面（派发 / 进度 / 取消 / 跳回会话）
-- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），132 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
+- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），134 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use（电脑操作智能体）
 
@@ -136,6 +137,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **统一控件形态**：多选一配置统一为下拉选择（外观、回复语言、发送快捷键、记忆管理方式、反思间隔、MCP 连接与身份验证），开 / 关项统一为拨杆开关（工具执行策略、内置高危命令守卫、风险分级闸门、Bash 沙箱），不再混用并排按钮
 - **专家参数独立成区**：设置侧栏新增「专家」分区，回合步数与思考 / 工具输出预算、Bash 与计划任务超时、自动修复与续写、委派配额、事实注入、会话保留与记忆固化、人格与系统提示词、额外可读目录、计划任务回调，以及直接编辑配置文档的 JSON 编辑器集中在此；「智能体」只保留模型选择与行为边界
 - **诊断入口**：设置页直达 daemon.log 与诊断包导出；打包版启动时静默检查新版本（有新版本才弹原生提示），关于页也可手动「检查更新」并跳转发布页
+- **语音输入与朗读**：输入框工具条最左侧录音按钮——点击开始录音、再点停止即转写并追加进输入框（未配置语音服务时提示去「设置 → 外部能力 → 语音服务」填 API Key）；每条助手消息带朗读按钮，点击合成并就地播放、再点停止；消息中的视频 / 音频产物自动以内联播放器展示
 
 ### 💻 现代化终端体验
 
@@ -301,7 +303,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（1279 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
+├── haoyue_tests/         # 运行时单元测试（1297 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── contracts/            # daemon 契约快照（DaemonContract 单源导出，JSON Schema 2020-12）
@@ -343,6 +345,29 @@ Haoyue/
   }
 }
 ```
+
+豆包式多模态能力走同一配置体系（密钥同样支持 `secret:` 加密引用）：
+
+```json
+{
+  "imageGen": { "model": "ark/doubao-seedream-5-0-pro-260628" },
+  "videoGen": {
+    "model": "ark/doubao-seedance-2-5-260628",
+    "ratio": "16:9",
+    "duration": 5,
+    "generateAudio": true,
+    "watermark": true,
+    "waitSeconds": 120,
+    "pollIntervalSeconds": 10
+  },
+  "speech": {
+    "apiKey": "secret:volc-voice-key",
+    "ttsSpeaker": "zh_female_vv_uranus_bigtts"
+  }
+}
+```
+
+`imageGen.model` / `videoGen.model` 取「providerId/modelId」全限定引用（模型必须来自该提供商）；`speech.apiKey` 为火山引擎语音 API Key（与模型方舟 Key 分属两套凭据，ASR / TTS 走 `openspeech.bytedance.com`）。未配置对应模型 / 密钥时，图像、视频、语音工具自动从模型工具视图隐藏。
 
 ### 工作区配置
 
@@ -493,7 +518,7 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1279 / haoyue_cli_tests 27 用例）
+dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1297 / haoyue_cli_tests 27 用例）
 
 # 桌面端（需先 pnpm install）
 cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 365 用例（37 个文件）
@@ -570,7 +595,7 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
 - 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1279+27+365、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1297+27+365、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - 桌面端 UI 审查——三栏布局与按键绑定（布局职责 / 死键 / 重复入口 / 零入口能力面 22 项发现按 P1-P3 排序，附 14 条分批建议与逐条修复对账：后台任务面板、本地推理看板、路由容灾、工作区配置、专家参数、设置搜索与离线只读）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）
 - ProviderManager 并发与参数审查

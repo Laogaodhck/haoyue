@@ -15,6 +15,7 @@ const api: DesktopApi = {
   selectWorkspace: () => ipcRenderer.invoke('app:select-workspace'),
   selectFiles: () => ipcRenderer.invoke('app:select-files'),
   readFileBase64: (path: string) => ipcRenderer.invoke('app:read-file-base64', path),
+  readMediaBase64: (path: string) => ipcRenderer.invoke('app:read-media-base64', path),
   getPathForFile: (file: File) => {
     try {
       return webUtils.getPathForFile(file)

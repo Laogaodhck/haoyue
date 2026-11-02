@@ -1726,4 +1726,77 @@ internal sealed partial class DaemonAdminApi(
                && !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
                && !Path.IsPathRooted(relative);
     }
+
+    // ---------------------------------------------------------------- speech RPC（豆包语音同源）
+
+    /// <summary>speech.transcribe：转写语音为文本（录音文件极速版识别）。</summary>
+    public async Task<string> TranscribeAsync(JsonObject parameters, CancellationToken ct)
+    {
+        var path = OptionalString(parameters, "audioPath");
+        var url = OptionalString(parameters, "audioUrl");
+        var data = OptionalString(parameters, "audioData");
+        if (path is null && url is null && data is null)
+            throw new DaemonRequestException("params.audioPath / audioUrl / audioData 至少提供一个");
+        try
+        {
+            string? tempFile = null;
+            if (data is not null)
+            {
+                tempFile = Path.Combine(Path.GetTempPath(),
+                    $"haoyue-stt-{Guid.NewGuid():N}.wav");
+                await File.WriteAllBytesAsync(tempFile, Convert.FromBase64String(data), ct).ConfigureAwait(false);
+                path = tempFile;
+            }
+            try
+            {
+                var text = await Haoyue.Runtime.Tools.Builtin.SpeechToTextTool.TranscribeAsync(
+                    runtime.ConfigStore.Config.Speech, path, url, ct).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(text))
+                    throw new DaemonRequestException("ASR returned no transcript");
+                return new JsonObject { ["text"] = text }.ToJsonString();
+            }
+            finally
+            {
+                if (tempFile is not null)
+                {
+                    try { File.Delete(tempFile); } catch (Exception) { }
+                }
+            }
+        }
+        catch (DaemonRequestException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new DaemonRequestException(ex.Message, DaemonErrorCode.InternalError);
+        }
+    }
+
+    /// <summary>speech.synthesize：合成语音并落盘到当前工作区 .haoyue/outputs/audio/。</summary>
+    public async Task<string> SynthesizeAsync(JsonObject parameters, CancellationToken ct)
+    {
+        var text = RequiredString(parameters, "text");
+        var speaker = OptionalString(parameters, "speaker");
+        byte[] bytes;
+        string format;
+        try
+        {
+            (bytes, format) = await Haoyue.Runtime.Tools.Builtin.TextToSpeechTool.SynthesizeAsync(
+                runtime.ConfigStore.Config.Speech, text, speaker, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new DaemonRequestException(ex.Message, DaemonErrorCode.InternalError);
+        }
+        if (bytes.Length == 0)
+            throw new DaemonRequestException("TTS returned no audio payload");
+
+        var dir = Path.Combine(runtime.Workspace.Root, ".haoyue", "outputs", "audio");
+        Directory.CreateDirectory(dir);
+        var extension = "." + (format == "ogg_opus" ? "ogg" : format);
+        var file = Path.Combine(dir, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}{extension}");
+        await File.WriteAllBytesAsync(file, bytes, ct).ConfigureAwait(false);
+        return new JsonObject { ["file"] = file, ["format"] = format }.ToJsonString();
+    }
 }

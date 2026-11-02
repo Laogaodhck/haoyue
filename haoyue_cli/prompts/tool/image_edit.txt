@@ -1,0 +1,8 @@
+Edit a reference image (remove objects, extend the canvas, restyle, swap elements) and save the result into the workspace.
+
+- prompt (required): what to change in the reference image. Be concrete about the edit region and the desired result, e.g. "remove the red car on the left", "change the dress material to glass", "extend the sky upward".
+- image_path (optional): local path of the reference image (png/jpeg/webp/gif). Mutually exclusive with image_url.
+- image_url (optional): public URL of the reference image. Mutually exclusive with image_path.
+- file_name (optional): file name without extension; a timestamped default is used otherwise.
+
+Uses the configured image-capable provider (OpenAI-compatible images/generations with the image field). The result is written under .haoyue/outputs/images/ — read that path afterwards to verify the edit. Hidden when no image-capable provider is configured.

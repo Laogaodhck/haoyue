@@ -1,0 +1,7 @@
+Synthesize text into spoken audio and save it into the workspace.
+
+- text (required): the text to read aloud (up to a few thousand characters per request).
+- speaker (optional): voice id from the console voice library; defaults to speech.ttsSpeaker.
+- file_name (optional): output file name without extension; a timestamped default is used otherwise.
+
+The audio file is written under .haoyue/outputs/audio/. Use it to produce voice narration, dubbing or read-aloud audio for any text. Hidden when speech.apiKey is not configured.

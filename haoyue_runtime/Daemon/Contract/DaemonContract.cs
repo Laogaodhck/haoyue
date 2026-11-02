@@ -1177,6 +1177,21 @@ public static class DaemonContract
             result: RObject(("recorded", SBoolean("是否已记录"))),
             errors: E(DaemonErrorCode.InvalidParams)),
 
+        // speech（语音服务，豆包语音同源 openspeech）。speech.apiKey 未配置时返回 InvalidParams。
+        M("speech.transcribe", "speech", "转写语音为文本（ASR，录音文件极速版）", parameters: SObject(
+            ("audioPath", SString("本地音频文件绝对路径（wav/mp3/ogg，≤100MB）"), false),
+            ("audioUrl", SString("公网音频 URL"), false),
+            ("audioData", SString("音频 base64（wav/mp3/ogg，≤100MB），与 audioPath/audioUrl 互斥"), false)),
+            result: RObject(("text", SString("识别文本"))),
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("speech.synthesize", "speech", "合成语音音频（TTS，大模型语音合成；落盘到当前工作区 .haoyue/outputs/audio/）", parameters: SObject(
+            ("text", SString("待合成文本"), true),
+            ("speaker", SString("音色 ID；缺省 speech.ttsSpeaker"), false)),
+            result: RObject(
+                ("file", SString("合成音频文件绝对路径")),
+                ("format", SString("音频格式（mp3/wav/ogg_opus）"))),
+            errors: E(DaemonErrorCode.InvalidParams)),
+
         // workspace
         M("workspace.get", "workspace", "查询当前工作区与模式", parameters: EmptyParams,
             result: WorkspaceResult, errors: E()),

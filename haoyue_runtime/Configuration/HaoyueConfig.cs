@@ -22,6 +22,8 @@ public sealed class HaoyueConfig
     public EvolutionConfig Evolution { get; set; } = new();
     public KnowledgeConfig Knowledge { get; set; } = new();
     public ImageGenConfig ImageGen { get; set; } = new();
+    public VideoGenConfig VideoGen { get; set; } = new();
+    public SpeechConfig Speech { get; set; } = new();
     public DocRenderConfig DocRender { get; set; } = new();
     public WebConfig Web { get; set; } = new();
     public DaemonConfig Daemon { get; set; } = new();
@@ -390,6 +392,54 @@ public sealed class ImageGenConfig
     public string? Model { get; set; }
     /// <summary>生成尺寸（传给 images/generations 的 size）。提供商不支持时由端点裁定。</summary>
     public string Size { get; set; } = "1024x1024";
+}
+
+/// <summary>
+/// 视频生成配置（多模态输出）。video_generate 走 OpenAI 兼容端点的异步
+/// contents/generations/tasks 链路（如火山方舟 Seedance）。模型引用必填，
+/// 未配置时 video_generate / video_status 工具自动隐藏。
+/// </summary>
+public sealed class VideoGenConfig
+{
+    /// <summary>视频模型引用（"providerId/modelId"），必填才启用视频工具。空 = 工具隐藏。</summary>
+    public string? Model { get; set; }
+    /// <summary>默认画幅，传给 contents/generations/tasks 的 ratio（16:9 / 9:16 / 1:1 / adaptive 等）。</summary>
+    public string Ratio { get; set; } = "16:9";
+    /// <summary>默认时长（秒），夹紧到 5..30。</summary>
+    public int Duration { get; set; } = 5;
+    /// <summary>是否默认生成配乐/音频轨。</summary>
+    public bool GenerateAudio { get; set; } = true;
+    /// <summary>是否请求官方水印（未配置时按端点默认）。</summary>
+    public bool Watermark { get; set; } = true;
+    /// <summary>video_generate 单次轮询等待上限（秒），夹紧到 30..600；超时返回任务 ID 交由 video_status 查询。</summary>
+    public int WaitSeconds { get; set; } = 120;
+    /// <summary>轮询间隔（秒），夹紧到 5..60。</summary>
+    public int PollIntervalSeconds { get; set; } = 10;
+}
+
+/// <summary>
+/// 语音服务配置（豆包语音同源，openspeech.bytedance.com）。
+/// ApiKey 支持 "secret:" 加密引用（与 provider 密钥同一凭据体系）。
+/// 未配置 ApiKey 时 speech_to_text / text_to_speech 工具自动隐藏。
+/// </summary>
+public sealed class SpeechConfig
+{
+    /// <summary>火山引擎语音 API Key（新版控制台「API Key 管理」），支持 secret: 加密引用。</summary>
+    public string? ApiKey { get; set; }
+    /// <summary>ASR 资源 ID（录音文件极速版识别）。</summary>
+    public string AsrResourceId { get; set; } = "volc.bigasr.auc_turbo";
+    /// <summary>ASR 识别接口地址；空 = 默认官方端点。</summary>
+    public string AsrBaseUrl { get; set; } = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash";
+    /// <summary>TTS 资源 ID（大模型语音合成）。</summary>
+    public string TtsResourceId { get; set; } = "seed-tts-2.0";
+    /// <summary>TTS 合成接口地址；空 = 默认官方端点。</summary>
+    public string TtsBaseUrl { get; set; } = "https://openspeech.bytedance.com/api/v3/tts/unidirectional";
+    /// <summary>默认音色 ID（控制台 > 音色库）。</summary>
+    public string TtsSpeaker { get; set; } = "zh_female_vv_uranus_bigtts";
+    /// <summary>合成音频格式：mp3 / wav / ogg_opus / pcm。</summary>
+    public string TtsFormat { get; set; } = "mp3";
+    /// <summary>合成采样率 Hz（8000..48000）。</summary>
+    public int TtsSampleRate { get; set; } = 24000;
 }
 
 /// <summary>

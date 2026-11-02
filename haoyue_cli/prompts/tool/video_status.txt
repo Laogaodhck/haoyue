@@ -1,0 +1,6 @@
+Query the status of an asynchronous video-generation task started by video_generate, and optionally download the finished MP4.
+
+- task_id (required): the task id returned by video_generate.
+- download (optional): when true and the task succeeded, download the MP4 under .haoyue/outputs/videos/. Default true.
+
+Returns the current status (queued / running / succeeded / failed). Use this to follow up on a video task after video_generate timed out. Requires agent.videoGen.model; hidden when not configured.

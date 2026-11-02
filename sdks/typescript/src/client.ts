@@ -948,6 +948,22 @@ export class DaemonClient {
       this.call("expert.list", params),
   };
 
+  /** speech 类别方法。 */
+  readonly speech = {
+    /**
+     * 转写语音为文本（ASR，录音文件极速版）
+     * 终态事件：result, error
+     */
+    speechTranscribe: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("speech.transcribe", params),
+    /**
+     * 合成语音音频（TTS，大模型语音合成；落盘到当前工作区 .haoyue/outputs/audio/）
+     * 终态事件：result, error
+     */
+    speechSynthesize: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("speech.synthesize", params),
+  };
+
   /** system 类别方法。 */
   readonly system = {
     /**

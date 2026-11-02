@@ -363,6 +363,20 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
                          prompts,
                          _services.GetRequiredService<IConfigStore>(),
                          _services.GetRequiredService<ILlmHttpFactory>()),
+                     new ImageEditTool(
+                         prompts,
+                         _services.GetRequiredService<IConfigStore>(),
+                         _services.GetRequiredService<ILlmHttpFactory>()),
+                     new VideoGenTool(
+                         prompts,
+                         _services.GetRequiredService<IConfigStore>(),
+                         _services.GetRequiredService<ILlmHttpFactory>()),
+                     new VideoStatusTool(
+                         prompts,
+                         _services.GetRequiredService<IConfigStore>(),
+                         _services.GetRequiredService<ILlmHttpFactory>()),
+                     new SpeechToTextTool(prompts, _services.GetRequiredService<IConfigStore>()),
+                     new TextToSpeechTool(prompts, _services.GetRequiredService<IConfigStore>()),
                      new DocRenderTool(prompts, _services.GetRequiredService<IConfigStore>()),
                      new DeclareSkillTool(_services.GetRequiredService<ISkillManager>(), prompts),
                  })

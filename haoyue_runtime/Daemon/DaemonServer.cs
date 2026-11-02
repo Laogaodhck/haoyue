@@ -968,6 +968,16 @@ public sealed partial class DaemonServer : IAsyncDisposable
                         break;
                     }
 
+                    case "speech.transcribe":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            ct => _admin.TranscribeAsync(Params(request), ct), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "speech.synthesize":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            ct => _admin.SynthesizeAsync(Params(request), ct), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "workspace.init":
                         await RunAdminAsync(context.Writer, context.WriterGate, id, true,
                             _ => Task.FromResult(_admin.InitializeWorkspace()), context.ConnectionCt).ConfigureAwait(false);

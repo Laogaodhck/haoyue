@@ -106,6 +106,23 @@ const imageMediaTypes: Record<string, string> = {
   '.webp': 'image/webp',
   '.gif': 'image/gif'
 }
+// 语音/视频产物展示通道：只放行工具落盘的媒体扩展名，base64 传输受体积上限约束。
+const maxAudioBytes = 30 * 1024 * 1024
+const maxVideoBytes = 150 * 1024 * 1024
+const audioMediaTypes: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac'
+}
+const videoMediaTypes: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/mp4'
+}
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
@@ -577,6 +594,28 @@ function registerIpc(): void {
       return {
         data: data.toString('base64'),
         mediaType: imageMediaTypes[ext] || 'image/png',
+        sizeBytes: data.byteLength
+      }
+    } catch {
+      return null
+    }
+  })
+
+  handle('app:read-media-base64', async (_event, path: string) => {
+    try {
+      // 安全边界：仅放行语音/视频产物扩展名，限制体积，防止渲染层获得任意文件读取原语。
+      const filePath = requireAbsolutePath(path)
+      const ext = extname(filePath).toLocaleLowerCase()
+      const mediaType = audioMediaTypes[ext] || videoMediaTypes[ext]
+      if (!mediaType) return null
+      const info = await stat(filePath)
+      if (!info.isFile()) return null
+      const cap = audioMediaTypes[ext] ? maxAudioBytes : maxVideoBytes
+      if (info.size > cap) return null
+      const data = await readFile(filePath)
+      return {
+        data: data.toString('base64'),
+        mediaType,
         sizeBytes: data.byteLength
       }
     } catch {

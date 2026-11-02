@@ -105,6 +105,8 @@ export const DAEMON_METHODS = [
   'agent.undo',
   'agent.interrupted',
   'feedback.turn',
+  'speech.transcribe',
+  'speech.synthesize',
   'workspace.get',
   'workspace.open',
   'workspace.trust',

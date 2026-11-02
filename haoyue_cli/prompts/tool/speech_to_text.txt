@@ -1,0 +1,6 @@
+Transcribe an audio file into text (Chinese and multilingual ASR).
+
+- audio_path (optional): local path of the audio file (wav/mp3/ogg opus, ≤100MB). Mutually exclusive with audio_url.
+- audio_url (optional): public URL of the audio file. Mutually exclusive with audio_path.
+
+Returns the recognized transcript text. Use it to turn voice notes, meeting recordings or user-spoken instructions into text the conversation can act on. Hidden when speech.apiKey is not configured.

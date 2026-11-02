@@ -122,6 +122,7 @@ Open “Settings → Models & Providers” to:
 - create, edit, test, enable, or remove Providers;
 - view and edit API keys stored in the configuration (resolved for display, encrypted at rest);
 - store and manage the API key in the configuration;
+- import a provider from a cURL / Python snippet: the API base URL, Bearer / api_key, and model IDs are detected and filled in (parsed locally, nothing uploaded);
 - manage models, Base URL, proxy, timeout, and priority; the “Protocol” menu offers Alibaba Cloud Bailian, Volcengine Ark, Tencent Hunyuan, Baidu Qianfan, Zhipu GLM, and DeepSeek presets that pre-fill the compatible endpoint;
 - configure advanced provider fields: organization and project, concurrency threads (local inference), KV prefix reuse (local inference), custom request headers (secret header values are never echoed — leave blank to keep), and reasoning-effort maps;
 - set a fallback model and input / output pricing per model (the Runtime accumulates cost from usage records);

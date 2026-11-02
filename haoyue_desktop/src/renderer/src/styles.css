@@ -4327,6 +4327,79 @@ select:focus-visible {
   overflow-y: auto;
 }
 
+/* cURL / Python 导入：折叠面板放在表单最前，避免打断既有字段顺序。 */
+.provider-import {
+  padding: 11px 13px;
+  margin-bottom: 20px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  border: 1px dashed var(--border-strong);
+  border-radius: 9px;
+}
+
+.provider-import-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  color: var(--text);
+  text-align: left;
+  background: none;
+  border: 0;
+}
+
+.provider-import-toggle span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.provider-import-toggle small {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.provider-import-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.provider-import-body textarea {
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+}
+
+.provider-import-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.provider-import-actions small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.provider-import-error,
+.provider-import-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.provider-import-error { color: var(--danger); }
+.provider-import-note { color: var(--text-muted); }
+
 .provider-form-section {
   padding-bottom: 21px;
   margin-bottom: 21px;

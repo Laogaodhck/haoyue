@@ -48,6 +48,19 @@ Open “Settings → Models & Providers” to manage Providers, Profiles, and th
 4. Configure proxy, timeout, priority, prompt caching, and enabled state as needed.
 5. Save and select “Test,” then activate the Provider or model.
 
+### Import from cURL / Python
+
+The “Import from cURL / Python” panel at the top of the Add Provider dialog accepts a call snippet directly:
+
+```bash
+curl -X POST 'https://api.example.com/v1/chat/completions' \
+  -H 'Authorization: Bearer sk-...' \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "deepseek/deepseek-flash", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+The parser extracts the API base URL (dropping `/chat/completions` or `/messages`), the `Bearer` / `api_key` value, and the `model` field locally, then fills the form; Python snippets using the OpenAI SDK, `requests.post`, and either quote style are supported. A built-in vendor host also switches the protocol preset. Nothing is uploaded, the pasted text is cleared after import, and the API key is still stored as an encrypted reference.
+
 The `apiKey` value is stored in the configuration as an encrypted `secret:` reference (Windows DPAPI / Linux keyring) and is resolved, displayed, and edited by Desktop. Runtime does not read API keys from environment variables.
 
 On request failure, the Runtime preserves the Provider name, HTTP status, and response body. Protocol mismatches, missing tool results, invalid model IDs, and other 400 responses are shown in full so the server's concrete guidance remains available.

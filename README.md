@@ -47,6 +47,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 ### 🤖 多提供商与模型
 
 - **OpenAI 兼容 / Anthropic / 国内云厂商**：OpenAI、Anthropic，以及阿里云百炼、火山方舟、腾讯云混元、百度千帆、智谱 GLM、DeepSeek 等预设一键接入
+- **cURL / Python 一键导入**：新增提供商时直接粘贴调用片段，自动识别 API 地址、Bearer Key 与模型 ID（支持 OpenAI、requests、Anthropic 等常见写法），识别结果仍走加密密钥与 OpenAI 兼容链路
 - **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、MoE 专家权重钉 CPU、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；加载失败自动重试（GPU 卸载失败自动降级 CPU），加载完成后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）；多模型 LRU 驻留（默认 2 个，嵌入/聊天交替零重载，实测 **6.4~6.9×** 加速）、daemon 启动后台预热、加载进度实时广播（阶段 + ETA）、header/mmproj 元数据缓存（换文件自动失效）、空闲权重自动回收（默认 20 分钟）、备用模型回退与 GGUF 版本 / ABI 兼容性早期诊断——详见 [本地模型加载优化报告](haoyue_doc/本地模型加载优化报告-2026-10-14.md)
 - **本地多模态视觉**：GGUF 配套 mmproj 权重自动发现，本地模型可直接"看"对话中的图片与工具截图——带图请求自动降级 CPU 上下文规避上游 CUDA 慢路径，文本轮保持 GPU 全速
 - **智能路由**：快速、均衡、质量、经济、离线多种策略，自动重试、指数退避与熔断器故障转移
@@ -495,7 +496,7 @@ parameters:          # 提示末尾追加参数收集说明
 dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1277 / haoyue_cli_tests 27 用例）
 
 # 桌面端（需先 pnpm install）
-cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 357 用例（36 个文件）
+cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 365 用例（37 个文件）
 ```
 
 门槛：`haoyue_runtime` 行覆盖 ≥70% / 分支 ≥55%；CLI（`haoyue_cli`）行 ≥15% / 分支 ≥15%；webserver 行 ≥45% / 分支 ≥15%——三者各自单跑，低于门槛 `dotnet test` 直接失败。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算、`wwwroot/lib` vendor 清单（哈希 / 版本下限 / 引用覆盖）均有护栏测试强制。桌面端在 CI 的 desktop job 中执行 `pnpm lint`、组件行数预算、`pnpm test` 与 `pnpm typecheck && pnpm build`；`benchmarks/*` 三个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描（发现即失败）、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）；另有 Linux 作业覆盖 Unix socket、符号链接解析、Python 连接器与 TS SDK 集成测试。runtime 与测试工程构建均开启 `TreatWarningsAsErrors`，runtime 另开 AOT / 裁剪分析器，JSON 序列化统一走源生成上下文。
@@ -569,7 +570,7 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
 - 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1277+27+357、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1277+27+365、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - 桌面端 UI 审查——三栏布局与按键绑定（布局职责 / 死键 / 重复入口 / 零入口能力面 22 项发现按 P1-P3 排序，附 14 条分批建议与逐条修复对账：后台任务面板、本地推理看板、路由容灾、工作区配置、专家参数、设置搜索与离线只读）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）
 - ProviderManager 并发与参数审查

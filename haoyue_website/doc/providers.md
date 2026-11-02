@@ -48,6 +48,19 @@ DeepSeek、Azure OpenAI、企业网关或其他兼容服务可以通过新增 `k
 4. 根据需要配置代理、超时、优先级、提示词缓存和启用状态。
 5. 保存后点击“测试”；确认可用后切换活动 Provider 或模型。
 
+### 从 cURL / Python 导入
+
+“新增模型提供商”顶部的“从 cURL / Python 导入”可直接粘贴调用片段：
+
+```bash
+curl -X POST 'https://api.example.com/v1/chat/completions' \
+  -H 'Authorization: Bearer sk-...' \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "deepseek/deepseek-flash", "messages": [{"role": "user", "content": "你好"}]}'
+```
+
+解析器会在本地提取 API 根地址（自动去掉 `/chat/completions` 或 `/messages`）、`Bearer` / `api_key` 与 `model` 字段，并回填表单；Python 的 OpenAI SDK、`requests.post` 与单双引号写法同样支持。命中内置厂商域名时同步切换接口协议。代码不会上传，粘贴内容回填后立即清空，API Key 仍按加密引用保存。
+
 `apiKey` 以 `secret:` 加密引用写入配置文件（Windows DPAPI / Linux 密钥环），由 Desktop 解密显示和修改。Runtime 不会从环境变量读取 API Key。
 
 请求失败时，Runtime 会保留 Provider 名称、HTTP 状态和响应正文。例如协议不兼容、工具调用消息缺少对应结果、模型 ID 错误等 400 响应会完整展示，方便按服务端提示修复。

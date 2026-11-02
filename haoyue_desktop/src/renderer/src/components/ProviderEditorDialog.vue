@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { daemonRequest } from '../daemon-rpc'
-import { Eye, EyeOff, FolderOpen, Gauge, Plus, RefreshCw, Save, Settings2, Trash2, X } from '@lucide/vue'
+import { ClipboardPaste, Eye, EyeOff, FolderOpen, Gauge, Plus, RefreshCw, Save, Settings2, Trash2, Wand2, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import FieldLabel from './FieldLabel.vue'
 import SelectMenu from './SelectMenu.vue'
@@ -8,6 +8,7 @@ import ModelConfigModal, { type ModelDetailConfig } from './ModelConfigModal.vue
 import ModelLoadSettingsDialog, { type LocalModelLoadSettings } from './ModelLoadSettingsDialog.vue'
 import { formatTokenCount } from '../app-helpers'
 import { PROVIDER_PROTOCOLS, providerProtocol, type ProviderKind } from '../provider-presets'
+import { parseProviderImport } from '../provider-import'
 
 export interface ProviderFormValue {
   id: string
@@ -81,6 +82,11 @@ const protocolOptions = PROVIDER_PROTOCOLS
 const showAdvanced = ref(false)
 /** 打开编辑时回填表单会改写 kind；此间不应用协议预设，避免覆盖已存 Base URL。 */
 const hydrating = ref(false)
+
+const importOpen = ref(false)
+const importText = ref('')
+const importError = ref('')
+const importNote = ref('')
 
 const apiKeyPlaceholder = computed((): string =>
   props.keyConfigured
@@ -174,6 +180,54 @@ function addModel(): void {
     }
   }
   newModelInput.value = ''
+}
+
+/**
+ * 解析 cURL / Python 片段并回填。只填入识别到的字段，未识别项保留现状；
+ * 粘贴内容解析后立即清空，避免密钥文本长期停留在输入框里。
+ */
+function applyImport(): void {
+  importError.value = ''
+  importNote.value = ''
+  const result = parseProviderImport(importText.value)
+  if (!result.baseUrl && !result.apiKey && result.models.length === 0) {
+    importError.value = '未能识别出 API 地址、密钥或模型；请确认粘贴的是 cURL / Python 调用代码。'
+    return
+  }
+
+  if (result.baseUrl) {
+    if (form.kind !== result.kind) form.kind = result.kind
+    form.baseUrl = result.baseUrl
+  }
+  if (result.apiKey) {
+    form.apiKey = result.apiKey
+    form.clearApiKey = false
+    revealKey.value = false
+  }
+  for (const id of result.models) {
+    if (!modelList.value.some((model) => model.id.toLowerCase() === id.toLowerCase())) {
+      modelList.value.push({
+        id,
+        alias: undefined,
+        contextWindow: 1000000,
+        maxOutput: 128000,
+        vision: false
+      })
+    }
+  }
+  if (!props.editingId) {
+    if (!form.id.trim() && result.suggestedId) form.id = result.suggestedId
+    if (!form.name.trim() && result.suggestedName) form.name = result.suggestedName
+  }
+
+  const filled = [
+    result.baseUrl ? `API 地址 ${result.baseUrl}` : '',
+    result.apiKey ? 'API Key' : '',
+    result.models.length > 0 ? `${result.models.length} 个模型` : ''
+  ].filter(Boolean)
+  importNote.value = filled.length > 0 ? `已回填：${filled.join('、')}。` : ''
+  importError.value = result.warnings.join(' ')
+  importText.value = ''
 }
 
 function isLocalKind(): boolean {
@@ -352,6 +406,10 @@ watch(() => props.open, (open) => {
     resetAdvancedToDefaults()
   }
   revealKey.value = false
+  importOpen.value = false
+  importText.value = ''
+  importError.value = ''
+  importNote.value = ''
   scannedModels.value = []
   scanError.value = ''
   localSaveError.value = ''
@@ -406,6 +464,28 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
           </header>
 
           <div class="provider-editor-body">
+            <div class="provider-import">
+              <button type="button" class="provider-import-toggle" :aria-expanded="importOpen"
+                @click="importOpen = !importOpen">
+                <ClipboardPaste :size="15" />
+                <span>从 cURL / Python 导入</span>
+                <small>自动识别 API 地址、密钥与模型</small>
+              </button>
+              <div v-if="importOpen" class="provider-import-body">
+                <textarea v-model="importText" rows="6" spellcheck="false"
+                  placeholder="粘贴任意 OpenAI 兼容调用片段，例如：&#10;curl -X POST 'https://api.example.com/v1/chat/completions' \\&#10;  -H 'Authorization: Bearer sk-...' \\&#10;  -d '{&quot;model&quot;: &quot;deepseek/deepseek-flash&quot;, ...}'&#10;&#10;或 Python：&#10;client = OpenAI(api_key=&quot;sk-...&quot;, base_url=&quot;https://api.example.com/v1&quot;)&#10;client.chat.completions.create(model=&quot;deepseek/deepseek-flash&quot;, ...)" />
+                <div class="provider-import-actions">
+                  <small>仅在本地解析，不会上传；API Key 仍按加密引用保存。</small>
+                  <button type="button" class="secondary-button compact-button" :disabled="!importText.trim()"
+                    @click="applyImport">
+                    <Wand2 :size="14" /> 解析并填入
+                  </button>
+                </div>
+                <p v-if="importError" class="provider-import-error">{{ importError }}</p>
+                <p v-else-if="importNote" class="provider-import-note">{{ importNote }}</p>
+              </div>
+            </div>
+
             <section class="provider-form-section">
               <div class="provider-section-heading">
                 <strong>基本信息</strong>

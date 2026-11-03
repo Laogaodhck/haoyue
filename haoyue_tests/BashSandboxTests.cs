@@ -194,13 +194,33 @@ public class BashSandboxTests : IDisposable
     {
         if (!OperatingSystem.IsWindows()) return; // Job Object 是 Windows 专属能力
 
-        var tool = new BashTool(new FilePromptProvider());
-        var result = await tool.ExecuteAsync(
-            new JsonObject { ["command"] = "ping -n 30 127.0.0.1", ["timeout_seconds"] = 2 },
-            Context(Workspace(), sandboxEnabled: true), CancellationToken.None);
+        // 用 python sleep 脚本而非 ping：Windows 无真实 bash 时回退 pwsh，`ping -n` 的
+        // Linux 语义（-n 为 numeric）会瞬间失败而不是超时；python 跨 shell 一致。
+        // 脚本文件而非内联 -c：命令含嵌套引号时 .NET ArgumentList 的引号转义会
+        // 让 pwsh 报 ParserError。
+        var py = FindPython();
+        if (py is null) return; // 无 python 时跳过
 
-        Assert.False(result.Success);
-        Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
+        var script = Path.Combine(Path.GetTempPath(), $"haoyue_sleep_{Guid.NewGuid():N}.py");
+        File.WriteAllText(script, "import time\ntime.sleep(30)");
+        // 平台分支：Windows 回退 pwsh 需 & 调用运算符（否则 ParserError），Unix 走 bash。
+        var command = OperatingSystem.IsWindows()
+            ? $"& \"{py}\" \"{script}\""
+            : $"\"{py}\" \"{script}\"";
+        try
+        {
+            var tool = new BashTool(new FilePromptProvider());
+            var result = await tool.ExecuteAsync(
+                new JsonObject { ["command"] = command, ["timeout_seconds"] = 2 },
+                Context(Workspace(), sandboxEnabled: true), CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            File.Delete(script);
+        }
     }
 }
 

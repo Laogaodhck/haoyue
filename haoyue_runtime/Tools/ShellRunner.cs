@@ -22,15 +22,49 @@ internal static class ShellRunner
         if (!OperatingSystem.IsWindows())
             return ("/bin/bash", ["-c", command], ShellKind.Bash);
 
-        var bash = FindOnPath("bash.exe");
+        var bash = FindRealBash();
         if (bash is not null)
             return (bash, ["-c", command], ShellKind.Bash);
 
         var pwsh = FindOnPath("pwsh.exe") ?? FindOnPath("powershell.exe");
         if (pwsh is not null)
-            return (pwsh, ["-NoProfile", "-NonInteractive", "-Command", command], ShellKind.PowerShell);
+        {
+            // -EncodedCommand：命令原文经 UTF-16LE Base64 传入，pwsh 直接执行该文本，
+            // 不经命令行解析层。否则 -Command 的参数经 .NET ArgumentList 拼装后，
+            // 命令内含双引号/特殊字符时会被拆开，pwsh 报 ParserError
+            //（实测 `"py" "script"` 报 Unexpected token；bash 工具的命令常含引号）。
+            var encoded = EncodePowerShellCommand(command);
+            return (pwsh, ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], ShellKind.PowerShell);
+        }
 
         return ("cmd.exe", ["/d", "/s", "/c", command], ShellKind.Cmd);
+    }
+
+    /// <summary>
+    /// Windows 上找「真实 bash」：跳过 WSL bridge（System32\bash.exe 与 WindowsApps
+    /// App 执行别名）。WSL bridge 把命令经 Windows→WSL 参数转换后再交给 Linux bash，
+    /// 实测 `i=0; echo $i` 的 `$i` 展开为空、stdout 经管道回传会整体丢失——用它执行
+    /// bash 工具/终端会让带变量的命令静默出错（记录于 2026-11-03 三测试失败根因）。
+    /// 只接受 Git Bash / MSYS / Cygwin 这类原生 bash；没有则回退 pwsh。
+    /// </summary>
+    private static string? FindRealBash()
+    {
+        var system32 = Environment.SystemDirectory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var windowsApps = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WindowsApps").TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(dir.Trim(), "bash.exe");
+            if (!File.Exists(candidate)) continue;
+            if (candidate.StartsWith(system32, StringComparison.OrdinalIgnoreCase)
+                || candidate.StartsWith(windowsApps, StringComparison.OrdinalIgnoreCase))
+                continue;
+            return candidate;
+        }
+        return null;
     }
 
     /// <summary>
@@ -226,6 +260,11 @@ internal static class ShellRunner
         .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
         .Select(dir => Path.Combine(dir.Trim(), fileName))
         .FirstOrDefault(File.Exists);
+
+    /// <summary>把命令文本编码为 pwsh -EncodedCommand 所需的 UTF-16LE Base64。
+    /// ShellRunner 的 pwsh 回退与 terminal 的 PowerShell 会话共用。</summary>
+    public static string EncodePowerShellCommand(string command) =>
+        Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
 }
 
 /// <summary>

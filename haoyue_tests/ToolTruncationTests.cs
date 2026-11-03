@@ -72,9 +72,21 @@ public class ToolTruncationTests : IDisposable
     [Fact]
     public async Task BashTool_FailedCommand_KeepsTailSummary()
     {
+        var py = FindPython();
+        if (py is null) return; // 无 python 时跳过：需要跨 shell 一致的长输出载体
+
         var tool = new BashTool(new FilePromptProvider());
         // 6000 行输出后以退出码 3 结束：失败摘要在尾部，必须存活。
-        var command = "i=0; while [ $i -lt 6000 ]; do echo \"line-$i\"; i=$((i+1)); done; exit 3";
+        // 用 python 脚本文件而非 bash 变量循环 / 内联 -c：Windows 无真实 bash 时
+        // 回退 pwsh/cmd，`$i` 变量写法在 PowerShell 下语法不同会直接报错；命令含
+        // 嵌套引号时 .NET ArgumentList 的引号转义会让 pwsh 报 ParserError。
+        var script = Path.Combine(_dir, "tail6000.py");
+        File.WriteAllText(script,
+            "import sys\n[sys.stdout.write('line-%04d\\n' % i) for i in range(6000)]\nsys.exit(3)");
+        // 平台分支：Windows 回退 pwsh（& 调用 + 退出码回传），Unix 走真实 bash。
+        var command = OperatingSystem.IsWindows()
+            ? $"& \"{py}\" \"{script}\"; exit $LASTEXITCODE"
+            : $"\"{py}\" \"{script}\"; exit $?";
         var result = await tool.ExecuteAsync(
             new JsonObject { ["command"] = command, ["timeout_seconds"] = 60 },
             NewContext(_dir), CancellationToken.None);
@@ -83,5 +95,15 @@ public class ToolTruncationTests : IDisposable
         Assert.Contains("Exit code 3", result.Output);
         Assert.Contains("line-5999", result.Output); // 头截断下会被丢掉的尾行
         Assert.Contains("omitted from the middle", result.Output);
+    }
+
+    private static string? FindPython()
+    {
+        foreach (var name in new[] { "python.exe", "python3.exe" })
+        {
+            var found = ShellRunner.FindOnPath(name);
+            if (found is not null) return found;
+        }
+        return null;
     }
 }

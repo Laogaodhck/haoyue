@@ -80,9 +80,16 @@ public sealed class TerminalTool(IPromptProvider prompts) : BuiltinTool(prompts)
             var marker = Guid.NewGuid().ToString("N")[..8];
             var (shell, shellArgs, kind) = ShellRunner.ResolveShellWithKind(command);
             var wrapped = WrapCommand(command, marker, kind);
-            string[] finalArgs = kind == ShellRunner.ShellKind.Cmd
-                ? ["/d", "/v:on", "/s", "/c", wrapped] // /v:on 启用延迟展开（!CD! / !ERRORLEVEL!）
-                : [.. shellArgs[..^1], wrapped];
+            string[] finalArgs = kind switch
+            {
+                // /v:on 启用延迟展开（!CD! / !ERRORLEVEL!）
+                ShellRunner.ShellKind.Cmd => ["/d", "/v:on", "/s", "/c", wrapped],
+                // 与 ShellRunner 的 pwsh 回退一致：命令必须经 UTF-16LE Base64 编码后
+                // 作为 -EncodedCommand 传入，明文会报 "not properly encoded"。
+                ShellRunner.ShellKind.PowerShell =>
+                    ["-NoProfile", "-NonInteractive", "-EncodedCommand", ShellRunner.EncodePowerShellCommand(wrapped)],
+                _ => [.. shellArgs[..^1], wrapped], // bash：-c 后的命令明文
+            };
 
             var (risk, riskReasons) = BashRiskClassifier.Classify(command);
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();

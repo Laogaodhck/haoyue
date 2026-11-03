@@ -120,7 +120,10 @@ public sealed class BackgroundTaskService : IBackgroundTaskService, IDisposable
         _tasks.TryGetValue(id, out var entry) ? Snapshot(entry) : null;
 
     public IReadOnlyList<BackgroundTaskInfo> List() =>
-        [.. _tasks.Values.OrderByDescending(e => e.CreatedAt).Select(Snapshot)];
+        // 显式 ToList()：daemon RPC 用 HaoyueJsonContext 注册的 List<BackgroundTaskInfo>
+        // 序列化 task.list 响应，集合表达式在 IReadOnlyList 目标下会生成数组，
+        // object 重载拆箱为 List 抛 InvalidCastException（2026-11-03 实测 task.list 失败）。
+        _tasks.Values.OrderByDescending(e => e.CreatedAt).Select(Snapshot).ToList();
 
     public BackgroundTaskInfo? Cancel(string id)
     {

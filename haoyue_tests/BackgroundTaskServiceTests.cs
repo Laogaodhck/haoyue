@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
@@ -137,6 +138,19 @@ public sealed class BackgroundTaskServiceTests : IDisposable
     [Fact]
     public void Get_UnknownId_ReturnsNull() =>
         Assert.Null(NewService(out _).Get("bg-nope"));
+
+    [Fact]
+    public void List_SerializesWithDaemonJsonContext()
+    {
+        // 回归：task.list RPC 用 HaoyueJsonContext.Compact.ListBackgroundTaskInfo 序列化
+        // List() 结果。此前 List() 用集合表达式返回数组，object 重载拆箱为 List<T>
+        // 抛 InvalidCastException（2026-11-03 实测 daemon task.list 失败）。
+        var service = NewService(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)), out var runtime);
+        var task = service.Start(Workspace(runtime), "任务一");
+        var json = JsonSerializer.Serialize(service.List(), HaoyueJsonContext.Compact.ListBackgroundTaskInfo);
+        Assert.Contains(task.Id, json);
+    }
 
     private static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 10_000)
     {

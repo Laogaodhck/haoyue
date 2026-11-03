@@ -117,13 +117,12 @@ public sealed class HealthChecker(ILlmClientFactory clientFactory, Configuration
         // 禁止在此手写 HTTP payload —— 各端点的真实请求语义（方舟 reasoning 模型
         // 的 max_completion_tokens、Anthropic 的 messages 端点等）只在客户端内正确，
         // 手写 payload 曾导致对 ark 的 403 误报（doctor 显示 offline 而真实链路正常）。
-        var model = provider.Models.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m.Id))
-            ?? new ModelConfig
-            {
-                Id = ProviderKinds.IsAnthropic(provider.Kind)
-                    ? "claude-3-haiku-20240307"
-                    : "gpt-4o-mini",
-            };
+        //
+        // 探测目标优先取「活动模型」而非 provider 的第一个模型：tokenhub 实测
+        // 首模型 deepseek/deepseek-flash 免费额度耗尽返回 402，而活动模型
+        // deepseek-v4-flash-202605 真实调用正常 —— 用首模型探测会把可用提供商
+        // 误报为 offline（与 ark 403 误报同源：探测目标与真实使用不一致）。
+        var model = ResolveProbeModel(provider);
 
         var request = new LlmRequest
         {
@@ -189,5 +188,32 @@ public sealed class HealthChecker(ILlmClientFactory clientFactory, Configuration
         var size = $"{first.Length / (double)(gigabytes ? 1L << 30 : 1L << 20):F1} {(gigabytes ? "GB" : "MB")}";
         return new HealthReport(provider.Id, true, 0,
             $"{present.Count}/{provider.Models.Count} model file(s) ready, e.g. {first.Name} ({size})");
+    }
+
+    /// <summary>选择探测模型：优先活动模型（配置 provider/model 对应当前真实使用），
+    /// 否则取该 provider 第一个非空模型，最后兜底通用 ID。避免用「第一个模型」探测时
+    /// 选中额度耗尽 / 已下线的模型而把可用提供商误报为 offline。</summary>
+    private ModelConfig ResolveProbeModel(ProviderConfig provider)
+    {
+        var activeProvider = configStore.Config.Provider;
+        var activeModel = configStore.Config.Model;
+        if (!string.IsNullOrWhiteSpace(activeProvider)
+            && provider.Id.Equals(activeProvider, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(activeModel))
+        {
+            var byId = provider.Models.FirstOrDefault(m =>
+                m.Id.Equals(activeModel, StringComparison.OrdinalIgnoreCase)
+                || m.Id.EndsWith($"/{activeModel}", StringComparison.OrdinalIgnoreCase));
+            if (byId is not null)
+                return byId;
+        }
+
+        return provider.Models.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m.Id))
+            ?? new ModelConfig
+            {
+                Id = ProviderKinds.IsAnthropic(provider.Kind)
+                    ? "claude-3-haiku-20240307"
+                    : "gpt-4o-mini",
+            };
     }
 }

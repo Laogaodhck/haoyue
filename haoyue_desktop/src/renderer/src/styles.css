@@ -2133,6 +2133,44 @@ select:focus-visible {
   padding: 0 34px 12px;
 }
 
+/* 豆包式空态：输入框悬浮居中，欢迎区（empty-state）上移让位。 */
+.composer-region--hero {
+  position: absolute;
+  z-index: 6;
+  top: 54px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 34px 7vh;
+  pointer-events: none;
+}
+
+.composer-region--hero > * {
+  pointer-events: auto;
+}
+
+.composer-region--hero .composer-shell {
+  width: min(100%, 820px);
+}
+
+.composer-region--hero .composer-caption {
+  margin-top: 10px;
+}
+
+.conversation-scroll--hero .empty-state {
+  min-height: 46%;
+  padding: 10vh 24px 0;
+  place-content: start center;
+}
+
+.conversation-scroll--hero .empty-state h1 {
+  font-size: 21px;
+}
+
 .pending-message-stack {
   display: grid;
   width: min(100%, 940px);

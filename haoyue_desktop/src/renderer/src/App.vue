@@ -210,6 +210,15 @@ const conversationSelectionToken = { value: 0 }
 
 const activeThread = computed(() => threads.value.find((thread) => thread.id === activeThreadId.value))
 
+/** 豆包式空态：会话为空（无任务或任务无消息）且运行时在线时，输入框悬浮居中。 */
+const isComposerHero = computed(() =>
+  activePage.value === 'main' &&
+  !conversationLoading.value &&
+  !conversationLoadError.value &&
+  daemonState.value.connected &&
+  !(activeThread.value && activeThread.value.messages.length > 0)
+)
+
 /** H19: long phases (compaction/verify) show elapsed seconds so they don't read as frozen.
  *  必须在 activeThread 声明之后：watch 会在 setup 阶段立即求值 getter。 */
 const phaseStartedAt = ref(0)
@@ -1669,7 +1678,7 @@ watch(theme, applyTheme)
             </div>
           </header>
 
-          <section ref="scrollArea" class="conversation-scroll" @scroll="handleConversationScroll">
+          <section ref="scrollArea" class="conversation-scroll" :class="{ 'conversation-scroll--hero': isComposerHero }" @scroll="handleConversationScroll">
             <div v-if="conversationLoading" class="conversation-content conversation-skeleton" role="status" aria-label="正在加载会话">
               <div class="skeleton-bubble user" style="width: 130px;" />
               <div class="skeleton-bubble assistant" style="width: 240px;" />
@@ -1767,7 +1776,7 @@ watch(theme, applyTheme)
             </button>
           </Transition>
 
-          <footer class="composer-region">
+          <footer class="composer-region" :class="{ 'composer-region--hero': isComposerHero }">
             <!-- P0-2: 明文凭证告警。runtime 不会把无法加密的 Key 写成明文落盘，但历史配置
                  里可能残留一个，必须由界面说清楚并指向重设入口。 -->
             <div v-if="secretWarnings.length" class="security-banner" role="alert">

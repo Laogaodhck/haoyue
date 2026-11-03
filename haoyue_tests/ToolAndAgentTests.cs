@@ -922,7 +922,13 @@ public sealed class ToolAndAgentTests
 
         var prompts = new FilePromptProvider();
         var tool = new CaptureScreenTool(prompts);
-        using var runtime = HaoyueRuntime.Create();
+        // 用临时 config/state 隔离，避免并发 runtime 创建竞争真实 ~/.haoyue 配置与
+        // SQLite —— 全量并发跑时偶发 GetRequiredService<SkillManager> 失败
+        //（2026-11-03 实测: 单跑稳定通过,全量间歇失败;本测试只需屏幕,无需全局配置）。
+        var dir = Path.Combine(Path.GetTempPath(), "haoyue-capture-test", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var store = new ConfigStore(Path.Combine(dir, "config.json"), Path.Combine(dir, "state.json"));
+        using var runtime = HaoyueRuntime.Create(dir, store);
 
         var context = new ToolContext
         {

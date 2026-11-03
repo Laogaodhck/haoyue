@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Haoyue.Runtime.Tools;
 
@@ -73,6 +74,28 @@ public sealed class WindowsJobObject : IDisposable
 
     /// <summary>Assigns an already-started process (and its whole future child tree) to this job.</summary>
     public bool Assign(IntPtr processHandle) => Interop.AssignProcessToJobObject(_handle, processHandle);
+
+    /// <summary>
+    /// Assign with a bounded retry, absorbing the process-startup transition window:
+    /// on loaded machines a freshly started process can momentarily fail to join a new
+    /// job (2026-11-03 实测间歇: 全量并发跑时偶发 Win32 error 0 误报,单跑稳定通过)。
+    /// Always reports the real Win32 error — the raw P/Invoke path lets later managed
+    /// calls reset LastWin32Error to 0, which made every failure look like error 0.
+    /// </summary>
+    public bool TryAssign(IntPtr processHandle, out int win32Error, int retryDelayMs = 150, int retries = 2)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            if (Interop.AssignProcessToJobObject(_handle, processHandle))
+            {
+                win32Error = 0;
+                return true;
+            }
+            win32Error = Marshal.GetLastWin32Error();
+            if (attempt >= retries) return false;
+            Thread.Sleep(retryDelayMs);
+        }
+    }
 
     /// <summary>Raw job handle（测试缝：QueryInformationJobObject 回读校验 limit 配置）。</summary>
     internal IntPtr HandleForTest => _handle;

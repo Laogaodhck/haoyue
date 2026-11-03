@@ -151,8 +151,8 @@ internal static class ShellRunner
         if (!process.Start())
             return ("failed", null, "process failed to start");
 
-        if (!job.Assign(process.Handle))
-            return ("failed", null, $"job assignment failed (Win32 error {Marshal.GetLastWin32Error()})");
+        if (!job.TryAssign(process.Handle, out var assignError))
+            return ("failed", null, $"job assignment failed (Win32 error {assignError})");
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);

@@ -112,11 +112,11 @@ public sealed class ComputerExecTool(IPromptProvider prompts, ComputerUseConfig 
         {
             return ToolResult.Fail($"{spec.Label} could not start: {ex.Message}");
         }
-        if (sandbox is not null && !sandbox.Assign(process.Handle))
+        if (sandbox is not null && !sandbox.TryAssign(process.Handle, out var assignError))
         {
             try { process.Kill(entireProcessTree: true); } catch { }
             return ToolResult.Fail(
-                $"{spec.Label} sandbox assignment failed (Win32 error {Marshal.GetLastWin32Error()})");
+                $"{spec.Label} sandbox assignment failed (Win32 error {assignError})");
         }
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);

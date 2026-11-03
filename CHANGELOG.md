@@ -6,6 +6,7 @@
 
 ### 新增
 
+- **doc_toolkit 表格块支持**：解析器把 Markdown 管道表格统一建模为 `TableBlock`（合并表头解析、单元格归属），docx / xlsx / pptx / markdown 渲染器对应输出真实表格——docx 用原生 Word 表格、xlsx 用行列写入、pptx 用图形表格、markdown 原样保真，不再退化为等宽文本。`doc_render` 文档创作链同步收益，含单元格对齐 / 边框 / 表头样式映射。
 - **豆包式多模态能力**：新增 `image_edit`（图片编辑，与文生图共用 OpenAI 兼容 `images/generations` 端点，多传参考图——本地图转 `data:image/<fmt>;base64,<...>` data URI 或 HTTP(S) 图床 URL，交互式编辑支持 `<bbox>` / `<point>`，风格迁移 / 元素替换 / 局部修改 / 消除 / 延伸构图；未配置图像模型时工具自动隐藏）、`video_generate`（视频生成，seedance 同源异步任务：`POST {baseUrl}/contents/generations/tasks` 建任务 → 轮询 `GET .../tasks/{id}` → 下载 MP4 落 `.haoyue/outputs/videos/`，超时返回任务 ID 交 `video_status` 续查；`videoGen.model` 未配置时隐藏）、`speech_to_text` / `text_to_speech`（语音转写与合成，火山 openspeech 同源：ASR 录音文件极速版 `volc.bigasr.auc_turbo`、大模型语音合成 seed-tts-2.0，`speech.apiKey` 支持 `secret:` 加密引用，未配置时两个语音工具自动隐藏；TTS 流式多 JSON 响应逐块解码拼接）。全部复用现有 OpenAI 兼容 provider 配置体系与「产物落盘 + 视觉核验回灌」链路。
 - **语音与媒体 RPC**：`speech.transcribe`（audioPath / audioUrl / audioData base64 三通道 → 文本）与 `speech.synthesize`（text / speaker → 落盘音频文件），契约方法 132 → 134，TS SDK 与桌面端契约类型同步重生成。
 - **桌面端语音与媒体播放**：输入框工具条新增录音按钮（MediaRecorder 录音 → 16kHz 单声道 PCM WAV → daemon 转写，文本追加进输入框）；助手消息操作区新增朗读按钮（`speech.synthesize` → 主进程读媒体 → 就地播放）；消息内容中的视频 / 音频产物（`.mp4/.webm/.mov/.m4v/.mp3/.wav/.ogg/.opus/.m4a/.flac` 绝对路径）自动渲染为内联播放器（上限 4 个，经新增 IPC `app:read-media-base64` 读入，扩展名白名单 + 体积上限 audio≤30MB / video≤150MB）。
@@ -13,12 +14,17 @@
 
 ### 桌面
 
+- **对话框改豆包风格**：输入框从 940px 横贯收窄为 720px 居中胶囊（26px 大圆角、细边框、双层柔和阴影），发送钮加大为 37px 圆形主题色并带光晕（hover 加深）；空会话（无任务或任务无消息且运行时在线）时输入框脱离底部悬浮垂直居中并加宽至 820px，欢迎区上移让位，有消息 / 加载中 / 加载失败 / 离线自动回落底部固定布局。语音 / 附件 / 优化 / Agent 模式 / 模型 / 推理深度 / 联网 / 停止 / 发送全部功能按钮保留原位与交互。
 - **修复厂商前缀模型 ID 导致活动模型解析失败**：OpenAI 兼容网关常返回 `deepseek/deepseek-flash` 这类带斜杠的模型 ID，活动模型此前会被误拆成「提供商 deepseek + 模型 deepseek-flash」，解析失败后静默回退到全部模型（典型表现是调用落到本地 GGUF 并报文件不存在）。现在先按当前提供商拼接解析，再退回原值以兼容已存的全限定引用。
 - **新增提供商支持 cURL / Python 导入**：「新增模型提供商」顶部新增可折叠导入区，粘贴 cURL、Python（OpenAI SDK / requests）或 JSON 调用片段后一键解析 API 地址、Bearer / api_key 与模型 ID，并自动回填表单；识别到预设厂商域名时同步切换接口协议。导入只在本地解析、不上传代码，粘贴内容回填后立即清空；API Key 仍走原有加密引用保存。
 - **新增模型提供商支持国内云厂商预设**：「接口协议」下拉新增阿里云百炼、火山方舟、腾讯云混元、百度千帆、智谱 GLM 与 DeepSeek。选中后自动预填 OpenAI 兼容 Base URL，并按厂商给出模型 ID 与 API Key 示例；手动填过的地址不会被覆盖。运行时把这些厂商 kind 统一映射到 OpenAI 兼容客户端，健康检查、模型列表拉取与失败转移行为与普通 OpenAI 提供商一致；`provider.upsert` 校验并保留厂商 kind。
 - **子智能体配置（Qoder 式 Markdown）**：「设置 → 智能体」新增子智能体列表与编辑器，兼容 `~/.haoyue/agents/*.md`（用户级）与 `<项目>/.haoyue/agents/*.md`（项目级）。frontmatter 声明名称、描述、模型与工具白名单，正文即工作指令；项目级覆盖用户级、同名覆盖内置预设，保存后下一次委派立即生效。委派工具按当前工作区动态列出可用子智能体，指定模型只作用于该子智能体（留空继承活动模型）。新增 RPC `agent.subagents.list/save/delete`。
 - **设置新增「专家」分区**：原「智能体」页底部的专家参数整体移到独立的「专家」分区——回合步数、思考与工具输出预算、Bash 与计划任务超时、自动修复与续写次数、委派配额、事实注入、会话保留、记忆固化、人格、主系统提示词、额外可读目录与计划任务结果回调；原「高级设置 → 专家参数（直接编辑配置文档）」的 JSON 编辑器也并入「专家」，「高级设置」只保留网络与桌面权限及出厂重置。「智能体」只保留模型选择与行为边界，计划任务页的回调提示同步指向新位置。
 - **回合预算与压缩保留比例移入「推理加速」**：单回合 token / 费用 / 时长上限与「压缩时保留的最近对话比例」从「智能体」迁到「推理加速」，与本地模型加载参数、驻留与显存治理同页管理；读写仍走 `agent.config.get/set`，现有配置无需迁移。
+
+### 修复
+
+- **doctor 对方舟 403 误报**：HealthChecker 原用手写的 `max_tokens=1 + stream=false` payload 探测方舟，与 reasoning 模型的参数要求不兼容，绕过真实客户端请求构造导致 doctor 显示 offline · auth failed (HTTP 403)，而真实调用链（provider test / agent 回合）正常。现改为注入 `ILlmClientFactory` 走与 provider test 相同的 `LlmRequest + client.StreamAsync` 管线，doctor 与真实调用链结果一致，透出方舟真实业务错误（如账户欠费）。
 
 ## [1.3.31] - 2026-11-02
 

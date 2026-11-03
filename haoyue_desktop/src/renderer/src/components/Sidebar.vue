@@ -96,6 +96,14 @@ function projectDisplayName(projectId?: string): string {
   return props.projects.find((project) => project.id === projectId)?.name ?? ''
 }
 
+/** 豆包式对话摘要：取首条用户消息正文（压缩空白、单行截断 46 字）；无用户消息返回空串。 */
+function threadSummary(thread: ThreadItem): string {
+  const first = thread.messages.find((msg) => msg.role === 'user' && msg.content.trim())
+  if (!first) return ''
+  const text = first.content.replace(/\s+/g, ' ').trim()
+  return text.length > 46 ? `${text.slice(0, 46)}…` : text
+}
+
 const timeGroups = computed<Array<SessionGroup & { list: { rows: ThreadItem[]; hidden: number } }>>(() => {
   if (viewMode.value !== 'time') return []
   return groupThreadsByTime(props.threads).map((group) => ({
@@ -410,8 +418,11 @@ onBeforeUnmount(() => {
             <button v-if="renamingThreadId !== thread.id" class="thread-row"
               @click="emit('selectThread', thread.id)" @dblclick.prevent="startRename(thread)"
               @keydown.f2.prevent="startRename(thread)">
-              <span>{{ thread.title }}</span>
-              <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
+              <span class="thread-row-top">
+                <span>{{ thread.title }}</span>
+                <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
+              </span>
+              <span v-if="threadSummary(thread)" class="thread-summary" :title="threadSummary(thread)">{{ threadSummary(thread) }}</span>
             </button>
             <div v-else class="thread-rename-box">
               <input ref="renameInput" v-model="renameValue" aria-label="重命名任务"
@@ -456,11 +467,14 @@ onBeforeUnmount(() => {
                 <button v-if="renamingThreadId !== thread.id" class="thread-row"
                   @click="emit('selectThread', thread.id)" @dblclick.prevent="startRename(thread)"
                   @keydown.f2.prevent="startRename(thread)">
-                  <span>{{ thread.title }}</span>
-                  <small v-if="projectDisplayName(thread.projectId)" class="thread-project-tag">
-                    {{ projectDisplayName(thread.projectId) }}
-                  </small>
-                  <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
+                  <span class="thread-row-top">
+                    <span>{{ thread.title }}</span>
+                    <small v-if="projectDisplayName(thread.projectId)" class="thread-project-tag">
+                      {{ projectDisplayName(thread.projectId) }}
+                    </small>
+                    <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
+                  </span>
+                  <span v-if="threadSummary(thread)" class="thread-summary" :title="threadSummary(thread)">{{ threadSummary(thread) }}</span>
                 </button>
                 <div v-else class="thread-rename-box">
                   <input ref="renameInput" v-model="renameValue" aria-label="重命名任务"
@@ -577,8 +591,11 @@ onBeforeUnmount(() => {
                 <button v-if="renamingThreadId !== thread.id" class="thread-row"
                   @click="emit('selectThread', thread.id)" @dblclick.prevent="startRename(thread)"
                   @keydown.f2.prevent="startRename(thread)">
-                  <span>{{ thread.title }}</span>
-                  <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
+                  <span class="thread-row-top">
+                    <span>{{ thread.title }}</span>
+                    <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
+                  </span>
+                  <span v-if="threadSummary(thread)" class="thread-summary" :title="threadSummary(thread)">{{ threadSummary(thread) }}</span>
                 </button>
                 <div v-else class="thread-rename-box">
                   <input ref="renameInput" v-model="renameValue" aria-label="重命名任务"

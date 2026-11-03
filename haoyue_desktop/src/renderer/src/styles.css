@@ -821,13 +821,39 @@ select:focus-visible {
 }
 
 .thread-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+/* 豆包式对话摘要：标题行(标题+项目标签+运行中)与其下摘要行分开布局。 */
+.thread-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.thread-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-row.active,
 .thread-heading-row.active .thread-row {
   color: var(--text);
+}
+
+.thread-heading-row.active .thread-summary {
+  color: var(--text-muted);
 }
 
 .empty-recent {
@@ -7987,12 +8013,14 @@ select:focus-visible {
   display: grid;
   flex: 0 0 auto;
   width: min(var(--work-dock-width), 100%);
-  grid-template-rows: 46px minmax(0, 1fr);
+  grid-template-rows: 52px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: var(--surface-raised);
   border-left: 1px solid var(--border);
+  /* 豆包式面板：与 workspace-main 顶部圆角呼应的左上圆角，贴边感弱化。 */
+  border-top-left-radius: 14px;
 }
 
 .work-dock.is-resizing,
@@ -8035,33 +8063,34 @@ select:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 10px 0 8px;
+  padding: 0 12px 0 10px;
   border-bottom: 1px solid var(--border);
 }
 
 .work-dock-tabs {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
   overflow-x: auto;
 }
 
+/* 豆包式胶囊页签：激活为软色胶囊，替代原下划线式 IDE 页签。 */
 .work-dock-tabs button {
   position: relative;
   display: inline-flex;
   flex: none;
   align-items: center;
   gap: 6px;
-  padding: 0 11px;
-  height: 46px;
+  padding: 0 12px;
+  height: 32px;
   color: var(--text-secondary);
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-radius: 999px;
   font-size: 12.5px;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 140ms ease, background 140ms ease;
+  transition: color 140ms ease, background-color 140ms ease;
 }
 
 .work-dock-tabs button:hover {
@@ -8071,7 +8100,7 @@ select:focus-visible {
 
 .work-dock-tabs button.active {
   color: var(--accent);
-  border-bottom-color: var(--accent);
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 14%, transparent));
 }
 
 .work-dock-tab-badge {

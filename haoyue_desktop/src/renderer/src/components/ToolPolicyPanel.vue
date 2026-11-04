@@ -6,6 +6,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { LoaderCircle, Plus, RefreshCw, Trash2 } from '@lucide/vue'
+import SelectMenu from './SelectMenu.vue'
 import { requestJson } from '../daemon-json'
 
 interface PolicyRule {
@@ -51,6 +52,12 @@ const RISK_TIER_LABELS: Record<string, string> = {
 const consentTierLabels = computed(() =>
   (policy.value?.toolPolicy.consentRiskTiers ?? []).map((tier) => RISK_TIER_LABELS[tier] ?? tier))
 
+/** Bash 沙箱 UI 限制：放开 / 限制（Job Object 的剪贴板/系统参数/显示设置/关机/桌面切换约束）。 */
+const UI_RESTRICTION_OPTIONS = [
+  { value: 'release', label: '放开', description: '不限制 UI 操作' },
+  { value: 'limit', label: 'UI 限', description: '限制剪贴板 / 系统参数 / 关机等' },
+]
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
@@ -83,8 +90,13 @@ function savePolicyFlag(key: 'enabled' | 'builtinBashGuard' | 'riskGating', valu
   void save({ toolPolicy: { [key]: value } }, `${label}已${value ? '开启' : '关闭'}`)
 }
 
-function saveSandboxFlag(key: 'enabled' | 'uiRestrictions', value: boolean): void {
-  void save({ bashSandbox: { [key]: value } }, `Bash 沙箱${key === 'enabled' ? (value ? '已启用' : '已停用') : (value ? 'UI 限制已开启' : 'UI 限制已关闭')}`)
+function saveSandboxFlag(key: 'enabled', value: boolean): void {
+  void save({ bashSandbox: { [key]: value } }, `Bash 沙箱${value ? '已启用' : '已停用'}`)
+}
+
+function saveUiRestriction(value: string): void {
+  const limited = value === 'limit'
+  void save({ bashSandbox: { uiRestrictions: limited } }, `UI 限制已设为${limited ? 'UI 限' : '放开'}`)
 }
 
 function saveSandboxNumber(key: 'memoryLimitMb' | 'maxProcesses', raw: string): void {
@@ -173,12 +185,12 @@ onMounted(load)
             @change="saveSandboxNumber('memoryLimitMb', ($event.target as HTMLInputElement).value)" /></label>
           <label>进程 <input type="number" min="0" max="4096" :value="policy.bashSandbox.maxProcesses"
             @change="saveSandboxNumber('maxProcesses', ($event.target as HTMLInputElement).value)" /></label>
-          <div class="segmented-control">
-            <button :class="{ active: policy.bashSandbox.uiRestrictions }" title="限制剪贴板/系统参数/关机等"
-              @click="saveSandboxFlag('uiRestrictions', true)">UI 限</button>
-            <button :class="{ active: !policy.bashSandbox.uiRestrictions }" title="不限制 UI 操作"
-              @click="saveSandboxFlag('uiRestrictions', false)">放开</button>
-          </div>
+          <SelectMenu
+            :model-value="policy.bashSandbox.uiRestrictions ? 'limit' : 'release'"
+            :options="UI_RESTRICTION_OPTIONS"
+            label="UI 限制"
+            :disabled="saving"
+            @update:model-value="saveUiRestriction" />
         </div>
       </div>
 

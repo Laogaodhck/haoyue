@@ -30,11 +30,16 @@ public sealed partial class Agent
         var personality = workspace.Config?.Personality ?? configStore.Config.Agent.Personality;
         if (string.IsNullOrWhiteSpace(personality)) personality = "pragmatic";
         var autoVerify = ShouldVerify(workspace, configStore.Config.Agent);
+        // 本地模型（CPU/低算力）上下文窗口与 prefill 速度有限：记忆/协作指令注入预算
+        // 减半，优先保住核心指令，避免把宝贵的窗口与首 token 时间耗在长文件上。
+        var injectedBudget = model.Provider.IsLocal
+            ? ContextPlanner.MaxInjectedFragmentTokens / 2
+            : ContextPlanner.MaxInjectedFragmentTokens;
         var variables = PromptVariables.Build(
             workspace,
             model,
             tools.Select(t => t.Name).ToList(),
-            memory is null ? "" : ContextPlanner.FitInjectedText(memory, label: "MEMORY.md"),
+            memory is null ? "" : ContextPlanner.FitInjectedText(memory, injectedBudget, label: "MEMORY.md"),
             modeName,
             networkEnabled,
             autoVerify,
@@ -44,7 +49,7 @@ public sealed partial class Agent
             // pins AGENTS.md below direct user/system instructions even if the file
             // itself contains text that claims higher authority.
             variables["agents_md"] = ContextPlanner.WrapWorkspaceInstructions(
-                ContextPlanner.FitInjectedText(agentsMd, label: "AGENTS.md"));
+                ContextPlanner.FitInjectedText(agentsMd, injectedBudget, label: "AGENTS.md"));
         // Skill triggers evaluate against a stickiness window (current input + recent
         // user turns): follow-ups like "继续" keep previously triggered skills injected
         // instead of silently dropping them mid-task. The value is constant within a

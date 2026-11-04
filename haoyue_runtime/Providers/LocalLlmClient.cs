@@ -46,6 +46,15 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
     /// </summary>
     internal const string ThinkingOpenMarker = " thinking";
 
+    /// <summary>
+    /// 无思考模式下 R1 蒸馏等模型仍会自发输出思考链（模板含 <code>&lt;/think&gt;</code>
+    /// 分隔符、模型训练使然，提示词无法抑制）。给思考段一个字符上限，耗尽即注入结束
+    /// 标记强制收束进作答——避免模型把整个输出窗口耗在不可见的思考上，导致回答为空、
+    /// 总时长以分钟计（CPU 实测 256 token 思考吃满预算、text=0、总 50s；真实回合
+    /// MaxTokens 更大时思考更久）。有思考模式（用户显式开启）不受影响，沿用档位
+    /// token 预算。约 512 字符 ≈ 256 CJK token，8B CPU ≈ 40–60s 思考上限。
+    /// </summary>
+    internal const int LocalNoThinkThinkingCapChars = 512;
     /// <summary>解码速率低于该值（tok/s）且开启思考时，向上层附缩短思考预算的提示（P5）。</summary>
     private const double SlowDecodeHintTokensPerSecond = 10;
 
@@ -530,8 +539,11 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
             var generated = 0;
             var stopped = false;
             // 思考预算（与 KV 复用路径同口径）：耗尽后注入结束标记强制收束。
+            // 有思考模式按档位 token 计数；无思考模式下 R1 蒸馏等模型仍会自发
+            // 输出思考链，用字符上限兜底，避免整个输出窗口耗在不可见思考上。
             var thinkingBudget = ThinkingBudgetTokens(request);
             var thinkingTokens = 0;
+            var thinkingChars = 0;
             var budgetExhausted = false;
             for (var i = 0; i < maxTokens && !ct.IsCancellationRequested; i++)
             {
@@ -543,17 +555,34 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                 var decoded = decoder.Read();
                 if (antiprocessor.Add(decoded)) { stopped = true; break; }
 
-                if (thinkingBudget is { } mBudget && !budgetExhausted && parser.InThinking)
+                if (!budgetExhausted && parser.InThinking)
                 {
-                    thinkingTokens++;
-                    if (thinkingTokens >= mBudget)
+                    if (thinkingBudget is { } mBudget)
                     {
-                        budgetExhausted = true;
-
-                        foreach (var piece in parser.Process("</think>"))
+                        thinkingTokens++;
+                        if (thinkingTokens >= mBudget)
                         {
-                            if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
-                            else yield return new LlmTextDelta(piece.Text);
+                            budgetExhausted = true;
+
+                            foreach (var piece in parser.Process("</think>"))
+                            {
+                                if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                                else yield return new LlmTextDelta(piece.Text);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        thinkingChars += decoded.Length;
+                        if (thinkingChars >= LocalNoThinkThinkingCapChars)
+                        {
+                            budgetExhausted = true;
+
+                            foreach (var piece in parser.Process("</think>"))
+                            {
+                                if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                                else yield return new LlmTextDelta(piece.Text);
+                            }
                         }
                     }
                 }
@@ -610,6 +639,14 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         {
             var parser = new ThinkTagParser(startsInThinking);
 
+            // 思考预算（与 KV 复用路径同口径）：有思考模式按档位 token 预算；无思考模式下
+            // R1 蒸馏等模型仍会自发输出思考链（模板含 </think> 分隔符、提示词无法抑制），
+            // 用字符上限兜底强制收束进作答，避免整个输出窗口耗在不可见思考上、回答为空。
+            // 本路径无 token 计数通道，档位预算按 CJK 约 1.5 字符/token 换算为字符口径。
+            var thinkingBudget = ThinkingBudgetTokens(request);
+            var thinkingChars = 0;
+            var budgetExhausted = false;
+
             await using var stream = executor
                 .InferAsync(prompt, BuildInferenceParams(request), ct)
                 .GetAsyncEnumerator(ct);
@@ -632,6 +669,22 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
                         inner: ex);
                 }
                 if (!hasNext) break;
+
+                if (!budgetExhausted && parser.InThinking)
+                {
+                    thinkingChars += stream.Current.Length;
+                    var cap = thinkingBudget is { } b ? (int)(b * 1.5) : LocalNoThinkThinkingCapChars;
+                    if (thinkingChars >= cap)
+                    {
+                        budgetExhausted = true;
+
+                        foreach (var piece in parser.Process("</think>"))
+                        {
+                            if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                            else yield return new LlmTextDelta(piece.Text);
+                        }
+                    }
+                }
 
                 foreach (var piece in parser.Process(stream.Current))
                 {
@@ -691,6 +744,7 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
         // --reasoning-budget 行为一致），避免小模型单步思考以分钟计。
         var thinkingBudget = ThinkingBudgetTokens(request);
         var thinkingTokens = 0;
+        var thinkingChars = 0;
         var budgetExhausted = false;
 
         var context = reuse.Context;
@@ -765,17 +819,34 @@ public sealed class LocalLlmClient(LocalModelCache cache) : ILlmClient
 
                 // 思考预算计量：仅在思考段内逐采样 token 计数；耗尽后一次性注入
                 // 结束标记，parser 随即切入作答段，后续采样继续正常进行。
-                if (thinkingBudget is { } budget && !budgetExhausted && parser.InThinking)
+                if (!budgetExhausted && parser.InThinking)
                 {
-                    thinkingTokens++;
-                    if (thinkingTokens >= budget)
+                    if (thinkingBudget is { } budget)
                     {
-                        budgetExhausted = true;
-
-                        foreach (var piece in parser.Process("</think>"))
+                        thinkingTokens++;
+                        if (thinkingTokens >= budget)
                         {
-                            if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
-                            else yield return new LlmTextDelta(piece.Text);
+                            budgetExhausted = true;
+
+                            foreach (var piece in parser.Process("</think>"))
+                            {
+                                if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                                else yield return new LlmTextDelta(piece.Text);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        thinkingChars += decoded.Length;
+                        if (thinkingChars >= LocalNoThinkThinkingCapChars)
+                        {
+                            budgetExhausted = true;
+
+                            foreach (var piece in parser.Process("</think>"))
+                            {
+                                if (piece.IsThinking) yield return new LlmThinkingDelta(piece.Text);
+                                else yield return new LlmTextDelta(piece.Text);
+                            }
                         }
                     }
                 }

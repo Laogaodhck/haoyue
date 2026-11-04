@@ -2,6 +2,14 @@
 
 记录用户可见变化与工程护栏调整。版本号由 `version.py` 统一管理，发布流程见 [RELEASING.md](RELEASING.md)。更早版本的发布说明见 GitHub Releases；本文件自 2026-10-31 起维护。
 
+## [Unreleased]
+
+### 新增
+
+- **任务监控**：右栏新增「任务监控」页签（固定模式）或独立悬浮窗（浮动模式），实时展示当前任务的进度回顾、执行活动、产出与来源；「设置 → 任务监控」分区控制展示形式与四个内容区块（进度与上下文 / 执行活动 / 结果与来源 / 辅助入口）的开关，偏好经 `advanced.get/set` 的 taskMonitor 节持久化；聚合层单测 13 例
+- **事件钩子（Hooks）**：「设置 → 钩子」分区可查看已配置钩子、配置问题逐条诊断与最近执行状态，并支持添加 / 编辑 / 启用 / 立即测试 / 删除。钩子按触发事件（回合完成 `task.completed`、定时任务完成 `schedule.completed`）自动执行 Webhook（POST JSON、可选 Bearer 密钥）或本地命令（30 秒超时、参数化启动不拼 shell）；触发为 fire-and-forget，绝不拖慢 agent 与调度主流程；密钥只回「已配置」标记、不回传明文。设置页显式提示「使用前请确认自动执行的操作及其文件、网络访问安全」。新增 RPC `hooks.list/save/delete/test`，配置持久化于 config.json 的 Hooks 节
+- **契约与测试计数**：RPC 方法 134 → 138、runtime 测试 1300 → 1309（新增 HookRunnerTests 9 例：配置诊断六类 + 状态复位）、巨类预算 `DaemonAdminApi` 4200 → 4400（新增 Hooks partial，聚合实测 4318）
+
 ## [1.3.32] - 2026-11-04
 
 ### 新增

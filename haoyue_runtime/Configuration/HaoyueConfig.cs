@@ -34,6 +34,8 @@ public sealed class HaoyueConfig
     /// 命令会以当前进程身份启动子进程并可访问文件与网络——配置前请确认其安全性。
     /// </summary>
     public HooksConfig Hooks { get; set; } = new();
+    /// <summary>「编码」设置：Git 工作流（分支前缀、强制推送）与安全（三层渐进式扫描）。</summary>
+    public CodingConfig Coding { get; set; } = new();
 
 
     public ProviderConfig? FindProvider(string id) =>
@@ -463,6 +465,37 @@ public sealed class HookConfig
     public string? Command { get; set; }
     /// <summary>启用开关（缺省 true）。</summary>
     public bool Enabled { get; set; } = true;
+}
+
+/// <summary>
+/// 「编码」设置：Git 工作流与安全。由桌面设置页「编码」分区读写
+/// （advanced.get / advanced.set 的 coding 节），runtime 按节点读取生效。
+/// </summary>
+public sealed class CodingConfig
+{
+    /// <summary>Git 工作流：分支前缀与推送策略。</summary>
+    public GitCodingConfig Git { get; set; } = new();
+    /// <summary>安全：三层渐进式扫描与自动修复。</summary>
+    public CodingSecurityConfig Security { get; set; } = new();
+}
+
+/// <summary>Git 工作流配置（桌面设置页「编码 → Git」）。</summary>
+public sealed class GitCodingConfig
+{
+    /// <summary>新建分支时预填的分支名前缀；留空则不添加前缀。</summary>
+    public string BranchPrefix { get; set; } = "";
+    /// <summary>推送时使用 --force-with-lease：会改写远端分支历史，但远端已变化时拒绝覆盖。</summary>
+    public bool ForcePushWithLease { get; set; } = false;
+}
+
+/// <summary>安全配置（桌面设置页「编码 → 安全」）。</summary>
+public sealed class CodingSecurityConfig
+{
+    /// <summary>
+    /// 三层渐进式扫描与自动修复总开关。开启后 haoyue 在合适节点智能推荐对应的
+    /// 安全扫描能力，用户确认后执行扫描并修复。
+    /// </summary>
+    public bool ProgressiveScan { get; set; } = false;
 }
 
 /// <summary>知识库配置：语义检索（embedding）层。</summary>

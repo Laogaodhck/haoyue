@@ -209,6 +209,11 @@ public static class ConfigSchema
         // 语义与 mcp.servers 一致——钩子条目是用户数据，不属于默认值登记表）。
         // 注意路径是 hooks.hooks：根属性 Hooks(HooksConfig) 内嵌 List<HookConfig> Hooks。
         New("hooks.hooks", "object", null),
+
+        // 「编码」：Git 工作流（分支前缀、强制推送）与安全（三层渐进式扫描）。
+        New("coding.git.branchPrefix", "string", ""),
+        New("coding.git.forcePushWithLease", "bool", false),
+        New("coding.security.progressiveScan", "bool", false),
     ];
 
     private static ConfigField New(string path, string type, JsonNode? @default,

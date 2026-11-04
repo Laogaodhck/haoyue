@@ -3641,6 +3641,157 @@ select:focus-visible {
   white-space: pre-wrap;
 }
 
+/* 「编码 → Git」：新建分支 / 推送 / 安全扫描推荐（GitWorkspacePanel 操作区）。 */
+.git-repo-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px 4px;
+}
+
+.git-repo-actions .button,
+.git-branch-form .button,
+.git-scan-confirm-actions .button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.git-repo-actions .button:hover:not(:disabled),
+.git-branch-form .button:hover:not(:disabled),
+.git-scan-confirm-actions .button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong, var(--border));
+}
+
+.git-repo-actions .button:disabled,
+.git-branch-form .button:disabled,
+.git-scan-confirm-actions .button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.git-branch-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 14px 4px;
+}
+
+.git-branch-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.git-branch-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.git-branch-form .button-primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.git-scan-confirm {
+  margin: 8px 14px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: 9px;
+}
+
+.git-scan-confirm-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.git-scan-findings {
+  max-height: 168px;
+  margin: 8px 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.git-scan-findings li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 2px;
+  font-size: 11px;
+}
+
+.git-scan-findings li span {
+  flex: none;
+  min-width: 20px;
+  padding: 1px 5px;
+  color: #9a6700;
+  background: color-mix(in srgb, #d4a72c 18%, transparent);
+  border-radius: 5px;
+  text-align: center;
+}
+
+.git-scan-findings li span.high {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.git-scan-findings li code {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.git-scan-findings li small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-scan-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.git-scan-confirm-actions .button-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.git-action-message {
+  margin: 8px 14px 0;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  border-radius: 7px;
+}
+
+.git-action-message.is-error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
 .git-history-list {
   margin: 0;
   padding: 10px 0 28px;

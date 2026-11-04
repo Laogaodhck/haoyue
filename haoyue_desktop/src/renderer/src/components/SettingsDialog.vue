@@ -31,7 +31,8 @@ import {
   X,
   Zap,
   Monitor,
-  Webhook
+  Webhook,
+  Code2
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { AppInfo } from '../../../shared/ipc'
@@ -61,9 +62,10 @@ import SettingsAdvancedPanel from './SettingsAdvancedPanel.vue'
 import SettingsNetworkPanel from './SettingsNetworkPanel.vue'
 import SettingsTaskMonitorPanel from './SettingsTaskMonitorPanel.vue'
 import SettingsHooksPanel from './SettingsHooksPanel.vue'
+import SettingsCodingPanel from './SettingsCodingPanel.vue'
 import { useEscapeClose } from '../use-escape-close'
 
-type SettingsSection = 'general' | 'network' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced' | 'monitor' | 'hooks'
+type SettingsSection = 'general' | 'network' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced' | 'monitor' | 'hooks' | 'coding'
 
 interface ProviderInfo {
   id: string
@@ -357,6 +359,7 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'inference', label: '推理加速', icon: Gauge },
   { id: 'monitor', label: '任务监控', icon: Monitor },
   { id: 'hooks', label: '钩子', icon: Webhook },
+  { id: 'coding', label: '编码', icon: Code2 },
   { id: 'advanced', label: '高级设置', icon: SlidersHorizontal }
 ]
 
@@ -389,6 +392,7 @@ const SECTION_KEYWORDS: Record<SettingsSection, string> = {
   inference: '推理 加速 GPU 卸载 显存 KV 量化 flash attention 预热 卸载 驻留 基准 回合预算 token 费用 时长 上下文压缩 保留比例',
   monitor: '任务监控 监控 固定 浮动 悬浮 默认展示 进度 上下文 回顾 目标 计划 执行 活动 子智能体 后台 进程 侧边 聊天 技能 mcp 产出 网页 来源 知识 记忆 更新 演示 画面 开关',
   hooks: '钩子 hook webhook 命令 触发 事件 任务完成 定时 自动 执行 密钥 bearer 本地',
+  coding: '编码 git 分支 前缀 强制推送 force push lease 工作区 worktree 索引 安全 扫描 修复 提交',
   advanced: '高级 网络 白名单 电脑操作 computer use 网络运维 故障转移 容灾 负载均衡 重试 出厂'
 }
 
@@ -1724,6 +1728,11 @@ onBeforeUnmount(() => {
 
         <template v-else-if="section === 'hooks'">
           <SettingsHooksPanel :connected="daemonConnected" @notice="onPanelNotice" @error="onPanelError" />
+        </template>
+
+        <template v-else-if="section === 'coding'">
+          <SettingsCodingPanel :connected="daemonConnected" :workspace-path="workspacePath"
+            @notice="onPanelNotice" @error="onPanelError" />
         </template>
 
         <template v-else-if="section === 'advanced'">

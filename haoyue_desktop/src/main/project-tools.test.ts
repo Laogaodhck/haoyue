@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { normalizeDiffForGit, parseGitLog, revertFileDiffs } from './project-tools.js'
+import { createGitBranch, normalizeDiffForGit, parseGitLog, parseGitWorktrees, revertFileDiffs, scanForSecrets } from './project-tools.js'
 
 describe('parseGitLog', () => {
   it('parses record and unit separated git log output', () => {
@@ -21,6 +21,101 @@ describe('normalizeDiffForGit', () => {
     const raw = '--- a\\src\\foo.ts\r\n+++ b\\src\\foo.ts\r\n@@ -1,2 +1,3 @@\r\n'
     const normalized = normalizeDiffForGit(raw)
     expect(normalized).toContain('--- a/src/foo.ts\n+++ b/src/foo.ts\n')
+  })
+})
+
+describe('parseGitWorktrees', () => {
+  it('parses porcelain worktree list including the main worktree and resolves relative paths', () => {
+    const porcelain =
+      'worktree E:/proj/main\n' +
+      'HEAD abcdef123456\n' +
+      'branch refs/heads/main\n\n' +
+      'worktree E:/proj/main/.git/worktrees/feature\n' +
+      'HEAD 123456abcdef\n' +
+      'branch refs/heads/feature\n'
+
+    const entries = parseGitWorktrees(porcelain, 'E:/proj/main')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]).toMatchObject({ path: 'E:/proj/main', branch: 'main', head: 'abcdef1' })
+    expect(entries[1]?.branch).toBe('feature')
+  })
+
+  it('marks detached HEAD worktrees with no branch', () => {
+    const porcelain =
+      'worktree E:/proj/main\n' +
+      'HEAD 111122223333\n' +
+      'branch refs/heads/main\n\n' +
+      'worktree E:/proj/other\n' +
+      'HEAD 444455556666\n'
+
+    const entries = parseGitWorktrees(porcelain, 'E:/proj/main')
+    expect(entries[1]).toMatchObject({ path: 'E:/proj/other', branch: '', head: '4444555' })
+  })
+})
+
+describe('createGitBranch', () => {
+  it('rejects empty or whitespace-only branch names', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'haoyue-test-branch-empty-'))
+    try {
+      const result = await createGitBranch(dir, '  ')
+      expect(result.ok).toBe(false)
+      expect(result.error).toContain('不能为空')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects names with invalid characters or leading dash', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'haoyue-test-branch-bad-'))
+    try {
+      const bad = ['a..b', 'a b', 'a~b', 'a^b', 'a:b', 'a?b', 'a*b', 'a[b', '-lead']
+      for (const name of bad) {
+        const result = await createGitBranch(dir, name)
+        expect(result.ok).toBe(false)
+        expect(result.error).toContain('非法字符')
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('scanForSecrets', () => {
+  it('detects AWS keys, private keys, passwords and api tokens with file and line', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'haoyue-test-secrets-'))
+    try {
+      writeFileSync(join(dir, 'conf.txt'),
+        'ok line\npassword = hunter2\napi_key = "abcdef1234567890"\n', 'utf8')
+      writeFileSync(join(dir, 'keys.pem'),
+        '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n', 'utf8')
+      writeFileSync(join(dir, 'aws.env'), 'AWS_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE\n', 'utf8')
+
+      const result = await scanForSecrets(dir)
+      expect(result.findings.length).toBeGreaterThanOrEqual(4)
+      expect(result.findings.some((f) => f.kind === 'AWS 访问密钥' && f.line === 1)).toBe(true)
+      expect(result.findings.some((f) => f.kind === '私钥内容')).toBe(true)
+      expect(result.findings.some((f) => f.kind === '口令赋值')).toBe(true)
+      expect(result.findings.some((f) => f.kind === 'API 密钥/令牌' && f.line === 3)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('skips node_modules and binary extensions while scanning', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'haoyue-test-scan-skip-'))
+    try {
+      writeFileSync(join(dir, 'a.ts'), 'const token = "abcdef1234567890"\n', 'utf8')
+      const nodeModules = join(dir, 'node_modules')
+      mkdirSync(nodeModules, { recursive: true })
+      writeFileSync(join(nodeModules, 'dep.js'), 'password = xyz\n', 'utf8')
+      writeFileSync(join(dir, 'img.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+
+      const result = await scanForSecrets(dir)
+      expect(result.scannedFiles).toBe(1)
+      expect(result.findings.some((f) => f.file.includes('node_modules'))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

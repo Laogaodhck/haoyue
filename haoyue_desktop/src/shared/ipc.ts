@@ -183,6 +183,52 @@ export interface GitHistory {
   error?: string
 }
 
+/** 新建分支结果（分支名在成功/失败时都回传，便于 UI 提示）。 */
+export interface GitBranchCreateResult {
+  ok: boolean
+  branch: string
+  error?: string
+}
+
+/** 推送结果：ok=false 时 error 为可展示原因（如 --force-with-lease 拒绝覆盖远端）。 */
+export interface GitPushResult {
+  ok: boolean
+  error?: string
+}
+
+/** 一条 git worktree 条目（git worktree list --porcelain 解析结果）。 */
+export interface GitWorktreeEntry {
+  /** 工作树绝对路径（相对路径已按仓库根解析）。 */
+  path: string
+  /** 当前分支名；detached HEAD 时为空串。 */
+  branch: string
+  /** HEAD 提交短哈希。 */
+  head?: string
+  /** 裸仓库标记。 */
+  bare: boolean
+}
+
+/** 仓库全部工作树（含主工作树），供「编码 → Worktrees 工作区索引」展示与刷新。 */
+export interface GitWorktreesResult {
+  worktrees: GitWorktreeEntry[]
+  error?: string
+}
+
+/** 安全快速扫描的一条发现。 */
+export interface SecurityFinding {
+  file: string
+  line: number
+  kind: string
+  severity: 'high' | 'medium'
+}
+
+/** 安全快速扫描结果（「编码 → 安全」三层渐进式扫描的第一层：密钥与敏感信息）。 */
+export interface SecurityScanResult {
+  findings: SecurityFinding[]
+  scannedFiles: number
+  error?: string
+}
+
 export interface DesktopSkillFileSelection {
   paths: string[]
   warning?: string
@@ -251,6 +297,14 @@ export interface DesktopApi {
     gitOverview(path: string): Promise<GitOverview>
     gitHistory(path: string): Promise<GitHistory>
     revertFileDiffs(workspace: string, patches: RevertDiffItem[]): Promise<RevertDiffsResult>
+    /** 新建分支（git checkout -b）；分支名由调用方按「编码 → Git → 分支前缀」预填。 */
+    createGitBranch(path: string, name: string): Promise<GitBranchCreateResult>
+    /** 推送当前分支到 origin；forceWithLease=true 时追加 --force-with-lease。 */
+    pushGitBranch(path: string, forceWithLease: boolean): Promise<GitPushResult>
+    /** 列出仓库全部工作树（git worktree list），供工作区索引展示。 */
+    gitWorktrees(path: string): Promise<GitWorktreesResult>
+    /** 安全快速扫描：扫描工作区密钥/口令/私钥等敏感信息（三层渐进式扫描的第一层）。 */
+    securityScan(path: string): Promise<SecurityScanResult>
   }
   web: {
     /** 校验并规范化地址栏输入；拒绝原因直接可展示。 */

@@ -97,7 +97,7 @@ const workDockTab = ref<WorkDockTab>('changes')
 const workDockWidth = ref(560)
 const toolDiff = ref<{ path: string; diff: string } | null>(null)
 
-const settingsSection = ref<'general' | 'models' | 'agent' | 'mcp' | 'skills' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced' | 'monitor' | 'hooks'>('general')
+const settingsSection = ref<'general' | 'models' | 'agent' | 'mcp' | 'skills' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced' | 'monitor' | 'hooks' | 'coding'>('general')
 const extensionsSection = ref<'mcp' | 'skills' | 'experts'>('mcp')
 const taskSettingsThreadId = ref('')
 const activePropertiesProject = ref<ProjectItem | null>(null)

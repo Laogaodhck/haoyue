@@ -389,6 +389,12 @@ public static class DaemonContract
             ("access", SObject(
                 ("memoryUpdate", SBoolean("记忆更新"), false),
                 ("demoScreen", SBoolean("演示画面"), false)), false)), false),
+        ("coding", SObject(
+            ("git", SObject(
+                ("branchPrefix", SString("新建分支时预填的分支名前缀（留空不添加前缀）"), false),
+                ("forcePushWithLease", SBoolean("推送时使用 --force-with-lease（远端已变化时拒绝覆盖）"), false)), false),
+            ("security", SObject(
+                ("progressiveScan", SBoolean("三层渐进式扫描（开启后 haoyue 在合适节点智能推荐，确认后扫描并修复）"), false)), false)), false),
         ("localInference", SObject(
             ("providerId", SString("本地提供商 id"), false),
             ("gpuLayers", SInteger("GPU 卸载层数，0 为纯 CPU"), false),

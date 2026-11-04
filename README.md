@@ -133,6 +133,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **任务监控**：右栏新增「任务监控」页签（固定模式）或独立悬浮窗（浮动模式），实时展示当前任务的进度回顾、执行活动、产出与来源；「设置 → 任务监控」分区控制展示形式（固定 / 浮动）、固定模式默认页签与四个内容区块（进度与上下文 / 执行活动 / 结果与来源 / 辅助入口）的开关，偏好经 `advanced.get/set` 的 taskMonitor 节持久化
 - **定时任务**：cron 驱动的调度回合，行内展示上次运行状态 / 时间 / 错误与输出摘要，可就地打开本次运行会话；失败即时桌面通知，支持 Webhook 回调
 - **事件钩子（Hooks）**：「设置 → 钩子」分区可查看已配置钩子、配置问题逐条诊断与最近执行状态，并支持添加 / 编辑 / 启用 / 立即测试 / 删除。钩子按触发事件（回合完成 `task.completed`、定时任务完成 `schedule.completed`）自动执行 Webhook（POST JSON、可选 Bearer 密钥）或本地命令（30 秒超时、参数化启动不拼 shell）；触发为 fire-and-forget，绝不拖慢 agent 与调度主流程；密钥只回「已配置」标记、不回传明文，设置页显式提示「使用前请确认自动执行的操作及其文件、网络访问安全」。新增 RPC `hooks.list/save/delete/test`，配置持久化于 config.json 的 Hooks 节
+- **编码**：「设置 → 编码」分区集中管理 Git 与安全工作流。Git 分支前缀（新建分支预填、留空不添加）与始终强制推送（`--force-with-lease`，远端已变化时拒绝覆盖）经 `advanced.get/set` 的 coding 节持久化，并接入 Git 工作区面板——面板新增「新建分支」（按前缀预填的内联输入）与「推送」入口；开启「三层渐进式扫描与自动修复」后推送前先执行密钥 / 口令 / 私钥 / API 令牌快扫（第一层，快扫 + 上限保护），命中即列出高 / 中级发现并要求确认后再推送；Worktrees 子区展示当前工作区的 Git 工作树索引（`git worktree list`，支持刷新）。新增 RPC 能力 `project:git-create-branch`、`project:git-push`、`project:git-worktrees`、`project:security-scan`
 - **工作区级配置**：项目属性新增「智能体」页签——模型、提供商、温度、Agent 模式、语言、人格、验证命令（多行 fail-fast）与系统提示词可设为项目级默认，写入 `<workspace>/.haoyue/config.json` 且只提交变更字段
 - **回合撤销与负反馈**：文件变更一键回滚；每条助手回答可点踩并附原因，反馈直接进入进化信号
 - **「本次允许」审批链路**：内置高危守卫拦截后不再只有静态拒绝——弹窗展示工具名、参数摘要与拦截原因，用户可「拒绝」或「本次允许」一次性放行（`approval_request` 流式事件 + `agent.respondApproval` RPC，等待超时按拒绝处理），拦截与放行全程可见
@@ -528,7 +529,7 @@ parameters:          # 提示末尾追加参数收集说明
 dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1309 / haoyue_cli_tests 27 用例）
 
 # 桌面端（需先 pnpm install）
-cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 378 用例（38 个文件）
+cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 384 用例（38 个文件）
 ```
 
 门槛：`haoyue_runtime` 行覆盖 ≥70% / 分支 ≥55%；CLI（`haoyue_cli`）行 ≥15% / 分支 ≥15%；webserver 行 ≥45% / 分支 ≥15%——三者各自单跑，低于门槛 `dotnet test` 直接失败。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算、`wwwroot/lib` vendor 清单（哈希 / 版本下限 / 引用覆盖）均有护栏测试强制。桌面端在 CI 的 desktop job 中执行 `pnpm lint`、组件行数预算、`pnpm test` 与 `pnpm typecheck && pnpm build`；`benchmarks/*` 三个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描（发现即失败）、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）；另有 Linux 作业覆盖 Unix socket、符号链接解析、Python 连接器与 TS SDK 集成测试。runtime 与测试工程构建均开启 `TreatWarningsAsErrors`，runtime 另开 AOT / 裁剪分析器，JSON 序列化统一走源生成上下文。

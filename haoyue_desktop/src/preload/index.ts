@@ -40,7 +40,11 @@ const api: DesktopApi = {
     openTerminal: (path) => ipcRenderer.invoke('project:open-terminal', path),
     gitOverview: (path) => ipcRenderer.invoke('project:git-overview', path),
     gitHistory: (path) => ipcRenderer.invoke('project:git-history', path),
-    revertFileDiffs: (workspace, patches) => ipcRenderer.invoke('project:revert-file-diffs', workspace, patches)
+    revertFileDiffs: (workspace, patches) => ipcRenderer.invoke('project:revert-file-diffs', workspace, patches),
+    createGitBranch: (path, name) => ipcRenderer.invoke('project:git-create-branch', path, name),
+    pushGitBranch: (path, forceWithLease) => ipcRenderer.invoke('project:git-push', path, forceWithLease),
+    gitWorktrees: (path) => ipcRenderer.invoke('project:git-worktrees', path),
+    securityScan: (path) => ipcRenderer.invoke('project:security-scan', path)
   },
   web: {
     checkUrl: (url) => ipcRenderer.invoke('web:check-url', url),

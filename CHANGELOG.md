@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **设置 → 编码**：集中管理 Git 与安全工作流。Git 分支前缀（haoyue 新建分支时预填此前缀，留空则不添加前缀）与始终强制推送（haoyue 推送时使用 `--force-with-lease`：改写远端分支历史，但远端已变化时拒绝覆盖）经 `advanced.get/set` 的 coding 节持久化；Worktrees 子区展示当前工作区的 Git 工作树索引（`git worktree list`，支持刷新）；安全子区提供「三层渐进式扫描与自动修复」总开关。
+- **Git 工作区面板行为接入**：面板新增「新建分支」（内联输入，按配置的分支前缀预填）与「推送」入口；开启安全开关后推送前先执行密钥 / 口令 / 私钥 / API 令牌快扫（第一层，含文件数与大小上限），命中即列出高 / 中级发现并需确认后再推送。新增主进程能力 `project:git-create-branch`、`project:git-push`、`project:git-worktrees`、`project:security-scan` 及对应 IPC / preload 桥接。
+- **契约与测试计数**：桌面 vitest 378 → 384（新增 parseGitWorktrees / createGitBranch 校验 / 密钥快扫 6 例）；RPC 方法 138、runtime 测试 1309 + 27 保持全绿；README 中英计数同步为 384 用例（38 个文件）。
+
 ## [1.3.33] - 2026-11-04
 
 ### 新增

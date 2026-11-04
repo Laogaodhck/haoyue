@@ -38,7 +38,7 @@ import {
   type ConnectionSettings
 } from './connection-settings.js'
 import { openDaemonLogSink, readDaemonLogTail } from './daemon-log.js'
-import { getGitHistory, getGitOverview, openProjectTerminal, revertFileDiffs } from './project-tools.js'
+import { createGitBranch, getGitHistory, getGitOverview, getGitWorktrees, openProjectTerminal, pushGitBranch, revertFileDiffs, scanForSecrets } from './project-tools.js'
 import { isTrustedIpcSender, requireAbsolutePath } from './ipc-guard.js'
 import { checkForUpdate } from './update-check.js'
 import { attachWebviewGuard, checkBrowserUrl } from './web-guard.js'
@@ -665,6 +665,14 @@ function registerIpc(): void {
   handle('project:revert-file-diffs', (_event, workspace: string, patches: RevertDiffItem[]) =>
     revertFileDiffs(requireAbsolutePath(workspace), patches)
   )
+  handle('project:git-create-branch', (_event, path: string, name: string) =>
+    createGitBranch(requireAbsolutePath(path), name)
+  )
+  handle('project:git-push', (_event, path: string, forceWithLease: boolean) =>
+    pushGitBranch(requireAbsolutePath(path), forceWithLease)
+  )
+  handle('project:git-worktrees', (_event, path: string) => getGitWorktrees(requireAbsolutePath(path)))
+  handle('project:security-scan', (_event, path: string) => scanForSecrets(requireAbsolutePath(path)))
 
   // 可视化浏览器：导航前校验白名单（与无头 browser 工具同一份 config.web.allowedSites）。
   handle('web:check-url', (_event, url: string) => checkBrowserUrl(daemon, url))

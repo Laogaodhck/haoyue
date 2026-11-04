@@ -48,9 +48,10 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 
 - **OpenAI-compatible / Anthropic / Chinese cloud vendors**: OpenAI, Anthropic, and one-click presets for Alibaba Cloud Bailian, Volcengine Ark, Tencent Hunyuan, Baidu Qianfan, Zhipu GLM, and DeepSeek
 - **cURL / Python import**: paste a call snippet when adding a provider and the desktop extracts the API base URL, bearer key, and model IDs (OpenAI, requests, and Anthropic styles); the result still uses encrypted credentials and the OpenAI-compatible pipeline
-- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, MoE-expert weights pinned to CPU, KV cache quantization, Flash Attention, and cross-request KV prefix reuse; load failures retry automatically (falling back to CPU when GPU offload fails), and every successful load runs a small-context inference self-check — corrupted weights or an unallocatable context surface at load time rather than mid-conversation; the CUDA 12 backend delivers a measured **11× decoding speedup** (7.6 → 84.9 tok/s); multi-model LRU residency (default 2 models, so embedding/chat alternation reloads nothing — a measured **6.4~6.9×** speedup), background prewarm at daemon startup, live load-progress broadcasts (phase + ETA), a header/mmproj metadata cache that invalidates when the file changes, automatic idle-weight reclamation (default 20 minutes), and fallback models with early GGUF version / ABI compatibility diagnostics — see the [local model loading optimization report](haoyue_doc/本地模型加载优化报告-2026-10-14.md) (in Chinese)
+- **Local Models**: Ollama, LM Studio, or GGUF models running in-process directly (no server required), with GPU layer offload, MoE-expert weights pinned to CPU, KV cache quantization, Flash Attention, and cross-request KV prefix reuse; load failures retry automatically (falling back to CPU when GPU offload fails), and every successful load runs a small-context inference self-check — corrupted weights or an unallocatable context surface at load time rather than mid-conversation; the CUDA 12 backend delivers a measured **11× decoding speedup** (7.6 → 84.9 tok/s); multi-model LRU residency (default 2 models, so embedding/chat alternation reloads nothing — a measured **6.4~6.9×** speedup), background prewarm at daemon startup, live load-progress broadcasts (phase + ETA), a header/mmproj metadata cache that invalidates when the file changes, automatic idle-weight reclamation (default 20 minutes), and fallback models with early GGUF version / ABI compatibility diagnostics — see the [local model loading optimization report](haoyue_doc/本地模型加载优化报告-2026-10-14.md) (in Chinese); **Windows installers / portable builds ship with the CUDA 12 backend by default** (`build.py` publishes with `-p:LlamaBackend=Cuda12`, auto-falling back to CPU when no GPU is present), with an 8B R1-distilled model measured at ≈39 tok/s on GPU vs ≈5.4 on CPU (a simple Q&A drops from ≈51s to ≈11s); no-think mode force-closes an R1-distilled model's spontaneous chain-of-thought (thinking-char cap + forced `</think>`), so the reply is never starved by invisible thinking
 - **Local Multimodal Vision**: companion mmproj weights are auto-discovered so local models can directly "see" images in conversations and tool screenshots — image-bearing requests automatically fall back to a CPU context to dodge an upstream CUDA slow path, while text-only turns stay at full GPU speed
 - **Smart Routing**: fast, balanced, quality, budget, and offline strategies; automatic retry with exponential backoff and circuit-breaker failover
+- **Model-Switch Context Continuity**: switching models mid-conversation (local ↔ cloud, across providers) keeps the full history — assistant messages carry their source model ref, thinking is stored in its own field so it never pollutes the text handed to the next model, and the new model adapts to its own window; each local model keeps its own KV cache (no cross-talk), and failover reuses the same history (locked down by agent-level regression tests)
 - **Usage Analytics**: token counts, cost, and model distribution with desktop charts
 
 ### 🛠️ Tool & Skill Ecosystem
@@ -305,7 +306,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (1298 cases, coverage gates: line ≥70% / branch ≥55%)
+├── haoyue_tests/         # Runtime unit tests (1300 cases, coverage gates: line ≥70% / branch ≥55%)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── docs/                 # Full-chain closure review report (2026-11-03, with breakpoint-fix updates)
@@ -372,7 +373,7 @@ Each project can override providers and models, temperature and context, tool pe
 }
 ```
 
-- `gpuLayers`: number of GPU-offloaded layers, default `0` (pure CPU); after building the CUDA 12 backend (`dotnet build -p:LlamaBackend=Cuda12`), set `999` to offload everything — measured 7.6 → 84.9 tok/s
+- `gpuLayers`: number of GPU-offloaded layers, default `0` (pure CPU); after building the CUDA 12 backend (`dotnet build -p:LlamaBackend=Cuda12`), set `999` to offload everything — measured 7.6 → 84.9 tok/s (an 8B R1-distilled model runs at ≈39 tok/s on GPU, ≈7× CPU). **Windows installers / portable builds default to the CUDA 12 backend**, auto-falling back to CPU when no GPU is present
 - `mmprojPath`: path to the multimodal projector weights (mmproj GGUF); when left empty, the single `*mmproj*.gguf` in the model directory is auto-discovered — it must sit next to the main model and be the companion version built for that model (e.g. gemma-4-E4B pairs with the unsloth mmproj-F16)
 - `localPrefixReuse`: reuse KV prefixes across requests — multi-step turns only decode new tokens, throughput improves significantly (measured TTFT 20.5s → 0.61s)
 - `flashAttention` / `kvCacheQuantization`: attention-kernel acceleration and KV cache quantization (`q8_0` / `q4_0`); quantization only takes effect with Flash Attention enabled
@@ -498,7 +499,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1298 / haoyue_cli_tests 27 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1300 / haoyue_cli_tests 27 cases)
 
 # Desktop (requires pnpm install first)
 cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest: 365 cases across 37 files
@@ -575,7 +576,7 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
 - Local GGUF load & quantization optimization report (per-layer KV-head parsing fix for hybrid architectures + Flash Attention everywhere + measured Q4/Q5/Q8 comparison: nemotron decode +22%, long-context +45%, requantization buys no quality; reproducible via benchmarks/model-opt) (in Chinese)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1298+27+365, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1300+27+365, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Desktop UI review — three-column layout & key bindings (22 findings across layout responsibility / dead keys / duplicate entries / capability gaps, ranked P1-P3, plus 14 batched recommendations and an item-by-item fix reconciliation: background task panel, local inference dashboard, routing & failover, workspace config, agent expert settings, settings search and offline read-only)
 - Full-chain closure review report (2026-11-03: 32 built-in tools + ComputerUse 8 / NetworkOps extensions + 60+ MCP tools, image generation, doc_render, and all 54 desktop components verified end-to-end across "config → registration → gating → call → artifact → delivery"; of 4 external breakpoints, the local model path and disabled MCP git were fixed as authorized, leaving ark account arrears, speech key, and video enablement pending external resources — see [`docs/审查报告-全链路闭环-20261103.md`](docs/审查报告-全链路闭环-20261103.md))
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)

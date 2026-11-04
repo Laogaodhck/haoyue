@@ -48,9 +48,10 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 
 - **OpenAI 兼容 / Anthropic / 国内云厂商**：OpenAI、Anthropic，以及阿里云百炼、火山方舟、腾讯云混元、百度千帆、智谱 GLM、DeepSeek 等预设一键接入
 - **cURL / Python 一键导入**：新增提供商时直接粘贴调用片段，自动识别 API 地址、Bearer Key 与模型 ID（支持 OpenAI、requests、Anthropic 等常见写法），识别结果仍走加密密钥与 OpenAI 兼容链路
-- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、MoE 专家权重钉 CPU、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；加载失败自动重试（GPU 卸载失败自动降级 CPU），加载完成后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）；多模型 LRU 驻留（默认 2 个，嵌入/聊天交替零重载，实测 **6.4~6.9×** 加速）、daemon 启动后台预热、加载进度实时广播（阶段 + ETA）、header/mmproj 元数据缓存（换文件自动失效）、空闲权重自动回收（默认 20 分钟）、备用模型回退与 GGUF 版本 / ABI 兼容性早期诊断——详见 [本地模型加载优化报告](haoyue_doc/本地模型加载优化报告-2026-10-14.md)
+- **本地模型**：Ollama、LM Studio，或直接进程内运行 GGUF 模型（无需任何服务器），支持 GPU 层卸载、MoE 专家权重钉 CPU、KV 缓存量化、Flash Attention 与跨请求 KV 前缀复用；加载失败自动重试（GPU 卸载失败自动降级 CPU），加载完成后自动执行小上下文推理自检——权重损坏或上下文放不下在加载期即暴露；CUDA 12 后端实测解码提速 **11 倍**（7.6 → 84.9 tok/s）；多模型 LRU 驻留（默认 2 个，嵌入/聊天交替零重载，实测 **6.4~6.9×** 加速）、daemon 启动后台预热、加载进度实时广播（阶段 + ETA）、header/mmproj 元数据缓存（换文件自动失效）、空闲权重自动回收（默认 20 分钟）、备用模型回退与 GGUF 版本 / ABI 兼容性早期诊断——详见 [本地模型加载优化报告](haoyue_doc/本地模型加载优化报告-2026-10-14.md)；**Windows 安装包 / 便携版默认内置 CUDA12 后端**（`build.py` 自动以 `-p:LlamaBackend=Cuda12` 发布，无 GPU 自动降级 CPU），8B R1 蒸馏模型实测 GPU 解码约 39 tok/s（对比 CPU 约 5.4 tok/s，一次问答从约 51s 降到约 11s）；无思考模式下强制收束 R1 蒸馏模型的自发思考链（思考段字符上限 + 注入收束标记），回答不再被不可见思考吃空
 - **本地多模态视觉**：GGUF 配套 mmproj 权重自动发现，本地模型可直接"看"对话中的图片与工具截图——带图请求自动降级 CPU 上下文规避上游 CUDA 慢路径，文本轮保持 GPU 全速
 - **智能路由**：快速、均衡、质量、经济、离线多种策略，自动重试、指数退避与熔断器故障转移
+- **模型切换上下文连通**：会话中随时切换模型（本地 ↔ 云端、不同提供商），历史消息完整延续——助手消息带来源模型标识、思考段独立存储不污染正文，新模型按自身窗口自动适配；本地各模型独立 KV 缓存互不串扰，故障转移复用同一历史（Agent 层回归测试固化）
 - **用量统计**：Token 计数、成本与模型分布，桌面端图表可视化
 
 ### 🛠️ 工具与技能生态
@@ -306,7 +307,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（1298 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
+├── haoyue_tests/         # 运行时单元测试（1300 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── docs/                 # 全链路闭环审查报告（2026-11-03，含断点修复更新）
@@ -396,7 +397,7 @@ Haoyue/
 }
 ```
 
-- `gpuLayers`：GPU 卸载层数，默认 `0`（纯 CPU）；构建 CUDA 12 后端（`dotnet build -p:LlamaBackend=Cuda12`）后设 `999` 卸载全部层，实测解码 7.6 → 84.9 tok/s
+- `gpuLayers`：GPU 卸载层数，默认 `0`（纯 CPU）；构建 CUDA 12 后端（`dotnet build -p:LlamaBackend=Cuda12`）后设 `999` 卸载全部层，实测解码 7.6 → 84.9 tok/s（8B R1 蒸馏模型 GPU 约 39 tok/s，对比 CPU 约 7 倍）。**Windows 安装包 / 便携版发布默认即 CUDA12 后端**，无 GPU 的机器自动降级 CPU
 - `mmprojPath`：多模态视觉投影权重（mmproj GGUF）路径；留空时自动发现模型目录下唯一 `*mmproj*.gguf`——必须与主模型同目录，且须使用与该模型配套的 mmproj 版本（如 gemma-4-E4B 配 unsloth 版 mmproj-F16）
 - `localPrefixReuse`：跨请求复用 KV 前缀，多步回合只解码新增 token，吞吐显著提升（实测 TTFT 20.5s → 0.61s）
 - `flashAttention` / `kvCacheQuantization`：注意力内核加速与 KV 缓存量化（`q8_0` / `q4_0`），量化仅在 Flash Attention 开启时生效
@@ -522,7 +523,7 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1298 / haoyue_cli_tests 27 用例）
+dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1300 / haoyue_cli_tests 27 用例）
 
 # 桌面端（需先 pnpm install）
 cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 365 用例（37 个文件）
@@ -599,7 +600,7 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
 - 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1298+27+365、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1300+27+365、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - 桌面端 UI 审查——三栏布局与按键绑定（布局职责 / 死键 / 重复入口 / 零入口能力面 22 项发现按 P1-P3 排序，附 14 条分批建议与逐条修复对账：后台任务面板、本地推理看板、路由容灾、工作区配置、专家参数、设置搜索与离线只读）
 - 全链路闭环审查报告（2026-11-03：32 内置工具 + ComputerUse 8 / NetworkOps 扩展 + MCP 60+ 工具、图片生成、doc_render、桌面端 54 组件全链路「配置 → 注册 → 门控 → 调用 → 产物 → 交付」闭环核对；4 处断点均为外部资源——本地模型路径与 MCP git 停用两处已按用户授权修复，剩余 ark 账户欠费、语音 Key、视频开通三项待外部资源到位，见 [`docs/审查报告-全链路闭环-20261103.md`](docs/审查报告-全链路闭环-20261103.md)）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）

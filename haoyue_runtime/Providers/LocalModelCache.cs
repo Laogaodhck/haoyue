@@ -659,7 +659,23 @@ public sealed class LocalModelCache : IDisposable
             try
             {
                 Report(LocalLoadPhase.Loading, attempt, cpuOnly);
-                weights = await Task.Run(() => LLamaWeights.LoadFromFile(attemptParams), ct).ConfigureAwait(false);
+                // LLamaWeights.LoadFromFile 是同步读盘 + tensor 解析：Task.Run 的取消
+                // 令牌只在任务调度前生效，加载一旦开始便无法中断（4GB+ 模型在 CPU 上
+                // 可达数十秒）。此前把 ct 直接传给 Task.Run，用户在加载期按停止会一直
+                // 干等到加载完成，表现为「停止键没有反应」（2026-11-04 实测复现）。
+                // 改为不受本回合取消约束的后台加载 + WaitAsync(ct)：取消立即返回，
+                // 加载在后台收尾并挂回缓存槽（RecycleCancelledLoadAsync），下次请求
+                // 直接复用——既不泄漏权重，也不让用户重载一遍。
+                var loadTask = Task.Run(() => LLamaWeights.LoadFromFile(attemptParams), CancellationToken.None);
+                try
+                {
+                    weights = await loadTask.WaitAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _ = RecycleCancelledLoadAsync(loadTask, attemptParams, path, loadSignature, mmprojPath);
+                    throw;
+                }
 
                 // 加载后自检：一次真实 tokenize + decode。上下文创建失败（显存放不下 KV
                 // cache）与权重损坏在这里暴露，触发重试 / 降级而不是第一次对话报错。
@@ -721,6 +737,76 @@ public sealed class LocalModelCache : IDisposable
         var failure = $"加载本地模型 '{fileName}' 失败：" + string.Join("；", attempts);
         _fingerprints.RecordFailure(path, failure);
         throw new LlmException(failure, retryable: false);
+    }
+
+    /// <summary>
+    /// 回合取消时后台仍在进行的权重加载的收尾：加载完成 → 校验 + 投影器 →
+    /// 原子挂回缓存槽（期间槽位若已被其他请求装入则丢弃本次结果），失败即释放。
+    /// 目标是不让已完成的数 GB 加载白费，同时绝不与并发加载互相覆盖。
+    /// </summary>
+    private async Task RecycleCancelledLoadAsync(
+        Task<LLamaWeights> loadTask, ModelParams attemptParams, string path, string? loadSignature, string? mmprojPath)
+    {
+        LLamaWeights? weights = null;
+        try
+        {
+            weights = await loadTask.ConfigureAwait(false);
+            try
+            {
+                VerifyInference(weights, path, attemptParams);
+                MtmdWeights? mtmd = null;
+                if (mmprojPath is { Length: > 0 } mp) mtmd = LoadProjector(mp, weights);
+                var slot = new Slot
+                {
+                    Key = SlotKey(path, loadSignature),
+                    Path = path,
+                    LoadSignature = loadSignature,
+                    Weights = weights,
+                    Mtmd = mtmd,
+                    Report = new LocalModelLoadReport
+                    {
+                        EffectiveGpuLayers = attemptParams.GpuLayerCount.ToString(),
+                        Attempts = 1,
+                        DegradedToCpu = false,
+                        Verified = true,
+                        LoadDurationMs = 0,
+                        Note = "取消后后台补载完成（下次请求直接复用）",
+                    },
+                    WeightBytes = 0,
+                    LastUsedTicks = DateTimeOffset.UtcNow.Ticks,
+                };
+                if (TryPutSlot(slot))
+                {
+                    weights = null; // 已归槽位
+                    EvictUnderBudget(slot.Key);
+                }
+            }
+            catch
+            {
+                // 校验 / 投影失败：不缓存本次结果。
+            }
+        }
+        catch
+        {
+            // 后台加载本身失败：无结果可缓存。
+        }
+        finally
+        {
+            weights?.Dispose();
+        }
+    }
+
+    /// <summary>原子置槽：目标键无有效槽位时才装入；已有（并发装入）则返回 false 由调用方释放。</summary>
+    private bool TryPutSlot(Slot slot)
+    {
+        lock (_slotGate)
+        {
+            if (_slots.TryGetValue(slot.Key, out var existing) && !existing.PendingDispose)
+                return false;
+            _slots[slot.Key] = slot;
+            _lastReport = slot.Report;
+            return true;
+        }
     }
 
     /// <summary>

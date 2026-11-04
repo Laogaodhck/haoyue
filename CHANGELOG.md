@@ -26,6 +26,7 @@
 
 ### 修复
 
+- **本地模型加载期「停止键无反应」**：`LLamaWeights.LoadFromFile` 是同步读盘 + tensor 解析，此前 `Task.Run(..., ct)` 的取消令牌只在任务调度前生效——权重（4GB+，CPU 上可达数十秒）一旦开始加载，按停止键只能干等到加载完成，表现为「点了完全没反应」。现改为不受回合取消约束的后台加载 + `WaitAsync(ct)`：取消立即返回（探针实测冷加载期 5ms、生成中 138ms/1ms），后台加载完成后原子挂回缓存槽（`TryPutSlot` 防并发覆盖），下次请求直接复用已完成的加载，不泄漏权重也不重载。
 - **doctor 对方舟 403 误报**：HealthChecker 原用手写的 `max_tokens=1 + stream=false` payload 探测方舟，与 reasoning 模型的参数要求不兼容，绕过真实客户端请求构造导致 doctor 显示 offline · auth failed (HTTP 403)，而真实调用链（provider test / agent 回合）正常。现改为注入 `ILlmClientFactory` 走与 provider test 相同的 `LlmRequest + client.StreamAsync` 管线，doctor 与真实调用链结果一致，透出方舟真实业务错误（如账户欠费）。
 - **可用提供商误报 offline（探测目标与真实使用不一致）**：HealthChecker 此前固定用提供商的第一个模型探测——tokenhub 首模型 `deepseek/deepseek-flash` 免费额度耗尽返回 402，而配置的活动模型（`deepseek-v4-flash-202605`）调用正常，doctor 面板误导。现按配置的 provider / model 精确定位活动模型（支持 `/model` 后缀匹配），找不到再回退首模型与通用 ID，doctor 与真实调用链一致。
 - **Windows 无真实 bash 时的执行缺陷**：本机只有 WSL bridge bash（`System32\bash.exe`）时，bash / terminal 工具选中它，命令经 Windows→WSL 参数转换后 `$` 变量展开为空、stdout 管道整体丢失，带变量的命令静默出错（命令截断 / 超时 / 终端 cwd 注记三个沙箱类测试同源失败）。现跳过 System32 与 WindowsApps 的 WSL bridge 别名、只接受真实 bash，否则回退 pwsh；pwsh 路径改 `-EncodedCommand`（UTF-16LE Base64 原文执行）绕开命令行引号解析，terminal 的 PowerShell 会话同路径。

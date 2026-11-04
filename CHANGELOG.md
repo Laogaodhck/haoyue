@@ -10,6 +10,11 @@
 - **Git 工作区面板行为接入**：面板新增「新建分支」（内联输入，按配置的分支前缀预填）与「推送」入口；开启安全开关后推送前先执行密钥 / 口令 / 私钥 / API 令牌快扫（第一层，含文件数与大小上限），命中即列出高 / 中级发现并需确认后再推送。新增主进程能力 `project:git-create-branch`、`project:git-push`、`project:git-worktrees`、`project:security-scan` 及对应 IPC / preload 桥接。
 - **契约与测试计数**：桌面 vitest 378 → 384（新增 parseGitWorktrees / createGitBranch 校验 / 密钥快扫 6 例）；RPC 方法 138、runtime 测试 1309 + 27 保持全绿；README 中英计数同步为 384 用例（38 个文件）。
 
+### 修复
+
+- **设置 → 编码开关点击无反馈**：开关行 `.coding-toggle-row` 缺少 `input:checked` 选中态 scoped 规则（全局样式仅覆盖 provider / model 开关行），点击后状态实际已切换并持久化，视觉上轨道不变色、滑块不动；按既有面板（McpPanel）模式补齐选中态底色、滑块位移与键盘焦点轮廓，`advanced.set` 仍逐键 patch + 失败回滚，行为不变。
+- **KnowledgePdfImportTests 并行竞态（间歇失败）**：`PdfTextExtractor` 是进程级静态桥（HaoyueRuntime 装配时注册），`Pdf_WithoutBridge_FailsWithActionableMessage` 将其置空后调用时，并行测试恰好重新注册会导致断言读到「桥已注册」的文案而间歇失败（此前 Release 全量构建曾 1308/1309）。测试类归入既有非并行 `process-env` 集合，消除互踩。
+
 ## [1.3.33] - 2026-11-04
 
 ### 新增

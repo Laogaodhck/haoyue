@@ -10,7 +10,10 @@ namespace Haoyue.Tests;
 /// 知识库 PDF 导入桥（4.2）：桥未注册 → 明确报错；桥可用时文本 PDF 提取成功、
 /// 损坏 PDF 明确报错。扫描件 OCR 路径依赖 RapidOCR 模型，不在自动化范围
 ///（doc_toolkit 的 --ocr 语义已在 verify_ocr.py 覆盖）。
+/// PdfTextExtractor 是进程级静态状态（HaoyueRuntime 装配时注册），与其它会
+/// 注册/读取该桥的测试并行会导致互踩，因此加入非并行集合。
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public sealed class KnowledgePdfImportTests
 {
     [Fact]

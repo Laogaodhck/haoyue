@@ -17,6 +17,7 @@ import ConfigAnomalyDialog from './components/ConfigAnomalyDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import ConversationMessage from './components/ConversationMessage.vue'
 import EditMessageDialog from './components/EditMessageDialog.vue'
+import FloatingTaskMonitor from './components/FloatingTaskMonitor.vue'
 import WorkDock from './components/WorkDock.vue'
 import KnowledgeBaseDialog from './components/KnowledgeBaseDialog.vue'
 import RulesMemoryDialog from './components/RulesMemoryDialog.vue'
@@ -60,6 +61,7 @@ import { createEvolutionController } from './evolution-controller'
 import { createMessageEditing } from './message-editing'
 import { createProjectStore } from './project-store'
 import { createWorkDockController } from './work-dock'
+import { createMonitorPreferences } from './monitor-preferences'
 import { createRuntimeReconnect } from './runtime-reconnect'
 import { createRuntimeRecovery, type ConfigAnomaly } from './runtime-recovery'
 
@@ -95,7 +97,7 @@ const workDockTab = ref<WorkDockTab>('changes')
 const workDockWidth = ref(560)
 const toolDiff = ref<{ path: string; diff: string } | null>(null)
 
-const settingsSection = ref<'general' | 'models' | 'agent' | 'mcp' | 'skills' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'>('general')
+const settingsSection = ref<'general' | 'models' | 'agent' | 'mcp' | 'skills' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced' | 'monitor' | 'hooks'>('general')
 const extensionsSection = ref<'mcp' | 'skills' | 'experts'>('mcp')
 const taskSettingsThreadId = ref('')
 const activePropertiesProject = ref<ProjectItem | null>(null)
@@ -354,6 +356,17 @@ const {
   resizeWorkDock,
   openProjectTerminal
 } = createWorkDockController({ activeProject, workDockOpen, workDockTab, workDockWidth, toolDiff })
+
+const {
+  config: monitorConfig,
+  floatingOpen: floatingMonitorOpen,
+  load: loadMonitorConfig,
+  togglePanel: toggleMonitorPanel,
+  applyDefaultTab: applyMonitorDefaultTab
+} = createMonitorPreferences()
+
+/** 固定模式默认展示 = 展示：打开右栏时默认选中任务监控页签。 */
+watch(workDockOpen, (open) => applyMonitorDefaultTab(open, workDockTab))
 
 
 // 历史消息的图片只有元数据进入渲染端（session.get 不内联 base64）：这里按当前任务
@@ -1571,6 +1584,7 @@ onMounted(async () => {
   unsubscribeState = window.haoyue.daemon.onState(handleDaemonState)
   setAppReady(true)
   await runReconnectCycle(true)
+  void loadMonitorConfig()
   measureConversationViewport()
   window.addEventListener('resize', measureConversationViewport)
   window.addEventListener('keydown', handleGlobalShortcuts)
@@ -1665,11 +1679,11 @@ watch(theme, applyTheme)
                 @click="openProjectTerminal">
                 <TerminalSquare :size="18" />
               </button>
-              <!-- 工作区面板只留一个开关：五个页签由面板自己导航。此前 header 为每个页签
-                   各放一个按钮、又在末尾重复了标题栏已有的「切换侧栏」，同一屏 9 个可点元素。 -->
-              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen }"
-                :title="workDockOpen ? '收起工作区面板' : '工作区面板：更改 / 提交记录 / 工具活动 / 浏览 / 后台任务'"
-                @click="toggleWorkDock">
+              <!-- 工作区面板只留一个开关：页签由面板自己导航。固定模式打开右栏，
+                   浮动模式切换任务监控悬浮窗（monitorConfig.mode 分流）。 -->
+              <button class="icon-button project-tool-button" :class="{ 'is-active': workDockOpen || floatingMonitorOpen }"
+                :title="workDockOpen || floatingMonitorOpen ? '收起工作区面板' : '工作区面板：更改 / 提交记录 / 工具活动 / 浏览 / 后台任务 / 任务监控'"
+                @click="() => toggleMonitorPanel(toggleWorkDock)">
                 <PanelRight :size="18" />
               </button>
               <button class="icon-button" title="任务设置" :disabled="!activeThread" @click="openTaskSettings()">
@@ -1890,11 +1904,15 @@ watch(theme, applyTheme)
         </main>
 
         <WorkDock v-show="activePage === 'main'" :open="workDockOpen" v-model:tab="workDockTab"
-          :width="workDockWidth" :project="activeProject" :thread="activeThread" :diff-override="toolDiff"
+          :width="workDockWidth" :project="activeProject" :thread="activeThread" :threads="threads"
+          :monitor-as-tab="monitorConfig.mode === 'fixed'" :diff-override="toolDiff"
           @close="closeWorkDock" @resize="resizeWorkDock" @open-terminal="openProjectTerminal"
-          @open-session="openTaskSession" />
+          @open-session="openTaskSession" @select-thread="selectThread" />
 
         <!-- 1.4 导航模型统一：这些页面是右栏同级视图，左栏常驻（此前它们直接占满外壳，把左栏盖掉）。 -->
+        <FloatingTaskMonitor :open="floatingMonitorOpen && monitorConfig.mode === 'floating'" :thread="activeThread"
+          :threads="threads" @close="floatingMonitorOpen = false"
+          @open-session="openTaskSession" @select-thread="selectThread" />
         <SettingsDialog :open="activePage === 'settings' || activePage === 'extensions'"
           :page="activePage === 'extensions' ? 'extensions' : 'settings'" :theme="theme"
           :daemon-connected="daemonState.connected" :daemon-endpoint="daemonState.endpoint"

@@ -187,6 +187,28 @@ public static class ConfigSchema
 
         // 按服务器名键控的字典：容器整体登记为用户数据，子项由 McpConfig 逐项容错。
         New("mcp.servers", "object", null),
+
+        // 桌面端任务监控展示偏好（纯 UI，runtime 行为不读取；只供桌面渲染层消费）。
+        New("taskMonitor.mode", "enum", "fixed", allowed: ["fixed", "floating"]),
+        New("taskMonitor.fixedDefaultShow", "enum", "show", allowed: ["show", "hidden"]),
+        New("taskMonitor.progress.review", "bool", true),
+        New("taskMonitor.progress.goal", "bool", true),
+        New("taskMonitor.progress.plan", "bool", true),
+        New("taskMonitor.activity.subAgents", "bool", true),
+        New("taskMonitor.activity.backgroundProcesses", "bool", true),
+        New("taskMonitor.activity.sideChat", "bool", true),
+        New("taskMonitor.activity.skillMcp", "bool", true),
+        New("taskMonitor.results.outputs", "bool", true),
+        New("taskMonitor.results.webVisits", "bool", true),
+        New("taskMonitor.results.sources", "bool", true),
+        New("taskMonitor.results.knowledge", "bool", true),
+        New("taskMonitor.access.memoryUpdate", "bool", true),
+        New("taskMonitor.access.demoScreen", "bool", true),
+
+        // 事件钩子：数组容器整体登记为用户数据（子项由 HookConfig 逐项容错，
+        // 语义与 mcp.servers 一致——钩子条目是用户数据，不属于默认值登记表）。
+        // 注意路径是 hooks.hooks：根属性 Hooks(HooksConfig) 内嵌 List<HookConfig> Hooks。
+        New("hooks.hooks", "object", null),
     ];
 
     private static ConfigField New(string path, string type, JsonNode? @default,

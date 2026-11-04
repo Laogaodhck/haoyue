@@ -5,8 +5,86 @@ export interface ProjectItem {
   loaded?: boolean
 }
 
-/** 右侧统一工作区面板（WorkDock）的页签：Git 更改 / 提交记录 / 工具活动 / 内置浏览器。 */
-export type WorkDockTab = 'changes' | 'history' | 'tools' | 'browser' | 'tasks'
+/** 右侧统一工作区面板（WorkDock）的页签：Git 更改 / 提交记录 / 工具活动 / 内置浏览器 / 后台任务 / 任务监控。 */
+export type WorkDockTab = 'changes' | 'history' | 'tools' | 'browser' | 'tasks' | 'monitor'
+
+/** 桌面端「任务监控」展示偏好（advanced.get/set 的 taskMonitor 节，与 runtime 契约同构）。 */
+export interface TaskMonitorConfig {
+  /** 任务监控形式：fixed（右栏页签）| floating（悬浮窗）。 */
+  mode: 'fixed' | 'floating'
+  /** 固定模式默认展示：show（打开右栏默认选中监控页签）| hidden（需手动点开）。 */
+  fixedDefaultShow: 'show' | 'hidden'
+  /** 进度与上下文：任务回顾 / 任务目标 / 计划。 */
+  progress: { review: boolean; goal: boolean; plan: boolean }
+  /** 执行活动：子智能体 / 后台进程 / 侧边聊天 / Skill 与 MCP。 */
+  activity: { subAgents: boolean; backgroundProcesses: boolean; sideChat: boolean; skillMcp: boolean }
+  /** 结果与来源：产出 / 网页查阅 / 来源 / 知识。 */
+  results: { outputs: boolean; webVisits: boolean; sources: boolean; knowledge: boolean }
+  /** 辅助入口：记忆更新 / 演示画面。 */
+  access: { memoryUpdate: boolean; demoScreen: boolean }
+}
+
+/** 任务监控偏好的缺省值（advanced.get 失败/未返回时面板回退）。 */
+export function defaultTaskMonitorConfig(): TaskMonitorConfig {
+  return {
+    mode: 'fixed',
+    fixedDefaultShow: 'show',
+    progress: { review: true, goal: true, plan: true },
+    activity: { subAgents: true, backgroundProcesses: true, sideChat: true, skillMcp: true },
+    results: { outputs: true, webVisits: true, sources: true, knowledge: true },
+    access: { memoryUpdate: true, demoScreen: true }
+  }
+}
+
+/** 事件钩子（hooks.list/save/delete 读面，与 runtime 契约同构）。 */
+export interface HookInfo {
+  name: string
+  trigger: 'task.completed' | 'schedule.completed'
+  action: 'webhook' | 'command'
+  enabled: boolean
+  webhookUrl: string
+  /** 是否已配置 Bearer 密钥（不回传密钥明文）。 */
+  hasSecret: boolean
+  command: string
+}
+
+export interface HookProblem {
+  name: string
+  problem: string
+}
+
+export interface HookStatus {
+  name: string
+  runCount: number
+  lastOk: boolean
+  lastTriggeredAt: string | null
+  lastError: string | null
+  lastDurationMs: number | null
+}
+
+export interface HooksListResult {
+  hooks: HookInfo[]
+  problems: HookProblem[]
+  status: HookStatus[]
+}
+
+export interface HookTestResult {
+  ok: boolean
+  error: string | null
+  durationMs: number
+  output: string
+}
+
+/** 钩子编辑表单的载荷（hooks.save 参数）。 */
+export interface HookDraft {
+  name: string
+  trigger: 'task.completed' | 'schedule.completed'
+  action: 'webhook' | 'command'
+  enabled: boolean
+  webhookUrl: string
+  webhookSecret: string
+  command: string
+}
 
 /** Provider-neutral reasoning depth. Runtime wire clients perform API-specific mapping. */
 export enum ReasoningLevel {

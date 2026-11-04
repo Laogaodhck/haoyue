@@ -246,6 +246,43 @@ public static class DaemonContract
     private static readonly JsonObject IdParams = SObject(
         ("id", SString("资源 id"), true));
 
+    private static readonly JsonObject HookUpsert = SObject(
+        ("name", SString("钩子名称（唯一标识；更新已有钩子时用于定位）"), true),
+        ("trigger", SString("触发事件", "task.completed", "schedule.completed"), false),
+        ("action", SString("动作类型", "webhook", "command"), false),
+        ("webhookUrl", SString("Webhook 目标地址（http/https）；空串清除"), false),
+        ("webhookSecret", SString("Authorization: Bearer 密钥；缺省保持已存值，显式空串清除"), false),
+        ("command", SString("本地命令（非交互，30 秒超时）；空串清除"), false),
+        ("enabled", SBoolean("启用开关（缺省 true）"), false));
+
+    private static readonly JsonObject HookResult = RObject(
+        ("name", SString("钩子名称")),
+        ("trigger", SString("触发事件")),
+        ("action", SString("动作类型")),
+        ("enabled", SBoolean("是否启用")),
+        ("webhookUrl", SString("Webhook 地址")),
+        ("hasSecret", SBoolean("是否已配置 Bearer 密钥")),
+        ("command", SString("本地命令")));
+
+    private static readonly JsonObject HookListResult = RObject(
+        ("hooks", RArray(HookResult)),
+        ("problems", RArray(RObject(
+            ("name", SString("钩子名称")),
+            ("problem", SString("配置问题描述"))))),
+        ("status", RArray(RObject(
+            ("name", SString("钩子名称")),
+            ("runCount", SInteger("累计触发次数")),
+            ("lastOk", SBoolean("最近一次是否成功")),
+            ("lastTriggeredAt", SString("最近触发时间（ISO）")),
+            ("lastError", SString("最近一次失败原因")),
+            ("lastDurationMs", SNumber("最近一次耗时（毫秒）"))))));
+
+    private static readonly JsonObject HookTestResult = RObject(
+        ("ok", SBoolean("是否成功")),
+        ("error", SString("失败原因")),
+        ("durationMs", SNumber("耗时（毫秒）")),
+        ("output", SString("命令输出摘要 / HTTP 状态")));
+
     private static readonly JsonObject IdOnlyParams = SObject(
         ("id", SString("会话 id"), true));
 
@@ -332,6 +369,26 @@ public static class DaemonContract
         ("language", SString("界面语言"), false),
         ("rulesEnabled", SBoolean("AGENTS.md 规则注入开关"), false),
         ("memoryMode", SString("记忆模式"), false),
+        ("taskMonitor", SObject(
+            ("mode", SString("任务监控形式：fixed（右栏页签）/ floating（悬浮窗）"), false),
+            ("fixedDefaultShow", SString("固定模式默认展示：show / hidden"), false),
+            ("progress", SObject(
+                ("review", SBoolean("任务回顾"), false),
+                ("goal", SBoolean("任务目标"), false),
+                ("plan", SBoolean("计划"), false)), false),
+            ("activity", SObject(
+                ("subAgents", SBoolean("子智能体"), false),
+                ("backgroundProcesses", SBoolean("后台进程"), false),
+                ("sideChat", SBoolean("侧边聊天"), false),
+                ("skillMcp", SBoolean("Skill 与 MCP"), false)), false),
+            ("results", SObject(
+                ("outputs", SBoolean("产出"), false),
+                ("webVisits", SBoolean("网页查阅"), false),
+                ("sources", SBoolean("来源"), false),
+                ("knowledge", SBoolean("知识"), false)), false),
+            ("access", SObject(
+                ("memoryUpdate", SBoolean("记忆更新"), false),
+                ("demoScreen", SBoolean("演示画面"), false)), false)), false),
         ("localInference", SObject(
             ("providerId", SString("本地提供商 id"), false),
             ("gpuLayers", SInteger("GPU 卸载层数，0 为纯 CPU"), false),
@@ -1431,6 +1488,18 @@ public static class DaemonContract
         M("schedule.run", "schedule", "立即执行一次定时任务", parameters: IdParams,
             result: RText,
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound, DaemonErrorCode.Conflict)),
+
+        // hooks（事件钩子：task.completed / schedule.completed → Webhook / 本地命令）
+        M("hooks.list", "hooks", "列出已配置钩子、配置问题与最近执行状态", parameters: EmptyParams,
+            result: HookListResult, errors: E()),
+        M("hooks.save", "hooks", "新增或更新一条钩子", parameters: HookUpsert,
+            result: HookListResult, errors: E(DaemonErrorCode.InvalidParams)),
+        M("hooks.delete", "hooks", "删除一条钩子", parameters: IdParams,
+            result: HookListResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("hooks.test", "hooks", "立即触发一次钩子（试运行）", parameters: IdParams,
+            result: HookTestResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
 
         // task（后台任务队列：完整 agent 回合转后台执行，状态经 task.updated 广播）
         M("task.start", "task", "提交后台 agent 回合（立即返回任务快照）", parameters: SObject(

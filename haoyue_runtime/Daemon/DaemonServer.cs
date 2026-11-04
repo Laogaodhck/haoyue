@@ -1536,6 +1536,26 @@ public sealed partial class DaemonServer : IAsyncDisposable
                             _ => Task.FromResult(_admin.RunSchedule(Params(request))), context.ConnectionCt).ConfigureAwait(false);
                         break;
 
+                    case "hooks.list":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            _ => Task.FromResult(_admin.ListHooks()), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "hooks.save":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.SaveHook(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "hooks.delete":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, true,
+                            _ => Task.FromResult(_admin.DeleteHook(Params(request))), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
+                    case "hooks.test":
+                        await RunAdminAsync(context.Writer, context.WriterGate, id, false,
+                            token => _admin.TestHookAsync(Params(request), token), context.ConnectionCt).ConfigureAwait(false);
+                        break;
+
                     case "task.start":
                     {
                         var parameters = Params(request);

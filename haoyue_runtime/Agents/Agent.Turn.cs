@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Providers;
@@ -680,6 +681,17 @@ public sealed partial class Agent
                 ? null
                 : ledger.Changes.Select(c => ToRelativePath(c.AbsolutePath, s.Workspace.Root)).ToList(),
             s.Outcome));
+
+        // 事件钩子（task.completed）：回合收尾后按配置自动执行 Webhook / 本地命令。
+        // fire-and-forget——钩子失败或误配绝不回头影响回合结果；命令动作会以当前
+        // 进程身份访问文件与网络，这是用户显式配置的自动化行为。
+        HookRunner.Trigger("task.completed", new System.Text.Json.Nodes.JsonObject
+        {
+            ["sessionId"] = s.Session.Header.Id,
+            ["cancelled"] = s.Cancelled,
+            ["error"] = s.Error,
+            ["finishReason"] = s.Outcome,
+        }, configStore);
 
         // H-C 回合结束触发式沉淀提示：有实际执行步骤的成功回合给一条客户端可见的
         // 轻提示（不进模型上下文、零 token 成本）——回合内自觉写入优先，后台

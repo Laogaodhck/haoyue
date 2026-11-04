@@ -29,7 +29,9 @@ import {
   Wifi,
   Wrench,
   X,
-  Zap
+  Zap,
+  Monitor,
+  Webhook
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { AppInfo } from '../../../shared/ipc'
@@ -57,9 +59,11 @@ import SettingsIntegrationsPanel from './SettingsIntegrationsPanel.vue'
 import SettingsEvolutionPanel from './SettingsEvolutionPanel.vue'
 import SettingsAdvancedPanel from './SettingsAdvancedPanel.vue'
 import SettingsNetworkPanel from './SettingsNetworkPanel.vue'
+import SettingsTaskMonitorPanel from './SettingsTaskMonitorPanel.vue'
+import SettingsHooksPanel from './SettingsHooksPanel.vue'
 import { useEscapeClose } from '../use-escape-close'
 
-type SettingsSection = 'general' | 'network' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced'
+type SettingsSection = 'general' | 'network' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced' | 'monitor' | 'hooks'
 
 interface ProviderInfo {
   id: string
@@ -351,6 +355,8 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'evolution', label: '进化', icon: Telescope },
   { id: 'diagnostics', label: '诊断与用量', icon: Activity },
   { id: 'inference', label: '推理加速', icon: Gauge },
+  { id: 'monitor', label: '任务监控', icon: Monitor },
+  { id: 'hooks', label: '钩子', icon: Webhook },
   { id: 'advanced', label: '高级设置', icon: SlidersHorizontal }
 ]
 
@@ -381,6 +387,8 @@ const SECTION_KEYWORDS: Record<SettingsSection, string> = {
   evolution: '进化 反思 缺陷 草稿 趋势',
   diagnostics: '诊断 用量 日志 token 费用 健康检查 导出',
   inference: '推理 加速 GPU 卸载 显存 KV 量化 flash attention 预热 卸载 驻留 基准 回合预算 token 费用 时长 上下文压缩 保留比例',
+  monitor: '任务监控 监控 固定 浮动 悬浮 默认展示 进度 上下文 回顾 目标 计划 执行 活动 子智能体 后台 进程 侧边 聊天 技能 mcp 产出 网页 来源 知识 记忆 更新 演示 画面 开关',
+  hooks: '钩子 hook webhook 命令 触发 事件 任务完成 定时 自动 执行 密钥 bearer 本地',
   advanced: '高级 网络 白名单 电脑操作 computer use 网络运维 故障转移 容灾 负载均衡 重试 出厂'
 }
 
@@ -1708,6 +1716,14 @@ onBeforeUnmount(() => {
           </section>
 
           <SettingsSubAgentsPanel :connected="daemonConnected" :workspace-path="workspacePath" />
+        </template>
+
+        <template v-else-if="section === 'monitor'">
+          <SettingsTaskMonitorPanel :connected="daemonConnected" @notice="onPanelNotice" @error="onPanelError" />
+        </template>
+
+        <template v-else-if="section === 'hooks'">
+          <SettingsHooksPanel :connected="daemonConnected" @notice="onPanelNotice" @error="onPanelError" />
         </template>
 
         <template v-else-if="section === 'advanced'">

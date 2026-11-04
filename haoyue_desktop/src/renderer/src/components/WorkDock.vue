@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { Braces, Globe2, History, ListChecks, RefreshCw, TerminalSquare, Wrench, X } from '@lucide/vue'
+import { Braces, Globe2, History, ListChecks, Monitor, RefreshCw, TerminalSquare, Wrench, X } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { ProjectItem, ThreadItem, WorkDockTab } from '../types'
 import { collectActivities } from '../tools-activity'
 import BackgroundTasksPanel from './BackgroundTasksPanel.vue'
 import BrowserPanel from './BrowserPanel.vue'
 import GitWorkspacePanel from './GitWorkspacePanel.vue'
+import TaskMonitorPanel from './TaskMonitorPanel.vue'
 import ToolsPanel from './ToolsPanel.vue'
 
 /**
  * 右侧统一工作区面板（WorkBuddy 式）：对话区永远至多让出一列宽度，
- * Git 更改 / 提交记录 / 工具活动 / 内置浏览器 / 后台任务 以页签切换，互不叠开。五个内容
- * 组件以 embedded 模式宿主在此，只渲染主体；外壳（手柄/头部/页签）由本
+ * Git 更改 / 提交记录 / 工具活动 / 内置浏览器 / 后台任务 / 任务监控 以页签切换，互不叠开。
+ * 内容组件以 embedded 模式宿主在此，只渲染主体；外壳（手柄/头部/页签）由本
  * 组件统一提供，宽度与关闭动作也统一收口。
  */
 const props = withDefaults(defineProps<{
@@ -20,9 +21,14 @@ const props = withDefaults(defineProps<{
   width?: number
   project?: ProjectItem
   thread?: ThreadItem
+  /** 全部会话：任务监控「侧边聊天」区块展示其它运行中的会话。 */
+  threads?: ThreadItem[]
+  /** 任务监控是否作为页签展示（false = 浮动模式，面板由悬浮窗承载）。 */
+  monitorAsTab?: boolean
   diffOverride?: { path: string; diff: string } | null
 }>(), {
-  width: 560
+  width: 560,
+  monitorAsTab: true
 })
 
 const emit = defineEmits<{
@@ -31,6 +37,7 @@ const emit = defineEmits<{
   'update:tab': [tab: WorkDockTab]
   openTerminal: []
   openSession: [payload: { sessionId: string; workspace?: string }]
+  selectThread: [threadId: string]
 }>()
 
 const MIN_PANEL_WIDTH = 300
@@ -129,6 +136,9 @@ onBeforeUnmount(stopResize)
           <button :class="{ active: tab === 'tasks' }" role="tab" @click="selectTab('tasks')">
             <ListChecks :size="15" />后台任务
           </button>
+          <button v-if="monitorAsTab" :class="{ active: tab === 'monitor' }" role="tab" @click="selectTab('monitor')">
+            <Monitor :size="15" />任务监控
+          </button>
         </div>
         <div class="work-dock-actions">
           <button v-if="isGitTab && !diffOverride" class="icon-button" title="刷新"
@@ -157,6 +167,10 @@ onBeforeUnmount(stopResize)
         <div v-show="tab === 'tasks'" class="work-dock-pane">
           <BackgroundTasksPanel :open="open && tab === 'tasks'" :workspace-path="project?.path"
             @open-session="(sessionId) => emit('openSession', { sessionId, workspace: project?.path })" />
+        </div>
+        <div v-if="monitorAsTab" v-show="tab === 'monitor'" class="work-dock-pane">
+          <TaskMonitorPanel :open="open && tab === 'monitor'" :thread="thread" :threads="threads"
+            @open-session="(payload) => emit('openSession', payload)" @select-thread="(id) => emit('selectThread', id)" />
         </div>
       </div>
     </aside>

@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Coordination;
+using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Sessions;
@@ -218,6 +220,17 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         var webhookUrl = _runtime.ConfigStore.Config.Agent.ScheduleWebhookUrl;
         if (!string.IsNullOrWhiteSpace(webhookUrl))
             _ = Task.Run(() => _webhook.NotifyAsync(webhookUrl, updated, sessionId, CancellationToken.None));
+
+        // 事件钩子（schedule.completed）：按配置自动执行 Webhook / 本地命令，
+        // fire-and-forget，绝不拖慢调度主流程。
+        HookRunner.Trigger("schedule.completed", new JsonObject
+        {
+            ["taskId"] = updated.Id,
+            ["name"] = updated.DisplayName,
+            ["status"] = status,
+            ["sessionId"] = sessionId,
+            ["error"] = error,
+        }, _runtime.ConfigStore);
         return updated;
     }
 

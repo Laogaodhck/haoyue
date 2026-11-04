@@ -307,6 +307,7 @@ internal sealed partial class DaemonAdminApi(
         ["rulesEnabled"] = runtime.ConfigStore.Config.Agent.RulesEnabled,
         ["memoryMode"] = runtime.ConfigStore.Config.Agent.MemoryMode,
         ["localInference"] = LocalInferenceJson(),
+        ["taskMonitor"] = TaskMonitorConfigJson.ToJson(runtime.ConfigStore.Config.TaskMonitor),
     }.ToJsonString();
 
     /// <summary>
@@ -504,6 +505,8 @@ internal sealed partial class DaemonAdminApi(
         }
 
         ApplyLocalInference(parameters["localInference"] as JsonObject);
+        // 任务监控偏好（纯 UI 配置）：模式校验 + 四组开关逐键应用。
+        TaskMonitorConfigJson.Apply(parameters["taskMonitor"] as JsonObject, runtime.ConfigStore.Config.TaskMonitor);
 
         runtime.ConfigStore.Save();
         return GetAdvancedConfig();

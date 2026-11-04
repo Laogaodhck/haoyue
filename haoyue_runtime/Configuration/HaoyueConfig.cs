@@ -27,6 +27,13 @@ public sealed class HaoyueConfig
     public DocRenderConfig DocRender { get; set; } = new();
     public WebConfig Web { get; set; } = new();
     public DaemonConfig Daemon { get; set; } = new();
+    /// <summary>桌面端「任务监控」展示偏好（纯 UI 配置，runtime 行为不读取）。</summary>
+    public TaskMonitorConfig TaskMonitor { get; set; } = new();
+    /// <summary>
+    /// 事件钩子：任务/计划任务完成时自动执行的外部动作（Webhook 通知或本地命令）。
+    /// 命令会以当前进程身份启动子进程并可访问文件与网络——配置前请确认其安全性。
+    /// </summary>
+    public HooksConfig Hooks { get; set; } = new();
 
 
     public ProviderConfig? FindProvider(string id) =>
@@ -374,6 +381,88 @@ public sealed class BashSandboxConfig
     public int MaxProcesses { get; set; } = 256;
     /// <summary>UI 限制（剪贴板读写、系统参数、显示设置、关机、桌面切换、全局原子表）。</summary>
     public bool UiRestrictions { get; set; } = true;
+}
+
+/// <summary>
+/// 桌面端「任务监控」展示偏好（纯 UI 配置：展示形式 + 四组内容开关）。
+/// runtime 行为不读取任何字段；由桌面渲染层按开关决定监控面板展示哪些区块。
+/// </summary>
+public sealed class TaskMonitorConfig
+{
+    /// <summary>任务监控形式：fixed（右栏页签）| floating（悬浮窗）。</summary>
+    public string Mode { get; set; } = "fixed";
+    /// <summary>固定模式默认展示：show（打开右栏默认选中监控页签）| hidden（需手动点开）。</summary>
+    public string FixedDefaultShow { get; set; } = "show";
+    /// <summary>进度与上下文：任务回顾 / 任务目标 / 计划。</summary>
+    public TaskMonitorProgressConfig Progress { get; set; } = new();
+    /// <summary>执行活动：子智能体 / 后台进程 / 侧边聊天 / Skill 与 MCP。</summary>
+    public TaskMonitorActivityConfig Activity { get; set; } = new();
+    /// <summary>结果与来源：产出 / 网页查阅 / 来源 / 知识。</summary>
+    public TaskMonitorResultsConfig Results { get; set; } = new();
+    /// <summary>辅助入口：记忆更新 / 演示画面。</summary>
+    public TaskMonitorAccessConfig Access { get; set; } = new();
+}
+
+/// <summary>进度与上下文组（默认全部展示）。</summary>
+public sealed class TaskMonitorProgressConfig
+{
+    public bool Review { get; set; } = true;
+    public bool Goal { get; set; } = true;
+    public bool Plan { get; set; } = true;
+}
+
+/// <summary>执行活动组（默认全部展示）。</summary>
+public sealed class TaskMonitorActivityConfig
+{
+    public bool SubAgents { get; set; } = true;
+    public bool BackgroundProcesses { get; set; } = true;
+    public bool SideChat { get; set; } = true;
+    public bool SkillMcp { get; set; } = true;
+}
+
+/// <summary>结果与来源组（默认全部展示）。</summary>
+public sealed class TaskMonitorResultsConfig
+{
+    public bool Outputs { get; set; } = true;
+    public bool WebVisits { get; set; } = true;
+    public bool Sources { get; set; } = true;
+    public bool Knowledge { get; set; } = true;
+}
+
+/// <summary>辅助入口组（默认全部展示）。</summary>
+public sealed class TaskMonitorAccessConfig
+{
+    public bool MemoryUpdate { get; set; } = true;
+    public bool DemoScreen { get; set; } = true;
+}
+
+/// <summary>
+/// 事件钩子配置：按触发事件（task.completed / schedule.completed）自动执行外部动作。
+/// 每条钩子独立启停；动作二选一——Webhook（POST JSON 通知）或命令（本地子进程执行，
+/// 会以运行时代理身份访问文件与网络，配置前务必确认目标命令与参数的安全性）。
+/// </summary>
+public sealed class HooksConfig
+{
+    public List<HookConfig> Hooks { get; set; } = new();
+}
+
+/// <summary>单条钩子。Name 为唯一标识；WebhookUrl/WebhookSecret/Command 按 Action 取值。</summary>
+public sealed class HookConfig
+{
+    /// <summary>钩子名称（唯一标识，设置页以此增删改）。</summary>
+    public string Name { get; set; } = "";
+    /// <summary>触发事件：task.completed（回合完成）| schedule.completed（计划任务完成）。</summary>
+    public string Trigger { get; set; } = "task.completed";
+    /// <summary>动作类型：webhook（HTTP POST）| command（本地命令）。</summary>
+    public string Action { get; set; } = "webhook";
+    /// <summary>Webhook 目标地址（action=webhook 必填，http/https）。</summary>
+    public string? WebhookUrl { get; set; }
+    /// <summary>可选：随请求发送的 Authorization: Bearer 密钥（不回传明文）。</summary>
+    public string? WebhookSecret { get; set; }
+    /// <summary>本地命令（action=command 必填，非交互，超时 30 秒）。</summary>
+    public string? Command { get; set; }
+    /// <summary>启用开关（缺省 true）。</summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>知识库配置：语义检索（embedding）层。</summary>

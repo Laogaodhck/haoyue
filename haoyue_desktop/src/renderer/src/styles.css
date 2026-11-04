@@ -6364,27 +6364,46 @@ select:focus-visible {
 }
 
 .segmented-control {
-  display: grid;
-  grid-template-columns: 38px 38px;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  gap: 2px;
   padding: 3px;
   background: var(--surface-hover);
-  border-radius: 7px;
+  border-radius: 9px;
 }
 
 .segmented-control button {
   display: grid;
   height: 30px;
-  padding: 0;
+  padding: 0 12px;
   place-items: center;
   color: var(--text-secondary);
   background: transparent;
-  border-radius: 5px;
+  border: 0;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.segmented-control button:hover {
+  background: var(--surface);
 }
 
 .segmented-control button.active {
-  color: var(--text);
-  background: var(--surface);
-  box-shadow: 0 1px 4px rgb(0 0 0 / 9%);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.segmented-control button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 ::-webkit-scrollbar {

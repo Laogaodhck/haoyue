@@ -212,6 +212,19 @@ watch(() => props.workspacePath, () => { void refreshWorktrees() })
   align-items: flex-start;
 }
 
+.coding-toggle-row input:checked + .toggle-switch {
+  background: var(--accent);
+}
+
+.coding-toggle-row input:checked + .toggle-switch > span {
+  transform: translateX(16px);
+}
+
+.coding-toggle-row input:focus-visible + .toggle-switch {
+  outline: 2px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  outline-offset: 2px;
+}
+
 .settings-text-input {
   width: 240px;
   padding: 6px 10px;

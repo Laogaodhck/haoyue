@@ -64,15 +64,34 @@ function deepEqual(left: unknown, right: unknown): boolean {
   return false
 }
 
+/** 工作区写入为什么（没）生效。`applied=false` 的两种原因对用户意味着不同的后续动作。 */
+export type ConfigSaveReason = 'applied' | 'other-workspace' | 'untrusted'
+
+/** 工作区写入的回执；全局分支仍返回纯字符串，不做结构化承诺。 */
+export interface ConfigSaveResult {
+  scope: 'global' | 'workspace'
+  path: string
+  exists: boolean
+  /**
+   * 是否已同步进当前引擎驻留工作区的**内存**。false 表示只落盘：
+   * 写入的是另一个工作区（`other-workspace`），或该工作区未被信任、内存里没有配置（`untrusted`）。
+   */
+  applied: boolean
+  /** 具体原因；旧版 daemon 可能只回 `applied`，调用方应以布尔值兜底。 */
+  appliedReason?: ConfigSaveReason
+}
+
 /**
- * 写补丁。`patch` 为空时直接返回 false（不产生无意义的写帧）。
- * 返回 true 表示 daemon 已合并落盘。
+ * 写补丁。`patch` 为空时返回 null（不产生无意义的写帧）。
+ * 返回回执可让调用方区分「已热生效」与「只落盘，切换工作区后生效」。
  */
-export async function saveConfigPatch(patch: ConfigObject, workspace?: string): Promise<boolean> {
-  if (Object.keys(patch).length === 0) return false
-  await requestJson<string>('config.save', {
+export async function saveConfigPatch(
+  patch: ConfigObject,
+  workspace?: string
+): Promise<ConfigSaveResult | string | null> {
+  if (Object.keys(patch).length === 0) return null
+  return requestJson<ConfigSaveResult | string>('config.save', {
     fields: patch,
     ...(workspace ? { workspace } : {})
   })
-  return true
 }

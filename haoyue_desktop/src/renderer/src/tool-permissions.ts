@@ -6,7 +6,7 @@
  * 界面在保存前拦一次，服务端在写盘前再拦一次——否则用户以为已经收紧，
  * 实际写进去的却是被静默忽略的垃圾模式。
  */
-import type { ConfigObject } from './config-patch'
+import type { ConfigObject, ConfigSaveReason } from './config-patch'
 
 /** 与 `ToolPermissionPolicy.MaxPatternLength` 相同的上限。 */
 export const TOOL_PATTERN_MAX_LENGTH = 128
@@ -53,33 +53,105 @@ export function parseToolPatterns(text: string): ParsedToolPatterns {
 
 export interface ToolPermissionView {
   patterns: string[]
+  /** 硬禁用清单（deny-overrides 最高优先级，优先于 allowedTools）。 */
+  disabledPatterns: string[]
+  /** 磁盘上 `allowedTools` 里的历史非法条目：不进编辑框，也不阻止其它字段保存。 */
+  invalidPatterns: string[]
+  /** 磁盘上 `disabledTools` 里的历史非法条目（同上）。 */
+  invalidDisabledPatterns: string[]
   fallback: boolean
-  /** 磁盘上的字段本身不合法时的说明（例如 allowedTools 不是字符串数组）。 */
+  /** 字段本身不是数组 / 布尔值时的说明；条目级问题进 invalid*，不阻塞保存。 */
   problem: string
 }
 
-/** 从工作区配置文档里读出工具权限字段；缺省/空都表示「不限制」。 */
+function describeValue(value: unknown): string {
+  const text = JSON.stringify(value) ?? String(value)
+  return text.length > 48 ? `${text.slice(0, 48)}…` : text
+}
+
+/**
+ * 读一个模式列表，并把条目分成「可编辑的有效项」与「历史遗留的非法项」。
+ *
+ * 历史文件可能是用户手工改坏的：非法条目单独列出（界面可一键清理），合法条目照常
+ * 编辑；这样一条坏数据不会把整块面板锁死。字段类型不对（不是数组）才记入 problem。
+ */
+function readPatternList(
+  config: ConfigObject | null | undefined,
+  key: string,
+  problem: string[],
+  invalid: string[]
+): string[] {
+  const raw = config?.[key]
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) {
+    problem.push(`${key} 不是字符串数组`)
+    return []
+  }
+  const valid: string[] = []
+  raw.forEach((item, index) => {
+    if (typeof item !== 'string') {
+      invalid.push(`${key} 第 ${index + 1} 项不是字符串（${describeValue(item)}）`)
+      return
+    }
+    const error = validateToolPattern(item)
+    if (error) {
+      invalid.push(`${key} 第 ${index + 1} 项「${item}」${error}`)
+      return
+    }
+    valid.push(item)
+  })
+  return valid
+}
+
+/** 从工作区配置文档里读出工具权限字段；缺省/空都表示不限制。 */
 export function readToolPermissions(config: ConfigObject | null | undefined): ToolPermissionView {
   const problem: string[] = []
-  let patterns: string[] = []
-  const raw = config?.allowedTools
-  if (raw !== undefined && raw !== null) {
-    if (!Array.isArray(raw)) {
-      problem.push('allowedTools 不是字符串数组')
-    } else if (!raw.every((item) => typeof item === 'string')) {
-      problem.push('allowedTools 含有非字符串条目')
-      patterns = raw.filter((item): item is string => typeof item === 'string')
-    } else {
-      patterns = [...raw]
-    }
-  }
+  const invalidPatterns: string[] = []
+  const invalidDisabledPatterns: string[] = []
+  const patterns = readPatternList(config, 'allowedTools', problem, invalidPatterns)
+  const disabledPatterns = readPatternList(config, 'disabledTools', problem, invalidDisabledPatterns)
 
   const fallbackRaw = config?.allowToolFallbackToGlobal
   let fallback = false
   if (typeof fallbackRaw === 'boolean') fallback = fallbackRaw
   else if (fallbackRaw !== undefined && fallbackRaw !== null) problem.push('allowToolFallbackToGlobal 不是布尔值')
 
-  return { patterns, fallback, problem: problem.length > 0 ? `${problem.join('；')}，请先修正配置。` : '' }
+  return {
+    patterns,
+    disabledPatterns,
+    invalidPatterns,
+    invalidDisabledPatterns,
+    fallback,
+    problem: problem.length > 0 ? `${problem.join('；')}，请先修正配置。` : ''
+  }
+}
+
+export interface ToolPermissionSaveInput {
+  allowedCount: number
+  disabledCount: number
+  /** `config.save` 回执里的 appliedReason；决定「已热生效」还是两种只落盘的提示。 */
+  reason: ConfigSaveReason
+  path: string
+}
+
+/** 保存回执文案：区分「已热生效」「写了别的工作区」「当前工作区未受信」三种情况。 */
+export function describeToolPermissionSave(input: ToolPermissionSaveInput): string {
+  const changes = [
+    input.allowedCount === 0
+      ? '已清空白名单（= 不限制工具）'
+      : `已保存 ${input.allowedCount} 条白名单模式`,
+    input.disabledCount === 0
+      ? '已清空硬禁用清单'
+      : `已保存 ${input.disabledCount} 条硬禁用模式`
+  ]
+  const suffix = input.reason === 'applied'
+    ? '项目配置已同步到内存，下一回合生效。'
+    : input.reason === 'untrusted'
+      ? `已写入配置文件（${input.path}），但当前工作区尚未受信任（内存中没有加载配置），`
+        + '信任或重新打开该工作区后生效。'
+      : `已写入配置文件（${input.path}），但当前引擎驻留的是另一个工作区，`
+        + '切换到该工作区后生效。'
+  return `${changes.join('，')}；${suffix}`
 }
 
 /** 比较两份清单是否完全一致（顺序敏感），用于判断是否有未保存改动。 */

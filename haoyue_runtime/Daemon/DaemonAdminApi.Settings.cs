@@ -355,15 +355,34 @@ internal sealed partial class DaemonAdminApi
         var updated = node.Deserialize(HaoyueJsonContext.Default.WorkspaceConfig) ?? current;
         AtomicFile.WriteAllText(file, JsonSerializer.Serialize(updated, HaoyueJsonContext.Default.WorkspaceConfig));
 
-        if (SameRoot(root, runtime.Workspace.Root) && runtime.Workspace.Config is { } live)
-            CopyWorkspaceConfig(updated, live);
+        // applied 必须如实反映「是否同步进了当前引擎驻留的工作区内存」：不同工作区的
+        // 写入只会落盘（切换过去后才生效），未受信工作区的 Config 也是 null（同样未应用）。
+        // 两种 false 对用户意味着不同的后续动作（切换工作区 vs 信任/重开工作区），
+        // 因此用 appliedReason 区分；applied 布尔值保留，旧客户端不受影响。
+        var applied = false;
+        var appliedReason = "other-workspace";
+        if (SameRoot(root, runtime.Workspace.Root))
+        {
+            if (runtime.Workspace.Config is { } live)
+            {
+                CopyWorkspaceConfig(updated, live);
+                applied = true;
+                appliedReason = "applied";
+            }
+            else
+            {
+                // 写的就是当前工作区，但它未被信任（内存中没有加载配置），因此只落盘。
+                appliedReason = "untrusted";
+            }
+        }
 
         return new JsonObject
         {
             ["scope"] = "workspace",
             ["path"] = file,
             ["exists"] = true,
-            ["applied"] = runtime.Workspace.Config is not null || !SameRoot(root, runtime.Workspace.Root),
+            ["applied"] = applied,
+            ["appliedReason"] = appliedReason,
         }.ToJsonString();
     }
 

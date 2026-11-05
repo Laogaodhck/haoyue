@@ -141,7 +141,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **定时任务**：cron 驱动的调度回合，行内展示上次运行状态 / 时间 / 错误与输出摘要，可就地打开本次运行会话；失败即时桌面通知，支持 Webhook 回调
 - **事件钩子（Hooks）**：「设置 → 钩子」分区可查看已配置钩子、配置问题逐条诊断与最近执行状态，并支持添加 / 编辑 / 启用 / 立即测试 / 删除。钩子按 5 类触发事件执行——`session.start`（输出注入系统提示）、`tool.before`（可阻断高风险调用）、`tool.after`（审计与产物归档）、`task.completed`、`schedule.completed`；每个钩子可配通配符匹配条件、1–120 秒超时与失败策略（放行并告警 / 阻断，阻断仅对 `tool.before` 生效）。执行方式为 Webhook（POST JSON、可选 Bearer 密钥）或本地命令（参数化启动不拼 shell），默认 fire-and-forget；「等待完成」为可选项，超时仍不阻断主流程。执行结果写入 JSONL 台账（按工作区落 `.haoyue/hooks-ledger.jsonl`，默认保留 2000 条并按日期把溢出记录归档到 `.haoyue/hooks/archive/`），面板内可查看最近记录、失败原因与耗时；密钥只回「已配置」标记、不回传明文
 - **规则与记忆面板**：「设置 → 规则与记忆」的规则页支持结构化规则卡片（作用域 / 优先级 / 启停 / 编辑 / 删除）、冲突提示与三种显式解决方式（项目胜出 / 全局胜出 / 合并到项目），命中记录展示动作与操作者；记忆页在 MEMORY.md 编辑器之外提供事实库卡片——新增 / 编辑 / 删除 / 置顶 / 撤销仲裁 / 确认自动固化，并展示来源、置信度、来源会话与仲裁结果
-- **工具权限**：「设置 → 工具权限」编辑项目级工具白名单（支持 `server/tool`、`server/*` 等通配符），保存前校验模式格式、非法即拒绝落盘；可切换「裁空后回退工作区清单」的降级开关（默认关闭、显式提示放权风险）。配置写入工作区 `.haoyue/config.json`，同步到运行内存，下一回合生效
+- **工具权限**：「设置 → 工具权限」编辑项目级工具白名单与硬禁用清单（`allowedTools` / `disabledTools`，支持 `server/tool`、`server/*`、`*` 等通配符；硬禁用 deny-overrides 优先级最高），保存前逐行校验模式格式、非法即拒绝落盘；可切换「裁空后回退工作区清单」的降级开关（默认关闭、显式提示放权风险）。配置写入工作区 `.haoyue/config.json`，保存后按 `config.save` 的 `applied` / `appliedReason` 回执区分三种结果——已同步进当前引擎内存「下一回合生效」、写入的是另一个工作区「切换过去后生效」、当前工作区尚未受信「信任或重新打开后生效」；磁盘上历史手工写入的非法条目会单独列出并提供一键清理，不阻塞其它字段保存；未打开工作区时面板明确提示原因并保持只读
 - **智能体团体**：「设置 → 智能体团体」提供团队列表与编辑器——名称、描述、协作模式、协调者、轮次 / 超时 / 重试 / 失败策略，成员可配角色、职责、模型、工具白名单与专家；运行面板可输入任务、启动、取消，并以时间线展示成员分工、工具调用、耗时、失败原因与最终结果
 - **编码**：「设置 → 编码」分区集中管理 Git 与安全工作流。Git 分支前缀（新建分支预填、留空不添加）与始终强制推送（`--force-with-lease`，远端已变化时拒绝覆盖）经 `advanced.get/set` 的 coding 节持久化，并接入 Git 工作区面板——面板新增「新建分支」（按前缀预填的内联输入）与「推送」入口；开启「三层渐进式扫描与自动修复」后推送前先执行密钥 / 口令 / 私钥 / API 令牌快扫（第一层，快扫 + 上限保护），命中即列出高 / 中级发现并要求确认后再推送；Worktrees 子区展示当前工作区的 Git 工作树索引（`git worktree list`，支持刷新）。新增 RPC 能力 `project:git-create-branch`、`project:git-push`、`project:git-worktrees`、`project:security-scan`
 - **工作区级配置**：项目属性新增「智能体」页签——模型、提供商、温度、Agent 模式、语言、人格、验证命令（多行 fail-fast）与系统提示词可设为项目级默认，写入 `<workspace>/.haoyue/config.json` 且只提交变更字段
@@ -321,7 +321,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（1392 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
+├── haoyue_tests/         # 运行时单元测试（1393 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── docs/                 # 全链路闭环审查报告（2026-11-03，含断点修复更新）
@@ -537,10 +537,10 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1392 / haoyue_cli_tests 27 用例）
+dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1393 / haoyue_cli_tests 27 用例）
 
 # 桌面端（需先 pnpm install）
-cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 400 用例（40 个文件）
+cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 403 用例（40 个文件）
 ```
 
 门槛：`haoyue_runtime` 行覆盖 ≥70% / 分支 ≥55%；CLI（`haoyue_cli`）行 ≥15% / 分支 ≥15%；webserver 行 ≥45% / 分支 ≥15%——三者各自单跑，低于门槛 `dotnet test` 直接失败。契约快照漂移、Runbook 章节齐全性、文档统计数字（docs-facts，README 数字与源码现场推导对齐）、巨型类行数预算、`wwwroot/lib` vendor 清单（哈希 / 版本下限 / 引用覆盖）均有护栏测试强制。桌面端在 CI 的 desktop job 中执行 `pnpm lint`、组件行数预算、`pnpm test` 与 `pnpm typecheck && pnpm build`；`benchmarks/*` 三个评测工程已纳入 `Haoyue.slnx`（CI 编译把关），agent-eval 另有每周 scheduled workflow（用仓库 secrets 播种提供商配置，未配置时自动跳过）。CI 同时执行 NuGet 脆弱依赖扫描（发现即失败）、`pnpm audit`（生产依赖 high 门槛）、TS SDK 契约自检与 locked-mode restore（`packages.lock.json` 锁定依赖图）；另有 Linux 作业覆盖 Unix socket、符号链接解析、Python 连接器与 TS SDK 集成测试。runtime 与测试工程构建均开启 `TreatWarningsAsErrors`，runtime 另开 AOT / 裁剪分析器，JSON 序列化统一走源生成上下文。
@@ -614,7 +614,7 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
 - 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1392+27+400、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1393+27+403、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - 桌面端 UI 审查——三栏布局与按键绑定（布局职责 / 死键 / 重复入口 / 零入口能力面 22 项发现按 P1-P3 排序，附 14 条分批建议与逐条修复对账：后台任务面板、本地推理看板、路由容灾、工作区配置、专家参数、设置搜索与离线只读）
 - 全链路闭环审查报告（2026-11-03：32 内置工具 + ComputerUse 8 / NetworkOps 扩展 + MCP 60+ 工具、图片生成、doc_render、桌面端 54 组件全链路「配置 → 注册 → 门控 → 调用 → 产物 → 交付」闭环核对；4 处断点均为外部资源——本地模型路径与 MCP git 停用两处已按用户授权修复，剩余 ark 账户欠费、语音 Key、视频开通三项待外部资源到位，见 [`docs/审查报告-全链路闭环-20261103.md`](docs/审查报告-全链路闭环-20261103.md)）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）

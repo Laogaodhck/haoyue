@@ -1733,7 +1733,7 @@ onBeforeUnmount(() => {
           <div class="settings-section-heading">
             <div>
               <h3>工具权限</h3>
-              <p>项目级工具白名单与降级开关；保存后同步到运行内存，下一回合即时生效</p>
+              <p>项目级工具白名单、硬禁用与降级开关；保存后按回执提示是否已热生效</p>
             </div>
           </div>
           <SettingsToolPermissionsPanel :connected="daemonConnected" :workspace-path="workspacePath" />

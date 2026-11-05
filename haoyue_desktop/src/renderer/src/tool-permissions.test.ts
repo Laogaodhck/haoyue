@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   TOOL_PATTERN_MAX_LENGTH,
+  describeToolPermissionSave,
   parseToolPatterns,
   readToolPermissions,
   sameToolPatterns,
@@ -56,25 +57,81 @@ describe('parseToolPatterns', () => {
 })
 
 describe('readToolPermissions', () => {
-  it('treats a missing or empty allow list as unrestricted', () => {
-    expect(readToolPermissions({})).toEqual({ patterns: [], fallback: false, problem: '' })
-    expect(readToolPermissions({ allowedTools: [] }))
-      .toEqual({ patterns: [], fallback: false, problem: '' })
-    expect(readToolPermissions(null)).toEqual({ patterns: [], fallback: false, problem: '' })
+  it('treats a missing or empty list as unrestricted', () => {
+    const empty = {
+      patterns: [], disabledPatterns: [], invalidPatterns: [], invalidDisabledPatterns: [],
+      fallback: false, problem: ''
+    }
+    expect(readToolPermissions({})).toEqual(empty)
+    expect(readToolPermissions({ allowedTools: [], disabledTools: [] })).toEqual(empty)
+    expect(readToolPermissions(null)).toEqual(empty)
   })
 
-  it('reads patterns and the fallback switch', () => {
-    expect(readToolPermissions({ allowedTools: ['github/*'], allowToolFallbackToGlobal: true }))
-      .toEqual({ patterns: ['github/*'], fallback: true, problem: '' })
+  it('reads both lists and the fallback switch', () => {
+    expect(readToolPermissions({
+      allowedTools: ['github/*'],
+      disabledTools: ['bash', 'mcp__dangerous__*'],
+      allowToolFallbackToGlobal: true
+    })).toEqual({
+      patterns: ['github/*'],
+      disabledPatterns: ['bash', 'mcp__dangerous__*'],
+      invalidPatterns: [],
+      invalidDisabledPatterns: [],
+      fallback: true,
+      problem: ''
+    })
   })
 
-  it('surfaces malformed on-disk fields instead of silently swallowing them', () => {
+  it('surfaces malformed on-disk field shapes instead of silently swallowing them', () => {
     expect(readToolPermissions({ allowedTools: 'github/*' }).problem)
       .toBe('allowedTools 不是字符串数组，请先修正配置。')
-    expect(readToolPermissions({ allowedTools: ['read_file', 42] }))
-      .toMatchObject({ patterns: ['read_file'], problem: 'allowedTools 含有非字符串条目，请先修正配置。' })
+    expect(readToolPermissions({ disabledTools: 'bash' }).problem)
+      .toBe('disabledTools 不是字符串数组，请先修正配置。')
     expect(readToolPermissions({ allowToolFallbackToGlobal: 'yes' }).problem)
       .toBe('allowToolFallbackToGlobal 不是布尔值，请先修正配置。')
+  })
+
+  it('keeps illegal on-disk entries in a separate bucket without blocking valid ones', () => {
+    const view = readToolPermissions({
+      allowedTools: ['read_file', 42],
+      disabledTools: ['bash', 'bad pattern', 'github/**']
+    })
+    // 合法条目照常进入编辑框；非法条目单独列出，problem 不被条目级问题污染。
+    expect(view.patterns).toEqual(['read_file'])
+    expect(view.disabledPatterns).toEqual(['bash'])
+    expect(view.invalidPatterns).toEqual(['allowedTools 第 2 项不是字符串（42）'])
+    expect(view.invalidDisabledPatterns[0]).toContain('disabledTools 第 2 项「bad pattern」')
+    expect(view.invalidDisabledPatterns[0]).toContain('不允许字符')
+    expect(view.invalidDisabledPatterns[1]).toBe('disabledTools 第 3 项「github/**」只支持单个 `*`，不允许 `**`')
+    expect(view.problem).toBe('')
+  })
+})
+
+describe('describeToolPermissionSave', () => {
+  it('says the next turn takes effect when the write was applied to memory', () => {
+    expect(describeToolPermissionSave({
+      allowedCount: 2,
+      disabledCount: 1,
+      reason: 'applied',
+      path: 'C:/ws/.haoyue/config.json'
+    })).toBe('已保存 2 条白名单模式，已保存 1 条硬禁用模式；项目配置已同步到内存，下一回合生效。')
+  })
+
+  it('distinguishes a different workspace from an untrusted current workspace', () => {
+    const base = {
+      allowedCount: 0,
+      disabledCount: 0,
+      path: 'C:/ws/.haoyue/config.json'
+    }
+    expect(describeToolPermissionSave({ ...base, reason: 'other-workspace' })).toBe(
+      '已清空白名单（= 不限制工具），已清空硬禁用清单；'
+      + '已写入配置文件（C:/ws/.haoyue/config.json），但当前引擎驻留的是另一个工作区，切换到该工作区后生效。'
+    )
+    expect(describeToolPermissionSave({ ...base, reason: 'untrusted' })).toBe(
+      '已清空白名单（= 不限制工具），已清空硬禁用清单；'
+      + '已写入配置文件（C:/ws/.haoyue/config.json），但当前工作区尚未受信任（内存中没有加载配置），'
+      + '信任或重新打开该工作区后生效。'
+    )
   })
 })
 

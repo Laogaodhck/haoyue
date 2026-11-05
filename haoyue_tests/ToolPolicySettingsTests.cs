@@ -26,7 +26,7 @@ public sealed class ToolPolicySettingsTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
-    private (DaemonAdminApi Admin, ConfigStore Store) CreateAdmin()
+    private (DaemonAdminApi Admin, ConfigStore Store) CreateAdmin(WorkspaceInfo? workspace = null)
     {
         var store = new ConfigStore(
             Path.Combine(_dir, "config.json"), Path.Combine(_dir, "state.json"));
@@ -35,7 +35,7 @@ public sealed class ToolPolicySettingsTests : IDisposable
             Id = "p1", Kind = "openai", BaseUrl = "https://test.local/v1",
             Models = [new ModelConfig { Id = "m1", ContextWindow = 8_000, MaxOutput = 256 }],
         });
-        var workspace = new WorkspaceManager().CreateGlobal(Path.Combine(_dir, "global"));
+        workspace ??= new WorkspaceManager().CreateGlobal(Path.Combine(_dir, "global"));
         var runtime = HaoyueRuntime.CreateIsolated(workspace, configureServices: services =>
         {
             services.AddSingleton<IConfigStore>(store);
@@ -164,16 +164,78 @@ public sealed class ToolPolicySettingsTests : IDisposable
             new JsonObject
             {
                 ["allowedTools"] = new JsonArray("read_file", "github/*", "*/create_issue"),
+                ["disabledTools"] = new JsonArray("bash", "mcp__dangerous__*"),
                 ["allowToolFallbackToGlobal"] = true,
             }))!.AsObject();
         Assert.Equal("workspace", saved["scope"]!.GetValue<string>());
+        // 项目不是当前引擎驻留的工作区：只落盘，不能宣称已同步到内存。
+        Assert.False(saved["applied"]!.GetValue<bool>());
+        Assert.Equal("other-workspace", saved["appliedReason"]!.GetValue<string>());
 
         var file = Path.Combine(project, ".haoyue", "config.json");
         var document = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
         Assert.Equal(
             ["read_file", "github/*", "*/create_issue"],
             document["allowedTools"]!.AsArray().Select(node => node!.GetValue<string>()));
+        Assert.Equal(
+            ["bash", "mcp__dangerous__*"],
+            document["disabledTools"]!.AsArray().Select(node => node!.GetValue<string>()));
         Assert.True(document["allowToolFallbackToGlobal"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void SaveWorkspaceConfig_ReportsAppliedOnlyForLiveWorkspace()
+    {
+        var liveRoot = Path.Combine(_dir, "live");
+        Directory.CreateDirectory(liveRoot);
+        var liveConfig = new WorkspaceConfig();
+        var live = new WorkspaceInfo
+        {
+            Root = liveRoot,
+            ProjectKinds = [],
+            Config = liveConfig,
+            Trusted = true,
+        };
+        var (admin, _) = CreateAdmin(live);
+
+        var applied = JsonNode.Parse(admin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = liveRoot },
+            new JsonObject
+            {
+                ["allowedTools"] = new JsonArray("read_file"),
+                ["disabledTools"] = new JsonArray("bash"),
+            }))!.AsObject();
+        Assert.True(applied["applied"]!.GetValue<bool>());
+        Assert.Equal("applied", applied["appliedReason"]!.GetValue<string>());
+        Assert.Equal(["read_file"], liveConfig.AllowedTools);
+        Assert.Equal(["bash"], liveConfig.DisabledTools);
+
+        var otherRoot = Path.Combine(_dir, "other");
+        Directory.CreateDirectory(otherRoot);
+        var notApplied = JsonNode.Parse(admin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = otherRoot },
+            new JsonObject { ["disabledTools"] = new JsonArray("bash") }))!.AsObject();
+        Assert.False(notApplied["applied"]!.GetValue<bool>());
+        Assert.Equal("other-workspace", notApplied["appliedReason"]!.GetValue<string>());
+        Assert.Equal(["bash"], liveConfig.DisabledTools); // 内存未被另一个工作区的写入影响
+
+        // 同一工作区但未受信：内存中没有 Config，写盘成功但不能宣称已生效。
+        var untrustedRoot = Path.Combine(_dir, "untrusted");
+        Directory.CreateDirectory(untrustedRoot);
+        var untrusted = new WorkspaceInfo
+        {
+            Root = untrustedRoot,
+            ProjectKinds = [],
+            Config = null,
+            Trusted = false,
+        };
+        var (untrustedAdmin, _) = CreateAdmin(untrusted);
+        var untrustedSaved = JsonNode.Parse(untrustedAdmin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = untrustedRoot },
+            new JsonObject { ["disabledTools"] = new JsonArray("bash") }))!.AsObject();
+        Assert.False(untrustedSaved["applied"]!.GetValue<bool>());
+        Assert.Equal("untrusted", untrustedSaved["appliedReason"]!.GetValue<string>());
+        Assert.True(File.Exists(Path.Combine(untrustedRoot, ".haoyue", "config.json")));
     }
 
     [Fact]
@@ -201,5 +263,18 @@ public sealed class ToolPolicySettingsTests : IDisposable
             new JsonObject { ["workspace"] = project },
             new JsonObject { ["allowedTools"] = "read_file" }));
         Assert.Contains("字符串数组", shape.Message);
+
+        // 硬禁用与白名单同一套校验：非法模式同样拒绝落盘。
+        var disabled = Assert.Throws<DaemonRequestException>(() => admin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = project },
+            new JsonObject { ["disabledTools"] = new JsonArray("bash", "bad pattern") }));
+        Assert.Contains("disabledTools", disabled.Message);
+        Assert.Contains("不允许字符", disabled.Message);
+        Assert.False(File.Exists(file));
+
+        var disabledShape = Assert.Throws<DaemonRequestException>(() => admin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = project },
+            new JsonObject { ["disabledTools"] = "bash" }));
+        Assert.Contains("disabledTools 必须是字符串数组", disabledShape.Message);
     }
 }

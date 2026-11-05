@@ -47,6 +47,7 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
     private readonly LocalModelCache? _sharedLocalModels;
     private readonly ScheduleTurnRunner _turnRunner;
     private readonly ScheduleWebhookNotifier _webhook;
+    private readonly ApprovalRegistry? _approvals;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> _running = new();
     private readonly ConcurrentDictionary<string, string> _upcomingNotified = new();
@@ -63,7 +64,8 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         ScheduleTurnRunner? turnRunner = null,
         TimeProvider? clock = null,
         LocalModelCache? sharedLocalModels = null,
-        ScheduleWebhookNotifier? webhook = null)
+        ScheduleWebhookNotifier? webhook = null,
+        ApprovalRegistry? approvals = null)
     {
         _store = store;
         _runtime = runtime;
@@ -73,6 +75,7 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         _sharedLocalModels = sharedLocalModels;
         _turnRunner = turnRunner ?? RunIsolatedTurnAsync;
         _webhook = webhook ?? new ScheduleWebhookNotifier();
+        _approvals = approvals;
         if (clock is not null) _clock = clock;
     }
 
@@ -169,7 +172,11 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
 
         try
         {
-            var workspace = ResolveWorkspace(task);
+            // 回合身份：让这次定时运行产生的事件（含审批审计）都能归到具体计划任务，
+            // 而不是像无回合事件那样 TurnId 为 null。
+            using var stamp = TurnStamp.BeginScope(
+                $"schedule:{task.Id}:{Guid.NewGuid().ToString("N")[..8]}");
+            var workspace = TaskScopes.Bind(ResolveWorkspace(task), $"schedule-{task.Id}");
             var session = _runtime.Sessions.Create(
                 workspace,
                 reasoningLevel: _runtime.ConfigStore.Config.Agent.ReasoningLevel,
@@ -177,24 +184,26 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
             sessionId = session.Header.Id;
             _runtime.Sessions.UpdateMetadata(workspace, session.Header.Id, title: $"{task.Name}（计划任务）");
             var result = await _turnRunner(workspace, session, task.Prompt, runCt).ConfigureAwait(false);
-            RecordRun(
+            await RecordRunAsync(
                 task.Id,
                 sessionId,
                 result.Error is null ? ScheduleRunStatus.Success : ScheduleRunStatus.Error,
                 result.Error,
-                result.Text);
+                result.Text).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            RecordRun(task.Id, sessionId, ScheduleRunStatus.Cancelled, "任务已取消");
+            await RecordRunAsync(task.Id, sessionId, ScheduleRunStatus.Cancelled, "任务已取消").ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (runCt.IsCancellationRequested)
         {
-            RecordRun(task.Id, sessionId, ScheduleRunStatus.Cancelled, $"任务执行超过 {timeoutSeconds} 秒，已中止");
+            await RecordRunAsync(
+                task.Id, sessionId, ScheduleRunStatus.Cancelled,
+                $"任务执行超过 {timeoutSeconds} 秒，已中止").ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            RecordRun(task.Id, sessionId, ScheduleRunStatus.Error, ex.Message);
+            await RecordRunAsync(task.Id, sessionId, ScheduleRunStatus.Error, ex.Message).ConfigureAwait(false);
         }
         finally
         {
@@ -203,7 +212,7 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         }
     }
 
-    private ScheduledTask RecordRun(
+    private async Task<ScheduledTask> RecordRunAsync(
         string id,
         string? sessionId,
         string status,
@@ -221,9 +230,9 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(webhookUrl))
             _ = Task.Run(() => _webhook.NotifyAsync(webhookUrl, updated, sessionId, CancellationToken.None));
 
-        // 事件钩子（schedule.completed）：按配置自动执行 Webhook / 本地命令，
-        // fire-and-forget，绝不拖慢调度主流程。
-        HookRunner.Trigger("schedule.completed", new JsonObject
+        // 事件钩子（schedule.completed）：默认 fire-and-forget；配置了「等待完成」的钩子
+        // 才会等待，且超时/失败都不阻断调度主流程。
+        await HookRunner.TriggerAsync("schedule.completed", new JsonObject
         {
             ["taskId"] = updated.Id,
             ["name"] = updated.DisplayName,
@@ -236,35 +245,87 @@ public sealed class ScheduleService : IScheduleService, IAsyncDisposable
 
     private WorkspaceInfo ResolveWorkspace(ScheduledTask task)
     {
-        if (!string.IsNullOrWhiteSpace(task.Workspace))
+        // 有项目归属的定时任务必须落回该项目；路径失效时记录运行错误，
+        // 不再静默改投全局目录或沿路径向上误落到别的项目。
+        if (string.IsNullOrWhiteSpace(task.Workspace))
+            return _runtime.Workspaces.CreateGlobal();
+
+        string fullPath;
+        try { fullPath = Path.GetFullPath(task.Workspace); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            try
-            {
-                return _runtime.Workspaces.Detect(task.Workspace);
-            }
-            catch (Exception)
-            {
-                // Fall back to the global scope when the target path cannot be resolved.
-            }
+            throw new InvalidOperationException($"计划任务的工作区路径无效：{task.Workspace}", ex);
         }
-        return _runtime.Workspaces.CreateGlobal();
+
+        if (!Directory.Exists(fullPath))
+            throw new InvalidOperationException($"计划任务的工作区不存在：{fullPath}");
+        return _runtime.Workspaces.Detect(fullPath);
+    }
+
+    /// <summary>
+    /// 构建本次定时运行使用的隔离运行时。审批登记簿必须与手动回合共用同一个实例：
+    /// 否则隔离容器会回落到 <see cref="HaoyueRuntime"/> 默认的非交互实例，高风险工具
+    /// 会在「无人值守」路径上被静默放行（P0）。抽成独立方法也便于测试注入脚本模型。
+    /// </summary>
+    internal HaoyueRuntime CreateTurnRuntime(
+        WorkspaceInfo workspace, string owner, Action<IServiceCollection>? configure = null)
+    {
+        return HaoyueRuntime.CreateIsolated(workspace, _fileLocks, owner, services =>
+        {
+            services.AddSingleton<ILlmHttpFactory>(_sharedHttp);
+            services.AddSingleton(_sharedBreaker);
+            if (_sharedLocalModels is not null) services.AddSingleton(_sharedLocalModels);
+            if (_approvals is not null) services.AddSingleton(_approvals);
+            configure?.Invoke(services);
+        });
     }
 
     private async Task<AgentTurnResult> RunIsolatedTurnAsync(
         WorkspaceInfo workspace, AgentSession session, string prompt, CancellationToken ct)
     {
         var owner = $"{session.Header.Id}/{Guid.NewGuid().ToString("N")[..8]}";
-        await using var turnRuntime = HaoyueRuntime.CreateIsolated(workspace, _fileLocks, owner, services =>
-        {
-            services.AddSingleton<ILlmHttpFactory>(_sharedHttp);
-            services.AddSingleton(_sharedBreaker);
-            if (_sharedLocalModels is not null) services.AddSingleton(_sharedLocalModels);
-        });
+        await using var turnRuntime = CreateTurnRuntime(workspace, owner);
         turnRuntime.Prompts.SetWorkspaceRoot(workspace.IsGlobal ? null : workspace.PromptsDir);
         turnRuntime.Skills.Attach(workspace);
-        if (turnRuntime.Mcp.LoadServerConfigs(workspace).Count > 0)
-            await turnRuntime.Mcp.ConnectAllAsync(workspace, ct).ConfigureAwait(false);
-        return await turnRuntime.Agent.RunTurnAsync(session, workspace, prompt, ct).ConfigureAwait(false);
+
+        // 定时任务没有发起请求的客户端，隔离回合的审批请求不会自动回到桌面。
+        // 把 ApprovalRequiredEvent 中继到宿主总线，已连接客户端才有机会批准；
+        // 无人响应时审批按超时拒绝（失败关闭），不再静默放行。
+        var approvalRelay = turnRuntime.Events.Subscribe();
+        var relayTask = ForwardApprovalRequestsAsync(approvalRelay, ct);
+        try
+        {
+            if (turnRuntime.Mcp.LoadServerConfigs(workspace).Count > 0)
+                await turnRuntime.Mcp.ConnectAllAsync(workspace, ct).ConfigureAwait(false);
+            return await turnRuntime.Agent.RunTurnAsync(session, workspace, prompt, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            approvalRelay.Dispose();
+            try
+            {
+                await relayTask.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // 中继失败不影响任务收尾；审批本身仍按超时/取消收敛。
+            }
+        }
+    }
+
+    private async Task ForwardApprovalRequestsAsync(IEventSubscription subscription, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in subscription.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            {
+                if (evt is ApprovalRequiredEvent approval) _runtime.Events.Publish(approval);
+            }
+        }
+        catch (Exception)
+        {
+            // 订阅关闭/回合取消都是正常收尾。
+        }
     }
 
     public ValueTask DisposeAsync()

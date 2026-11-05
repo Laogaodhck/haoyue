@@ -17,6 +17,12 @@ public static class EventJournal
     /// <summary>Maximum rows kept in the journal; older rows are pruned on append.</summary>
     public const int RetainedEvents = 5000;
 
+    /// <summary>
+    /// 审批决策审计行单独保留条数：普通事件刷屏时不能被环形裁剪带走。
+    /// 仍保留上限，避免长期无人清理导致台账无限增长。
+    /// </summary>
+    public const int ApprovalAuditRetained = 2000;
+
     /// <summary>Serialized payloads above this size are replaced by a placeholder.</summary>
     public const int MaxPayloadChars = 65_536;
 
@@ -34,6 +40,8 @@ public static class EventJournal
         nameof(MemoryConsolidationCompletedEvent),
         nameof(ModelLoadProgressEvent),
         nameof(WarningEvent), nameof(ErrorEvent),
+        // 审批决策审计：必须可事后核对「谁在何时对什么放行/拒绝」。
+        nameof(ApprovalDecisionEvent),
     ];
 
     public static bool IsPersistent(RuntimeEvent evt) => PersistentTypes.Contains(evt.GetType().Name);

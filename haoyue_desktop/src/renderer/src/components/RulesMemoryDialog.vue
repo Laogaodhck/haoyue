@@ -20,10 +20,96 @@ interface RuleFile {
   content: string
 }
 
+/** 结构化规则（全局 / 项目作用域）。 */
+interface ManagedRule {
+  id: string
+  title: string
+  content: string
+  enabled: boolean
+  priority: number
+  scope: 'global' | 'workspace'
+  createdAt: string
+  updatedAt: string
+}
+
+interface RuleConflict {
+  title: string
+  globalId: string
+  workspaceId: string
+  winner: 'global' | 'workspace'
+}
+
+interface EffectiveRule {
+  id: string
+  title: string
+  scope: 'global' | 'workspace'
+  priority: number
+}
+
+interface RuleHit {
+  ruleId: string
+  title: string
+  scope: string
+  sessionId: string | null
+  at: string
+  action?: string | null
+  actor?: string | null
+}
+
+interface RuleResolution {
+  ruleId: string
+  title: string
+  scope: string
+  action: string
+  actor: string
+  at: string
+}
+
 interface RulesPayload {
   workspace: string
   isGlobal: boolean
   files: RuleFile[]
+  managed?: ManagedRule[]
+  effective?: EffectiveRule[]
+  conflicts?: RuleConflict[]
+  hits?: RuleHit[]
+  resolutions?: RuleResolution[]
+}
+
+/** 记忆事实（含来源、时间、置信度与仲裁状态）。 */
+interface FactEntry {
+  id: string
+  content: string
+  topic: string | null
+  source: 'user' | 'agent'
+  confidence: number
+  createdAt: string
+  expiresAt: string | null
+  supersededBy: string | null
+  supersededAt: string | null
+  pinned: boolean
+  sourceSessionId: string | null
+  kind: 'auto' | 'manual'
+  confirmed: boolean
+}
+
+interface FactConflict {
+  topic: string | null
+  keptId: string
+  keptContent: string
+  replacedIds: string[]
+  replacedContents: string[]
+  at: string
+}
+
+interface FactsPayload {
+  workspace: string
+  activeCount: number
+  capacity: number
+  facts: FactEntry[]
+  conflicts: FactConflict[]
+  entry?: FactEntry
+  superseded?: FactEntry[]
 }
 
 interface MemoryPayload {
@@ -56,6 +142,26 @@ const creating = ref(false)
 const newPath = ref('')
 const newPathInput = ref<HTMLInputElement | null>(null)
 const deleting = ref(false)
+
+/** 结构化规则管理面。 */
+const managedRules = ref<ManagedRule[]>([])
+const ruleConflicts = ref<RuleConflict[]>([])
+const effectiveRules = ref<EffectiveRule[]>([])
+const ruleHits = ref<RuleHit[]>([])
+const ruleResolutions = ref<RuleResolution[]>([])
+const ruleEditing = ref<ManagedRule | null>(null)
+const ruleSaving = ref(false)
+const ruleError = ref('')
+
+/** 事实库管理面。 */
+const facts = ref<FactEntry[]>([])
+const factConflicts = ref<FactConflict[]>([])
+const factsLoading = ref(false)
+const factsError = ref('')
+const factEditing = ref<Partial<FactEntry> | null>(null)
+const factSaving = ref(false)
+const factNotice = ref('')
+const factUndoId = ref('')
 
 const isRules = computed(() => tab.value === 'rules')
 const dirty = computed(() => content.value !== baseline.value)
@@ -139,6 +245,11 @@ async function loadRules(): Promise<void> {
     const payload = await requestJson<RulesPayload>('rules.list')
     files.value = payload.files
     workspaceRoot.value = payload.workspace
+    managedRules.value = payload.managed ?? []
+    ruleConflicts.value = payload.conflicts ?? []
+    effectiveRules.value = payload.effective ?? []
+    ruleHits.value = payload.hits ?? []
+    ruleResolutions.value = payload.resolutions ?? []
     if (!payload.files.some(file => file.path === activePath.value))
       activePath.value = 'AGENTS.md'
     const current = payload.files.find(file => file.path === activePath.value)
@@ -159,11 +270,256 @@ async function loadMemory(): Promise<void> {
     memoryPath.value = payload.path
     content.value = payload.content
     baseline.value = payload.content
+    await loadFacts()
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
     loading.value = false
   }
+}
+
+async function loadFacts(): Promise<void> {
+  factsLoading.value = true
+  factsError.value = ''
+  try {
+    const payload = await requestJson<FactsPayload>('facts.list')
+    facts.value = payload.facts
+    factConflicts.value = payload.conflicts
+  } catch (reason) {
+    factsError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    factsLoading.value = false
+  }
+}
+
+// ---- 结构化规则 ----
+
+function beginRuleCreate(): void {
+  ruleError.value = ''
+  ruleEditing.value = {
+    id: '', title: '', content: '', enabled: true, priority: 50,
+    scope: 'workspace', createdAt: '', updatedAt: ''
+  }
+}
+
+function beginRuleEdit(rule: ManagedRule): void {
+  ruleError.value = ''
+  ruleEditing.value = { ...rule }
+}
+
+function cancelRuleEdit(): void {
+  ruleEditing.value = null
+  ruleError.value = ''
+}
+
+async function saveManagedRule(): Promise<void> {
+  if (!ruleEditing.value || ruleSaving.value) return
+  const draft = ruleEditing.value
+  if (!draft.title.trim() || !draft.content.trim()) {
+    ruleError.value = '请填写规则标题与内容'
+    return
+  }
+  ruleSaving.value = true
+  ruleError.value = ''
+  try {
+    await requestJson('rules.save', {
+      kind: 'managed',
+      id: draft.id || undefined,
+      title: draft.title.trim(),
+      content: draft.content,
+      enabled: draft.enabled,
+      priority: Number(draft.priority) || 50,
+      scope: draft.scope
+    })
+    ruleEditing.value = null
+    await loadRules()
+    flashSaved('规则已保存，下一回合生效')
+  } catch (reason) {
+    ruleError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    ruleSaving.value = false
+  }
+}
+
+async function toggleManagedRule(rule: ManagedRule): Promise<void> {
+  ruleError.value = ''
+  try {
+    await requestJson('rules.save', {
+      kind: 'managed', id: rule.id, title: rule.title, content: rule.content,
+      enabled: !rule.enabled, priority: rule.priority, scope: rule.scope
+    })
+    await loadRules()
+  } catch (reason) {
+    ruleError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+}
+
+async function resolveRuleConflict(
+  conflict: RuleConflict,
+  mode: 'workspace' | 'global' | 'merge'
+): Promise<void> {
+  if (ruleSaving.value) return
+  ruleSaving.value = true
+  ruleError.value = ''
+  try {
+    await requestJson('rules.resolve', { title: conflict.title, mode })
+    await loadRules()
+    flashSaved(
+      mode === 'merge' ? '已合并到项目规则' : mode === 'workspace' ? '已选择项目版本' : '已选择全局版本'
+    )
+  } catch (reason) {
+    ruleError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    ruleSaving.value = false
+  }
+}
+
+async function deleteManagedRule(rule: ManagedRule): Promise<void> {
+  const confirmed = await confirmAction({
+    title: '删除规则？',
+    message: `「${rule.title}」将被删除，下一回合起不再注入。`,
+    confirmLabel: '删除',
+    danger: true
+  })
+  if (!confirmed) return
+  ruleError.value = ''
+  try {
+    await requestJson('rules.delete', { id: rule.id, scope: rule.scope })
+    await loadRules()
+    flashSaved('规则已删除')
+  } catch (reason) {
+    ruleError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+}
+
+// ---- 事实库 ----
+
+function beginFactCreate(): void {
+  factsError.value = ''
+  factEditing.value = { content: '', topic: '', confidence: 0.9, pinned: false }
+}
+
+function beginFactEdit(fact: FactEntry): void {
+  factsError.value = ''
+  factEditing.value = { ...fact }
+}
+
+function cancelFactEdit(): void {
+  factEditing.value = null
+  factsError.value = ''
+}
+
+async function saveFact(): Promise<void> {
+  const draft = factEditing.value
+  if (!draft || factSaving.value) return
+  if (!draft.content?.trim()) {
+    factsError.value = '事实内容不能为空'
+    return
+  }
+  factSaving.value = true
+  factsError.value = ''
+  factNotice.value = ''
+  try {
+    const payload = draft.id
+      ? await requestJson<FactsPayload>('facts.update', {
+          id: draft.id,
+          content: draft.content,
+          topic: draft.topic || undefined,
+          confidence: draft.confidence,
+          pinned: draft.pinned
+        })
+      : await requestJson<FactsPayload>('facts.add', {
+          content: draft.content,
+          topic: draft.topic || undefined,
+          confidence: draft.confidence
+        })
+    facts.value = payload.facts
+    factConflicts.value = payload.conflicts
+    factEditing.value = null
+    const superseded = payload.superseded ?? []
+    if (superseded.length > 0) {
+      factUndoId.value = payload.entry?.id ?? ''
+      factNotice.value = `已用新事实取代 ${superseded.length} 条旧事实：${superseded
+        .map(item => item.content).join('；')}`
+    } else {
+      factUndoId.value = ''
+      factNotice.value = '事实已保存'
+    }
+  } catch (reason) {
+    factsError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    factSaving.value = false
+  }
+}
+
+async function toggleFactPin(fact: FactEntry): Promise<void> {
+  await runFactAction('facts.pin', { id: fact.id, pinned: !fact.pinned })
+}
+
+async function confirmFact(fact: FactEntry): Promise<void> {
+  await runFactAction('facts.confirm', { id: fact.id, confirmed: true })
+}
+
+async function restoreFact(fact: FactEntry): Promise<void> {
+  const confirmed = await confirmAction({
+    title: '撤销这次仲裁？',
+    message: `恢复旧事实「${fact.content}」，当前取代它的事实将转为失效。`,
+    confirmLabel: '撤销仲裁'
+  })
+  if (!confirmed) return
+  await runFactAction('facts.restore', { id: fact.id })
+}
+
+async function deleteFact(fact: FactEntry): Promise<void> {
+  const confirmed = await confirmAction({
+    title: '删除事实？',
+    message: `「${fact.content}」将被永久删除，Agent 之后不会再记住它。`,
+    confirmLabel: '删除',
+    danger: true
+  })
+  if (!confirmed) return
+  await runFactAction('facts.delete', { id: fact.id })
+}
+
+async function undoConsolidation(): Promise<void> {
+  const group = factConflicts.value.find(item => item.keptId === factUndoId.value)
+  if (!group) {
+    factUndoId.value = ''
+    factNotice.value = ''
+    await loadFacts()
+    return
+  }
+  factsError.value = ''
+  try {
+    for (const id of group.replacedIds) {
+      await requestJson('facts.restore', { id })
+    }
+    factUndoId.value = ''
+    factNotice.value = '已撤销本次自动仲裁'
+    await loadFacts()
+  } catch (reason) {
+    factsError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+}
+
+async function runFactAction(method: string, params: Record<string, unknown>): Promise<void> {
+  factsError.value = ''
+  try {
+    const payload = await requestJson<FactsPayload>(method, params)
+    facts.value = payload.facts
+    factConflicts.value = payload.conflicts
+    factNotice.value = ''
+    factUndoId.value = ''
+  } catch (reason) {
+    factsError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+}
+
+function factState(fact: FactEntry): string {
+  if (fact.supersededBy) return '已被取代'
+  if (fact.expiresAt && new Date(fact.expiresAt).getTime() < Date.now()) return '已过期'
+  if (fact.kind === 'auto' && !fact.confirmed) return '待确认'
+  return '生效中'
 }
 
 function load(): Promise<void> {
@@ -328,6 +684,10 @@ watch(() => props.open, (open) => {
   suppressSwitch = false
   creating.value = false
   newPath.value = ''
+  ruleEditing.value = null
+  ruleError.value = ''
+  factEditing.value = null
+  factsError.value = ''
   void loadRules()
 })
 
@@ -428,6 +788,183 @@ onBeforeUnmount(() => {
       记忆文件（MEMORY.md）会注入每次会话：Agent 在对话中沉淀长期事实，也可以在这里手动维护；越靠前越容易被记住。
     </p>
 
+    <section v-if="isRules" class="rm-managed">
+      <div class="rm-managed-head">
+        <div>
+          <strong>结构化规则</strong>
+          <small>启用后按优先级从高到低注入；项目规则覆盖同标题的全局规则</small>
+        </div>
+        <button class="secondary-button" :disabled="ruleSaving" @click="beginRuleCreate">
+          <Plus :size="14" /> 新建规则
+        </button>
+      </div>
+
+      <div v-for="conflict in ruleConflicts" :key="conflict.title" class="rm-conflict">
+        <span>
+          「{{ conflict.title }}」在全局与项目重复，当前以{{ conflict.winner === 'workspace' ? '项目' : '全局' }}版本生效
+        </span>
+        <div class="rm-rule-actions">
+          <button class="secondary-button" :disabled="ruleSaving" @click="resolveRuleConflict(conflict, 'workspace')">
+            项目胜出
+          </button>
+          <button class="secondary-button" :disabled="ruleSaving" @click="resolveRuleConflict(conflict, 'global')">
+            全局胜出
+          </button>
+          <button class="secondary-button" :disabled="ruleSaving" @click="resolveRuleConflict(conflict, 'merge')">
+            合并到项目
+          </button>
+        </div>
+      </div>
+
+      <div v-if="managedRules.length > 0" class="rm-rule-list">
+        <div v-for="rule in managedRules" :key="rule.id" class="rm-rule-card" :class="{ off: !rule.enabled }">
+          <div class="rm-rule-main">
+            <strong>{{ rule.title }}</strong>
+            <span class="rm-badge">{{ rule.scope === 'global' ? '全局' : '项目' }}</span>
+            <span class="rm-badge">优先级 {{ rule.priority }}</span>
+            <span v-if="!rule.enabled" class="rm-badge off">已停用</span>
+          </div>
+          <small class="rm-rule-content" :title="rule.content">{{ rule.content }}</small>
+          <div class="rm-rule-actions">
+            <button class="secondary-button" :disabled="ruleSaving" @click="toggleManagedRule(rule)">
+              {{ rule.enabled ? '停用' : '启用' }}
+            </button>
+            <button class="secondary-button" :disabled="ruleSaving" @click="beginRuleEdit(rule)">编辑</button>
+            <button class="icon-button compact" title="删除规则" :disabled="ruleSaving" @click="deleteManagedRule(rule)">
+              <Trash2 :size="14" />
+            </button>
+          </div>
+        </div>
+      </div>
+      <p v-else class="rules-memory-hint subtle">还没有结构化规则——点击「新建规则」添加第一条。</p>
+
+      <p v-if="effectiveRules.length > 0" class="rm-effective">
+        生效顺序：{{ effectiveRules.map(rule => `${rule.title}（${rule.scope === 'global' ? '全局' : '项目'}·P${rule.priority}）`).join(' → ') }}
+      </p>
+      <p v-if="ruleHits.length > 0" class="rm-effective subtle">
+        最近命中：{{ ruleHits.slice(0, 3).map(hit => `${hit.title} @ ${hit.at.slice(0, 16).replace('T', ' ')}`).join('；') }}
+      </p>
+      <p v-if="ruleResolutions.length > 0" class="rm-effective subtle">
+        冲突解决：{{ ruleResolutions.slice(0, 3).map(resolution => `${resolution.title} → ${resolution.action.replace('resolve:', '')}（${resolution.actor}）`).join('；') }}
+      </p>
+
+      <div v-if="ruleEditing" class="rm-form">
+        <label class="field-label">
+          标题
+          <input v-model="ruleEditing.title" class="text-input" placeholder="例如：提交规范" :disabled="ruleSaving" />
+        </label>
+        <label class="field-label">
+          规则内容
+          <textarea v-model="ruleEditing.content" class="rm-textarea" rows="3"
+            placeholder="写给 Agent 的规则正文" :disabled="ruleSaving" />
+        </label>
+        <div class="rm-form-row">
+          <label class="field-label">
+            作用域
+            <SelectMenu v-model="ruleEditing.scope" :options="SCOPE_OPTIONS" label="规则作用域"
+              class="settings-select" :disabled="ruleSaving" />
+          </label>
+          <label class="field-label">
+            优先级
+            <input v-model.number="ruleEditing.priority" class="text-input" type="number" min="0" max="100"
+              :disabled="ruleSaving" />
+          </label>
+          <label class="rm-check">
+            <input v-model="ruleEditing.enabled" type="checkbox" :disabled="ruleSaving" /> 启用
+          </label>
+        </div>
+        <div class="rm-form-actions">
+          <button class="secondary-button" :disabled="ruleSaving" @click="cancelRuleEdit">取消</button>
+          <button class="secondary-button primary-action" :disabled="ruleSaving" @click="saveManagedRule">
+            <LoaderCircle v-if="ruleSaving" class="spin" :size="14" />
+            <Save v-else :size="14" /> 保存规则
+          </button>
+        </div>
+      </div>
+      <p v-if="ruleError" class="rules-memory-error">{{ ruleError }}</p>
+    </section>
+
+    <section v-else class="rm-facts">
+      <div class="rm-managed-head">
+        <div>
+          <strong>事实库</strong>
+          <small>共 {{ facts.length }} 条 · 置顶事实每次注入；自动固化的结果可确认或撤销</small>
+        </div>
+        <button class="secondary-button" :disabled="factSaving || factsLoading" @click="beginFactCreate">
+          <Plus :size="14" /> 新增事实
+        </button>
+      </div>
+
+      <p v-if="factNotice" class="rm-notice">
+        {{ factNotice }}
+        <button v-if="factUndoId" class="secondary-button" @click="undoConsolidation">撤销</button>
+      </p>
+      <p v-if="factsError" class="rules-memory-error">{{ factsError }}</p>
+
+      <div v-if="facts.length > 0" class="rm-fact-list">
+        <div v-for="fact in facts.slice(0, 100)" :key="fact.id" class="rm-fact-card"
+          :class="{ retired: Boolean(fact.supersededBy), pinned: fact.pinned }">
+          <div class="rm-fact-main">
+            <strong>{{ fact.content }}</strong>
+          </div>
+          <small class="rm-fact-meta">
+            {{ fact.kind === 'manual' ? '手动' : '自动' }}
+            · {{ fact.source === 'user' ? '用户' : 'Agent' }}
+            · 置信度 {{ Math.round(fact.confidence * 100) }}%
+            · {{ fact.createdAt.slice(0, 16).replace('T', ' ') }}
+            <template v-if="fact.sourceSessionId"> · 会话 {{ fact.sourceSessionId }}</template>
+            <template v-if="fact.topic"> · 主题 {{ fact.topic }}</template>
+          </small>
+          <div class="rm-fact-actions">
+            <span class="rm-badge" :class="{ off: Boolean(fact.supersededBy) }">{{ factState(fact) }}</span>
+            <span v-if="fact.pinned" class="rm-badge">已置顶</span>
+            <button v-if="fact.kind === 'auto' && !fact.confirmed && !fact.supersededBy"
+              class="secondary-button" :disabled="factSaving" @click="confirmFact(fact)">确认</button>
+            <button class="secondary-button" :disabled="factSaving" @click="toggleFactPin(fact)">
+              {{ fact.pinned ? '取消置顶' : '置顶' }}
+            </button>
+            <button class="secondary-button" :disabled="factSaving || Boolean(fact.supersededBy)"
+              @click="beginFactEdit(fact)">编辑</button>
+            <button v-if="fact.supersededBy" class="secondary-button" :disabled="factSaving"
+              @click="restoreFact(fact)">撤销仲裁</button>
+            <button class="icon-button compact" title="删除事实" :disabled="factSaving" @click="deleteFact(fact)">
+              <Trash2 :size="14" />
+            </button>
+          </div>
+        </div>
+      </div>
+      <p v-else-if="!factsLoading" class="rules-memory-hint subtle">还没有事实——Agent 会自动沉淀，也可以手动新增。</p>
+
+      <div v-if="factEditing" class="rm-form">
+        <label class="field-label">
+          内容
+          <textarea v-model="factEditing.content" class="rm-textarea" rows="2"
+            placeholder="例如：部署前必须跑全量测试" :disabled="factSaving" />
+        </label>
+        <div class="rm-form-row">
+          <label class="field-label">
+            主题
+            <input v-model="factEditing.topic" class="text-input" placeholder="可选，例如：流程" :disabled="factSaving" />
+          </label>
+          <label class="field-label">
+            置信度
+            <input v-model.number="factEditing.confidence" class="text-input" type="number" min="0" max="1" step="0.1"
+              :disabled="factSaving" />
+          </label>
+          <label class="rm-check">
+            <input v-model="factEditing.pinned" type="checkbox" :disabled="factSaving" /> 置顶
+          </label>
+        </div>
+        <div class="rm-form-actions">
+          <button class="secondary-button" :disabled="factSaving" @click="cancelFactEdit">取消</button>
+          <button class="secondary-button primary-action" :disabled="factSaving" @click="saveFact">
+            <LoaderCircle v-if="factSaving" class="spin" :size="14" />
+            <Save v-else :size="14" /> 保存事实
+          </button>
+        </div>
+      </div>
+    </section>
+
     <p v-if="error" class="rules-memory-error">{{ error }}</p>
     <p v-else-if="savedMessage" class="rules-memory-saved">{{ savedMessage }}</p>
     <p v-else-if="isRules && files.length === 0" class="rules-memory-hint subtle">
@@ -458,13 +995,25 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .rules-memory-dialog.embedded-page {
-  display: grid;
+  display: flex;
   width: 100%;
   height: 100%;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
   background: var(--bg);
+}
+
+.rules-memory-header,
+.rules-memory-toolbar,
+.rules-memory-create,
+.rules-memory-hint,
+.rules-memory-error,
+.rules-memory-saved,
+.rules-memory-footer,
+.rm-managed,
+.rm-facts {
+  flex: 0 0 auto;
 }
 
 .rules-memory-header {
@@ -628,7 +1177,8 @@ onBeforeUnmount(() => {
 
 .rules-memory-editor {
   display: flex;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 96px;
   padding: 10px 22px 14px;
 }
 
@@ -669,5 +1219,221 @@ onBeforeUnmount(() => {
   font-size: 11.5px;
   background: var(--surface-raised);
   border-top: 1px solid var(--border);
+}
+
+/* ---- 结构化规则 / 事实库 ---- */
+
+.rm-managed,
+.rm-facts {
+  box-sizing: border-box;
+  max-height: 42vh;
+  margin: 10px 22px 0;
+  padding: 12px 14px;
+  overflow-y: auto;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.rm-managed-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.rm-managed-head strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.rm-managed-head small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.rm-rule-list,
+.rm-fact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rm-rule-card,
+.rm-fact-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.rm-rule-card.off,
+.rm-fact-card.retired {
+  opacity: .62;
+}
+
+.rm-fact-card.pinned {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.rm-rule-main,
+.rm-fact-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.rm-rule-main strong,
+.rm-fact-main strong {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.rm-rule-content {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rm-fact-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.rm-rule-actions,
+.rm-fact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.rm-rule-actions .secondary-button,
+.rm-fact-actions .secondary-button {
+  padding: 3px 9px;
+  font-size: 11.5px;
+}
+
+.rm-badge {
+  padding: 1px 7px;
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.rm-badge.off {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+}
+
+.rm-conflict,
+.rm-notice,
+.rm-effective {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.rm-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 10px;
+  color: var(--warning, #b58900);
+  background: color-mix(in srgb, #b58900 10%, transparent);
+  border-radius: 7px;
+}
+
+.rm-effective.subtle {
+  color: var(--text-muted);
+}
+
+.rm-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 7px;
+}
+
+.rm-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+}
+
+.rm-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.rm-form-row .field-label {
+  flex: 0 1 180px;
+}
+
+.rm-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.rm-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  outline: none;
+  resize: vertical;
+}
+
+.rm-textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 66%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.rm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.rm-check input {
+  accent-color: var(--accent);
 }
 </style>

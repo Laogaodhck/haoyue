@@ -222,7 +222,7 @@ public sealed partial class Agent(
         }
         finally
         {
-            FinalizeTurn(state);
+            await FinalizeTurnAsync(state).ConfigureAwait(false);
         }
 
         // 3.1 兜底并入：最后一批委派子任务的用量可能还没被主循环取走（子任务完成

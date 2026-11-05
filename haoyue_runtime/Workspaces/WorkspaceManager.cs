@@ -23,8 +23,28 @@ public sealed class WorkspaceInfo
 
     public string Name => IsGlobal ? "Global" : Path.GetFileName(Root.TrimEnd(Path.DirectorySeparatorChar, '/'));
 
+    /// <summary>
+    /// 任务作用域：项目调度层为单个任务分配的 id（bg-/schedule- 前缀）。普通回合与
+    /// 全局任务为 null，保持既有落点。
+    /// </summary>
+    public string? TaskId { get; init; }
+
+    /// <summary>
+    /// 任务专属目录（项目根下 <c>.haoyue/tasks/&lt;taskId&gt;</c>）。任务产物写入
+    /// 其中的 <c>outputs/</c>；为空表示该工作区不承载任务作用域。
+    /// </summary>
+    public string? TaskDir { get; init; }
+
     public string HaoyueDir => IsGlobal ? Root : Path.Combine(Root, ".haoyue");
     public string PromptsDir => Path.Combine(HaoyueDir, "prompts");
+
+    /// <summary>
+    /// 产物输出根：任务作用域内落在任务目录的 outputs/，其余沿用工作区既有的
+    /// .haoyue/outputs（全局任务行为不变）。
+    /// </summary>
+    public string OutputsDir => TaskDir is null
+        ? Path.Combine(Root, ".haoyue", "outputs")
+        : Path.Combine(TaskDir, "outputs");
     public string MemoryDir => Path.Combine(HaoyueDir, "memory");
     public string MemoryFile => Path.Combine(MemoryDir, "MEMORY.md");
     public string CacheDir => Path.Combine(HaoyueDir, "cache");

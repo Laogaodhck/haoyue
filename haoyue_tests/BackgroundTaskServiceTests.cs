@@ -7,6 +7,7 @@ using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
 using Haoyue.Runtime.Sessions;
+using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Tests;
@@ -98,6 +99,54 @@ public sealed class BackgroundTaskServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Cancel_QueuedTask_ConvergesImmediately_AndNeverRuns()
+    {
+        var started = 0;
+        var allStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runs = new List<string>();
+        var service = NewService(async (_, _, prompt, ct) =>
+        {
+            lock (runs) runs.Add(prompt);
+            if (prompt.StartsWith("block", StringComparison.Ordinal))
+            {
+                if (Interlocked.Increment(ref started) == BackgroundTaskService.MaxConcurrent)
+                    allStarted.TrySetResult();
+                await release.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+            return new AgentTurnResult("ok", false, null);
+        }, out var runtime);
+
+        // 占满并发槽，让第 5 个任务只能排队。
+        var blockers = Enumerable.Range(0, BackgroundTaskService.MaxConcurrent)
+            .Select(i => service.Start(Workspace(runtime), $"block-{i}"))
+            .ToList();
+        await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var queued = service.Start(Workspace(runtime), "queued");
+        var cancelled = service.Cancel(queued.Id);
+        Assert.NotNull(cancelled);
+        // 排队中取消必须同步收敛，而不是等执行体醒来（旧实现这里是空操作）。
+        Assert.Equal(BackgroundTaskStatus.Cancelled, cancelled!.Status);
+        Assert.NotNull(cancelled.EndedAt);
+        lock (runs) Assert.DoesNotContain("queued", runs);
+
+        release.TrySetResult();
+        Assert.True(await WaitUntilAsync(
+            () => blockers.All(b => service.Get(b.Id) is { Status: BackgroundTaskStatus.Completed })));
+
+        // 取消的排队任务没有占槽、也没有误放槽：后续任务仍能正常开跑。
+        var after = service.Start(Workspace(runtime), "after");
+        Assert.True(await WaitUntilAsync(
+            () => service.Get(after.Id) is { Status: BackgroundTaskStatus.Completed }));
+        lock (runs)
+        {
+            Assert.Contains("after", runs);
+            Assert.DoesNotContain("queued", runs);
+        }
+    }
+
+    [Fact]
     public async Task FailedTurn_RecordsErrorAndFailedStatus()
     {
         var service = NewService(
@@ -150,6 +199,46 @@ public sealed class BackgroundTaskServiceTests : IDisposable
         var task = service.Start(Workspace(runtime), "任务一");
         var json = JsonSerializer.Serialize(service.List(), HaoyueJsonContext.Compact.ListBackgroundTaskInfo);
         Assert.Contains(task.Id, json);
+    }
+
+    [Fact]
+    public async Task Start_InProject_RunsInsideProjectTaskDirectory()
+    {
+        WorkspaceInfo? seen = null;
+        var service = NewService((workspace, _, _, _) =>
+        {
+            seen = workspace;
+            return Task.FromResult(new AgentTurnResult("ok", false, null));
+        }, out var runtime);
+
+        var projectRoot = Path.Combine(_dir, "project");
+        Directory.CreateDirectory(projectRoot);
+        var project = new WorkspaceInfo { Root = projectRoot, ProjectKinds = [] };
+
+        var task = service.Start(project, "生成报告");
+        await WaitUntilAsync(() => service.Get(task.Id) is { Status: not BackgroundTaskStatus.Running });
+
+        var expected = Path.Combine(projectRoot, ".haoyue", "tasks", task.Id);
+        Assert.Equal(projectRoot, task.WorkspaceRoot);
+        Assert.NotNull(seen);
+        Assert.Equal(expected, seen!.TaskDir);
+        // 围栏仍是项目根，任务目录只是项目内的产物子目录。
+        Assert.Equal(projectRoot, seen.Root);
+        Assert.True(Directory.Exists(expected));
+        Assert.True(PathGuard.IsInside(projectRoot, seen.TaskDir!));
+        Assert.Contains(task.Id, TaskScopes.List(project));
+    }
+
+    [Fact]
+    public async Task Start_InProject_DoesNotCreateTaskDirectoryForGlobalTasks()
+    {
+        var service = NewService(
+            (_, _, _, _) => Task.FromResult(new AgentTurnResult("ok", false, null)), out var runtime);
+
+        var task = service.Start(Workspace(runtime), "全局任务");
+        await WaitUntilAsync(() => service.Get(task.Id) is { Status: not BackgroundTaskStatus.Running });
+
+        Assert.False(Directory.Exists(Path.Combine(runtime.Workspace.Root, ".haoyue", "tasks", task.Id)));
     }
 
     private static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 10_000)

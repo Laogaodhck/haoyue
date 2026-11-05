@@ -77,13 +77,28 @@ public sealed class HaoyueDatabase
             insert.Parameters.AddWithValue("$payload", payloadJson);
             insert.ExecuteNonQuery();
         }
+        // 审批决策审计行单独计量：普通事件刷屏（工具/流式/告警）时不能把
+        // 「谁在何时对什么放行/拒绝」挤出环形台账。审批行自身仍有上限。
+        const string approvalAuditType = nameof(Haoyue.Runtime.Events.ApprovalDecisionEvent);
         using (var prune = connection.CreateCommand())
         {
             prune.Transaction = transaction;
             prune.CommandText =
-                "DELETE FROM events WHERE id <= (SELECT COALESCE(MAX(id), 0) FROM events) - $keep;";
+                "DELETE FROM events WHERE type <> $auditType "
+                + "AND id <= (SELECT COALESCE(MAX(id), 0) FROM events) - $keep;";
             prune.Parameters.AddWithValue("$keep", EventJournal.RetainedEvents);
+            prune.Parameters.AddWithValue("$auditType", approvalAuditType);
             prune.ExecuteNonQuery();
+        }
+        using (var pruneAudit = connection.CreateCommand())
+        {
+            pruneAudit.Transaction = transaction;
+            pruneAudit.CommandText =
+                "DELETE FROM events WHERE type = $auditType AND id <= "
+                + "(SELECT COALESCE(MAX(id), 0) FROM events WHERE type = $auditType) - $auditKeep;";
+            pruneAudit.Parameters.AddWithValue("$auditType", approvalAuditType);
+            pruneAudit.Parameters.AddWithValue("$auditKeep", EventJournal.ApprovalAuditRetained);
+            pruneAudit.ExecuteNonQuery();
         }
         transaction.Commit();
     }

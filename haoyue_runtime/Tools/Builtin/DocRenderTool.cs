@@ -105,7 +105,8 @@ public sealed class DocRenderTool(IPromptProvider prompts, IConfigStore configSt
             if (context.Workspace is null)
                 return ToolResult.Fail("doc_render requires a workspace to write the artifact into.");
 
-            var outputsDir = Path.Combine(context.Workspace.Root, ".haoyue", "outputs", "documents");
+            var outputsDir = PathGuard.ArtifactDirectory(context.Workspace, "documents", out var artifactError);
+            if (outputsDir is null) return ToolResult.Fail(artifactError!);
             Directory.CreateDirectory(outputsDir);
             var customName = GetString(arguments, "file_name");
             var output = Sanitize(customName) is { Length: > 0 } safeName

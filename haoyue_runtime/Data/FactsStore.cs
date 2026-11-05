@@ -31,7 +31,18 @@ public sealed class FactEntry
     public int UseCount { get; set; }
     /// <summary>被否认过多少次（用户纠正、或 fact_forget 传 countAsWrong）；每次降置信度。</summary>
     public int DenialCount { get; set; }
+    /// <summary>用户置顶：注入时必带，不参与未用衰减与优先淘汰。</summary>
+    public bool Pinned { get; set; }
+    /// <summary>来源会话 id（自动固化/用户新增时的上下文），用于管理面溯源。</summary>
+    public string? SourceSessionId { get; set; }
+    /// <summary>来源类型：auto（模型自动固化）| manual（用户手动新增/编辑）。</summary>
+    public string Kind { get; set; } = "auto";
+    /// <summary>自动固化的事实需用户确认；用户新增/确认后为 true。</summary>
+    public bool Confirmed { get; set; } = true;
 }
+
+/// <summary>写事实的结果：落盘条目 + 本次被取代的旧事实（供 UI 展示仲裁，而非静默覆盖）。</summary>
+public sealed record FactWriteResult(FactEntry Entry, IReadOnlyList<FactEntry> Superseded);
 
 /// <summary>
 /// 记忆分层中的「项目事实层」：介于 MEMORY.md（用户策展的长期记忆）与知识库
@@ -95,11 +106,24 @@ public sealed class FactsStore
     public FactEntry Add(
         string root, string content, string? topic = null,
         string source = "agent", double confidence = 0.8, int? ttlDays = null,
-        string? supersedes = null)
+        string? supersedes = null) =>
+        AddDetailed(root, content, topic, source, confidence, ttlDays, supersedes).Entry;
+
+    /// <summary>
+    /// 写入事实并返回仲裁结果。自动固化（source=agent）默认 <c>Kind=auto/Confirmed=false</c>，
+    /// 用户新增（source=user）默认 <c>Kind=manual/Confirmed=true</c>。被取代的旧事实会在返回值里
+    /// 显式给出，UI 据此展示「已用新事实取代旧事实」而不是静默覆盖。
+    /// </summary>
+    public FactWriteResult AddDetailed(
+        string root, string content, string? topic = null,
+        string source = "agent", double confidence = 0.8, int? ttlDays = null,
+        string? supersedes = null, string? sessionId = null, string? kind = null)
     {
         if (string.IsNullOrWhiteSpace(content))
             throw new ArgumentException("事实内容不能为空。", nameof(content));
         confidence = Math.Clamp(confidence, 0, 1);
+        var normalizedSource = source is "user" ? "user" : "agent";
+        var normalizedKind = kind is "manual" or "auto" ? kind : (normalizedSource == "user" ? "manual" : "auto");
 
         lock (ProcessGate)
         using (CrossProcessLock.Acquire(root))
@@ -112,8 +136,10 @@ public sealed class FactsStore
             {
                 existing.Confidence = Math.Max(existing.Confidence, confidence);
                 existing.ExpiresAt = ttlDays is { } days ? DateTimeOffset.UtcNow.AddDays(days) : existing.ExpiresAt;
+                existing.SourceSessionId ??= sessionId;
+                if (normalizedSource == "user") existing.Confirmed = true;
                 Save(root, facts);
-                return existing;
+                return new FactWriteResult(existing, []);
             }
 
             var entry = new FactEntry
@@ -121,10 +147,13 @@ public sealed class FactsStore
                 Id = $"fact-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}",
                 Content = content.Trim(),
                 Topic = string.IsNullOrWhiteSpace(topic) ? null : topic!.Trim(),
-                Source = source is "user" ? "user" : "agent",
+                Source = normalizedSource,
                 Confidence = confidence,
                 CreatedAt = DateTimeOffset.UtcNow,
                 ExpiresAt = ttlDays is { } ttl ? DateTimeOffset.UtcNow.AddDays(ttl) : null,
+                SourceSessionId = string.IsNullOrWhiteSpace(sessionId) ? null : sessionId!.Trim(),
+                Kind = normalizedKind!,
+                Confirmed = normalizedSource == "user",
             };
 
             // M-D 冲突仲裁（写时解决，避免矛盾事实同时注入让模型每回合猜）：
@@ -148,17 +177,116 @@ public sealed class FactsStore
                                 && Jaccard(terms, Tokenize(f.Content).ToHashSet(StringComparer.OrdinalIgnoreCase)) >= ConflictOverlapThreshold)
                     .Select(f => f.Id));
             }
+            var superseded = new List<FactEntry>();
             foreach (var id in supersededIds)
             {
                 var target = facts.First(f => f.Id == id);
                 target.SupersededBy = entry.Id;
                 target.SupersededAt = DateTimeOffset.UtcNow;
+                superseded.Add(target);
             }
 
             facts.Add(entry);
             EnforceCapacity(facts);
             Save(root, facts);
-            return entry;
+            return new FactWriteResult(entry, superseded);
+        }
+    }
+
+    /// <summary>管理面：列出全部事实（含墓碑/过期），按创建时间倒序。</summary>
+    public IReadOnlyList<FactEntry> ListAllForRoot(string root) =>
+        [.. Load(root).OrderByDescending(f => f.CreatedAt)];
+
+    /// <summary>用户编辑/纠错：可改内容、主题、置信度、置顶、过期时间、来源类型、确认状态。</summary>
+    public FactWriteResult? UpdateForRoot(
+        string root, string id, string? content = null, string? topic = null,
+        double? confidence = null, bool? pinned = null, DateTimeOffset? expiresAt = null,
+        string? kind = null, bool? confirmed = null)
+    {
+        lock (ProcessGate)
+        using (CrossProcessLock.Acquire(root))
+        {
+            var facts = Load(root);
+            var target = facts.FirstOrDefault(f => f.Id.Equals(id, StringComparison.Ordinal));
+            if (target is null) return null;
+
+            var superseded = new List<FactEntry>();
+            if (!string.IsNullOrWhiteSpace(content))
+            {
+                target.Content = content!.Trim();
+                if (!string.IsNullOrWhiteSpace(topic))
+                {
+                    target.Topic = topic!.Trim();
+                    var terms = Tokenize(target.Content).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    foreach (var other in facts.Where(f =>
+                                 f.Id != target.Id
+                                 && f.SupersededBy is null
+                                 && string.Equals(f.Topic, target.Topic, StringComparison.OrdinalIgnoreCase)
+                                 && target.Confidence + 0.001 >= f.Confidence
+                                 && Jaccard(terms, Tokenize(f.Content).ToHashSet(StringComparer.OrdinalIgnoreCase))
+                                     >= ConflictOverlapThreshold))
+                    {
+                        other.SupersededBy = target.Id;
+                        other.SupersededAt = DateTimeOffset.UtcNow;
+                        superseded.Add(other);
+                    }
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(topic)) target.Topic = topic!.Trim();
+            if (confidence is { } value) target.Confidence = Math.Clamp(value, 0, 1);
+            if (pinned is { } pin)
+            {
+                target.Pinned = pin;
+                if (pin) target.Confirmed = true;
+            }
+            if (expiresAt is { } expiry) target.ExpiresAt = expiry;
+            if (kind is "auto" or "manual") target.Kind = kind;
+            if (confirmed is { } confirm) target.Confirmed = confirm;
+            if (target.Kind == "manual") target.Source = "user";
+            Save(root, facts);
+            return new FactWriteResult(target, superseded);
+        }
+    }
+
+    /// <summary>置顶/取消置顶；置顶同时视为用户确认。</summary>
+    public FactEntry? PinForRoot(string root, string id, bool pinned)
+    {
+        lock (ProcessGate)
+        using (CrossProcessLock.Acquire(root))
+        {
+            var facts = Load(root);
+            var target = facts.FirstOrDefault(f => f.Id.Equals(id, StringComparison.Ordinal));
+            if (target is null) return null;
+            target.Pinned = pinned;
+            if (pinned) target.Confirmed = true;
+            Save(root, facts);
+            return target;
+        }
+    }
+
+    /// <summary>
+    /// 撤销一次自动固化：恢复被取代的旧事实，并把当时的取代者反向标记为「被旧事实取代」。
+    /// 仲裁是可见且可逆的，而不是一旦覆盖就无法找回。
+    /// </summary>
+    public FactEntry? RestoreForRoot(string root, string id)
+    {
+        lock (ProcessGate)
+        using (CrossProcessLock.Acquire(root))
+        {
+            var facts = Load(root);
+            var target = facts.FirstOrDefault(f => f.Id.Equals(id, StringComparison.Ordinal));
+            if (target is null || target.SupersededBy is null) return null;
+            var replacementId = target.SupersededBy;
+            target.SupersededBy = null;
+            target.SupersededAt = null;
+            var replacement = facts.FirstOrDefault(f => f.Id == replacementId);
+            if (replacement is not null && replacement.Id != target.Id)
+            {
+                replacement.SupersededBy = target.Id;
+                replacement.SupersededAt = DateTimeOffset.UtcNow;
+            }
+            Save(root, facts);
+            return target;
         }
     }
 
@@ -275,7 +403,7 @@ public sealed class FactsStore
     private static bool DecayUnused(List<FactEntry> facts, DateTimeOffset now)
     {
         var changed = false;
-        foreach (var fact in facts.Where(f => f.SupersededBy is null && f.Source != "user"))
+        foreach (var fact in facts.Where(f => f.SupersededBy is null && f.Source != "user" && !f.Pinned))
         {
             var lastTouched = fact.LastUsedAt ?? fact.CreatedAt;
             if (lastTouched.AddDays(UnusedDecayDays) > now) continue;
@@ -297,7 +425,8 @@ public sealed class FactsStore
         var active = facts.Where(f => f.SupersededBy is null).ToList();
         if (active.Count <= CapacityPerWorkspace) return false;
         var doomed = active
-            .OrderBy(f => f.Confidence)
+            .OrderBy(f => f.Pinned ? 1 : 0)
+            .ThenBy(f => f.Confidence)
             .ThenBy(f => f.CreatedAt)
             .Take(active.Count - CapacityPerWorkspace)
             .Select(f => f.Id)
@@ -368,10 +497,12 @@ public sealed class FactsStore
                     .Take(topK - picked.Count)
                     .Select(pair => pair.Fact));
             }
-            // 用户明确给出的事实是指令而非记忆：相关性为 0 也要在场，但只保底带上限条数。
+            // 用户明确给出的事实是指令而非记忆；置顶事实是用户显式保留的记忆。
+            // 两者相关性为 0 也要在场，但只保底带上限条数。
             var pinned = active
-                .Where(f => f.Source == "user" && !picked.Contains(f))
-                .OrderByDescending(f => f.Confidence)
+                .Where(f => (f.Source == "user" || f.Pinned) && !picked.Contains(f))
+                .OrderByDescending(f => f.Pinned)
+                .ThenByDescending(f => f.Confidence)
                 .ThenByDescending(f => f.CreatedAt)
                 .Take(MaxPinnedFacts);
             picked.AddRange(pinned);

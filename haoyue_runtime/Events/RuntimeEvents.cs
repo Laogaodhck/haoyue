@@ -163,6 +163,22 @@ public sealed record ApprovalRequiredEvent(
     string Summary,
     string Reason) : RuntimeEvent;
 
+/// <summary>
+/// 审批决策审计（P0）：谁（<see cref="Actor"/>）、何时（事件 Timestamp）、对哪个回合
+/// （<see cref="RuntimeEvent.TurnId"/>）、对什么工具与参数（ToolName/Summary）、
+/// 结果（Approved/Outcome）。由 <see cref="Agents.ApprovalRegistry"/> 在决策落定时发布；
+/// 持久化后可用 events.recent 事后核对，审批行不受普通事件的环形裁剪影响。
+/// </summary>
+public sealed record ApprovalDecisionEvent(
+    string CallId,
+    string ToolName,
+    string Summary,
+    string Reason,
+    bool Approved,
+    string Outcome,
+    string Actor,
+    string? WorkspaceRoot) : RuntimeEvent;
+
 // ---------------------------------------------------------------- evolution
 
 /// <summary>Emitted after an evolution reflection turn finishes (engine stage E2).</summary>
@@ -198,6 +214,30 @@ public sealed record UserFeedbackEvent(
 /// 前端据此刷新任务列表；任务进度本身复用回合级流式事件经 events.recent 重放。</summary>
 public sealed record BackgroundTaskEvent(
     string TaskId, string Status, string? SessionId = null, string? Error = null) : RuntimeEvent;
+
+// ---------------------------------------------------------------- agent teams
+
+/// <summary>
+/// 团体运行状态迁移广播：受理、成员进度与终态都会发布，桌面据此刷新轨迹。
+/// 事件只携带摘要，完整成员明细仍从 <c>team.runs</c> 读取。
+/// </summary>
+public sealed record TeamRunUpdatedEvent(
+    string RunId,
+    string TeamId,
+    string Workspace,
+    string Status,
+    int Rounds) : RuntimeEvent
+{
+    /// <summary>广播 details（完整成员明细仍从 team.runs 读取）。</summary>
+    public System.Text.Json.Nodes.JsonObject ToDetails() => new()
+    {
+        ["runId"] = RunId,
+        ["teamId"] = TeamId,
+        ["workspace"] = Workspace,
+        ["status"] = Status,
+        ["rounds"] = Rounds,
+    };
+}
 
 // ---------------------------------------------------------------- local model loading
 

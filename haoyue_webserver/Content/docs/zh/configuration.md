@@ -137,11 +137,14 @@ Haoyue 使用全局配置保存 Provider、模型、Profile、路由和 Agent �
   "systemPrompt": "system/default",
   "disabledSkills": ["legacy-migration"],
   "disabledTools": [],
+  "allowedTools": [],
   "autoVerify": true,
   "verifyCommand": "dotnet test",
   "mcp": { "servers": {} }
 }
 ```
+
+`allowedTools` 是工作区级工具白名单（缺省/空 = 不限制），支持 MCP 的 `server/tool` 与 `server/*` 通配符；`disabledTools` 优先于它（同一名字同时命中即拒绝）。团体成员的 `tools` 只能在此基础上继续收窄，越权工具降级为「不可用」而不会让运行失败。`allowToolFallbackToGlobal` 默认 `false`；仅当显式设为 `true` 时，成员清单把工具集裁空后才退回仅受工作区策略约束的清单。
 
 ## 重新加载行为
 

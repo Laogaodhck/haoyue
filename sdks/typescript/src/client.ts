@@ -480,6 +480,40 @@ export class DaemonClient {
       this.call("evolution.config.set", params),
   };
 
+  /** hooks 类别方法。 */
+  readonly hooks = {
+    /**
+     * 列出已配置钩子、配置问题与最近执行状态
+     * 终态事件：result, error
+     */
+    hooksList: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("hooks.list", params),
+    /**
+     * 新增或更新一条钩子
+     * 终态事件：result, error
+     */
+    hooksSave: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("hooks.save", params),
+    /**
+     * 删除一条钩子
+     * 终态事件：result, error
+     */
+    hooksDelete: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("hooks.delete", params),
+    /**
+     * 立即触发一次钩子（试运行）
+     * 终态事件：result, error
+     */
+    hooksTest: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("hooks.test", params),
+    /**
+     * 读取钩子执行台账（最近 N 条，失败可排查）
+     * 终态事件：result, error
+     */
+    hooksRuns: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("hooks.runs", params),
+  };
+
   /** knowledge 类别方法。 */
   readonly knowledge = {
     /**
@@ -647,23 +681,71 @@ export class DaemonClient {
     memorySave: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("memory.save", params),
     /**
-     * 列出 AGENTS.md 工作区规则
+     * 列出 AGENTS.md 文件规则与结构化规则（含生效顺序、冲突与命中记录）
      * 终态事件：result, error
      */
     rulesList: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("rules.list", params),
     /**
-     * 写入工作区规则
+     * 写入文件规则（kind=file）或新增/更新结构化规则（kind=managed）
      * 终态事件：result, error
      */
     rulesSave: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("rules.save", params),
     /**
-     * 删除工作区规则文件
+     * 删除文件规则（path）或结构化规则（id）
      * 终态事件：result, error
      */
     rulesDelete: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("rules.delete", params),
+    /**
+     * 显式解决同名全局/项目规则冲突（项目胜/全局胜/合并到项目），结果与操作者写入命中记录
+     * 终态事件：result, error
+     */
+    rulesResolve: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("rules.resolve", params),
+    /**
+     * 列出事实库（含墓碑/仲裁结果/来源与时间戳）
+     * 终态事件：result, error
+     */
+    factsList: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("facts.list", params),
+    /**
+     * 手动新增一条事实（返回本次仲裁取代的旧事实）
+     * 终态事件：result, error
+     */
+    factsAdd: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("facts.add", params),
+    /**
+     * 编辑/纠错一条事实（可改内容、主题、置信度、置顶、过期、类型）
+     * 终态事件：result, error
+     */
+    factsUpdate: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("facts.update", params),
+    /**
+     * 删除一条事实
+     * 终态事件：result, error
+     */
+    factsDelete: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("facts.delete", params),
+    /**
+     * 置顶/取消置顶一条事实（置顶注入必带）
+     * 终态事件：result, error
+     */
+    factsPin: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("facts.pin", params),
+    /**
+     * 撤销一次自动固化仲裁，恢复被取代的旧事实
+     * 终态事件：result, error
+     */
+    factsRestore: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("facts.restore", params),
+    /**
+     * 确认自动固化的事实
+     * 终态事件：result, error
+     */
+    factsConfirm: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("facts.confirm", params),
   };
 
   /** model 类别方法。 */
@@ -1000,6 +1082,52 @@ export class DaemonClient {
      */
     taskCancel: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("task.cancel", params),
+  };
+
+  /** team 类别方法。 */
+  readonly team = {
+    /**
+     * 列出当前工作区的智能体团体
+     * 终态事件：result, error
+     */
+    teamList: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("team.list", params),
+    /**
+     * 新建/更新智能体团体（按 id 定位；配置改动下一回合热生效）
+     * 终态事件：result, error
+     */
+    teamSave: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("team.save", params),
+    /**
+     * 删除一个智能体团体
+     * 终态事件：result, error
+     */
+    teamDelete: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("team.delete", params),
+    /**
+     * 复制一个智能体团体
+     * 终态事件：result, error
+     */
+    teamCopy: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("team.copy", params),
+    /**
+     * 按协作模式运行一次团体任务；整体结果写回会话的一条助手消息
+     * 终态事件：result, error
+     */
+    teamRun: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("team.run", params),
+    /**
+     * 取消一次运行中的团体任务（状态收敛为 cancelled）
+     * 终态事件：result, error
+     */
+    teamCancel: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("team.cancel", params),
+    /**
+     * 读取团体运行轨迹（成员分工、工具调用、耗时、失败原因）
+     * 终态事件：result, error
+     */
+    teamRuns: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
+      this.call("team.runs", params),
   };
 
   /** usage 类别方法。 */

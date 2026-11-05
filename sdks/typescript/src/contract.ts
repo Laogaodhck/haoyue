@@ -7,7 +7,7 @@
 export const CONTRACT_VERSION = "1.0";
 export const PROTOCOL_VERSION = "2.2";
 
-/** 契约声明的全部 RPC 方法名（134 个）。 */
+/** 契约声明的全部 RPC 方法名（154 个）。 */
 export type MethodName =
   "ping" | "protocol.info" | "contract.export" | "daemon.lan.get"
   | "daemon.lan.set" | "events.recent" | "shutdown" | "chat"
@@ -24,17 +24,22 @@ export type MethodName =
   | "model.test" | "model.status" | "model.preload" | "model.unload"
   | "model.config.get" | "model.update" | "model.benchmark" | "schedule.list"
   | "schedule.create" | "schedule.update" | "schedule.toggle" | "schedule.delete"
-  | "schedule.run" | "task.start" | "task.get" | "task.list"
-  | "task.cancel" | "mcp.list" | "mcp.upsert" | "mcp.remove"
-  | "mcp.reload" | "connectors.list" | "connectors.install" | "connectors.uninstall"
-  | "skill.list" | "skill.import" | "skill.toggle" | "skill.official.list"
-  | "skill.official.install" | "expert.list" | "knowledge.list" | "knowledge.search"
-  | "knowledge.save" | "knowledge.delete" | "knowledge.import" | "knowledge.tags"
-  | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list"
-  | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list"
-  | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve"
-  | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get" | "memory.save"
-  | "rules.list" | "rules.save" | "rules.delete" | "agent.subagents.list"
+  | "schedule.run" | "hooks.list" | "hooks.save" | "hooks.delete"
+  | "hooks.test" | "hooks.runs" | "task.start" | "task.get"
+  | "task.list" | "task.cancel" | "mcp.list" | "mcp.upsert"
+  | "mcp.remove" | "mcp.reload" | "connectors.list" | "connectors.install"
+  | "connectors.uninstall" | "skill.list" | "skill.import" | "skill.toggle"
+  | "skill.official.list" | "skill.official.install" | "expert.list" | "knowledge.list"
+  | "knowledge.search" | "knowledge.save" | "knowledge.delete" | "knowledge.import"
+  | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save"
+  | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add"
+  | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh"
+  | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get"
+  | "memory.save" | "rules.list" | "rules.save" | "rules.delete"
+  | "rules.resolve" | "facts.list" | "facts.add" | "facts.update"
+  | "facts.delete" | "facts.pin" | "facts.restore" | "facts.confirm"
+  | "team.list" | "team.save" | "team.delete" | "team.copy"
+  | "team.run" | "team.cancel" | "team.runs" | "agent.subagents.list"
   | "agent.subagents.save" | "agent.subagents.delete" | "usage.get" | "usage.timeline"
   | "session.list" | "session.search" | "session.get" | "session.image"
   | "session.truncate" | "session.fork" | "session.update" | "session.archive"
@@ -282,7 +287,7 @@ export const METHODS: readonly MethodInfo[] = [
     name: "advanced.set",
     category: "config",
     description: "\u66f4\u65b0\u9ad8\u7ea7\u914d\u7f6e",
-    paramsSchema: {"properties": {"computerUseDriver": {"description": "Computer Use 驱动", "type": "string"}, "computerUseEnabled": {"description": "Computer Use 开关", "type": "boolean"}, "deepSeekOptimizationEnabled": {"description": "DeepSeek 优化开关", "type": "boolean"}, "failoverEnabled": {"description": "路由故障转移开关", "type": "boolean"}, "language": {"description": "界面语言", "type": "string"}, "localInference": {"properties": {"contextLength": {"description": "上下文长度", "type": "integer"}, "flashAttention": {"description": "Flash Attention 开关", "type": "boolean"}, "gpuLayers": {"description": "GPU 卸载层数，0 为纯 CPU", "type": "integer"}, "kvCacheQuantization": {"description": "KV 缓存量化", "type": "string"}, "providerId": {"description": "本地提供商 id", "type": "string"}}, "type": "object"}, "memoryMode": {"description": "记忆模式", "type": "string"}, "networkEnabled": {"description": "联网开关", "type": "boolean"}, "networkOpsAllowMutating": {"description": "网络运维：允许变更类命令", "type": "boolean"}, "networkOpsEnabled": {"description": "网络运维插件开关", "type": "boolean"}, "rulesEnabled": {"description": "AGENTS.md 规则注入开关", "type": "boolean"}}, "type": "object"},
+    paramsSchema: {"properties": {"coding": {"properties": {"git": {"properties": {"branchPrefix": {"description": "新建分支时预填的分支名前缀（留空不添加前缀）", "type": "string"}, "forcePushWithLease": {"description": "推送时使用 --force-with-lease（远端已变化时拒绝覆盖）", "type": "boolean"}}, "type": "object"}, "security": {"properties": {"progressiveScan": {"description": "三层渐进式扫描（开启后 haoyue 在合适节点智能推荐，确认后扫描并修复）", "type": "boolean"}}, "type": "object"}}, "type": "object"}, "computerUseDriver": {"description": "Computer Use 驱动", "type": "string"}, "computerUseEnabled": {"description": "Computer Use 开关", "type": "boolean"}, "deepSeekOptimizationEnabled": {"description": "DeepSeek 优化开关", "type": "boolean"}, "failoverEnabled": {"description": "路由故障转移开关", "type": "boolean"}, "language": {"description": "界面语言", "type": "string"}, "localInference": {"properties": {"contextLength": {"description": "上下文长度", "type": "integer"}, "flashAttention": {"description": "Flash Attention 开关", "type": "boolean"}, "gpuLayers": {"description": "GPU 卸载层数，0 为纯 CPU", "type": "integer"}, "kvCacheQuantization": {"description": "KV 缓存量化", "type": "string"}, "providerId": {"description": "本地提供商 id", "type": "string"}}, "type": "object"}, "memoryMode": {"description": "记忆模式", "type": "string"}, "networkEnabled": {"description": "联网开关", "type": "boolean"}, "networkOpsAllowMutating": {"description": "网络运维：允许变更类命令", "type": "boolean"}, "networkOpsEnabled": {"description": "网络运维插件开关", "type": "boolean"}, "rulesEnabled": {"description": "AGENTS.md 规则注入开关", "type": "boolean"}, "taskMonitor": {"properties": {"access": {"properties": {"demoScreen": {"description": "演示画面", "type": "boolean"}, "memoryUpdate": {"description": "记忆更新", "type": "boolean"}}, "type": "object"}, "activity": {"properties": {"backgroundProcesses": {"description": "后台进程", "type": "boolean"}, "sideChat": {"description": "侧边聊天", "type": "boolean"}, "skillMcp": {"description": "Skill 与 MCP", "type": "boolean"}, "subAgents": {"description": "子智能体", "type": "boolean"}}, "type": "object"}, "fixedDefaultShow": {"description": "固定模式默认展示：show / hidden", "type": "string"}, "mode": {"description": "任务监控形式：fixed（右栏页签）/ floating（悬浮窗）", "type": "string"}, "progress": {"properties": {"goal": {"description": "任务目标", "type": "boolean"}, "plan": {"description": "计划", "type": "boolean"}, "review": {"description": "任务回顾", "type": "boolean"}}, "type": "object"}, "results": {"properties": {"knowledge": {"description": "知识", "type": "boolean"}, "outputs": {"description": "产出", "type": "boolean"}, "sources": {"description": "来源", "type": "boolean"}, "webVisits": {"description": "网页查阅", "type": "boolean"}}, "type": "object"}}, "type": "object"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -479,6 +484,41 @@ export const METHODS: readonly MethodInfo[] = [
     category: "schedule",
     description: "\u7acb\u5373\u6267\u884c\u4e00\u6b21\u5b9a\u65f6\u4efb\u52a1",
     paramsSchema: {"properties": {"id": {"description": "资源 id", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "hooks.list",
+    category: "hooks",
+    description: "\u5217\u51fa\u5df2\u914d\u7f6e\u94a9\u5b50\u3001\u914d\u7f6e\u95ee\u9898\u4e0e\u6700\u8fd1\u6267\u884c\u72b6\u6001",
+    paramsSchema: {"properties": {}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "hooks.save",
+    category: "hooks",
+    description: "\u65b0\u589e\u6216\u66f4\u65b0\u4e00\u6761\u94a9\u5b50",
+    paramsSchema: {"properties": {"action": {"description": "动作类型", "enum": ["webhook", "command"], "type": "string"}, "command": {"description": "本地命令（非交互）；空串清除", "type": "string"}, "enabled": {"description": "启用开关（缺省 true）", "type": "boolean"}, "failurePolicy": {"description": "失败策略", "enum": ["warn", "block"], "type": "string"}, "match": {"description": "匹配条件：逗号分隔通配符（* ?），匹配工具名/会话 id；空 = 全部", "type": "string"}, "name": {"description": "钩子名称（唯一标识；更新已有钩子时用于定位）", "type": "string"}, "timeoutSeconds": {"description": "单次执行超时秒数 1..120（缺省 30；webhook 上限 30）", "type": "integer"}, "trigger": {"description": "触发事件", "enum": ["session.start", "tool.before", "tool.after", "task.completed", "schedule.completed"], "type": "string"}, "webhookSecret": {"description": "Authorization: Bearer 密钥；缺省保持已存值，显式空串清除", "type": "string"}, "webhookUrl": {"description": "Webhook 目标地址（http/https）；空串清除", "type": "string"}}, "required": ["name"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "hooks.delete",
+    category: "hooks",
+    description: "\u5220\u9664\u4e00\u6761\u94a9\u5b50",
+    paramsSchema: {"properties": {"id": {"description": "资源 id", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "hooks.test",
+    category: "hooks",
+    description: "\u7acb\u5373\u89e6\u53d1\u4e00\u6b21\u94a9\u5b50\uff08\u8bd5\u8fd0\u884c\uff09",
+    paramsSchema: {"properties": {"id": {"description": "资源 id", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "hooks.runs",
+    category: "hooks",
+    description: "\u8bfb\u53d6\u94a9\u5b50\u6267\u884c\u53f0\u8d26\uff08\u6700\u8fd1 N \u6761\uff0c\u5931\u8d25\u53ef\u6392\u67e5\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "limit": {"description": "返回条数 1..500（缺省 50）", "type": "integer"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
@@ -757,22 +797,127 @@ export const METHODS: readonly MethodInfo[] = [
   {
     name: "rules.list",
     category: "memory",
-    description: "\u5217\u51fa AGENTS.md \u5de5\u4f5c\u533a\u89c4\u5219",
+    description: "\u5217\u51fa AGENTS.md \u6587\u4ef6\u89c4\u5219\u4e0e\u7ed3\u6784\u5316\u89c4\u5219\uff08\u542b\u751f\u6548\u987a\u5e8f\u3001\u51b2\u7a81\u4e0e\u547d\u4e2d\u8bb0\u5f55\uff09",
     paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
     name: "rules.save",
     category: "memory",
-    description: "\u5199\u5165\u5de5\u4f5c\u533a\u89c4\u5219",
-    paramsSchema: {"properties": {"content": {"description": "规则文件内容", "type": "string"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "path": {"description": "目标规则文件相对路径，缺省根 AGENTS.md", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["content"], "type": "object"},
+    description: "\u5199\u5165\u6587\u4ef6\u89c4\u5219\uff08kind=file\uff09\u6216\u65b0\u589e/\u66f4\u65b0\u7ed3\u6784\u5316\u89c4\u5219\uff08kind=managed\uff09",
+    paramsSchema: {"properties": {"content": {"description": "规则文件内容（kind=file 必填；kind=managed 为规则正文）", "type": "string"}, "enabled": {"description": "结构化规则启用开关（缺省 true）", "type": "boolean"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "结构化规则 id（kind=managed；缺省新建）", "type": "string"}, "kind": {"description": "保存类型", "enum": ["file", "managed"], "type": "string"}, "path": {"description": "目标规则文件相对路径，缺省根 AGENTS.md（kind=file）", "type": "string"}, "priority": {"description": "结构化规则优先级 0..100（缺省 50）", "type": "integer"}, "scope": {"description": "结构化规则作用域", "enum": ["global", "workspace"], "type": "string"}, "title": {"description": "结构化规则标题（kind=managed 必填）", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {
     name: "rules.delete",
     category: "memory",
-    description: "\u5220\u9664\u5de5\u4f5c\u533a\u89c4\u5219\u6587\u4ef6",
-    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "path": {"description": "目标规则文件相对路径，缺省根 AGENTS.md", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
+    description: "\u5220\u9664\u6587\u4ef6\u89c4\u5219\uff08path\uff09\u6216\u7ed3\u6784\u5316\u89c4\u5219\uff08id\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "结构化规则 id", "type": "string"}, "path": {"description": "目标规则文件相对路径，缺省根 AGENTS.md", "type": "string"}, "scope": {"description": "结构化规则作用域", "enum": ["global", "workspace"], "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "rules.resolve",
+    category: "memory",
+    description: "\u663e\u5f0f\u89e3\u51b3\u540c\u540d\u5168\u5c40/\u9879\u76ee\u89c4\u5219\u51b2\u7a81\uff08\u9879\u76ee\u80dc/\u5168\u5c40\u80dc/\u5408\u5e76\u5230\u9879\u76ee\uff09\uff0c\u7ed3\u679c\u4e0e\u64cd\u4f5c\u8005\u5199\u5165\u547d\u4e2d\u8bb0\u5f55",
+    paramsSchema: {"properties": {"actor": {"description": "操作者（缺省当前系统用户）", "type": "string"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "mode": {"description": "解决方式", "enum": ["workspace", "global", "merge"], "type": "string"}, "title": {"description": "冲突规则标题", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["title", "mode"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "facts.list",
+    category: "memory",
+    description: "\u5217\u51fa\u4e8b\u5b9e\u5e93\uff08\u542b\u5893\u7891/\u4ef2\u88c1\u7ed3\u679c/\u6765\u6e90\u4e0e\u65f6\u95f4\u6233\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "includeRetired": {"description": "是否包含已失效/被取代条目（缺省 true）", "type": "boolean"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "facts.add",
+    category: "memory",
+    description: "\u624b\u52a8\u65b0\u589e\u4e00\u6761\u4e8b\u5b9e\uff08\u8fd4\u56de\u672c\u6b21\u4ef2\u88c1\u53d6\u4ee3\u7684\u65e7\u4e8b\u5b9e\uff09",
+    paramsSchema: {"properties": {"confidence": {"description": "置信度 0..1（缺省 0.9）", "type": "number"}, "content": {"description": "事实内容", "type": "string"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "sessionId": {"description": "来源会话 id", "type": "string"}, "supersedes": {"description": "显式取代的事实 id 或完整内容", "type": "string"}, "topic": {"description": "主题", "type": "string"}, "ttlDays": {"description": "有效天数", "type": "integer"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["content"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "facts.update",
+    category: "memory",
+    description: "\u7f16\u8f91/\u7ea0\u9519\u4e00\u6761\u4e8b\u5b9e\uff08\u53ef\u6539\u5185\u5bb9\u3001\u4e3b\u9898\u3001\u7f6e\u4fe1\u5ea6\u3001\u7f6e\u9876\u3001\u8fc7\u671f\u3001\u7c7b\u578b\uff09",
+    paramsSchema: {"properties": {"confidence": {"description": "新置信度 0..1", "type": "number"}, "confirmed": {"description": "确认/取消确认", "type": "boolean"}, "content": {"description": "新内容", "type": "string"}, "expiresAt": {"description": "新过期时间（ISO）", "type": "string"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "事实 id", "type": "string"}, "kind": {"description": "来源类型", "enum": ["auto", "manual"], "type": "string"}, "pinned": {"description": "置顶开关", "type": "boolean"}, "topic": {"description": "新主题", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "facts.delete",
+    category: "memory",
+    description: "\u5220\u9664\u4e00\u6761\u4e8b\u5b9e",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "事实 id", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "facts.pin",
+    category: "memory",
+    description: "\u7f6e\u9876/\u53d6\u6d88\u7f6e\u9876\u4e00\u6761\u4e8b\u5b9e\uff08\u7f6e\u9876\u6ce8\u5165\u5fc5\u5e26\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "事实 id", "type": "string"}, "pinned": {"description": "缺省 true", "type": "boolean"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "facts.restore",
+    category: "memory",
+    description: "\u64a4\u9500\u4e00\u6b21\u81ea\u52a8\u56fa\u5316\u4ef2\u88c1\uff0c\u6062\u590d\u88ab\u53d6\u4ee3\u7684\u65e7\u4e8b\u5b9e",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "被取代的事实 id", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "facts.confirm",
+    category: "memory",
+    description: "\u786e\u8ba4\u81ea\u52a8\u56fa\u5316\u7684\u4e8b\u5b9e",
+    paramsSchema: {"properties": {"confirmed": {"description": "缺省 true", "type": "boolean"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "事实 id", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "team.list",
+    category: "team",
+    description: "\u5217\u51fa\u5f53\u524d\u5de5\u4f5c\u533a\u7684\u667a\u80fd\u4f53\u56e2\u4f53",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "team.save",
+    category: "team",
+    description: "\u65b0\u5efa/\u66f4\u65b0\u667a\u80fd\u4f53\u56e2\u4f53\uff08\u6309 id \u5b9a\u4f4d\uff1b\u914d\u7f6e\u6539\u52a8\u4e0b\u4e00\u56de\u5408\u70ed\u751f\u6548\uff09",
+    paramsSchema: {"properties": {"coordinatorId": {"description": "协调者成员 id（supervisor / review 必填）", "type": "string"}, "description": {"description": "团体描述", "type": "string"}, "enabled": {"description": "启用开关（缺省 true）", "type": "boolean"}, "failureStrategy": {"description": "失败策略", "enum": ["stop", "continue", "fallback"], "type": "string"}, "global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "更新已有团体时必填；缺省为新建", "type": "string"}, "maxRetries": {"description": "单成员失败重试 0..3", "type": "integer"}, "maxRounds": {"description": "轮次上限 1..10", "type": "integer"}, "members": {"description": "成员列表", "items": {"properties": {"enabled": {"description": "是否参与运行（缺省 true）", "type": "boolean"}, "expertId": {"description": "关联的既有子智能体/专家名称（delegate_task 的 role）", "type": "string"}, "id": {"description": "成员 id；缺省自动生成", "type": "string"}, "model": {"description": "模型覆盖（provider/model、模型 id 或别名）；空 = 继承", "type": "string"}, "name": {"description": "成员名称", "type": "string"}, "responsibility": {"description": "职责说明，用于成员提示词", "type": "string"}, "role": {"description": "角色定位（如：架构师 / 实现者 / 审核者）", "type": "string"}, "tools": {"description": "工具权限范围（白名单）；空 = 不额外限制", "items": {"description": "工具名", "type": "string"}, "type": "array"}}, "required": ["name"], "type": "object"}, "type": "array"}, "mode": {"description": "协作模式", "enum": ["sequential", "parallel", "supervisor", "review"], "type": "string"}, "name": {"description": "团体名称", "type": "string"}, "timeoutSeconds": {"description": "整体超时秒数 30..1800", "type": "integer"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["name", "members"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "team.delete",
+    category: "team",
+    description: "\u5220\u9664\u4e00\u4e2a\u667a\u80fd\u4f53\u56e2\u4f53",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "团体 id", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "team.copy",
+    category: "team",
+    description: "\u590d\u5236\u4e00\u4e2a\u667a\u80fd\u4f53\u56e2\u4f53",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "被复制的团体 id", "type": "string"}, "name": {"description": "副本名称；缺省为原名 + 副本", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "team.run",
+    category: "team",
+    description: "\u6309\u534f\u4f5c\u6a21\u5f0f\u8fd0\u884c\u4e00\u6b21\u56e2\u4f53\u4efb\u52a1\uff1b\u6574\u4f53\u7ed3\u679c\u5199\u56de\u4f1a\u8bdd\u7684\u4e00\u6761\u52a9\u624b\u6d88\u606f",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "团体 id", "type": "string"}, "sessionId": {"description": "结果写回的目标会话 id；缺省只返回结果", "type": "string"}, "task": {"description": "交给团体的任务", "type": "string"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "required": ["id", "task"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "team.cancel",
+    category: "team",
+    description: "\u53d6\u6d88\u4e00\u6b21\u8fd0\u884c\u4e2d\u7684\u56e2\u4f53\u4efb\u52a1\uff08\u72b6\u6001\u6536\u655b\u4e3a cancelled\uff09",
+    paramsSchema: {"properties": {"runId": {"description": "运行 id", "type": "string"}}, "required": ["runId"], "type": "object"},
+    terminalEvents: ["result", "error"],
+  },
+  {
+    name: "team.runs",
+    category: "team",
+    description: "\u8bfb\u53d6\u56e2\u4f53\u8fd0\u884c\u8f68\u8ff9\uff08\u6210\u5458\u5206\u5de5\u3001\u5de5\u5177\u8c03\u7528\u3001\u8017\u65f6\u3001\u5931\u8d25\u539f\u56e0\uff09",
+    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "id": {"description": "按团体 id 过滤", "type": "string"}, "limit": {"description": "返回条数 1..20（缺省 20）", "type": "integer"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

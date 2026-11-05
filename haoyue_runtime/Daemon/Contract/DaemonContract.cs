@@ -157,7 +157,7 @@ public static class DaemonContract
     public static readonly string[] BroadcastEvents =
     [
         "schedule.updated", "schedule.upcoming", "task.updated", "evolution.reflected", "mcp.updated", "turn.interrupted",
-        "memory.consolidated", "model.load.progress",
+        "memory.consolidated", "model.load.progress", "team.run.updated",
     ];
 
     private static readonly Lazy<IReadOnlyList<DaemonMethodDoc>> _methods = new(BuildCatalog);
@@ -248,11 +248,14 @@ public static class DaemonContract
 
     private static readonly JsonObject HookUpsert = SObject(
         ("name", SString("钩子名称（唯一标识；更新已有钩子时用于定位）"), true),
-        ("trigger", SString("触发事件", "task.completed", "schedule.completed"), false),
+        ("trigger", SString("触发事件", "session.start", "tool.before", "tool.after", "task.completed", "schedule.completed"), false),
         ("action", SString("动作类型", "webhook", "command"), false),
         ("webhookUrl", SString("Webhook 目标地址（http/https）；空串清除"), false),
         ("webhookSecret", SString("Authorization: Bearer 密钥；缺省保持已存值，显式空串清除"), false),
-        ("command", SString("本地命令（非交互，30 秒超时）；空串清除"), false),
+        ("command", SString("本地命令（非交互）；空串清除"), false),
+        ("match", SString("匹配条件：逗号分隔通配符（* ?），匹配工具名/会话 id；空 = 全部"), false),
+        ("timeoutSeconds", SInteger("单次执行超时秒数 1..120（缺省 30；webhook 上限 30）"), false),
+        ("failurePolicy", SString("失败策略", "warn", "block"), false),
         ("enabled", SBoolean("启用开关（缺省 true）"), false));
 
     private static readonly JsonObject HookResult = RObject(
@@ -262,7 +265,21 @@ public static class DaemonContract
         ("enabled", SBoolean("是否启用")),
         ("webhookUrl", SString("Webhook 地址")),
         ("hasSecret", SBoolean("是否已配置 Bearer 密钥")),
-        ("command", SString("本地命令")));
+        ("command", SString("本地命令")),
+        ("match", SString("匹配条件（通配符）")),
+        ("timeoutSeconds", SInteger("单次执行超时秒数")),
+        ("failurePolicy", SString("失败策略", "warn", "block")));
+
+    /// <summary>钩子执行台账记录（hooks.runs / hooks.list.ledger）。</summary>
+    private static readonly JsonObject HookRunRecordResult = RObject(
+        ("at", SString("执行时间（ISO）")),
+        ("trigger", SString("触发事件")),
+        ("hook", SString("钩子名称")),
+        ("target", SString("匹配目标（工具名/会话 id）")),
+        ("ok", SBoolean("是否成功")),
+        ("durationMs", SNumber("耗时（毫秒）")),
+        ("error", SString("失败原因")),
+        ("output", SString("输出摘要")));
 
     private static readonly JsonObject HookListResult = RObject(
         ("hooks", RArray(HookResult)),
@@ -275,13 +292,78 @@ public static class DaemonContract
             ("lastOk", SBoolean("最近一次是否成功")),
             ("lastTriggeredAt", SString("最近触发时间（ISO）")),
             ("lastError", SString("最近一次失败原因")),
-            ("lastDurationMs", SNumber("最近一次耗时（毫秒）"))))));
+            ("lastDurationMs", SNumber("最近一次耗时（毫秒）"))))),
+        ("ledger", RArray(HookRunRecordResult)));
 
     private static readonly JsonObject HookTestResult = RObject(
         ("ok", SBoolean("是否成功")),
         ("error", SString("失败原因")),
         ("durationMs", SNumber("耗时（毫秒）")),
         ("output", SString("命令输出摘要 / HTTP 状态")));
+
+    /// <summary>团体成员：角色定位、职责、模型与工具权限范围。</summary>
+    private static readonly JsonObject TeamMemberInput = SObject(
+        ("id", SString("成员 id；缺省自动生成"), false),
+        ("name", SString("成员名称"), true),
+        ("role", SString("角色定位（如：架构师 / 实现者 / 审核者）"), false),
+        ("responsibility", SString("职责说明，用于成员提示词"), false),
+        ("model", SString("模型覆盖（provider/model、模型 id 或别名）；空 = 继承"), false),
+        ("expertId", SString("关联的既有子智能体/专家名称（delegate_task 的 role）"), false),
+        ("tools", SArray("工具权限范围（白名单）；空 = 不额外限制", SString("工具名")), false),
+        ("enabled", SBoolean("是否参与运行（缺省 true）"), false));
+
+    private static readonly JsonObject TeamResult = RObject(
+        ("id", SString("团体 id")),
+        ("name", SString("团体名称")),
+        ("description", SString("团体描述")),
+        ("mode", SString("协作模式")),
+        ("coordinatorId", SString("协调者成员 id")),
+        ("enabled", SBoolean("是否启用")),
+        ("maxRounds", SInteger("轮次上限")),
+        ("timeoutSeconds", SInteger("整体超时秒数")),
+        ("maxRetries", SInteger("单成员失败重试次数")),
+        ("failureStrategy", SString("失败策略")),
+        ("createdAt", SString("创建时间（ISO）")),
+        ("updatedAt", SString("更新时间（ISO）")),
+        ("members", RArray(TeamMemberInput)));
+
+    private static readonly JsonObject TeamListResult = RObject(
+        ("workspace", SString("工作区根目录")),
+        ("teams", RArray(TeamResult)));
+
+    /// <summary>一次团体运行中单个成员的轨迹。</summary>
+    private static readonly JsonObject TeamRunMemberResult = RObject(
+        ("memberId", SString("成员 id")),
+        ("role", SString("运行时角色定位")),
+        ("status", SString("状态", "pending", "running", "succeeded", "failed")),
+        ("durationMs", SNumber("该成员耗时（毫秒）")),
+        ("toolCalls", SInteger("共享台账中的工具调用增量（并行时可能含其他成员）")),
+        ("error", SString("失败原因")),
+        ("outputPreview", SString("产出摘要")));
+
+    private static readonly JsonObject TeamRunResult = RObject(
+        ("runId", SString("运行 id（取消与轨迹查询用）")),
+        ("teamId", SString("团体 id")),
+        ("sessionId", SString("结果写回的目标会话 id")),
+        ("status", SString("整体状态", "running", "succeeded", "partial", "failed", "cancelled")),
+        ("startedAt", SString("开始时间（ISO）")),
+        ("endedAt", SString("结束时间（ISO）")),
+        ("rounds", SInteger("实际执行轮次")),
+        ("result", SString("整体结果（同时写入会话的一条助手消息）")),
+        ("error", SString("整体失败/取消原因")),
+        ("workspace", SString("工作区根目录")),
+        ("members", RArray(TeamRunMemberResult)));
+
+    private static readonly JsonObject TeamRunListResult = RObject(
+        ("workspace", SString("工作区根目录")),
+        ("runs", RArray(TeamRunResult)));
+
+    private static readonly JsonObject TeamCancelResult = RObject(
+        ("runId", SString("运行 id")),
+        ("cancelled", SBoolean("是否找到并触发取消")));
+
+    private static readonly JsonObject TeamRunIdParams = SObject(
+        ("runId", SString("运行 id"), true));
 
     private static readonly JsonObject IdOnlyParams = SObject(
         ("id", SString("会话 id"), true));
@@ -768,14 +850,120 @@ public static class DaemonContract
         ("lineLimit", SInteger("行数上限")),
         ("warning", SString("超限告警")));
 
-    /// <summary>工作区规则（rules.list；rules.save/delete 仅回 path）。</summary>
+    /// <summary>一条结构化规则（全局或项目作用域）。</summary>
+    private static readonly JsonObject ManagedRuleResult = RObject(
+        ("id", SString("规则 id")),
+        ("title", SString("规则标题（会话中可见）")),
+        ("content", SString("规则正文")),
+        ("enabled", SBoolean("是否启用")),
+        ("priority", SInteger("优先级 0..100，越大越先注入")),
+        ("scope", SString("作用域", "global", "workspace")),
+        ("createdAt", SString("创建时间（ISO）")),
+        ("updatedAt", SString("更新时间（ISO）")));
+
+    /// <summary>同一标题跨作用域冲突（项目版本生效）。</summary>
+    private static readonly JsonObject RuleConflictResult = RObject(
+        ("title", SString("冲突标题")),
+        ("globalId", SString("全局规则 id")),
+        ("workspaceId", SString("项目规则 id")),
+        ("winner", SString("生效方", "global", "workspace")));
+
+    /// <summary>规则命中记录（哪条规则在哪个会话/时间被注入）。</summary>
+    private static readonly JsonObject RuleHitResult = RObject(
+        ("ruleId", SString("规则 id")),
+        ("title", SString("规则标题")),
+        ("scope", SString("作用域")),
+        ("sessionId", SString("会话 id")),
+        ("action", SString("解决动作（resolve:<mode>，普通命中为空）")),
+        ("actor", SString("解决操作者")));
+
+    /// <summary>冲突解决记录（rules.resolve 之后可回查）。</summary>
+    private static readonly JsonObject RuleResolutionResult = RObject(
+        ("ruleId", SString("规则 id")),
+        ("title", SString("规则标题")),
+        ("scope", SString("胜出作用域")),
+        ("action", SString("解决动作")),
+        ("actor", SString("操作者")),
+        ("at", SString("解决时间（ISO）")));
+
+    /// <summary>生效顺序条目。</summary>
+    private static readonly JsonObject EffectiveRuleResult = RObject(
+        ("id", SString("规则 id")),
+        ("title", SString("规则标题")),
+        ("scope", SString("作用域")),
+        ("priority", SInteger("优先级")));
+
+    /// <summary>工作区规则（rules.list；rules.save/delete 仅回 path 或 managed 集合）。</summary>
     private static readonly JsonObject RulesResult = RObject(
         ("workspace", SString("工作区根目录")),
         ("isGlobal", SBoolean("是否全局范围")),
-        ("path", SString("规则文件路径")),
-        ("isRoot", SBoolean("是否根 AGENTS.md")),
-        ("content", SString("文件全文")),
-        ("files", RArray(SString("规则文件清单"))));
+        ("files", RArray(RObject(
+            ("path", SString("规则文件路径")),
+            ("isRoot", SBoolean("是否根 AGENTS.md")),
+            ("content", SString("文件全文"))))),
+        ("managed", RArray(ManagedRuleResult)),
+        ("effective", RArray(EffectiveRuleResult)),
+        ("conflicts", RArray(RuleConflictResult)),
+        ("hits", RArray(RuleHitResult)),
+        ("resolutions", RArray(RuleResolutionResult)),
+        ("resolved", RObject(
+            ("title", SString("冲突标题")),
+            ("winner", SString("胜出作用域")),
+            ("globalId", SString("全局规则 id")),
+            ("workspaceId", SString("项目规则 id")),
+            ("mode", SString("解决方式")),
+            ("actor", SString("操作者")))),
+        ("path", SString("文件模式下的写入/删除路径")),
+        ("deleted", SBoolean("结构化规则是否删除成功")));
+
+    /// <summary>一条记忆事实（含来源、时间、置信度与仲裁状态）。</summary>
+    private static readonly JsonObject FactEntryResult = RObject(
+        ("id", SString("事实 id")),
+        ("content", SString("事实内容")),
+        ("topic", SString("主题")),
+        ("source", SString("来源", "user", "agent")),
+        ("confidence", SNumber("置信度 0..1")),
+        ("createdAt", SString("创建时间（ISO）")),
+        ("expiresAt", SString("过期时间（ISO）")),
+        ("supersededBy", SString("被哪条事实取代（墓碑）")),
+        ("supersededAt", SString("被取代时间（ISO）")),
+        ("lastUsedAt", SString("最近使用时间（ISO）")),
+        ("useCount", SInteger("使用次数")),
+        ("denialCount", SInteger("被否认次数")),
+        ("pinned", SBoolean("是否置顶（注入必带）")),
+        ("sourceSessionId", SString("来源会话 id")),
+        ("kind", SString("来源类型", "auto", "manual")),
+        ("confirmed", SBoolean("自动固化是否已被用户确认")));
+
+    /// <summary>事实仲裁组：当前保留项与被它取代的旧项。</summary>
+    private static readonly JsonObject FactConflictResult = RObject(
+        ("topic", SString("主题")),
+        ("keptId", SString("保留的事实 id")),
+        ("keptContent", SString("保留的事实内容")),
+        ("replacedIds", RArray(SString("被取代的事实 id"))),
+        ("replacedContents", RArray(SString("被取代的事实内容"))),
+        ("at", SString("仲裁时间（ISO）")));
+
+    /// <summary>事实库读面（facts.list）。</summary>
+    private static readonly JsonObject FactsResult = RObject(
+        ("workspace", SString("工作区根目录")),
+        ("isGlobal", SBoolean("是否全局范围")),
+        ("capacity", SInteger("事实容量上限")),
+        ("activeCount", SInteger("活跃事实数")),
+        ("facts", RArray(FactEntryResult)),
+        ("conflicts", RArray(FactConflictResult)));
+
+    /// <summary>事实写面（facts.add/update/delete/pin/restore/confirm）。</summary>
+    private static readonly JsonObject FactWriteResult = RObject(
+        ("workspace", SString("工作区根目录")),
+        ("isGlobal", SBoolean("是否全局范围")),
+        ("capacity", SInteger("事实容量上限")),
+        ("activeCount", SInteger("活跃事实数")),
+        ("facts", RArray(FactEntryResult)),
+        ("conflicts", RArray(FactConflictResult)),
+        ("entry", FactEntryResult),
+        ("superseded", RArray(FactEntryResult)),
+        ("deleted", SBoolean("是否删除成功")));
 
     /// <summary>一个子智能体定义（内置或 Markdown 文件）。</summary>
     private static readonly JsonObject SubAgentResult = RObject(
@@ -1506,6 +1694,12 @@ public static class DaemonContract
         M("hooks.test", "hooks", "立即触发一次钩子（试运行）", parameters: IdParams,
             result: HookTestResult,
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("hooks.runs", "hooks", "读取钩子执行台账（最近 N 条，失败可排查）", parameters: Scope(
+            ("limit", SInteger("返回条数 1..500（缺省 50）"), false)),
+            result: RObject(
+                ("workspace", SString("工作区根目录")),
+                ("records", RArray(HookRunRecordResult))),
+            errors: E(DaemonErrorCode.InvalidParams)),
 
         // task（后台任务队列：完整 agent 回合转后台执行，状态经 task.updated 广播）
         M("task.start", "task", "提交后台 agent 回合（立即返回任务快照）", parameters: SObject(
@@ -1671,17 +1865,115 @@ public static class DaemonContract
                 ("chars", SInteger("写入字符数")),
                 ("lines", SInteger("写入行数"))),
             errors: E(DaemonErrorCode.InvalidParams)),
-        M("rules.list", "memory", "列出 AGENTS.md 工作区规则", parameters: KnowledgeScope,
+        M("rules.list", "memory", "列出 AGENTS.md 文件规则与结构化规则（含生效顺序、冲突与命中记录）", parameters: KnowledgeScope,
             result: RulesResult, errors: E()),
-        M("rules.save", "memory", "写入工作区规则", parameters: Scope(
-            ("content", SString("规则文件内容"), true),
-            ("path", SString("目标规则文件相对路径，缺省根 AGENTS.md"), false)),
-            result: RObject(("path", SString("写入的规则文件路径"))),
+        M("rules.save", "memory", "写入文件规则（kind=file）或新增/更新结构化规则（kind=managed）", parameters: Scope(
+            ("kind", SString("保存类型", "file", "managed"), false),
+            ("content", SString("规则文件内容（kind=file 必填；kind=managed 为规则正文）"), false),
+            ("path", SString("目标规则文件相对路径，缺省根 AGENTS.md（kind=file）"), false),
+            ("id", SString("结构化规则 id（kind=managed；缺省新建）"), false),
+            ("title", SString("结构化规则标题（kind=managed 必填）"), false),
+            ("enabled", SBoolean("结构化规则启用开关（缺省 true）"), false),
+            ("priority", SInteger("结构化规则优先级 0..100（缺省 50）"), false),
+            ("scope", SString("结构化规则作用域", "global", "workspace"), false)),
+            result: RulesResult,
             errors: E(DaemonErrorCode.InvalidParams)),
-        M("rules.delete", "memory", "删除工作区规则文件", parameters: Scope(
-            ("path", SString("目标规则文件相对路径，缺省根 AGENTS.md"), false)),
-            result: RObject(("path", SString("删除的规则文件路径"))),
+        M("rules.delete", "memory", "删除文件规则（path）或结构化规则（id）", parameters: Scope(
+            ("path", SString("目标规则文件相对路径，缺省根 AGENTS.md"), false),
+            ("id", SString("结构化规则 id"), false),
+            ("scope", SString("结构化规则作用域", "global", "workspace"), false)),
+            result: RulesResult,
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("rules.resolve", "memory", "显式解决同名全局/项目规则冲突（项目胜/全局胜/合并到项目），结果与操作者写入命中记录", parameters: Scope(
+            ("title", SString("冲突规则标题"), true),
+            ("mode", SString("解决方式", "workspace", "global", "merge"), true),
+            ("actor", SString("操作者（缺省当前系统用户）"), false)),
+            result: RulesResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+
+        // facts（记忆事实库的用户控制面）
+        M("facts.list", "memory", "列出事实库（含墓碑/仲裁结果/来源与时间戳）", parameters: Scope(
+            ("includeRetired", SBoolean("是否包含已失效/被取代条目（缺省 true）"), false)),
+            result: FactsResult, errors: E(DaemonErrorCode.InvalidParams)),
+        M("facts.add", "memory", "手动新增一条事实（返回本次仲裁取代的旧事实）", parameters: Scope(
+            ("content", SString("事实内容"), true),
+            ("topic", SString("主题"), false),
+            ("confidence", SNumber("置信度 0..1（缺省 0.9）"), false),
+            ("ttlDays", SInteger("有效天数"), false),
+            ("supersedes", SString("显式取代的事实 id 或完整内容"), false),
+            ("sessionId", SString("来源会话 id"), false)),
+            result: FactWriteResult, errors: E(DaemonErrorCode.InvalidParams)),
+        M("facts.update", "memory", "编辑/纠错一条事实（可改内容、主题、置信度、置顶、过期、类型）", parameters: Scope(
+            ("id", SString("事实 id"), true),
+            ("content", SString("新内容"), false),
+            ("topic", SString("新主题"), false),
+            ("confidence", SNumber("新置信度 0..1"), false),
+            ("pinned", SBoolean("置顶开关"), false),
+            ("expiresAt", SString("新过期时间（ISO）"), false),
+            ("kind", SString("来源类型", "auto", "manual"), false),
+            ("confirmed", SBoolean("确认/取消确认"), false)),
+            result: FactWriteResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("facts.delete", "memory", "删除一条事实", parameters: Scope(
+            ("id", SString("事实 id"), true)),
+            result: FactWriteResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("facts.pin", "memory", "置顶/取消置顶一条事实（置顶注入必带）", parameters: Scope(
+            ("id", SString("事实 id"), true),
+            ("pinned", SBoolean("缺省 true"), false)),
+            result: FactWriteResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("facts.restore", "memory", "撤销一次自动固化仲裁，恢复被取代的旧事实", parameters: Scope(
+            ("id", SString("被取代的事实 id"), true)),
+            result: FactWriteResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("facts.confirm", "memory", "确认自动固化的事实", parameters: Scope(
+            ("id", SString("事实 id"), true),
+            ("confirmed", SBoolean("缺省 true"), false)),
+            result: FactWriteResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+
+        // team（智能体团体：配置 CRUD + 编排运行 + 轨迹/取消）
+        M("team.list", "team", "列出当前工作区的智能体团体", parameters: Scope(),
+            result: TeamListResult, errors: E(DaemonErrorCode.InvalidParams)),
+        M("team.save", "team", "新建/更新智能体团体（按 id 定位；配置改动下一回合热生效）", parameters: Scope(
+            ("id", SString("更新已有团体时必填；缺省为新建"), false),
+            ("name", SString("团体名称"), true),
+            ("description", SString("团体描述"), false),
+            ("mode", SString("协作模式", "sequential", "parallel", "supervisor", "review"), false),
+            ("coordinatorId", SString("协调者成员 id（supervisor / review 必填）"), false),
+            ("members", SArray("成员列表", TeamMemberInput), true),
+            ("enabled", SBoolean("启用开关（缺省 true）"), false),
+            ("maxRounds", SInteger("轮次上限 1..10"), false),
+            ("timeoutSeconds", SInteger("整体超时秒数 30..1800"), false),
+            ("maxRetries", SInteger("单成员失败重试 0..3"), false),
+            ("failureStrategy", SString("失败策略", "stop", "continue", "fallback"), false)),
+            result: TeamListResult, errors: E(DaemonErrorCode.InvalidParams)),
+        M("team.delete", "team", "删除一个智能体团体", parameters: Scope(
+            ("id", SString("团体 id"), true)),
+            result: TeamListResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("team.copy", "team", "复制一个智能体团体", parameters: Scope(
+            ("id", SString("被复制的团体 id"), true),
+            ("name", SString("副本名称；缺省为原名 + 副本"), false)),
+            result: RObject(
+                ("workspace", SString("工作区根目录")),
+                ("team", TeamResult),
+                ("teams", RArray(TeamResult))),
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("team.run", "team", "按协作模式运行一次团体任务；整体结果写回会话的一条助手消息", parameters: Scope(
+            ("id", SString("团体 id"), true),
+            ("task", SString("交给团体的任务"), true),
+            ("sessionId", SString("结果写回的目标会话 id；缺省只返回结果"), false)),
+            result: TeamRunResult,
+            errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
+        M("team.cancel", "team", "取消一次运行中的团体任务（状态收敛为 cancelled）", parameters: TeamRunIdParams,
+            result: TeamCancelResult,
+            errors: E(DaemonErrorCode.InvalidParams)),
+        M("team.runs", "team", "读取团体运行轨迹（成员分工、工具调用、耗时、失败原因）", parameters: Scope(
+            ("id", SString("按团体 id 过滤"), false),
+            ("limit", SInteger("返回条数 1..20（缺省 20）"), false)),
+            result: TeamRunListResult, errors: E(DaemonErrorCode.InvalidParams)),
         M("agent.subagents.list", "config", "列出子智能体（内置预设 + 用户级/项目级 Markdown 定义）",
             parameters: KnowledgeScope,
             result: SubAgentsResult, errors: E()),

@@ -445,6 +445,9 @@ public sealed class TaskMonitorAccessConfig
 /// </summary>
 public sealed class HooksConfig
 {
+    /// <summary>钩子台账每个工作区保留的条数（200..10000，默认 2000）。裁剪前按日期归档。</summary>
+    public int MaxLedgerRecords { get; set; } = 2000;
+
     public List<HookConfig> Hooks { get; set; } = new();
 }
 
@@ -461,8 +464,23 @@ public sealed class HookConfig
     public string? WebhookUrl { get; set; }
     /// <summary>可选：随请求发送的 Authorization: Bearer 密钥（不回传明文）。</summary>
     public string? WebhookSecret { get; set; }
-    /// <summary>本地命令（action=command 必填，非交互，超时 30 秒）。</summary>
+    /// <summary>本地命令（action=command 必填，非交互，默认超时 30 秒）。</summary>
     public string? Command { get; set; }
+    /// <summary>
+    /// 匹配条件：逗号分隔的通配符（支持 * 和 ?），匹配 payload.target
+    /// （tool.before/tool.after 为工具名，session.start 为会话 id）。空 = 全部匹配。
+    /// </summary>
+    public string? Match { get; set; }
+    /// <summary>单次执行超时秒数（1..120；webhook 实际上限 30 秒）。</summary>
+    public int TimeoutSeconds { get; set; } = 30;
+    /// <summary>失败策略：warn（放行并告警）| block（阻断主流程，仅 tool.before 生效）。</summary>
+    public string FailurePolicy { get; set; } = "warn";
+    /// <summary>
+    /// 等待完成：仅对 tool.after / task.completed / schedule.completed 生效。
+    /// true 时主流程等待该钩子执行结束（仍受 TimeoutSeconds 约束）；超时或失败都不阻断。
+    /// 默认 false（fire-and-forget），保持既有行为。
+    /// </summary>
+    public bool WaitForCompletion { get; set; }
     /// <summary>启用开关（缺省 true）。</summary>
     public bool Enabled { get; set; } = true;
 }
@@ -685,7 +703,21 @@ public sealed class WorkspaceConfig
     /// <summary>Per-workspace reply language override (auto | zh | en). Null falls back to the global Agent.Language.</summary>
     public string? Language { get; set; }
     public List<string>? DisabledSkills { get; set; }
+    /// <summary>
+    /// 工作区级工具硬禁用（大小写不敏感，支持 <c>server/tool</c> 通配符）。优先级高于
+    /// <see cref="AllowedTools"/>：同一工具同时命中两者时一律拒绝（deny-overrides）。
+    /// </summary>
     public List<string>? DisabledTools { get; set; }
+    /// <summary>
+    /// 工作区级工具白名单（缺省/空 = 不限制）；支持 MCP 的 <c>server/tool</c> 与
+    /// <c>server/*</c> 通配符。智能体与子代理只能在此清单内继续收窄，不能放大。
+    /// </summary>
+    public List<string>? AllowedTools { get; set; }
+    /// <summary>
+    /// 角色预置/团体成员的工具清单把工具集裁成空时，是否退回仅受工作区策略约束的清单。
+    /// 默认 <c>false</c>：fail-closed，宁可不给工具也不静默放权。
+    /// </summary>
+    public bool AllowToolFallbackToGlobal { get; set; }
     public McpConfig? Mcp { get; set; }
     public bool? AutoVerify { get; set; }
     /// <summary>Overrides the auto-detected build/check command used by the verify loop.</summary>

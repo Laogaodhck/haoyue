@@ -32,6 +32,17 @@ partial 模式落地，未并入主文件）。同日 `DaemonServer` 预算 3250
 `DaemonAdminApi.Hooks.cs` 134 行；聚合实测 4318，约 1.9% 余量。按决策 3 的按域
 partial 模式落地，未并入主文件）。
 
+2026-11-04 执行决策 3 的 `DaemonServer` 拆分：
+- 主文件 3132 → **449** 行（仅保留字段组合根之外的启动/停止/连接接受、token 认证、
+  分发入口、错误封装与日志）；分发 switch 压缩为「每个处理函数一行」。
+- 按域拆出 135 个处理函数：`DaemonServer.{Protocol,Sessions,Agent,Tasks,Models,Tools,
+  Knowledge,Settings,Evolution}.cs`；生命周期/连接/广播/回合执行/后台任务/状态/辅助
+  分别迁入对应 partial（纯搬迁，无行为变化；`case` 内的 switch 级 `break` 等价改写为
+  `return`）。既有 `Forwarding` partial 不动。
+- 聚合口径显式评审预算：`DaemonServer` 3300 → **4100**（拆分后实测 3987，约 2.8% 余量；
+  +692 行为 18 个 partial 的 using/类头与 135 个处理函数签名/花括号开销，属拆分的
+  固定成本）。
+
 ## 背景
 
 评估文档（haoyue_doc/Agent能力与工程缺口评估-2026-10-14.md）指出四个巨型文件已成为
@@ -55,7 +66,8 @@ partial 模式落地，未并入主文件）。
 2. **冻结增长：行数预算护栏**。四个文件各设行数上限，由
    `haoyue_tests/DocsFactsTests.cs` 的 `GiantClass_LineBudget_Maintained` 强制：
    `DaemonAdminApi ≤ 4400`（含全部 partial 文件的类级总量；2026-10-21 自 3100 上调、2026-10-31
-   改聚合口径后上调、2026-11-02 上调、2026-11-04 再次上调，见状态行）、`DaemonServer ≤ 3300`（同口径；
+   改聚合口径后上调、2026-11-02 上调、2026-11-04 再次上调，见状态行）、`DaemonServer ≤ 4100`（同口径；
+   2026-11-04 按域拆分后上调，见状态行；
    `SettingsDialog.vue ≤ 2700`、`App.vue ≤ 2400`。超额即测试失败——这是刻意设计：**任何继续膨胀必须先经历一次
    显式的预算上调评审（改本 ADR 状态行 + 预算数字），而不是默认允许**。
 3. **拆分路径登记（触发条件式，非排期）**：
@@ -64,6 +76,8 @@ partial 模式落地，未并入主文件）。
      providers+models、knowledge 两域先行拆分；剩余 evolution / schedules / sessions 等域
      在下次触顶时按同一模式迁出。
    - DaemonServer：先抽 switch 分发到 `per-method` 注册表，再按域 partial。
+     **已执行（2026-11-04）**：按域 partial + 每方法一个处理函数，主文件分发 switch
+     保留（每处理函数一行）；主文件 3132 → 449 行，聚合 3987 行。
    - SettingsDialog.vue / App.vue：按面板抽 SFC 子组件；需在拆分前补齐交互回归
      （Electron GUI 冒烟本机不可信，依赖 vitest + typecheck 保障）。
 4. **新代码禁入**：新增 RPC 实现优先放独立文件的新类（如已存在的

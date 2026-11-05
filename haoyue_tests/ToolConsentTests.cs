@@ -2,9 +2,11 @@ using System.Text.Json.Nodes;
 using Haoyue.Runtime;
 using Haoyue.Runtime.Agents;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Coordination;
 using Haoyue.Runtime.Data;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
+using Haoyue.Runtime.Scheduling;
 using Haoyue.Runtime.Sessions;
 using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Workspaces;
@@ -122,6 +124,85 @@ public sealed class ToolConsentTests : IDisposable
             .Single(e => e.ToolName == "computer_exec");
         Assert.False(completed.Success);
         Assert.Contains("未获得用户同意", completed.ResultSummary);
+    }
+
+    [Fact]
+    public async Task ScheduledTurn_SystemTierTool_IsGatedThroughSharedApprovalChannel()
+    {
+        Directory.CreateDirectory(_dir);
+        var store = new ConfigStore(Path.Combine(_dir, "config-scheduled.json"), Path.Combine(_dir, "state-scheduled.json"));
+        store.Config.Providers.Clear();
+        store.Config.Providers.Add(new ProviderConfig
+        {
+            Id = "openai",
+            Kind = "openai",
+            BaseUrl = "https://test.local/v1",
+            Models = [new ModelConfig { Id = "gpt-test", ContextWindow = 128_000 }],
+        });
+        store.Config.Agent.AutoVerify = false;
+        // 只走「风险分级」闸门：名单为空，确保不是 requireConsentFor 那条旧路径在兜底。
+        store.Config.Agent.ToolPolicy.RequireConsentFor = [];
+        store.Config.Agent.ToolPolicy.ConsentRiskTiers = ["system"];
+
+        var capture = new ScriptedClientFactory([ToolCall("call-probe", "probe"), Text("done")]);
+        var workspace = new WorkspaceManager().CreateGlobal(Path.Combine(_dir, "global-scheduled"));
+        var approvals = new ApprovalRegistry { Interactive = true };
+
+        var baseRuntime = HaoyueRuntime.CreateIsolated(workspace, configureServices: services =>
+        {
+            services.AddSingleton<IConfigStore>(store);
+            services.AddSingleton(new HaoyueDatabase(Path.Combine(_dir, "scheduled-base.db")));
+            services.AddSingleton<ILlmHttpFactory>(new LlmHttpFactory());
+            services.AddSingleton(new CircuitBreaker(store.Config.Routing.Retry));
+        });
+        var service = new ScheduleService(
+            new ScheduleStore(new HaoyueDatabase(Path.Combine(_dir, "scheduled-schedules.db"))),
+            baseRuntime, new FileLockCoordinator(), new LlmHttpFactory(),
+            new CircuitBreaker(new RetryConfig()), approvals: approvals);
+
+        var stub = new StubProbeTool();
+        // 与 RunIsolatedTurnAsync 相同的隔离运行时构建路径：审批登记簿必须是共享交互实例。
+        await using var turn = service.CreateTurnRuntime(workspace, "scheduled-test", services =>
+        {
+            services.AddSingleton<IConfigStore>(store);
+            services.AddSingleton(new HaoyueDatabase(Path.Combine(_dir, "scheduled-turn.db")));
+            services.AddSingleton<ILlmClientFactory>(capture);
+        });
+        turn.Tools.Register(stub);
+        Assert.Same(approvals, turn.Approvals);
+        Assert.True(turn.Approvals.Interactive);
+
+        var session = turn.Sessions.Create(workspace, networkEnabled: false);
+        using var subscription = turn.Events.Subscribe();
+        using var approvalCts = new CancellationTokenSource();
+        var events = new List<RuntimeEvent>();
+        var responder = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var evt in subscription.Reader.ReadAllAsync(approvalCts.Token).ConfigureAwait(false))
+                {
+                    events.Add(evt);
+                    if (evt is ApprovalRequiredEvent approval)
+                        approvals.Respond(approval.CallId, approve: false);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }, CancellationToken.None);
+
+        var result = await turn.Agent.RunTurnAsync(session, workspace, "probe", CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(30));
+        await approvalCts.CancelAsync();
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("done", result.Text);
+        // 反向用例：无人批准时风险工具绝不执行，而不是被静默放行。
+        Assert.Empty(stub.Executions);
+        Assert.Contains(events, e => e is ApprovalRequiredEvent { ToolName: "probe" });
+        Assert.Contains(events,
+            e => e is ToolCallCompletedEvent { ToolName: "probe", Success: false });
     }
 
     [Fact]
@@ -252,6 +333,25 @@ public sealed class ToolConsentTests : IDisposable
         public bool Mutating => true;
         public bool RequiresWorkspace => false;
         public string StatusLabel => "Running shell";
+
+        public Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
+        {
+            Executions.Add("ran");
+            return Task.FromResult(ToolResult.Ok("ok", "ok"));
+        }
+    }
+
+    /// <summary>没有配名单、但声明了系统级风险的工具：只能由风险分级闸门拦截。</summary>
+    private sealed class StubProbeTool : ITool
+    {
+        public List<string> Executions { get; } = [];
+        public string Name => "probe";
+        public string Description => "stub";
+        public JsonObject ParameterSchema => [];
+        public bool Mutating => false;
+        public bool RequiresWorkspace => false;
+        public string StatusLabel => "Probing";
+        public ToolRiskTier RiskTier => ToolRiskTier.Write | ToolRiskTier.System;
 
         public Task<ToolResult> ExecuteAsync(JsonObject arguments, ToolContext context, CancellationToken ct)
         {

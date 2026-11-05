@@ -1,86 +1,278 @@
+using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Daemon;
-using Xunit;
 
 namespace Haoyue.Tests;
 
-/// <summary>
-/// 事件钩子执行器的配置诊断（HookRunner.Validate）与进程内状态复位。
-/// 触发执行本身是 fire-and-forget（Task.Run），属于集成路径，
-/// 由 DaemonServerTests 的 hooks.* 契约用例与手动试运行覆盖。
-/// </summary>
-public sealed class HookRunnerTests
+public sealed class HookRunnerTests : IDisposable
 {
-    private static HookConfig Base(string action = "webhook") => new()
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "haoyue-hooks-" + Guid.NewGuid().ToString("N")[..8]);
+
+    public HookRunnerTests() => HookRunner.ResetForTests();
+
+    public void Dispose()
     {
-        Name = "notify",
-        Trigger = "task.completed",
-        Action = action,
-        Enabled = true,
-        WebhookUrl = action == "webhook" ? "https://example.com/hook" : null,
-        Command = action == "command" ? "dotnet --version" : null,
+        try { Directory.Delete(_dir, recursive: true); }
+        catch (DirectoryNotFoundException) { }
+    }
+
+    private ConfigStore Store(params HookConfig[] hooks)
+    {
+        Directory.CreateDirectory(_dir);
+        var store = new ConfigStore(
+            Path.Combine(_dir, "config.json"), Path.Combine(_dir, "state.json"));
+        foreach (var hook in hooks) store.Config.Hooks.Hooks.Add(hook);
+        return store;
+    }
+
+    private JsonObject Payload(string target, string? workspace = null) => new()
+    {
+        ["target"] = target,
+        ["workspace"] = workspace ?? _dir,
+        ["sessionId"] = "session-1",
     };
 
-    [Fact]
-    public void ValidWebhook_NoProblem() =>
-        Assert.Null(HookRunner.Validate(Base("webhook")));
+    [Theory]
+    [InlineData("bash*", "bash_run", true)]
+    [InlineData("bash*,read*", "read_file", true)]
+    [InlineData("bash", "bash_run", false)]
+    [InlineData("?", "x", true)]
+    [InlineData("", "anything", true)]
+    public void MatchesTarget_SupportsWildcards(string match, string target, bool expected) =>
+        Assert.Equal(expected, HookRunner.MatchesTarget(match, target));
 
     [Fact]
-    public void ValidCommand_NoProblem() =>
-        Assert.Null(HookRunner.Validate(Base("command")));
-
-    [Fact]
-    public void EmptyName_ReportsProblem()
+    public void Ledger_ArchivesOverflowBeforeTrimming()
     {
-        var hook = Base();
-        hook.Name = " ";
-        Assert.Contains("名称", HookRunner.Validate(hook));
+        const int max = HookLedger.MinMaxRecords;
+        for (var index = 0; index < max + 3; index++)
+        {
+            HookLedger.Append(_dir, new HookRunRecord(
+                DateTimeOffset.Now.AddSeconds(-index), "tool.after", $"hook-{index}", "bash_run",
+                true, 1, null, null), max);
+        }
+
+        var kept = HookLedger.Read(_dir, 500, max);
+        Assert.Equal(max, kept.Count);
+        Assert.Equal("tool.after", kept[0].Trigger);
+
+        var archived = Directory.GetFiles(HookLedger.ArchiveDir(_dir))
+            .Sum(file => File.ReadAllLines(file).Length);
+        Assert.Equal(3, archived);
     }
 
     [Fact]
-    public void UnsupportedTrigger_ReportsProblem()
+    public void Ledger_CapacityIsClampedToSafeRange()
     {
-        var hook = Base();
-        hook.Trigger = "turn.started";
-        Assert.Contains("触发事件", HookRunner.Validate(hook));
+        for (var index = 0; index < HookLedger.MinMaxRecords + 2; index++)
+        {
+            HookLedger.Append(_dir, new HookRunRecord(
+                DateTimeOffset.Now, "task.completed", $"h-{index}", "", true, 0, null, null),
+                maxRecords: 10);
+        }
+
+        Assert.Equal(HookLedger.MinMaxRecords, HookLedger.ClampMax(10));
+        Assert.Equal(HookLedger.DefaultMaxRecords, HookLedger.ClampMax(0));
+        Assert.Equal(HookLedger.MinMaxRecords, HookLedger.Read(_dir, 500).Count);
     }
 
     [Fact]
-    public void UnsupportedAction_ReportsProblem()
+    public async Task TriggerAsync_WaitModeTimeoutDoesNotBlockOrThrow()
     {
-        var hook = Base();
-        hook.Action = "email";
-        Assert.Contains("动作类型", HookRunner.Validate(hook));
+        var store = Store(new HookConfig
+        {
+            Name = "slow-after",
+            Trigger = "task.completed",
+            Action = "command",
+            Command = "cmd /c ping -n 6 127.0.0.1",
+            WaitForCompletion = true,
+            Enabled = true,
+            TimeoutSeconds = 1,
+            FailurePolicy = "warn",
+        });
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await HookRunner.TriggerAsync(
+            "task.completed", Payload("session-1"), store, CancellationToken.None);
+        watch.Stop();
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"等待模式阻塞了 {watch.Elapsed}");
+        var record = Assert.Single(HookLedger.Read(_dir));
+        Assert.False(record.Ok);
+        Assert.Equal("task.completed", record.Trigger);
     }
 
     [Fact]
-    public void WebhookWithoutUrl_ReportsProblem()
+    public async Task ToolBefore_BlockPolicy_BlocksOnFailure()
     {
-        var hook = Base();
-        hook.WebhookUrl = null;
-        Assert.Contains("目标地址", HookRunner.Validate(hook));
+        var store = Store(new HookConfig
+        {
+            Name = "deny-danger",
+            Trigger = "tool.before",
+            Action = "command",
+            Command = "cmd /c exit 3",
+            Match = "bash*",
+            FailurePolicy = "block",
+            TimeoutSeconds = 5,
+        });
+
+        var decision = await HookRunner.EvaluateAsync(
+            "tool.before", Payload("bash_run"), store, CancellationToken.None);
+
+        Assert.True(decision.Blocked);
+        Assert.Contains("deny-danger", decision.Reason);
+        var ledger = HookLedger.Read(_dir);
+        var record = Assert.Single(ledger);
+        Assert.False(record.Ok);
+        Assert.Equal("tool.before", record.Trigger);
+        Assert.Equal("bash_run", record.Target);
     }
 
     [Fact]
-    public void WebhookWithNonHttpUrl_ReportsProblem()
+    public async Task ToolBefore_WarnPolicy_LetsCallThrough()
     {
-        var hook = Base();
-        hook.WebhookUrl = "ftp://example.com/hook";
-        Assert.Contains("http(s)", HookRunner.Validate(hook));
+        var store = Store(new HookConfig
+        {
+            Name = "warn-only",
+            Trigger = "tool.before",
+            Action = "command",
+            Command = "cmd /c exit 2",
+            FailurePolicy = "warn",
+            TimeoutSeconds = 5,
+        });
+
+        var decision = await HookRunner.EvaluateAsync(
+            "tool.before", Payload("write_file"), store, CancellationToken.None);
+
+        Assert.False(decision.Blocked);
+        Assert.Single(decision.Outcomes);
+        Assert.False(decision.Outcomes[0].Ok);
+        Assert.Single(HookLedger.Read(_dir));
     }
 
     [Fact]
-    public void CommandWithoutCommand_ReportsProblem()
+    public async Task Match_FiltersOutNonMatchingTools()
     {
-        var hook = Base("command");
-        hook.Command = " ";
-        Assert.Contains("命令", HookRunner.Validate(hook));
+        var store = Store(new HookConfig
+        {
+            Name = "bash-only",
+            Trigger = "tool.before",
+            Action = "command",
+            Command = "cmd /c exit 3",
+            Match = "bash*",
+            FailurePolicy = "block",
+        });
+
+        var decision = await HookRunner.EvaluateAsync(
+            "tool.before", Payload("read_file"), store, CancellationToken.None);
+
+        Assert.False(decision.Blocked);
+        Assert.Empty(decision.Outcomes);
+        Assert.Empty(HookLedger.Read(_dir));
     }
 
     [Fact]
-    public void ResetForTests_ClearsSnapshot()
+    public async Task Timeout_IsEnforced_AndDoesNotBlockUnderWarn()
     {
-        HookRunner.ResetForTests();
-        Assert.Empty(HookRunner.Snapshot());
+        var store = Store(new HookConfig
+        {
+            Name = "slow",
+            Trigger = "tool.before",
+            Action = "command",
+            Command = "powershell -NoProfile -Command \"Start-Sleep -Seconds 5\"",
+            FailurePolicy = "warn",
+            TimeoutSeconds = 1,
+        });
+
+        var started = DateTimeOffset.UtcNow;
+        var decision = await HookRunner.EvaluateAsync(
+            "tool.before", Payload("bash_run"), store, CancellationToken.None);
+
+        Assert.False(decision.Blocked);
+        Assert.Single(decision.Outcomes);
+        Assert.False(decision.Outcomes[0].Ok);
+        Assert.Contains("超时", decision.Outcomes[0].Error);
+        Assert.True(DateTimeOffset.UtcNow - started < TimeSpan.FromSeconds(4));
+    }
+
+    [Fact]
+    public async Task SessionStart_NeverBlocks_EvenWithBlockPolicy()
+    {
+        var store = Store(new HookConfig
+        {
+            Name = "startup",
+            Trigger = "session.start",
+            Action = "command",
+            Command = "cmd /c exit 3",
+            FailurePolicy = "block",
+        });
+
+        var decision = await HookRunner.EvaluateAsync(
+            "session.start", Payload("session-1"), store, CancellationToken.None);
+
+        Assert.False(decision.Blocked);
+    }
+
+    [Fact]
+    public async Task SuccessfulCommand_ReturnsOutput_AndRecordsLedger()
+    {
+        var store = Store(new HookConfig
+        {
+            Name = "echo",
+            Trigger = "tool.after",
+            Action = "command",
+            Command = "cmd /c echo archived",
+            FailurePolicy = "warn",
+            TimeoutSeconds = 5,
+        });
+
+        var decision = await HookRunner.EvaluateAsync(
+            "tool.after", Payload("write_file"), store, CancellationToken.None);
+
+        var outcome = Assert.Single(decision.Outcomes);
+        Assert.True(outcome.Ok);
+        Assert.Contains("archived", outcome.Output);
+        var record = Assert.Single(HookLedger.Read(_dir));
+        Assert.True(record.Ok);
+        Assert.Contains("archived", record.Output);
+    }
+
+    [Fact]
+    public void Ledger_IsIsolatedPerWorkspace_AndTrimsBadLines()
+    {
+        var other = Path.Combine(_dir, "other");
+        HookLedger.Append(_dir, new HookRunRecord(
+            DateTimeOffset.UtcNow, "tool.after", "a", "x", true, 1, null, null));
+        HookLedger.Append(other, new HookRunRecord(
+            DateTimeOffset.UtcNow, "tool.after", "b", "y", true, 1, null, null));
+
+        Assert.Equal("a", Assert.Single(HookLedger.Read(_dir)).Hook);
+        Assert.Equal("b", Assert.Single(HookLedger.Read(other)).Hook);
+
+        File.WriteAllText(HookLedger.LedgerFile(_dir), "not-json\n");
+        Assert.Empty(HookLedger.Read(_dir));
+    }
+
+    [Fact]
+    public void Validate_RejectsUnsupportedTriggerPolicyAndTimeout()
+    {
+        Assert.NotNull(HookRunner.Validate(new HookConfig
+        {
+            Name = "x", Trigger = "cron", Action = "command", Command = "cmd /c exit 0",
+        }));
+        Assert.NotNull(HookRunner.Validate(new HookConfig
+        {
+            Name = "x", Trigger = "tool.before", Action = "command", Command = "x",
+            FailurePolicy = "explode",
+        }));
+        Assert.NotNull(HookRunner.Validate(new HookConfig
+        {
+            Name = "x", Trigger = "tool.before", Action = "command", Command = "x",
+            TimeoutSeconds = 0,
+        }));
+        Assert.Null(HookRunner.Validate(new HookConfig
+        {
+            Name = "x", Trigger = "tool.before", Action = "command", Command = "cmd /c exit 0",
+        }));
     }
 }

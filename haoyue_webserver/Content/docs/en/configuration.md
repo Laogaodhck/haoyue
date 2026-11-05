@@ -130,11 +130,14 @@ This example uses the current field names:
   "systemPrompt": "system/default",
   "disabledSkills": ["legacy-migration"],
   "disabledTools": [],
+  "allowedTools": [],
   "autoVerify": true,
   "verifyCommand": "dotnet test",
   "mcp": { "servers": {} }
 }
 ```
+
+`allowedTools` is the workspace-level tool allow-list (absent/empty = unrestricted) and accepts MCP `server/tool` and `server/*` wildcards; `disabledTools` overrides it (a name matching both is denied). Team member `tools` can only narrow this set further, and a denied tool degrades to "unavailable" instead of failing the run. `allowToolFallbackToGlobal` defaults to `false`; only when explicitly set to `true` does an empty member list fall back to the workspace-constrained tool set.
 
 ## Reload behavior
 

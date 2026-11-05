@@ -30,6 +30,9 @@ internal sealed partial class DaemonAdminApi
                 // 密钥不回传明文：只给「是否已配置」标记，避免把凭据泄进设置页与日志。
                 ["hasSecret"] = !string.IsNullOrWhiteSpace(hook.WebhookSecret),
                 ["command"] = hook.Command ?? "",
+                ["match"] = hook.Match ?? "",
+                ["timeoutSeconds"] = hook.TimeoutSeconds,
+                ["failurePolicy"] = hook.FailurePolicy,
             };
             hooks.Add((JsonNode)node);
 
@@ -55,6 +58,7 @@ internal sealed partial class DaemonAdminApi
             ["hooks"] = hooks,
             ["problems"] = problems,
             ["status"] = status,
+            ["ledger"] = HookLedgerApi.Array(Haoyue.Runtime.Configuration.HaoyuePaths.Home, 20),
         }.ToJsonString();
     }
 
@@ -91,6 +95,12 @@ internal sealed partial class DaemonAdminApi
 
         if (parameters["enabled"] is JsonValue enabledValue && enabledValue.TryGetValue<bool>(out var enabled))
             hook.Enabled = enabled;
+        if (parameters["match"] is JsonValue matchValue && matchValue.TryGetValue<string>(out var match))
+            hook.Match = string.IsNullOrWhiteSpace(match) ? null : match.Trim();
+        if (parameters["timeoutSeconds"] is JsonValue timeoutValue && timeoutValue.TryGetValue<int>(out var timeout))
+            hook.TimeoutSeconds = timeout;
+        if (parameters["failurePolicy"] is JsonValue policyValue && policyValue.TryGetValue<string>(out var policy))
+            hook.FailurePolicy = policy.Trim();
 
         var problem = HookRunner.Validate(hook);
         if (problem is not null)

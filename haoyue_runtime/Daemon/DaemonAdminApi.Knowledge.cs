@@ -712,17 +712,47 @@ internal sealed partial class DaemonAdminApi
                 ["content"] = rule.Content,
             });
         }
-        return new JsonObject
+        var payload = new JsonObject
         {
             ["workspace"] = workspace.Root,
             ["isGlobal"] = workspace.IsGlobal,
             ["files"] = files,
-        }.ToJsonString();
+        };
+        RulesMemoryApi.AppendManagedRules(payload, workspace);
+        return payload.ToJsonString();
     }
+
+    /// <summary>显式解决同名全局/项目规则冲突（rules.resolve）。</summary>
+    public string ResolveRules(JsonObject parameters) =>
+        RulesMemoryApi.ResolveConflict(SessionWorkspace(parameters), parameters);
 
     public string SaveRules(JsonObject parameters)
     {
         var workspace = SessionWorkspace(parameters);
+        if (string.Equals(OptionalString(parameters, "kind"), "managed", StringComparison.OrdinalIgnoreCase))
+        {
+            var entry = new ManagedRuleEntry
+            {
+                Id = OptionalString(parameters, "id") ?? "",
+                Title = RequiredString(parameters, "title"),
+                Content = RequiredString(parameters, "content"),
+                Enabled = parameters["enabled"]?.GetValue<bool?>() ?? true,
+                Priority = parameters["priority"]?.GetValue<int?>() ?? ManagedRulesStore.DefaultPriority,
+                Scope = OptionalString(parameters, "scope") ?? "workspace",
+            };
+            try
+            {
+                ManagedRulesStore.Save(workspace, entry);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                throw new DaemonRequestException(ex.Message);
+            }
+            var result = new JsonObject();
+            RulesMemoryApi.AppendManagedRules(result, workspace);
+            return result.ToJsonString();
+        }
+
         var content = RequiredString(parameters, "content");
         string savedPath;
         try
@@ -744,12 +774,26 @@ internal sealed partial class DaemonAdminApi
     }
 
     /// <summary>
-    /// Deletes one hierarchical rule file with the same validation as
-    /// <see cref="SaveRules"/>. Missing files are not an error.
+    /// Deletes one hierarchical rule file (path selector) or one structured rule (id selector)
+    /// with the same validation as <see cref="SaveRules"/>. Missing files are not an error.
     /// </summary>
     public string DeleteRules(JsonObject parameters)
     {
         var workspace = SessionWorkspace(parameters);
+        var id = OptionalString(parameters, "id");
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            var scope = OptionalString(parameters, "scope")
+                ?? ManagedRulesStore.List(workspace)
+                    .FirstOrDefault(rule => rule.Id.Equals(id, StringComparison.Ordinal))?.Scope
+                ?? "workspace";
+            if (!ManagedRulesStore.Delete(workspace, id, scope))
+                throw new DaemonRequestException($"No rule with id \"{id}\" in this scope.");
+            var payload = new JsonObject { ["deleted"] = true };
+            RulesMemoryApi.AppendManagedRules(payload, workspace);
+            return payload.ToJsonString();
+        }
+
         string deletedPath;
         try
         {

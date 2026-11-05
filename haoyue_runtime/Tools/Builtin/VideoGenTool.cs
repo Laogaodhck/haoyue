@@ -149,7 +149,8 @@ public sealed class VideoGenTool(
                 $"Video task queued: {taskId} ({status})");
         }
 
-        var outputsDir = Path.Combine(context.Workspace.Root, ".haoyue", "outputs", "videos");
+        var outputsDir = PathGuard.ArtifactDirectory(context.Workspace, "videos", out var artifactError);
+        if (outputsDir is null) return ToolResult.Fail(artifactError!);
         Directory.CreateDirectory(outputsDir);
         var customName = GetString(arguments, "file_name");
         var file = Sanitize(customName) is { Length: > 0 } safeName

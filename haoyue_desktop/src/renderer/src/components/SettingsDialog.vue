@@ -19,6 +19,7 @@ import {
   Save,
   Search,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   ScrollText,
@@ -54,6 +55,8 @@ import ToolPolicyPanel from './ToolPolicyPanel.vue'
 import SettingsRoutingPanel from './SettingsRoutingPanel.vue'
 import SettingsInferencePanel from './SettingsInferencePanel.vue'
 import SettingsSubAgentsPanel from './SettingsSubAgentsPanel.vue'
+import SettingsToolPermissionsPanel from './SettingsToolPermissionsPanel.vue'
+import SettingsAgentTeamsPanel from './SettingsAgentTeamsPanel.vue'
 import SettingsAgentExpertPanel from './SettingsAgentExpertPanel.vue'
 import ConfigJsonEditor from './ConfigJsonEditor.vue'
 import SettingsIntegrationsPanel from './SettingsIntegrationsPanel.vue'
@@ -65,7 +68,7 @@ import SettingsHooksPanel from './SettingsHooksPanel.vue'
 import SettingsCodingPanel from './SettingsCodingPanel.vue'
 import { useEscapeClose } from '../use-escape-close'
 
-type SettingsSection = 'general' | 'network' | 'models' | 'agent' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced' | 'monitor' | 'hooks' | 'coding'
+type SettingsSection = 'general' | 'network' | 'models' | 'agent' | 'tool-permissions' | 'teams' | 'mcp' | 'skills' | 'experts' | 'rules-memory' | 'evolution' | 'diagnostics' | 'inference' | 'advanced' | 'monitor' | 'hooks' | 'coding'
 
 interface ProviderInfo {
   id: string
@@ -350,6 +353,8 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Setting
   { id: 'network', label: '局域网连接', icon: Wifi },
   { id: 'models', label: '模型与提供商', icon: Bot },
   { id: 'agent', label: '智能体', icon: Sparkles },
+  { id: 'tool-permissions', label: '工具权限', icon: ShieldCheck },
+  { id: 'teams', label: '智能体团体', icon: Users },
   { id: 'experts', label: '专家', icon: Users },
   { id: 'mcp', label: 'MCP', icon: Blocks },
   { id: 'skills', label: '技能', icon: Wrench },
@@ -383,6 +388,8 @@ const SECTION_KEYWORDS: Record<SettingsSection, string> = {
   network: '局域网 远程 连接 lan 主机 端口 令牌 配对 共享 runtime',
   models: '模型 提供商 provider api key base url 上下文 定价 路由链 活动模型',
   agent: '智能体 网页搜索 联网 委派 子智能体 自动验证 视觉',
+  'tool-permissions': '工具权限 白名单 allowedTools 黑名单 disabledTools 降级 fallback 放权 mcp 服务器 工具',
+  teams: '智能体团体 团体 团队 team 小组 协作 顺序 并行 主管 调度 评审 协调者 成员 编排 轨迹',
   mcp: 'mcp 连接器 服务器 connector 工具',
   skills: '技能 skill 导入 市场 官方',
   experts: '专家 expert 角色 子代理 参数 步数 思考预算 工具输出 bash 超时 自动修复 续写 委派 事实 会话保留 记忆固化 人格 系统提示词 可读目录 回调 json 原始配置 配置文档',
@@ -1720,6 +1727,21 @@ onBeforeUnmount(() => {
           </section>
 
           <SettingsSubAgentsPanel :connected="daemonConnected" :workspace-path="workspacePath" />
+        </template>
+
+        <template v-else-if="section === 'tool-permissions'">
+          <div class="settings-section-heading">
+            <div>
+              <h3>工具权限</h3>
+              <p>项目级工具白名单与降级开关；保存后同步到运行内存，下一回合即时生效</p>
+            </div>
+          </div>
+          <SettingsToolPermissionsPanel :connected="daemonConnected" :workspace-path="workspacePath" />
+        </template>
+
+        <template v-else-if="section === 'teams'">
+          <SettingsAgentTeamsPanel :connected="daemonConnected" :workspace-path="workspacePath"
+            @notice="onPanelNotice" @error="onPanelError" />
         </template>
 
         <template v-else-if="section === 'monitor'">

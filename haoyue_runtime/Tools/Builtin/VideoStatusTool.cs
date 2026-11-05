@@ -61,7 +61,8 @@ public sealed class VideoStatusTool(
             if (context.Workspace is null)
                 return ToolResult.Fail("video_status requires a workspace to write the artifact into.");
 
-            var outputsDir = Path.Combine(context.Workspace.Root, ".haoyue", "outputs", "videos");
+            var outputsDir = PathGuard.ArtifactDirectory(context.Workspace, "videos", out var artifactError);
+            if (outputsDir is null) return ToolResult.Fail(artifactError!);
             Directory.CreateDirectory(outputsDir);
             var file = Path.Combine(outputsDir, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}.mp4");
             var bytes = await client.GetByteArrayAsync(videoUrl, ct).ConfigureAwait(false);

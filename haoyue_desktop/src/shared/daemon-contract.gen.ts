@@ -54,6 +54,7 @@ export const DAEMON_BROADCAST_EVENTS = [
   'turn.interrupted',
   'memory.consolidated',
   'model.load.progress',
+  'team.run.updated',
 ] as const
 
 export const DAEMON_EVENT_NAMES = [
@@ -85,6 +86,7 @@ export const DAEMON_EVENT_NAMES = [
   'turn.interrupted',
   'memory.consolidated',
   'model.load.progress',
+  'team.run.updated',
 ] as const
 
 export type DaemonEventName = (typeof DAEMON_EVENT_NAMES)[number]
@@ -155,6 +157,7 @@ export const DAEMON_METHODS = [
   'hooks.save',
   'hooks.delete',
   'hooks.test',
+  'hooks.runs',
   'task.start',
   'task.get',
   'task.list',
@@ -197,6 +200,21 @@ export const DAEMON_METHODS = [
   'rules.list',
   'rules.save',
   'rules.delete',
+  'rules.resolve',
+  'facts.list',
+  'facts.add',
+  'facts.update',
+  'facts.delete',
+  'facts.pin',
+  'facts.restore',
+  'facts.confirm',
+  'team.list',
+  'team.save',
+  'team.delete',
+  'team.copy',
+  'team.run',
+  'team.cancel',
+  'team.runs',
   'agent.subagents.list',
   'agent.subagents.save',
   'agent.subagents.delete',

@@ -37,9 +37,11 @@ namespace Haoyue.Runtime.Events;
 [JsonSerializable(typeof(WarningEvent))]
 [JsonSerializable(typeof(ErrorEvent))]
 [JsonSerializable(typeof(ApprovalRequiredEvent))]
+[JsonSerializable(typeof(ApprovalDecisionEvent))]
 [JsonSerializable(typeof(EvolutionReflectionCompletedEvent))]
 [JsonSerializable(typeof(MemoryConsolidationCompletedEvent))]
 [JsonSerializable(typeof(UserFeedbackEvent))]
 [JsonSerializable(typeof(BackgroundTaskEvent))]
 [JsonSerializable(typeof(ModelLoadProgressEvent))]
+[JsonSerializable(typeof(TeamRunUpdatedEvent))]
 public sealed partial class EventJsonContext : JsonSerializerContext;

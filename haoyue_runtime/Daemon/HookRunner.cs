@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Haoyue.Runtime.Configuration;
 
 namespace Haoyue.Runtime.Daemon;
@@ -23,9 +24,16 @@ public sealed record HookRunOutcome(
     double DurationMs,
     string? Output = null);
 
+/// <summary>一次同步评估的结果：是否阻断 + 阻断原因 + 各钩子输出。</summary>
+public sealed record HookDecision(
+    bool Blocked,
+    string? Reason,
+    IReadOnlyList<HookRunOutcome> Outcomes);
+
 /// <summary>
-/// 事件钩子执行器：task.completed / schedule.completed 触发时按配置自动执行
-/// Webhook POST 或本地命令，并记录最近一次执行状态供「查看钩子配置和问题」。
+/// 事件钩子执行器：按触发事件自动执行 Webhook POST 或本地命令，并记录最近一次
+/// 执行状态与 JSONL 台账。支持 5 类触发：
+/// session.start / tool.before / tool.after / task.completed / schedule.completed。
 ///
 /// 安全边界：command 动作以当前进程身份启动子进程，可读写本机文件并可联网——
 /// 这是用户显式配置的自动化行为，执行器只做参数化启动（不拼 shell、不隐式展开）。
@@ -40,15 +48,26 @@ public static class HookRunner
 
     private static readonly HttpClient Http = CreateHttp();
 
-    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
     private const int CommandOutputLimit = 2_000;
 
-    private static readonly string[] Triggers = { "task.completed", "schedule.completed" };
+    private static readonly string[] Triggers =
+    {
+        "session.start",
+        "tool.before",
+        "tool.after",
+        "task.completed",
+        "schedule.completed",
+    };
+
     private static readonly string[] Actions = { "webhook", "command" };
+    private static readonly string[] FailurePolicies = { "warn", "block" };
+
+    /// <summary>支持「等待完成」语义的触发事件（tool.before / session.start 必须同步等待）。</summary>
+    private static readonly string[] WaitableTriggers = { "tool.after", "task.completed", "schedule.completed" };
 
     private static HttpClient CreateHttp()
     {
-        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("haoyue-hooks/1.0");
         return client;
     }
@@ -60,21 +79,110 @@ public static class HookRunner
         {
             var hooks = configStore.Config.Hooks.Hooks;
             if (hooks.Count == 0) return;
-            var matched = hooks.Where(h => h.Enabled && string.Equals(h.Trigger, trigger, StringComparison.Ordinal)).ToList();
-            foreach (var hook in matched)
+            _ = Task.Run(async () =>
             {
-                _ = Task.Run(() =>
+                try
                 {
-                    var outcome = ExecuteOneAsync(hook, payload, CancellationToken.None).GetAwaiter().GetResult();
-                    Record(hook.Name, outcome);
-                });
-            }
+                    await EvaluateAsync(trigger, payload, configStore, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // 钩子失败不影响主流程。
+                }
+            });
         }
         catch (Exception)
         {
             // Hooks are best-effort by design; a misconfigured store must never
             // affect the agent or scheduler paths that triggered them.
         }
+    }
+
+    /// <summary>
+    /// 可等待触发：存在 WaitForCompletion 钩子时等待评估（整体超时受各钩子超时约束），
+    /// 否则退回 fire-and-forget。任何失败/超时都不向调用方抛出，绝不阻断主流程。
+    /// </summary>
+    public static async Task TriggerAsync(
+        string trigger, JsonObject? payload, IConfigStore configStore, CancellationToken ct = default)
+    {
+        try
+        {
+            var hooks = configStore.Config.Hooks.Hooks;
+            if (hooks.Count == 0) return;
+            var target = TargetOf(payload);
+            var waiting = hooks
+                .Where(hook => hook.Enabled
+                               && hook.WaitForCompletion
+                               && WaitableTriggers.Contains(hook.Trigger)
+                               && string.Equals(hook.Trigger, trigger, StringComparison.Ordinal)
+                               && MatchesTarget(hook.Match, target))
+                .ToList();
+            if (waiting.Count == 0)
+            {
+                Trigger(trigger, payload, configStore);
+                return;
+            }
+
+            var seconds = Math.Min(120, waiting.Sum(hook => Math.Clamp(hook.TimeoutSeconds, 1, 120)));
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, seconds)));
+            await EvaluateAsync(trigger, payload, configStore, cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 等待模式仍以「不阻断、不拖垮主流程」为底线。
+        }
+    }
+
+    /// <summary>
+    /// 同步评估一次触发：按启用状态、事件、Match 通配符筛选后逐条执行；
+    /// 失败且 FailurePolicy=block（仅 tool.before）时返回 Blocked。
+    /// 永不向调用方抛异常（取消除外——取消除表示主流程已结束）。
+    /// </summary>
+    public static async Task<HookDecision> EvaluateAsync(
+        string trigger, JsonObject? payload, IConfigStore configStore, CancellationToken ct)
+    {
+        var outcomes = new List<HookRunOutcome>();
+        var root = HookLedger.ResolveRoot(payload);
+        var target = TargetOf(payload);
+        try
+        {
+            var hooks = configStore.Config.Hooks.Hooks;
+            var matched = hooks
+                .Where(hook => hook.Enabled
+                               && string.Equals(hook.Trigger, trigger, StringComparison.Ordinal)
+                               && MatchesTarget(hook.Match, target))
+                .OrderBy(hook => hook.Name, StringComparer.Ordinal)
+                .ToList();
+            foreach (var hook in matched)
+            {
+                var outcome = await ExecuteWithTimeoutAsync(hook, payload, ct).ConfigureAwait(false);
+                Record(hook.Name, outcome);
+                outcomes.Add(outcome);
+                HookLedger.Append(root, new HookRunRecord(
+                    DateTimeOffset.UtcNow, trigger, hook.Name, target,
+                    outcome.Ok, outcome.DurationMs, outcome.Error, outcome.Output),
+                    configStore.Config.Hooks.MaxLedgerRecords);
+
+                if (outcome.Ok || ct.IsCancellationRequested) continue;
+                if (string.Equals(trigger, "tool.before", StringComparison.Ordinal)
+                    && string.Equals(hook.FailurePolicy, "block", StringComparison.Ordinal))
+                {
+                    return new HookDecision(true,
+                        $"hook \"{hook.Name}\" failed: {outcome.Error ?? "unknown error"}", outcomes);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // 配置损坏/执行器异常都按放行处理，避免钩子把主流程拖死。
+        }
+        return new HookDecision(false, null, outcomes);
     }
 
     /// <summary>立即执行指定钩子一次并返回结果（hooks.test）。</summary>
@@ -88,9 +196,35 @@ public static class HookRunner
         if (problem is not null)
             return new HookRunOutcome(false, problem, 0);
 
-        var outcome = await ExecuteOneAsync(hook, null, ct).ConfigureAwait(false);
+        var outcome = await ExecuteWithTimeoutAsync(hook, null, ct).ConfigureAwait(false);
         Record(hook.Name, outcome);
+        HookLedger.Append(HaoyuePaths.Home, new HookRunRecord(
+            DateTimeOffset.UtcNow, hook.Trigger, hook.Name, "", outcome.Ok,
+            outcome.DurationMs, outcome.Error, outcome.Output),
+            configStore.Config.Hooks.MaxLedgerRecords);
         return outcome;
+    }
+
+    private static async Task<HookRunOutcome> ExecuteWithTimeoutAsync(
+        HookConfig hook, JsonObject? payload, CancellationToken ct)
+    {
+        var seconds = Math.Clamp(hook.TimeoutSeconds, 1, 120);
+        if (string.Equals(hook.Action, "webhook", StringComparison.Ordinal))
+            seconds = Math.Min(seconds, 30);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(seconds));
+        try
+        {
+            return await ExecuteOneAsync(hook, payload, cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return new HookRunOutcome(false, $"执行超过 {seconds} 秒，已中止", seconds * 1000d);
+        }
     }
 
     private static async Task<HookRunOutcome> ExecuteOneAsync(HookConfig hook, JsonObject? payload, CancellationToken ct)
@@ -98,11 +232,14 @@ public static class HookRunner
         var watch = Stopwatch.StartNew();
         try
         {
+            HookRunOutcome outcome;
             if (string.Equals(hook.Action, "webhook", StringComparison.Ordinal))
-                return await ExecuteWebhookAsync(hook, payload, ct).ConfigureAwait(false);
-            if (string.Equals(hook.Action, "command", StringComparison.Ordinal))
-                return await ExecuteCommandAsync(hook, payload, ct).ConfigureAwait(false);
-            return new HookRunOutcome(false, $"未知动作类型「{hook.Action}」", watch.Elapsed.TotalMilliseconds);
+                outcome = await ExecuteWebhookAsync(hook, payload, ct).ConfigureAwait(false);
+            else if (string.Equals(hook.Action, "command", StringComparison.Ordinal))
+                outcome = await ExecuteCommandAsync(hook, payload, ct).ConfigureAwait(false);
+            else
+                outcome = new HookRunOutcome(false, $"未知动作类型「{hook.Action}」", 0);
+            return outcome with { DurationMs = watch.Elapsed.TotalMilliseconds };
         }
         catch (OperationCanceledException)
         {
@@ -164,16 +301,15 @@ public static class HookRunner
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
+        Process? process = null;
         try
         {
-            using var process = new Process { StartInfo = psi };
+            process = new Process { StartInfo = psi };
             if (!process.Start())
                 return new HookRunOutcome(false, "进程启动失败", 0);
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(CommandTimeout);
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
-            var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
-            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
             var stdout = await stdoutTask.ConfigureAwait(false);
             var stderr = await stderrTask.ConfigureAwait(false);
             var ok = process.ExitCode == 0;
@@ -184,11 +320,23 @@ public static class HookRunner
         }
         catch (OperationCanceledException)
         {
-            return new HookRunOutcome(false, $"执行超过 {CommandTimeout.TotalSeconds} 秒，已中止", 0);
+            try
+            {
+                if (process is { HasExited: false }) process.Kill(entireProcessTree: true);
+            }
+            catch (Exception)
+            {
+                // 进程可能已退出或无权限终止；超时结果本身已足够。
+            }
+            return new HookRunOutcome(false, "执行超时或已取消", 0);
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return new HookRunOutcome(false, ex.Message, 0);
+        }
+        finally
+        {
+            process?.Dispose();
         }
     }
 
@@ -223,6 +371,31 @@ public static class HookRunner
             outcome.DurationMs);
     }
 
+    private static string TargetOf(JsonObject? payload)
+    {
+        try
+        {
+            return payload?["target"]?.GetValue<string>() ?? "";
+        }
+        catch (InvalidOperationException)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>Match 为逗号分隔通配符（* ?），空表示全部匹配。</summary>
+    internal static bool MatchesTarget(string? match, string target)
+    {
+        if (string.IsNullOrWhiteSpace(match)) return true;
+        foreach (var raw in match.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var pattern = "^" + Regex.Escape(raw).Replace("\\*", ".*").Replace("\\?", ".") + "$";
+            if (Regex.IsMatch(target, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>配置问题诊断：返回第一条问题描述；null = 配置可用。</summary>
     public static string? Validate(HookConfig hook)
     {
@@ -232,6 +405,10 @@ public static class HookRunner
             return $"触发事件「{hook.Trigger}」不受支持（可选：{string.Join(" / ", Triggers)}）";
         if (!Actions.Contains(hook.Action))
             return $"动作类型「{hook.Action}」不受支持（可选：{string.Join(" / ", Actions)}）";
+        if (!FailurePolicies.Contains(hook.FailurePolicy))
+            return $"失败策略「{hook.FailurePolicy}」不受支持（可选：warn / block）";
+        if (hook.TimeoutSeconds is < 1 or > 120)
+            return "超时秒数必须在 1..120 之间";
         if (string.Equals(hook.Action, "webhook", StringComparison.Ordinal))
         {
             if (string.IsNullOrWhiteSpace(hook.WebhookUrl))

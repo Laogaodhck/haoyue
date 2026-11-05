@@ -13,6 +13,15 @@ using Haoyue.Runtime.Workspaces;
 namespace Haoyue.Runtime.Agents;
 
 /// <summary>
+/// 一次委派的覆盖项：既有角色预置、模型与工具白名单。团体成员用它在共享
+/// 委派链路的前提下表达自己的角色定位与权限范围，而不是另起一套子代理构造。
+/// </summary>
+public sealed record AgentInvocation(
+    string? RolePreset = null,
+    string? Model = null,
+    IReadOnlyList<string>? AllowedTools = null);
+
+/// <summary>
 /// Runs self-contained subtasks in fresh sub-agents. Implementations own the
 /// isolation policy (clean context, tool restrictions, depth limits).
 /// </summary>
@@ -73,6 +82,15 @@ public interface IAgentDelegator
     Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
         WorkspaceInfo workspace, IReadOnlyList<string> tasks, string? role, TurnExecutionScope? parentScope, CancellationToken ct) =>
         RunSubTasksAsync(workspace, tasks, role, ct);
+
+    /// <summary>
+    /// 带覆盖项的委派（团体成员）：模型与工具白名单可按成员覆盖，仍共享父回合台账。
+    /// 默认实现忽略覆盖项、退化为按角色预置委派，既有实现与测试桩无需改动。
+    /// </summary>
+    Task<AgentTurnResult> RunSubTaskAsync(
+        WorkspaceInfo workspace, string task, AgentInvocation invocation,
+        TurnExecutionScope? parentScope, CancellationToken ct) =>
+        RunSubTaskAsync(workspace, task, invocation.RolePreset, parentScope, ct);
 }
 
 /// <summary>
@@ -89,6 +107,17 @@ public sealed class FilteredToolRegistry(IToolRegistry inner, params string[] ex
     public ITool? Resolve(string name) => _excluded.Contains(name) ? null : inner.Resolve(name);
 
     public IReadOnlyList<ITool> All => inner.All.Where(tool => !_excluded.Contains(tool.Name)).ToList();
+
+    public string? DenialReason(string name)
+    {
+        if (!_excluded.Contains(name)) return inner.DenialReason(name);
+        return IsKnown(inner, name) ? "子代理隔离：该委派工具不在本层视图中" : null;
+    }
+
+    /// <summary>更内层是否真的存在这个名字（或已被更内层说明拒绝）。</summary>
+    internal static bool IsKnown(IToolRegistry registry, string name) =>
+        registry.DenialReason(name) is not null
+        || registry.All.Any(tool => tool.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -115,21 +144,73 @@ public sealed class OverlayToolRegistry(IToolRegistry inner, ITool[] overlay, pa
     public IReadOnlyList<ITool> All =>
         overlay.Concat(inner.All.Where(tool => !_excluded.Contains(tool.Name)
             && !overlay.Any(o => o.Name.Equals(tool.Name, StringComparison.OrdinalIgnoreCase)))).ToList();
+
+    public string? DenialReason(string name)
+    {
+        if (overlay.Any(tool => tool.Name.Equals(name, StringComparison.OrdinalIgnoreCase))) return null;
+        if (!_excluded.Contains(name)) return inner.DenialReason(name);
+        return FilteredToolRegistry.IsKnown(inner, name)
+            ? "子代理隔离：该委派工具不在本层视图中"
+            : null;
+    }
 }
 
 /// <summary>
-/// S7 角色工具白名单视图：只放行 allowedTools 中的工具（大小写不敏感），
-/// 其余一律视为不存在。白名单为空/null 时等价于透传。
+/// S7 角色工具白名单视图：只放行 allowedTools 中的工具（大小写不敏感，支持
+/// <c>server/tool</c> 通配符），其余一律视为不存在。白名单为空/null 时等价于透传。
 /// </summary>
-public sealed class AllowListToolRegistry(IToolRegistry inner, IReadOnlyList<string> allowedTools) : IToolRegistry
+public sealed class AllowListToolRegistry(
+    IToolRegistry inner, IReadOnlyList<string> allowedTools, string scope = "角色/成员") : IToolRegistry
 {
-    private readonly HashSet<string> _allowed = allowedTools.ToHashSet(StringComparer.OrdinalIgnoreCase);
-
     public IDisposable Register(ITool tool) => inner.Register(tool);
 
-    public ITool? Resolve(string name) => _allowed.Contains(name) ? inner.Resolve(name) : null;
+    public ITool? Resolve(string name) =>
+        ToolPermissionPolicy.IsAllowed(allowedTools, name) ? inner.Resolve(name) : null;
 
-    public IReadOnlyList<ITool> All => inner.All.Where(tool => _allowed.Contains(tool.Name)).ToList();
+    public IReadOnlyList<ITool> All =>
+        inner.All.Where(tool => ToolPermissionPolicy.IsAllowed(allowedTools, tool.Name)).ToList();
+
+    public string? DenialReason(string name)
+    {
+        if (ToolPermissionPolicy.IsAllowed(allowedTools, name)) return inner.DenialReason(name);
+        return FilteredToolRegistry.IsKnown(inner, name)
+            ? $"不在{scope}的工具白名单内"
+            : null;
+    }
+}
+
+/// <summary>
+/// 工作区/成员策略视图：先按硬禁用（deny-overrides），再按白名单裁剪。两层都支持
+/// <c>server/tool</c> 通配符；逐层包裹即得交集，不存在放大路径。
+/// </summary>
+public sealed class ToolPermissionRegistry(
+    IToolRegistry inner,
+    IReadOnlyList<string>? allowedTools,
+    IReadOnlyList<string>? disabledTools,
+    string scope) : IToolRegistry
+{
+    public IDisposable Register(ITool tool) => inner.Register(tool);
+
+    public ITool? Resolve(string name)
+    {
+        if (ToolPermissionPolicy.IsDenied(disabledTools, name)) return null;
+        if (!ToolPermissionPolicy.IsAllowed(allowedTools, name)) return null;
+        return inner.Resolve(name);
+    }
+
+    public IReadOnlyList<ITool> All => inner.All
+        .Where(tool => !ToolPermissionPolicy.IsDenied(disabledTools, tool.Name)
+            && ToolPermissionPolicy.IsAllowed(allowedTools, tool.Name))
+        .ToList();
+
+    public string? DenialReason(string name)
+    {
+        if (ToolPermissionPolicy.IsDenied(disabledTools, name))
+            return FilteredToolRegistry.IsKnown(inner, name) ? $"被{scope}硬禁用" : null;
+        if (!ToolPermissionPolicy.IsAllowed(allowedTools, name))
+            return FilteredToolRegistry.IsKnown(inner, name) ? $"不在{scope}的工具白名单内" : null;
+        return inner.DenialReason(name);
+    }
 }
 
 /// <summary>
@@ -192,6 +273,23 @@ public sealed class AgentDelegator(
             .ConfigureAwait(false);
     }
 
+    /// <summary>团体成员的委派入口：角色预置 + 成员级模型/工具收窄，仍共享父台账。</summary>
+    async Task<AgentTurnResult> IAgentDelegator.RunSubTaskAsync(
+        WorkspaceInfo workspace, string task, AgentInvocation invocation,
+        TurnExecutionScope? parentScope, CancellationToken ct)
+    {
+        var preset = ResolveRole(workspace, invocation.RolePreset);
+        var effectiveTask = preset?.ComposeTask(task) ?? task;
+        // 角色与成员清单按顺序叠加（交集），成员永远不能放宽角色边界。
+        var roleTools = preset?.AllowedTools;
+        var memberTools = invocation.AllowedTools is { Count: > 0 } ? invocation.AllowedTools : null;
+        var modelOverride = string.IsNullOrWhiteSpace(invocation.Model) ? preset?.Model : invocation.Model;
+        return await RunSubTaskAsync(workspace, effectiveTask, ct, depth: 0, parallel: false,
+            allowedTools: roleTools, parentScope: parentScope, modelOverride: modelOverride,
+            invocationTools: memberTools)
+            .ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<AgentTurnResult>> RunSubTasksAsync(
         WorkspaceInfo workspace, IReadOnlyList<string> tasks, CancellationToken ct)
     {
@@ -224,9 +322,10 @@ public sealed class AgentDelegator(
 
     private async Task<AgentTurnResult> RunSubTaskAsync(
         WorkspaceInfo workspace, string task, CancellationToken ct, int depth, bool parallel,
-        IReadOnlyList<string>? allowedTools, TurnExecutionScope? parentScope, string? modelOverride)
+        IReadOnlyList<string>? allowedTools, TurnExecutionScope? parentScope, string? modelOverride,
+        IReadOnlyList<string>? invocationTools = null)
     {
-        var subTools = BuildSubToolView(depth, parallel, allowedTools);
+        var subTools = BuildSubToolView(workspace, depth, parallel, allowedTools, invocationTools);
         var subAgent = new Agent(
             configStore, providerManager, subTools, promptProvider, promptComposer,
             workspaceManager, sessionStore, verifier, events, fileLocks, lockScope, skills,
@@ -250,15 +349,18 @@ public sealed class AgentDelegator(
 
     /// <summary>
     /// Builds one sub-agent's tool view: the shared registry minus delegation tools,
-    /// plus depth-aware delegation tools when the child may still delegate. A role
-    /// preset (S7) additionally narrows the view to its allowed-tools list.
+    /// plus depth-aware delegation tools when the child may still delegate. The view is
+    /// then narrowed layer by layer — workspace policy → role preset → member list —
+    /// so every layer can only remove tools, never add them (deny wins throughout).
     /// </summary>
-    private IToolRegistry BuildSubToolView(int depth, bool parallel, IReadOnlyList<string>? allowedTools)
+    private IToolRegistry BuildSubToolView(
+        WorkspaceInfo workspace, int depth, bool parallel,
+        IReadOnlyList<string>? roleTools, IReadOnlyList<string>? invocationTools)
     {
         var childDepth = depth + 1;
         var mayDelegate = !parallel && childDepth < ResolveMaxDepth();
 
-        IToolRegistry view = mayDelegate
+        IToolRegistry baseView = mayDelegate
             ? new OverlayToolRegistry(
                 toolRegistry,
                 [
@@ -268,11 +370,35 @@ public sealed class AgentDelegator(
                 DelegateToolName, ParallelDelegateToolName)
             : new FilteredToolRegistry(toolRegistry, DelegateToolName, ParallelDelegateToolName);
 
-        return allowedTools is { Count: > 0 }
-            ? new AllowListToolRegistry(view, allowedTools)
-            : view;
+        return ComposeToolView(baseView, workspace.Config, roleTools, invocationTools);
 
         ChildDelegator childDelegatorFor(int d) => new(this, d);
+    }
+
+    /// <summary>
+    /// 权限层的唯一组装点：workspace（deny 优先于 allow）→ 角色预置 → 成员清单。
+    /// 每层都是对上一层结果的再过滤，因此结果天然是交集，任何一层都无法放大权限。
+    /// 抽成 internal 静态方法便于直接测试分层语义与降级开关。
+    /// </summary>
+    internal static IToolRegistry ComposeToolView(
+        IToolRegistry baseView, WorkspaceConfig? config,
+        IReadOnlyList<string>? roleTools, IReadOnlyList<string>? invocationTools)
+    {
+        var workspaceView = new ToolPermissionRegistry(
+            baseView, config?.AllowedTools, config?.DisabledTools, "工作区");
+
+        var roleApplied = roleTools is { Count: > 0 };
+        var memberApplied = invocationTools is { Count: > 0 };
+        IToolRegistry view = workspaceView;
+        if (roleApplied) view = new AllowListToolRegistry(view, roleTools!, "角色预置");
+        if (memberApplied) view = new AllowListToolRegistry(view, invocationTools!, "成员");
+
+        // 默认 fail-closed：裁空就是裁空。显式开关才退回仅受工作区策略约束的清单，
+        // 且绝不越过 workspace 的硬禁用/白名单。
+        if ((roleApplied || memberApplied) && config?.AllowToolFallbackToGlobal == true && view.All.Count == 0)
+            return workspaceView;
+
+        return view;
     }
 
     private int ResolveMaxDepth() =>

@@ -84,6 +84,10 @@ public sealed class BackgroundTaskService : IBackgroundTaskService, IDisposable
         public string? Error { get; set; }
         public string? Output { get; set; }
         public CancellationTokenSource? Cancellation { get; set; }
+        /// <summary>是否已拿到并发槽开跑；排队阶段取消要能立刻收敛，而不是空操作。</summary>
+        public bool Started { get; set; }
+        /// <summary>状态与 Cancellation 的同步点：Cancel 与 RunAsync 收尾互斥。</summary>
+        public readonly object Gate = new();
     }
 
     public BackgroundTaskService(
@@ -108,11 +112,18 @@ public sealed class BackgroundTaskService : IBackgroundTaskService, IDisposable
             throw new ArgumentException("后台任务的 prompt 不能为空。", nameof(prompt));
 
         var id = $"bg-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}";
-        var entry = new Entry { Id = id, Prompt = prompt, Workspace = workspace };
+        // 项目任务落到项目根下的 .haoyue/tasks/<id>/，产物也写在那里；无项目归属
+        // 的全局任务保持原落点。绑定失败（目录越界/项目根不存在）直接拒绝受理，
+        // 绝不让任务悄悄写回全局状态目录。
+        var scoped = TaskScopes.Bind(workspace, id);
+        var entry = new Entry { Id = id, Prompt = prompt, Workspace = scoped };
+        // 取消令牌在受理时创建（不是拿到并发槽后），排队任务才能被真正取消。
+        var runCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        entry.Cancellation = runCts;
         _tasks[id] = entry;
         PruneHistory();
 
-        _ = Task.Run(() => RunAsync(entry, title), CancellationToken.None);
+        _ = Task.Run(() => RunAsync(entry, runCts, title), CancellationToken.None);
         return Snapshot(entry);
     }
 
@@ -128,24 +139,47 @@ public sealed class BackgroundTaskService : IBackgroundTaskService, IDisposable
     public BackgroundTaskInfo? Cancel(string id)
     {
         if (!_tasks.TryGetValue(id, out var entry)) return null;
-        if (entry.Status != BackgroundTaskStatus.Running) return null;
-        entry.Cancellation?.Cancel();
+        lock (entry.Gate)
+        {
+            if (entry.EndedAt is not null || entry.Cancellation is null) return null;
+            entry.Cancellation.Cancel();
+            if (!entry.Started)
+            {
+                // 仍在排队：同步收敛为 cancelled，RPC 立刻返回正确快照；
+                // RunAsync 醒来只负责发一次终态事件，不会真的开跑。
+                entry.Status = BackgroundTaskStatus.Cancelled;
+                entry.EndedAt = DateTimeOffset.UtcNow;
+                entry.Error = "任务在排队中被取消。";
+            }
+        }
         return Snapshot(entry);
     }
 
-    private async Task RunAsync(Entry entry, string? title)
+    private async Task RunAsync(Entry entry, CancellationTokenSource runCts, string? title)
     {
-        // 并发闸：超限时排队等待（任务已受理，只是晚一点开跑）。
-        await _slots.WaitAsync(_lifetime.Token).ConfigureAwait(false);
-        using var runCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        entry.Cancellation = runCts;
+        var runCt = runCts.Token;
+        var acquired = false;
         var timeoutSeconds = Math.Clamp(
             _runtime.ConfigStore.Config.Agent.ScheduledTurnTimeoutSeconds, 60, 86_400);
-        runCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-        var runCt = runCts.Token;
 
         try
         {
+            // 并发闸：超限时排队等待。用任务自己的令牌等待，排队阶段也能被取消。
+            await _slots.WaitAsync(runCt).ConfigureAwait(false);
+            acquired = true;
+            lock (entry.Gate)
+            {
+                // 拿到槽之前被取消的任务已在 Cancel 里收敛，不必再跑。
+                if (runCt.IsCancellationRequested)
+                {
+                    entry.Status = BackgroundTaskStatus.Cancelled;
+                    entry.Error ??= "任务在排队中被取消。";
+                    return;
+                }
+                entry.Started = true;
+            }
+            runCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
             var session = _runtime.Sessions.Create(
                 entry.Workspace,
                 reasoningLevel: _runtime.ConfigStore.Config.Agent.ReasoningLevel,
@@ -157,28 +191,42 @@ public sealed class BackgroundTaskService : IBackgroundTaskService, IDisposable
             var result = await _turnRunner(entry.Workspace, session, entry.Prompt, runCt).ConfigureAwait(false);
             entry.Output = result.Text;
             entry.Error = result.Error;
-            if (result.Cancelled)
-                entry.Status = BackgroundTaskStatus.Cancelled;
-            else if (!string.IsNullOrWhiteSpace(result.Error))
-                entry.Status = BackgroundTaskStatus.Failed;
-            else
-                entry.Status = BackgroundTaskStatus.Completed;
+            lock (entry.Gate)
+            {
+                // 取消后即使回合返回成功，也不能把最终状态覆盖成 completed。
+                entry.Status = runCt.IsCancellationRequested || result.Cancelled
+                    ? BackgroundTaskStatus.Cancelled
+                    : !string.IsNullOrWhiteSpace(result.Error)
+                        ? BackgroundTaskStatus.Failed
+                        : BackgroundTaskStatus.Completed;
+            }
         }
         catch (OperationCanceledException) when (runCt.IsCancellationRequested)
         {
-            entry.Status = BackgroundTaskStatus.Cancelled;
-            entry.Error = $"任务被取消（或超过 {timeoutSeconds} 秒时限）。";
+            lock (entry.Gate)
+            {
+                entry.Status = BackgroundTaskStatus.Cancelled;
+                entry.Error ??= $"任务被取消（或超过 {timeoutSeconds} 秒时限）。";
+            }
         }
         catch (Exception ex)
         {
-            entry.Status = BackgroundTaskStatus.Failed;
-            entry.Error = ex.Message;
+            lock (entry.Gate)
+            {
+                entry.Status = BackgroundTaskStatus.Failed;
+                entry.Error = ex.Message;
+            }
         }
         finally
         {
-            entry.EndedAt = DateTimeOffset.UtcNow;
-            entry.Cancellation = null;
-            _slots.Release();
+            // 只有真正拿到槽才归还，避免等待被取消时误放信号量。
+            if (acquired) _slots.Release();
+            lock (entry.Gate)
+            {
+                entry.EndedAt ??= DateTimeOffset.UtcNow;
+                entry.Cancellation = null;
+            }
+            runCts.Dispose();
             _runtime.Events.Publish(new BackgroundTaskEvent(
                 entry.Id, entry.Status, entry.SessionId, entry.Error));
         }
@@ -209,7 +257,12 @@ public sealed class BackgroundTaskService : IBackgroundTaskService, IDisposable
             .Skip(HistoryLimit)
             .Select(e => e.Id)
             .ToList();
-        foreach (var id in finished) _tasks.TryRemove(id, out _);
+        foreach (var id in finished)
+        {
+            if (!_tasks.TryRemove(id, out var removed)) continue;
+            // 历史已被裁剪的任务，其任务目录一并清理，避免 .haoyue/tasks 无限增长。
+            TaskScopes.Remove(removed.Workspace, id);
+        }
     }
 
     private static BackgroundTaskInfo Snapshot(Entry entry) => new(

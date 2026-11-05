@@ -539,6 +539,9 @@ export function createDaemonEventHandler(context: DaemonEventContext): (event: D
         }
         if (!message || isBackgroundThread) reloadBackgroundThreadIfIdle(thread)
         break
+      case 'team.run.updated':
+        // 团体运行进度：设置面板按需轮询 team.runs；这里显式忽略以避免静默丢弃。
+        break
       default: {
         // 编译期穷举护栏：DaemonEventName 是契约生成类型（daemon-contract.gen.ts），
         // 上面每个事件都有显式归宿（处理或显式忽略）。新增事件若未加分支，下面向

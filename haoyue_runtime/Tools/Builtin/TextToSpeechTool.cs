@@ -62,7 +62,8 @@ public sealed partial class TextToSpeechTool(
         if (context.Workspace is null)
             return ToolResult.Fail("text_to_speech requires a workspace to write the artifact into.");
 
-        var outputsDir = Path.Combine(context.Workspace.Root, ".haoyue", "outputs", "audio");
+        var outputsDir = PathGuard.ArtifactDirectory(context.Workspace, "audio", out var artifactError);
+        if (outputsDir is null) return ToolResult.Fail(artifactError!);
         Directory.CreateDirectory(outputsDir);
         var customName = GetString(arguments, "file_name");
         var extension = "." + (format == "ogg_opus" ? "ogg" : format);

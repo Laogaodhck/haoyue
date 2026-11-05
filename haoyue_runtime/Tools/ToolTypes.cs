@@ -216,6 +216,13 @@ public interface IToolRegistry
     IDisposable Register(ITool tool);
     ITool? Resolve(string name);
     IReadOnlyList<ITool> All { get; }
+
+    /// <summary>
+    /// 只读元数据：本视图为何不能执行 <paramref name="name"/>（被硬禁用、不在白名单等）。
+    /// 更内层注册表里也不存在该名字时返回 null（即真正的未知工具）。默认实现不报告，
+    /// 既有实现与测试桩无需改动；裁决仍发生在委派组装与执行闸门，注册表不持有租户上下文。
+    /// </summary>
+    string? DenialReason(string name) => null;
 }
 
 public sealed class ToolRegistry : IToolRegistry

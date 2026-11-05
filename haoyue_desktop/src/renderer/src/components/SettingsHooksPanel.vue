@@ -2,7 +2,7 @@
 import { LoaderCircle, Pencil, Plus, ShieldAlert, Trash2, Webhook, X } from '@lucide/vue'
 import { onMounted, ref, watch } from 'vue'
 import { requestJson } from '../daemon-json'
-import type { HookDraft, HookInfo, HooksListResult, HookTestResult } from '../types'
+import type { HookDraft, HookInfo, HookRunRecord, HooksListResult, HookTestResult } from '../types'
 import SelectMenu from './SelectMenu.vue'
 
 /**
@@ -26,6 +26,7 @@ const busy = ref('')
 const hooks = ref<HookInfo[]>([])
 const problems = ref<HooksListResult['problems']>([])
 const status = ref<HooksListResult['status']>([])
+const ledger = ref<HookRunRecord[]>([])
 const testResults = ref<Record<string, HookTestResult>>({})
 
 /** 当前编辑中的钩子草稿；null = 不在编辑状态。 */
@@ -33,6 +34,9 @@ const editing = ref<HookDraft | null>(null)
 const editingOriginal = ref<HookInfo | null>(null)
 
 const TRIGGER_OPTIONS = [
+  { value: 'session.start', label: 'session.start', description: '会话首回合开始：输出会注入系统提示（不阻断）' },
+  { value: 'tool.before', label: 'tool.before', description: '工具执行前：可拦截危险命令、越界路径与敏感文件' },
+  { value: 'tool.after', label: 'tool.after', description: '工具执行后：审计、产物归档（payload 含 changedFiles）' },
   { value: 'task.completed', label: 'task.completed', description: '回合完成时触发（成功、失败、取消都会触发）' },
   { value: 'schedule.completed', label: 'schedule.completed', description: '定时任务完成时触发' }
 ]
@@ -50,7 +54,10 @@ function blankDraft(): HookDraft {
     enabled: true,
     webhookUrl: '',
     webhookSecret: '',
-    command: ''
+    command: '',
+    match: '',
+    timeoutSeconds: 30,
+    failurePolicy: 'warn'
   }
 }
 
@@ -58,6 +65,7 @@ function applyList(result: HooksListResult): void {
   hooks.value = result.hooks
   problems.value = result.problems
   status.value = result.status
+  ledger.value = result.ledger ?? []
 }
 
 async function load(): Promise<void> {
@@ -94,7 +102,10 @@ function openEdit(hook: HookInfo): void {
     enabled: hook.enabled,
     webhookUrl: hook.webhookUrl,
     webhookSecret: '',
-    command: hook.command
+    command: hook.command,
+    match: hook.match,
+    timeoutSeconds: hook.timeoutSeconds,
+    failurePolicy: hook.failurePolicy
   }
   editingOriginal.value = hook
 }
@@ -125,7 +136,10 @@ async function saveDraft(): Promise<void> {
     name: draft.name.trim(),
     trigger: draft.trigger,
     action: draft.action,
-    enabled: draft.enabled
+    enabled: draft.enabled,
+    match: draft.match.trim(),
+    timeoutSeconds: Math.min(120, Math.max(1, Number(draft.timeoutSeconds) || 30)),
+    failurePolicy: draft.failurePolicy
   }
   if (draft.action === 'webhook') {
     payload.webhookUrl = draft.webhookUrl.trim()
@@ -206,7 +220,7 @@ watch(() => props.connected, (connected) => { if (connected) void load() })
     <div class="settings-section-heading">
       <div>
         <h3>钩子</h3>
-        <p>事件钩子：任务完成或定时任务完成时自动执行 Webhook 请求或本地命令</p>
+        <p>事件钩子：在会话开始、工具调用前后、任务或定时任务完成时自动执行 Webhook 请求或本地命令</p>
       </div>
     </div>
 
@@ -265,7 +279,26 @@ watch(() => props.connected, (connected) => { if (connected) void load() })
           <label v-else class="field-label hook-command-field" for="hook-command">
             本地命令
             <input id="hook-command" v-model="editing.command" class="text-input"
-              placeholder="例如：notepad.exe（参数用空格分隔，30 秒超时）" :disabled="busy !== ''" />
+              placeholder="例如：notepad.exe（参数用空格分隔）" :disabled="busy !== ''" />
+          </label>
+          <label class="field-label" for="hook-match">
+            匹配条件
+            <input id="hook-match" v-model="editing.match" class="text-input"
+              placeholder="例如：bash*,write_file；空 = 全部" :disabled="busy !== ''" />
+          </label>
+          <label class="field-label" for="hook-timeout">
+            超时（秒）
+            <input id="hook-timeout" v-model.number="editing.timeoutSeconds" class="text-input" type="number"
+              min="1" max="120" :disabled="busy !== ''" />
+          </label>
+          <label class="field-label" for="hook-policy">
+            失败策略
+            <SelectMenu id="hook-policy" :model-value="editing.failurePolicy" class="settings-select select-compact"
+              :options="[
+                { value: 'warn', label: '放行并告警', description: '记录台账，不阻断主流程' },
+                { value: 'block', label: '阻断', description: '仅 tool.before：失败时阻止工具执行' }
+              ]" label="失败策略" :disabled="busy !== ''"
+              @update:model-value="editing.failurePolicy = $event as HookDraft['failurePolicy']" />
           </label>
         </div>
         <div class="hook-editor-actions">
@@ -309,6 +342,11 @@ watch(() => props.connected, (connected) => { if (connected) void load() })
                 {{ hook.action === 'webhook' ? 'Webhook' : '本地命令' }}
               </span>
               <span v-if="hook.hasSecret" class="inline-badge">已设置密钥</span>
+              <span v-if="hook.match" class="inline-badge">匹配 {{ hook.match }}</span>
+              <span class="inline-badge" :class="hook.failurePolicy === 'block' ? 'problem-badge' : ''">
+                {{ hook.failurePolicy === 'block' ? '失败阻断' : '失败放行' }}
+              </span>
+              <span class="inline-badge">{{ hook.timeoutSeconds }}s</span>
               <span v-if="problemOf(hook.name)" class="inline-badge problem-badge">配置问题</span>
             </div>
             <small :title="hook.action === 'webhook' ? hook.webhookUrl : hook.command">
@@ -356,6 +394,23 @@ watch(() => props.connected, (connected) => { if (connected) void load() })
           <span>{{ testResults[hook.name]?.ok
             ? `耗时 ${testResults[hook.name]?.durationMs}ms · ${testResults[hook.name]?.output || '已执行'}`
             : (testResults[hook.name]?.error || '未知错误') }}</span>
+        </div>
+      </div>
+
+      <div v-if="ledger.length > 0" class="hook-ledger">
+        <div class="settings-group-title">
+          <strong>执行台账</strong>
+          <small>最近 {{ ledger.length }} 次执行（含失败原因与耗时）</small>
+        </div>
+        <div v-for="(record, index) in ledger" :key="`${record.at}-${index}`" class="hook-ledger-row">
+          <span class="hook-ledger-time">{{ record.at.slice(0, 19).replace('T', ' ') }}</span>
+          <span class="inline-badge">{{ record.trigger }}</span>
+          <strong>{{ record.hook }}</strong>
+          <span v-if="record.target" class="hook-ledger-target">{{ record.target }}</span>
+          <span :class="record.ok ? 'hook-ledger-ok' : 'hook-ledger-fail'">
+            {{ record.ok ? '成功' : (record.error || '失败') }}
+          </span>
+          <span class="hook-ledger-ms">{{ Math.round(record.durationMs) }}ms</span>
         </div>
       </div>
     </section>
@@ -489,6 +544,40 @@ watch(() => props.connected, (connected) => { if (connected) void load() })
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
 }
+
+.hook-ledger {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.hook-ledger-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.hook-ledger-time {
+  color: var(--muted);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.hook-ledger-target {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.hook-ledger-ok { color: var(--success, #3fb950); flex: none; }
+.hook-ledger-fail { color: var(--danger); flex: none; }
+.hook-ledger-ms { margin-left: auto; color: var(--muted); flex: none; }
 
 @media (max-width: 720px) {
   .hook-form-grid {

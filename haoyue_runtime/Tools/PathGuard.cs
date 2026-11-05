@@ -128,4 +128,26 @@ internal static class PathGuard
 
     internal static string WorkspaceRoot(WorkspaceInfo workspace) =>
         Path.GetFullPath(workspace.IsGlobal ? Directory.GetCurrentDirectory() : workspace.Root);
+
+    /// <summary>
+    /// Resolves the directory a tool-generated artifact is written into. Task-scoped
+    /// workspaces keep their artifacts under the task directory (so a task's output is
+    /// enumerable and cleanable per task); ordinary turns keep the historical
+    /// .haoyue/outputs layout. The resolved directory must still stay inside the
+    /// workspace root after link resolution — a task directory can be swapped for a
+    /// junction pointing outside the project, and artifacts must never follow it out.
+    /// </summary>
+    internal static string? ArtifactDirectory(WorkspaceInfo workspace, string kind, out string? error)
+    {
+        error = null;
+        var root = WorkspaceRoot(workspace);
+        var dir = Path.Combine(workspace.OutputsDir, kind);
+        if (!IsInside(root, dir))
+        {
+            error = $"Artifact directory escapes the workspace: {dir}. "
+                + $"Generated files are restricted to the workspace root ({root}).";
+            return null;
+        }
+        return dir;
+    }
 }

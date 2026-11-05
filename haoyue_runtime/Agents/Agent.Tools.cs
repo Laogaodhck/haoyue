@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Coordination;
+using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Tools;
@@ -57,12 +58,32 @@ public sealed partial class Agent
 
         if (tool is null)
         {
+            // 该名字在更内层注册表里存在、但被权限层隐藏：说清原因，让模型换工具；
+            // 只有真正未知的名字才走下面的拼写建议，避免把「越权」误报成「写错名字」。
+            if (toolRegistry.DenialReason(call.Name) is { Length: > 0 } deniedByPolicy)
+            {
+                var deniedMessage = $"Tool not available: {call.Name} — {deniedByPolicy}. "
+                    + "Use one of the available tools instead.";
+                events.Publish(new ToolCallCompletedEvent(call.Id, call.Name, false, deniedMessage, TimeSpan.Zero));
+                AppendPermissionDenial(workspace, call.Name, deniedByPolicy);
+                return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, deniedMessage, false), false);
+            }
             var suggestions = SuggestTools(call.Name);
             var message = $"Unknown tool: {call.Name}"
                 + (suggestions.Length > 0
                     ? $". Closest available tools: {string.Join(", ", suggestions)}. Use one of these or correct the tool name."
                     : "");
             events.Publish(new ToolCallCompletedEvent(call.Id, call.Name, false, message, TimeSpan.Zero));
+            return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
+        }
+
+        // 工作区级权限闸门（fail-closed）：即使模型绕过提示词直接点名，也在这里被拒。
+        // 拒绝只是「该工具不可用」，不抛异常、不取消回合，模型可改用其它工具继续。
+        if (!ToolPermissionPolicy.TryResolveWorkspace(workspace.Config, tool.Name, out var deniedReason))
+        {
+            var message = $"Tool execution denied: '{tool.Name}' {deniedReason}.";
+            events.Publish(new ToolCallCompletedEvent(call.Id, tool.Name, false, message, TimeSpan.Zero));
+            AppendPermissionDenial(workspace, tool.Name, deniedReason!);
             return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, message, false), false);
         }
 
@@ -118,11 +139,13 @@ public sealed partial class Agent
                 && string.Equals(policyDecision.Rule, "builtin-bash-guard", StringComparison.OrdinalIgnoreCase))
             {
                 // 同上：先登记后发布，避免进程内响应器抢在登记之前。
-                var pendingApproval = _approvals.RequestAsync(
-                    call.Id, ApprovalRegistry.DefaultTimeoutSeconds, ct);
+                var pendingApproval = _approvals.RequestOutcomeAsync(
+                    call.Id,
+                    new ApprovalRequestContext(tool.Name, argsSummary, policyDecision.Reason, workspace.Root),
+                    ApprovalRegistry.DefaultTimeoutSeconds, ct);
                 events.Publish(new ApprovalRequiredEvent(
                     call.Id, tool.Name, argsSummary, policyDecision.Reason));
-                var approved = await pendingApproval.ConfigureAwait(false);
+                var approved = await pendingApproval.ConfigureAwait(false) == ApprovalOutcome.Approved;
                 if (approved)
                 {
                     events.Publish(new StatusEvent($"用户已批准执行 {tool.Name}", argsSummary));
@@ -161,12 +184,16 @@ public sealed partial class Agent
             }
             // 先登记后发布：RequestAsync 在方法体内同步完成 GetOrAdd 登记，事件若先于
             // 登记送达，进程内响应器（桌面 RPC / 测试）会面对一个尚不存在的挂起请求。
-            var pendingConsent = _approvals.RequestAsync(
-                call.Id, ApprovalRegistry.DefaultTimeoutSeconds, ct);
+            var pendingConsent = _approvals.RequestOutcomeAsync(
+                call.Id,
+                new ApprovalRequestContext(tool.Name, argsSummary,
+                    $"{tool.Name} 会以当前用户权限在你计算机上执行命令（无沙箱），请确认本次允许。",
+                    workspace.Root),
+                ApprovalRegistry.DefaultTimeoutSeconds, ct);
             events.Publish(new ApprovalRequiredEvent(
                 call.Id, tool.Name, argsSummary,
                 $"{tool.Name} 会以当前用户权限在你计算机上执行命令（无沙箱），请确认本次允许。"));
-            var consent = await pendingConsent.ConfigureAwait(false);
+            var consent = await pendingConsent.ConfigureAwait(false) == ApprovalOutcome.Approved;
             if (!consent)
             {
                 var denied = $"工具 {tool.Name} 未获得用户同意，已取消执行。"
@@ -190,13 +217,15 @@ public sealed partial class Agent
             var riskLabel = ToolRiskGating.Describe(tool.RiskTier);
             if (_approvals is { Interactive: true })
             {
-                var pendingRisk = _approvals.RequestAsync(
-                    call.Id, ApprovalRegistry.DefaultTimeoutSeconds, ct);
+                var riskReason = $"{tool.Name} 属于高风险操作（{riskLabel}），请确认本次允许。"
+                    + "本回合后续调用不再重复询问。";
+                var pendingRisk = _approvals.RequestOutcomeAsync(
+                    call.Id,
+                    new ApprovalRequestContext(tool.Name, argsSummary, riskReason, workspace.Root),
+                    ApprovalRegistry.DefaultTimeoutSeconds, ct);
                 events.Publish(new ApprovalRequiredEvent(
-                    call.Id, tool.Name, argsSummary,
-                    $"{tool.Name} 属于高风险操作（{riskLabel}），请确认本次允许。"
-                    + "本回合后续调用不再重复询问。"));
-                if (!await pendingRisk.ConfigureAwait(false))
+                    call.Id, tool.Name, argsSummary, riskReason));
+                if (await pendingRisk.ConfigureAwait(false) != ApprovalOutcome.Approved)
                 {
                     var deniedByRisk = $"工具 {tool.Name} 未获得用户同意（高风险：{riskLabel}），已取消执行。"
                         + "可在桌面审批卡片中选择「本次允许」，或在设置中调整「需要同意的风险维度」。";
@@ -219,6 +248,30 @@ public sealed partial class Agent
         }
 
         Execute:
+        // 用户配置的 tool.before 钩子：危险命令、路径越界、敏感文件等可在真正执行前拦截。
+        // block 策略只对 tool.before 生效；warn 策略记录台账后放行。
+        if (configStore.Config.Hooks.Hooks.Count > 0)
+        {
+            var preHook = await HookRunner.EvaluateAsync(
+                "tool.before",
+                new JsonObject
+                {
+                    ["tool"] = tool.Name,
+                    ["target"] = tool.Name,
+                    ["arguments"] = arguments.DeepClone(),
+                    ["workspace"] = workspace.Root,
+                    ["sessionId"] = turnScope.SessionId,
+                },
+                configStore, ct).ConfigureAwait(false);
+            if (preHook.Blocked)
+            {
+                var blocked = $"Blocked by hook: {preHook.Reason}";
+                events.Publish(new WarningEvent($"工具 {tool.Name} 被钩子拦截：{preHook.Reason}"));
+                events.Publish(new ToolCallCompletedEvent(
+                    call.Id, call.Name, false, blocked, TimeSpan.Zero));
+                return new ToolExecution(ChatMessage.ToolResult(call.Id, call.Name, blocked, false), false);
+            }
+        }
         var context = new ToolContext
         {
             Workspace = workspace,
@@ -256,6 +309,29 @@ public sealed partial class Agent
         // G6 审计扩展（L3）：MCP 调用与文件写入统一落 .haoyue/audit/tools.jsonl
         //（bash 保留专属风险分级日志，不重复记录）。审计失败绝不影响执行。
         TryAuditToolExecution(workspace, tool, arguments, result, stopwatch.ElapsedMilliseconds);
+
+        // 用户配置的 tool.after 钩子：审计与产物归档。fire-and-forget，绝不阻断主流程。
+        if (configStore.Config.Hooks.Hooks.Count > 0)
+        {
+            var changed = new JsonArray();
+            for (var i = Math.Min(changesBefore, turnScope.Changes.Count); i < turnScope.Changes.Count; i++)
+                changed.Add((JsonNode)JsonValue.Create(turnScope.Changes[i].AbsolutePath)!);
+            await HookRunner.TriggerAsync(
+                "tool.after",
+                new JsonObject
+                {
+                    ["tool"] = tool.Name,
+                    ["target"] = tool.Name,
+                    ["arguments"] = arguments.DeepClone(),
+                    ["ok"] = result.Success,
+                    ["durationMs"] = stopwatch.Elapsed.TotalMilliseconds,
+                    ["outputPreview"] = Firstline(result.Output),
+                    ["workspace"] = workspace.Root,
+                    ["sessionId"] = turnScope.SessionId,
+                    ["changedFiles"] = changed,
+                },
+                configStore);
+        }
 
         // Repaired-arguments transparency (L7): a bracket-closure repair can recover a
         // syntactically valid but semantically truncated parameter (e.g. a cut-off bash
@@ -312,6 +388,33 @@ public sealed partial class Agent
         catch (Exception)
         {
             // 审计属于观测层：任何异常都不允许反过来中断工具执行。
+        }
+    }
+
+    /// <summary>
+    /// 权限拒绝的审计落点：复用现有钩子台账（不新增事件类型），一条失败记录说明
+    /// 谁在什么原因下被拒。台账属于观测层，写入失败绝不反向中断回合。
+    /// </summary>
+    private void AppendPermissionDenial(WorkspaceInfo workspace, string tool, string reason)
+    {
+        try
+        {
+            HookLedger.Append(
+                workspace.Root,
+                new HookRunRecord(
+                    DateTimeOffset.Now,
+                    "tool.after",
+                    "tool-permission",
+                    tool,
+                    Ok: false,
+                    DurationMs: 0,
+                    Error: reason,
+                    Output: null),
+                configStore.Config.Hooks.MaxLedgerRecords);
+        }
+        catch (Exception)
+        {
+            // 观测增强：任何异常都不得影响工具/回合的结果。
         }
     }
 

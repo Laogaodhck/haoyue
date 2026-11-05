@@ -37,11 +37,11 @@ import { RUNTIME_RECONNECT_ATTEMPTS } from './runtime-reconnect'
 import { ReasoningLevel } from './types'
 import type { ChatMessage, FileAttachment, ImageAttachment, ProjectItem, QueuedMessage, SessionSearchHit, ThreadItem, WorkDockTab } from './types'
 import {
-  cancelParams, formatContextRatio, formatInferenceFootnote,
+  cancelParams, cancelThreadTurn, formatContextRatio, formatInferenceFootnote,
   formatPreloadLabel, formatPromptWithFiles, formatTurnFailure,
-  hydrateMessages, makeId, messageMatches, normalizeReasoningLevel,
-  pathName, plainImages, queuedImageUrl, queuedMessagePreview,
-  samePath, sessionScope, sessionStats, updateThreadTitle,
+  hydrateMessages, loadStoredActiveThreadId, makeId, messageMatches, normalizeReasoningLevel,
+  pathName, pickStartupThread, plainImages, queuedImageUrl, queuedMessagePreview,
+  rememberActiveThreadId, samePath, sessionScope, sessionStats, updateThreadTitle,
 } from './app-helpers'
 import { createChatActions } from './app-actions'
 import { readScrollPosition, saveScrollPosition } from './scroll-memory'
@@ -116,6 +116,9 @@ const rebuildingConfig = ref(false)
 const projects = ref<ProjectItem[]>([])
 const threads = ref<ThreadItem[]>([])
 const activeThreadId = ref('')
+
+// 选中项持久化：重启后优先恢复上次选中的会话，存储值失效时回退最近更新。
+watch(activeThreadId, (id) => rememberActiveThreadId(id))
 // daemon 启动预热进度：无运行回合时展示在输入区（Ready/Failed 或断连即清除）。
 const modelPreload = ref<{ phase: string; percent: number } | null>(null)
 const selectedProjectId = ref('')
@@ -479,9 +482,7 @@ async function loadRuntimeState(): Promise<void> {
     await reconcileInterruptedTurns()
 
     if (!activeThread.value) {
-      const recent = threads.value
-        .filter((thread) => !thread.archived)
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+      const recent = pickStartupThread(threads.value, loadStoredActiveThreadId())
       if (recent) {
         activeThreadId.value = recent.id
         selectedProjectId.value = recent.projectId ?? ''
@@ -1500,6 +1501,9 @@ async function stopTurn(): Promise<void> {
   } catch { /* sendMessage owns the final state */ }
 }
 
+/** 取消侧栏里任意会话的运行回合；不影响当前打开的对话。 */
+const cancelTaskTurn = (thread: ThreadItem): Promise<void> => cancelThreadTurn(thread, daemonRequest)
+
 async function changeNetwork(enabled: boolean): Promise<void> {
   const thread = activeThread.value
   if (!thread || thread.archived) return
@@ -1621,7 +1625,7 @@ watch(theme, applyTheme)
           :active-project-id="selectedProjectId" :version="appInfo.version" @new-task="newTask"
           @open-workspace="openWorkspace" @select-thread="selectThread" @open-session="openSearchSession" @task-settings="openTaskSettings"
           @rename-task="renameTaskInline"
-          @archive-task="archiveTask" @delete-task="deleteTask"
+          @archive-task="archiveTask" @delete-task="deleteTask" @cancel-task="cancelTaskTurn"
           @delete-project="deleteProject" @archive-project-tasks="archiveProjectTasks"
           @initialize-project-workspace="initializeProjectWorkspace" @open-project-properties="openProjectProperties"
           @delete-project-tasks="deleteProjectTasks" @archive-global-tasks="archiveGlobalTasks"

@@ -39,13 +39,17 @@ export function defaultTaskMonitorConfig(): TaskMonitorConfig {
 /** 事件钩子（hooks.list/save/delete 读面，与 runtime 契约同构）。 */
 export interface HookInfo {
   name: string
-  trigger: 'task.completed' | 'schedule.completed'
+  trigger: 'session.start' | 'tool.before' | 'tool.after' | 'task.completed' | 'schedule.completed'
   action: 'webhook' | 'command'
   enabled: boolean
   webhookUrl: string
   /** 是否已配置 Bearer 密钥（不回传密钥明文）。 */
   hasSecret: boolean
   command: string
+  /** 匹配条件：逗号分隔通配符（* ?），匹配工具名/会话 id；空 = 全部。 */
+  match: string
+  timeoutSeconds: number
+  failurePolicy: 'warn' | 'block'
 }
 
 export interface HookProblem {
@@ -62,10 +66,27 @@ export interface HookStatus {
   lastDurationMs: number | null
 }
 
+export interface HookRunRecord {
+  at: string
+  trigger: string
+  hook: string
+  target: string
+  ok: boolean
+  durationMs: number
+  error: string | null
+  output: string | null
+}
+
 export interface HooksListResult {
   hooks: HookInfo[]
   problems: HookProblem[]
   status: HookStatus[]
+  ledger: HookRunRecord[]
+}
+
+export interface HooksRunsResult {
+  workspace: string
+  records: HookRunRecord[]
 }
 
 export interface HookTestResult {
@@ -78,12 +99,90 @@ export interface HookTestResult {
 /** 钩子编辑表单的载荷（hooks.save 参数）。 */
 export interface HookDraft {
   name: string
-  trigger: 'task.completed' | 'schedule.completed'
+  trigger: 'session.start' | 'tool.before' | 'tool.after' | 'task.completed' | 'schedule.completed'
   action: 'webhook' | 'command'
   enabled: boolean
   webhookUrl: string
   webhookSecret: string
   command: string
+  match: string
+  timeoutSeconds: number
+  failurePolicy: 'warn' | 'block'
+}
+
+/** 智能体团体（team.* 读面，与 runtime 契约同构）。 */
+export type TeamMode = 'sequential' | 'parallel' | 'supervisor' | 'review'
+
+export interface TeamMember {
+  id: string
+  name: string
+  role: string
+  responsibility: string
+  model: string | null
+  expertId: string | null
+  tools: string[]
+  enabled: boolean
+}
+
+export interface TeamDefinition {
+  id: string
+  name: string
+  description: string
+  mode: TeamMode
+  coordinatorId: string | null
+  enabled: boolean
+  maxRounds: number
+  timeoutSeconds: number
+  maxRetries: number
+  failureStrategy: 'stop' | 'continue' | 'fallback'
+  createdAt: string
+  updatedAt: string
+  members: TeamMember[]
+}
+
+export interface TeamsListResult {
+  workspace: string
+  teams: TeamDefinition[]
+}
+
+export interface TeamCopyResult {
+  workspace: string
+  team: TeamDefinition
+  teams: TeamDefinition[]
+}
+
+export interface TeamRunMember {
+  memberId: string
+  role: string
+  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  durationMs: number
+  toolCalls: number
+  error: string | null
+  outputPreview: string
+}
+
+export interface TeamRun {
+  runId: string
+  teamId: string
+  sessionId: string
+  status: 'running' | 'succeeded' | 'partial' | 'failed' | 'cancelled'
+  startedAt: string
+  endedAt: string | null
+  rounds: number
+  result: string | null
+  error: string | null
+  workspace: string
+  members: TeamRunMember[]
+}
+
+export interface TeamRunsResult {
+  workspace: string
+  runs: TeamRun[]
+}
+
+export interface TeamCancelResult {
+  runId: string
+  cancelled: boolean
 }
 
 /** Provider-neutral reasoning depth. Runtime wire clients perform API-specific mapping. */

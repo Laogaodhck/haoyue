@@ -124,7 +124,8 @@ public sealed class ImageGenTool(
         if (context.Workspace is null)
             return ToolResult.Fail("image_generate requires a workspace to write the artifact into.");
 
-        var outputsDir = Path.Combine(context.Workspace.Root, ".haoyue", "outputs", "images");
+        var outputsDir = PathGuard.ArtifactDirectory(context.Workspace, "images", out var artifactError);
+        if (outputsDir is null) return ToolResult.Fail(artifactError!);
         Directory.CreateDirectory(outputsDir);
         var customName = GetString(arguments, "file_name");
         var extension = DetectExtension(bytes);

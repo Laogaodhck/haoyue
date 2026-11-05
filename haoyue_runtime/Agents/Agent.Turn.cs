@@ -245,7 +245,8 @@ public sealed partial class Agent
         if (promptKey != s.CachedPromptKey)
         {
             s.CachedSystemPrompt = await ComposeSystemPromptAsync(
-                s.Workspace, model, tools, effectiveNetworkEnabled, s.SkillTriggerContext, expertId, s.Ct).ConfigureAwait(false);
+                s.Workspace, model, tools, effectiveNetworkEnabled, s.SkillTriggerContext, expertId, s.Ct,
+                s.Session.Header.Id, s.Session.Messages.Count <= 1).ConfigureAwait(false);
             s.CachedToolSchemaTokens = ContextPlanner.EstimateToolTokens(
                 tools.Select(t => new ToolDefinition(t.Name, t.Description, t.ParameterSchema)).ToList());
             s.CachedPromptKey = promptKey;
@@ -618,7 +619,7 @@ public sealed partial class Agent
     /// 回合终态收口：工作流终态事件、迟到 steering、中断痕迹、撤销台账与完成事件。
     /// 必须无条件执行（原实现位于 finally），否则客户端的工作流视图会停在中途。
     /// </summary>
-    private void FinalizeTurn(TurnState s)
+    private async Task FinalizeTurnAsync(TurnState s)
     {
         // Terminal WorkflowEvent MUST live on the common path after all catches: the
         // previous placement inside the try made the "error" branch unreachable, so
@@ -685,13 +686,13 @@ public sealed partial class Agent
         // 事件钩子（task.completed）：回合收尾后按配置自动执行 Webhook / 本地命令。
         // fire-and-forget——钩子失败或误配绝不回头影响回合结果；命令动作会以当前
         // 进程身份访问文件与网络，这是用户显式配置的自动化行为。
-        HookRunner.Trigger("task.completed", new System.Text.Json.Nodes.JsonObject
+        await HookRunner.TriggerAsync("task.completed", new System.Text.Json.Nodes.JsonObject
         {
             ["sessionId"] = s.Session.Header.Id,
             ["cancelled"] = s.Cancelled,
             ["error"] = s.Error,
             ["finishReason"] = s.Outcome,
-        }, configStore);
+        }, configStore).ConfigureAwait(false);
 
         // H-C 回合结束触发式沉淀提示：有实际执行步骤的成功回合给一条客户端可见的
         // 轻提示（不进模型上下文、零 token 成本）——回合内自觉写入优先，后台

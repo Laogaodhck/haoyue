@@ -1,4 +1,5 @@
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Daemon;
 using Haoyue.Runtime.Experts;
 using Haoyue.Runtime.Prompts;
 using Haoyue.Runtime.Providers;
@@ -14,7 +15,8 @@ public sealed partial class Agent
 
     private async Task<string> ComposeSystemPromptAsync(
         WorkspaceInfo workspace, ModelInfo model, IReadOnlyList<ITool> tools, bool networkEnabled,
-        string? skillTriggerContext = null, string? expertId = null, CancellationToken ct = default)
+        string? skillTriggerContext = null, string? expertId = null, CancellationToken ct = default,
+        string? sessionId = null, bool isSessionStart = false)
     {
         var memory = workspaceManager.LoadMemory(workspace);
         var agentsMd = workspaceManager.LoadAgentInstructions(workspace);
@@ -64,6 +66,43 @@ public sealed partial class Agent
             WorkspaceConfig = workspace.Config,
         };
         var basePrompt = await promptComposer.ComposeAsync(context, ct).ConfigureAwait(false);
+        // 结构化规则：每回合重新读取，保存后下一回合即生效；标题即「哪些规则生效了」。
+        var effectiveRules = ManagedRulesStore.Effective(workspace);
+        if (effectiveRules.Count > 0)
+        {
+            var rendered = ManagedRulesStore.RenderEffectiveText(workspace);
+            basePrompt += "\n\n## 工作区规则（设置中启用，按优先级排序）\n\n"
+                + ContextPlanner.FitInjectedText(rendered, injectedBudget, label: "rules.json");
+            ManagedRulesStore.RecordHits(workspace, effectiveRules.Select(rule => rule.Id), sessionId);
+        }
+        // 会话开始钩子：首回合注入上下文；失败一律按告警处理，不阻断会话。
+        if (isSessionStart && sessionId is { Length: > 0 })
+        {
+            try
+            {
+                var decision = await HookRunner.EvaluateAsync(
+                    "session.start",
+                    new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["sessionId"] = sessionId,
+                        ["workspace"] = workspace.Root,
+                        ["target"] = sessionId,
+                    },
+                    configStore, ct).ConfigureAwait(false);
+                var injected = string.Join("\n\n", decision.Outcomes
+                    .Where(outcome => outcome.Ok && !string.IsNullOrWhiteSpace(outcome.Output))
+                    .Select(outcome => outcome.Output!.Trim()));
+                if (injected.Length > 0)
+                {
+                    basePrompt += "\n\n## 会话启动上下文\n\n"
+                        + ContextPlanner.FitInjectedText(injected, injectedBudget, label: "session.start");
+                }
+            }
+            catch (Exception)
+            {
+                // 钩子是增强能力：任何异常都不应阻止会话开始。
+            }
+        }
         var expert = ExpertCatalog.Find(expertId);
         if (expert is not null)
         {
@@ -85,10 +124,11 @@ public sealed partial class Agent
         var rawMode = workspace.Config?.Mode ?? configStore.Config.Agent.Mode;
         var mode = AgentModeExtensions.Parse(rawMode);
 
-        var disabled = workspace.Config?.DisabledTools;
-        var available = disabled is not { Count: > 0 }
-            ? toolRegistry.All
-            : toolRegistry.All.Where(t => !disabled.Contains(t.Name, StringComparer.OrdinalIgnoreCase)).ToList();
+        // 工作区策略：disabledTools 硬禁用优先于 allowedTools 白名单（通配符见策略类）。
+        // 子代理的注册表视图已在组装时收窄，这里覆盖主智能体与所有执行路径。
+        var available = toolRegistry.All
+            .Where(tool => ToolPermissionPolicy.TryResolveWorkspace(workspace.Config, tool.Name, out _))
+            .ToList();
 
         // Manifest-v2 skills can constrain the toolset: the union of allowed-tools
         // over the skills injected this turn (triggers honored, stickiness window

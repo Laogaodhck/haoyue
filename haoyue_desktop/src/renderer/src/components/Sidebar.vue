@@ -19,13 +19,23 @@ import {
   Settings2,
   SlidersHorizontal,
   SquarePen,
-  Trash2
+  Trash2,
+  X
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import logoUrl from '../../../../resources/logo.png?url'
 import type { ProjectItem, SessionSearchHit, ThreadItem } from '../types'
 import { capTaskList, filterUnloadedHits, shouldSearchRemotely } from '../sidebar-search'
 import { groupThreadsByTime, type SessionGroup } from '../session-groups'
+import {
+  backgroundTaskFor,
+  projectThreads,
+  sidebarTaskStatus,
+  sidebarTaskStatusLabel,
+  taskRecentTime,
+  type SidebarBackgroundTask,
+  type SidebarTaskStatus
+} from '../sidebar-project-tasks'
 
 const props = defineProps<{
   projects: ProjectItem[]
@@ -44,6 +54,7 @@ const emit = defineEmits<{
   renameTask: [thread: ThreadItem, title: string]
   archiveTask: [thread: ThreadItem]
   deleteTask: [thread: ThreadItem]
+  cancelTask: [thread: ThreadItem]
   openProjectProperties: [project: ProjectItem]
   deleteProject: [project: ProjectItem]
   initializeProjectWorkspace: [project: ProjectItem]
@@ -70,7 +81,68 @@ function focusSearch(): void {
 
 defineExpose({ focusSearch })
 const taskSectionExpanded = ref(true)
-const expandedProjects = ref(new Set<string>())
+
+// 项目折叠状态持久化（与 haoyue-sidebar-view 同一套 localStorage 方式）：
+// 只记录用户手动收起的项目；未记录 = 默认展开，新项目也默认展开。
+const COLLAPSED_PROJECTS_KEY = 'haoyue-sidebar-collapsed-projects'
+
+function loadCollapsedProjects(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_PROJECTS_KEY)
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.filter((item): item is string => typeof item === 'string'))
+  } catch {
+    return new Set()
+  }
+}
+
+const collapsedProjects = ref(loadCollapsedProjects())
+
+watch(collapsedProjects, (value) => {
+  try { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...value])) } catch { /* 配额满不影响使用 */ }
+}, { deep: true })
+
+const expandedProjects = computed(() => new Set(
+  props.projects
+    .filter((project) => !collapsedProjects.value.has(project.id))
+    .map((project) => project.id)
+))
+
+// 后台任务状态（task.list）：按 sessionId 关联到会话行，提供权威的状态与结束时间。
+const backgroundTasks = ref<SidebarBackgroundTask[]>([])
+
+async function refreshBackgroundTasks(): Promise<void> {
+  try {
+    const response = await daemonRequest('task.list')
+    const parsed = JSON.parse(response.data) as SidebarBackgroundTask[]
+    backgroundTasks.value = Array.isArray(parsed) ? parsed : []
+  } catch { /* daemon 未就绪或旧版本：状态回退到会话自身推导 */ }
+}
+
+/** 行内取消：后台任务用 task.cancel；普通回合交给 App 走 agent.cancel。 */
+async function cancelThreadTask(thread: ThreadItem): Promise<void> {
+  const task = backgroundTaskFor(thread, backgroundTasks.value)
+  if (task && task.status === 'running') {
+    try { await daemonRequest('task.cancel', { id: task.id }) } catch { /* 终态由事件兜底 */ }
+    void refreshBackgroundTasks()
+    return
+  }
+  emit('cancelTask', thread)
+}
+
+function threadStatus(thread: ThreadItem): SidebarTaskStatus {
+  return sidebarTaskStatus(thread, backgroundTaskFor(thread, backgroundTasks.value))
+}
+
+function threadTime(thread: ThreadItem): string {
+  return taskRecentTime(thread, backgroundTaskFor(thread, backgroundTasks.value))
+}
+
+function canCancelThread(thread: ThreadItem): boolean {
+  return threadStatus(thread) === 'running'
+}
 
 /** 项目区在时间视图下默认折叠，但保留标题与加项目入口。 */
 const projectSectionExpanded = ref(true)
@@ -140,25 +212,13 @@ function commitRename(thread: ThreadItem): void {
   emit('renameTask', thread, title)
 }
 
-watch(() => props.projects, (items) => {
-  const next = new Set(expandedProjects.value)
-  items.forEach((project) => next.add(project.id))
-  expandedProjects.value = next
-}, { immediate: true, deep: true })
-
 watch(() => props.threads.map((thread) => thread.id), (ids) => {
   const current = new Set(ids)
   for (const id of ids) {
     if (knownThreadIds.has(id)) continue
     const thread = props.threads.find((item) => item.id === id)
-    if (!thread) continue
-    if (thread.projectId) {
-      const next = new Set(expandedProjects.value)
-      next.add(thread.projectId)
-      expandedProjects.value = next
-    } else {
-      taskSectionExpanded.value = true
-    }
+    // 项目展开状态由用户控制（并持久化），新出现的项目会话不再强制展开所属项目。
+    if (thread && !thread.projectId) taskSectionExpanded.value = true
   }
   knownThreadIds.clear()
   current.forEach((id) => knownThreadIds.add(id))
@@ -241,7 +301,7 @@ const globalTaskList = computed(() => buildTaskList('global', props.threads.filt
 const projectTaskLists = computed(() => {
   const lists = new Map<string, TaskList>()
   for (const project of props.projects) {
-    lists.set(project.id, buildTaskList(`project:${project.id}`, props.threads.filter((thread) => thread.projectId === project.id)))
+    lists.set(project.id, buildTaskList(`project:${project.id}`, projectThreads(props.threads, project.id)))
   }
   return lists
 })
@@ -251,14 +311,15 @@ function visibleThreads(projectId: string): ThreadItem[] {
 }
 
 function projectHasRunningTask(projectId: string): boolean {
-  return props.threads.some((thread) => thread.projectId === projectId && !thread.archived && thread.running)
+  return props.threads.some((thread) => thread.projectId === projectId && !thread.archived
+    && threadStatus(thread) === 'running')
 }
 
 function createTask(projectId?: string): void {
   if (projectId) {
-    const next = new Set(expandedProjects.value)
-    next.add(projectId)
-    expandedProjects.value = next
+    const next = new Set(collapsedProjects.value)
+    next.delete(projectId)
+    collapsedProjects.value = next
   } else {
     taskSectionExpanded.value = true
   }
@@ -266,10 +327,10 @@ function createTask(projectId?: string): void {
 }
 
 function toggleProject(project: ProjectItem): void {
-  const next = new Set(expandedProjects.value)
+  const next = new Set(collapsedProjects.value)
   if (next.has(project.id)) next.delete(project.id)
   else next.add(project.id)
-  expandedProjects.value = next
+  collapsedProjects.value = next
 }
 
 function toggleMenu(key: string, event?: MouseEvent): void {
@@ -306,15 +367,29 @@ function closeMenuOnEscape(event: KeyboardEvent): void {
   if (event.key === 'Escape') menuKey.value = ''
 }
 
+let unsubscribeTaskEvents: (() => void) | undefined
+let unsubscribeDaemonState: (() => void) | undefined
+
 onMounted(() => {
   document.addEventListener('pointerdown', closeMenuWhenFocusLeaves)
   document.addEventListener('focusin', closeMenuWhenFocusLeaves)
   document.addEventListener('keydown', closeMenuOnEscape)
   window.addEventListener('blur', closeMenuWhenFocusLeaves)
+  void refreshBackgroundTasks()
+  // 后台任务状态变化（排队→运行→终态）会广播 task.updated，刷新即可保持侧栏行状态。
+  unsubscribeTaskEvents = window.haoyue.daemon.onEvent((message) => {
+    if (message.event === 'task.updated') void refreshBackgroundTasks()
+  })
+  // 重连后补拉一次：断连期间错过的终态事件不会重放，列表本身是权威快照。
+  unsubscribeDaemonState = window.haoyue.daemon.onState((state) => {
+    if (state.connected) void refreshBackgroundTasks()
+  })
 })
 
 onBeforeUnmount(() => {
   if (remoteSearchTimer) clearTimeout(remoteSearchTimer)
+  unsubscribeTaskEvents?.()
+  unsubscribeDaemonState?.()
   document.removeEventListener('pointerdown', closeMenuWhenFocusLeaves)
   document.removeEventListener('focusin', closeMenuWhenFocusLeaves)
   document.removeEventListener('keydown', closeMenuOnEscape)
@@ -420,6 +495,8 @@ onBeforeUnmount(() => {
               @keydown.f2.prevent="startRename(thread)">
               <span class="thread-row-top">
                 <span>{{ thread.title }}</span>
+                <span class="thread-task-status" :class="`is-${threadStatus(thread)}`">{{ sidebarTaskStatusLabel(threadStatus(thread)) }}</span>
+                <small class="thread-task-time">{{ threadTime(thread) }}</small>
                 <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
               </span>
               <span v-if="threadSummary(thread)" class="thread-summary" :title="threadSummary(thread)">{{ threadSummary(thread) }}</span>
@@ -429,6 +506,11 @@ onBeforeUnmount(() => {
                 @keydown.enter.prevent="commitRename(thread)" @keydown.esc.prevent="renamingThreadId = ''"
                 @blur="commitRename(thread)" />
             </div>
+            <button v-if="canCancelThread(thread)" class="icon-button compact row-cancel-button"
+              :aria-label="`取消 ${thread.title} 的运行`" title="取消运行中的任务"
+              @click.stop="cancelThreadTask(thread)">
+              <X :size="15" />
+            </button>
             <button class="icon-button compact row-menu-button" :aria-label="`${thread.title} 任务菜单`"
               @click.stop="toggleMenu(`thread:${thread.id}`, $event)">
               <MoreHorizontal :size="15" />
@@ -472,6 +554,8 @@ onBeforeUnmount(() => {
                     <small v-if="projectDisplayName(thread.projectId)" class="thread-project-tag">
                       {{ projectDisplayName(thread.projectId) }}
                     </small>
+                    <span class="thread-task-status" :class="`is-${threadStatus(thread)}`">{{ sidebarTaskStatusLabel(threadStatus(thread)) }}</span>
+                    <small class="thread-task-time">{{ threadTime(thread) }}</small>
                     <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
                   </span>
                   <span v-if="threadSummary(thread)" class="thread-summary" :title="threadSummary(thread)">{{ threadSummary(thread) }}</span>
@@ -481,6 +565,11 @@ onBeforeUnmount(() => {
                     @keydown.enter.prevent="commitRename(thread)" @keydown.esc.prevent="renamingThreadId = ''"
                     @blur="commitRename(thread)" />
                 </div>
+                <button v-if="canCancelThread(thread)" class="icon-button compact row-cancel-button"
+                  :aria-label="`取消 ${thread.title} 的运行`" title="取消运行中的任务"
+                  @click.stop="cancelThreadTask(thread)">
+                  <X :size="15" />
+                </button>
                 <button class="icon-button compact row-menu-button" :aria-label="`${thread.title} 任务菜单`"
                   @click.stop="toggleMenu(`thread:${thread.id}`, $event)">
                   <MoreHorizontal :size="15" />
@@ -555,6 +644,10 @@ onBeforeUnmount(() => {
               <LoaderCircle v-if="projectHasRunningTask(project.id)"
                 class="thread-running-spinner" :size="15" aria-label="项目中有任务正在运行" />
             </button>
+            <button class="icon-button compact project-add-task-button" :aria-label="`在 ${project.name} 中新建任务`"
+              :title="`在「${project.name}」中新建任务`" @click.stop="createTask(project.id)">
+              <Plus :size="15" />
+            </button>
             <button class="icon-button compact row-menu-button" :aria-label="`${project.name} 项目菜单`"
               @click.stop="toggleMenu(`project:${project.id}`, $event)">
               <MoreHorizontal :size="16" />
@@ -585,7 +678,7 @@ onBeforeUnmount(() => {
           </div>
 
           <Transition name="project-collapse">
-            <div v-if="expandedProjects.has(project.id) && viewMode === 'projects'" class="project-tasks">
+            <div v-if="expandedProjects.has(project.id)" class="project-tasks">
               <div v-for="thread in visibleThreads(project.id)" :key="thread.id" class="thread-heading-row"
                 :class="{ active: thread.id === activeThreadId }">
                 <button v-if="renamingThreadId !== thread.id" class="thread-row"
@@ -593,6 +686,8 @@ onBeforeUnmount(() => {
                   @keydown.f2.prevent="startRename(thread)">
                   <span class="thread-row-top">
                     <span>{{ thread.title }}</span>
+                    <span class="thread-task-status" :class="`is-${threadStatus(thread)}`">{{ sidebarTaskStatusLabel(threadStatus(thread)) }}</span>
+                    <small class="thread-task-time">{{ threadTime(thread) }}</small>
                     <LoaderCircle v-if="thread.running" class="thread-running-spinner" :size="15" aria-label="运行中" />
                   </span>
                   <span v-if="threadSummary(thread)" class="thread-summary" :title="threadSummary(thread)">{{ threadSummary(thread) }}</span>
@@ -602,6 +697,11 @@ onBeforeUnmount(() => {
                     @keydown.enter.prevent="commitRename(thread)" @keydown.esc.prevent="renamingThreadId = ''"
                     @blur="commitRename(thread)" />
                 </div>
+                <button v-if="canCancelThread(thread)" class="icon-button compact row-cancel-button"
+                  :aria-label="`取消 ${thread.title} 的运行`" title="取消运行中的任务"
+                  @click.stop="cancelThreadTask(thread)">
+                  <X :size="15" />
+                </button>
                 <button class="icon-button compact row-menu-button" :aria-label="`${thread.title} 任务菜单`"
                   @click.stop="toggleMenu(`thread:${thread.id}`, $event)">
                   <MoreHorizontal :size="15" />
@@ -628,7 +728,7 @@ onBeforeUnmount(() => {
                 @click="expandTaskList(`project:${project.id}`)">显示全部（还有
                 {{ projectTaskLists.get(project.id)?.hidden }} 个）</button>
               <p v-if="visibleThreads(project.id).length === 0" class="project-empty">
-                {{ project.loaded === false ? '正在读取任务…' : '无任务' }}
+                {{ project.loaded === false ? '正在读取任务…' : '暂无任务，点击项目行的 + 新建' }}
               </p>
             </div>
           </Transition>

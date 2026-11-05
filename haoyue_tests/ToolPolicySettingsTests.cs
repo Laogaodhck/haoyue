@@ -151,4 +151,55 @@ public sealed class ToolPolicySettingsTests : IDisposable
         Assert.Contains("没有 tool 字段", ex.Message);
         Assert.Empty(store.Config.Agent.ToolPolicy.Allow); // 拒绝即不落盘
     }
+
+    [Fact]
+    public void SaveWorkspaceConfig_AcceptsToolAllowListAndFallbackSwitch()
+    {
+        var (admin, _) = CreateAdmin();
+        var project = Path.Combine(_dir, "project-ok");
+        Directory.CreateDirectory(project);
+
+        var saved = JsonNode.Parse(admin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = project },
+            new JsonObject
+            {
+                ["allowedTools"] = new JsonArray("read_file", "github/*", "*/create_issue"),
+                ["allowToolFallbackToGlobal"] = true,
+            }))!.AsObject();
+        Assert.Equal("workspace", saved["scope"]!.GetValue<string>());
+
+        var file = Path.Combine(project, ".haoyue", "config.json");
+        var document = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        Assert.Equal(
+            ["read_file", "github/*", "*/create_issue"],
+            document["allowedTools"]!.AsArray().Select(node => node!.GetValue<string>()));
+        Assert.True(document["allowToolFallbackToGlobal"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void SaveWorkspaceConfig_RejectsInvalidToolPatternsWithoutWriting()
+    {
+        var (admin, _) = CreateAdmin();
+        var project = Path.Combine(_dir, "project-bad");
+        Directory.CreateDirectory(project);
+        var file = Path.Combine(project, ".haoyue", "config.json");
+
+        var ex = Assert.Throws<DaemonRequestException>(() => admin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = project },
+            new JsonObject { ["allowedTools"] = new JsonArray("read_file", "bad pattern") }));
+        Assert.Contains("allowedTools", ex.Message);
+        Assert.Contains("不允许字符", ex.Message);
+        Assert.False(File.Exists(file)); // 拒绝即不落盘
+
+        var wildcard = Assert.Throws<DaemonRequestException>(() => admin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = project },
+            new JsonObject { ["allowedTools"] = new JsonArray("github/**") }));
+        Assert.Contains("`**`", wildcard.Message);
+        Assert.False(File.Exists(file));
+
+        var shape = Assert.Throws<DaemonRequestException>(() => admin.SaveWorkspaceConfig(
+            new JsonObject { ["workspace"] = project },
+            new JsonObject { ["allowedTools"] = "read_file" }));
+        Assert.Contains("字符串数组", shape.Message);
+    }
 }

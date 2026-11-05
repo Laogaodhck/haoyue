@@ -8,6 +8,7 @@ using Haoyue.Runtime.Events;
 using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Scheduling;
 using Haoyue.Runtime.Sessions;
+using Haoyue.Runtime.Tools;
 using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Tests;
@@ -140,6 +141,26 @@ public sealed class ScheduleTests : IDisposable
         var ran = store.Get(task.Id)!;
         Assert.Equal(ScheduleRunStatus.Success, ran.LastStatus);
         Assert.NotNull(ran.LastRunAt);
+    }
+
+    [Fact]
+    public async Task Service_TurnRuntime_UsesSharedInteractiveApprovalRegistry()
+    {
+        var store = NewStore();
+        var runtime = HaoyueRuntime.Create(
+            _dir,
+            new ConfigStore(Path.Combine(_dir, "config-approval.json"), Path.Combine(_dir, "state-approval.json")),
+            Path.Combine(_dir, "runtime-approval.db"));
+        var approvals = new ApprovalRegistry { Interactive = true };
+        var service = new ScheduleService(
+            store, runtime, new FileLockCoordinator(), new LlmHttpFactory(),
+            new CircuitBreaker(new RetryConfig()), approvals: approvals);
+
+        // 定时运行的隔离容器必须复用 daemon 的交互式登记簿；否则会回落到
+        // HaoyueRuntime 默认的非交互实例，高风险工具在无人值守时被静默放行。
+        await using var turn = service.CreateTurnRuntime(runtime.Workspace, "schedule-test");
+        Assert.Same(approvals, turn.Approvals);
+        Assert.True(turn.Approvals.Interactive);
     }
 
     [Fact]
@@ -327,6 +348,64 @@ public sealed class ScheduleTests : IDisposable
         await notifier.NotifyAsync("http://webhook.test/notify", task, null, CancellationToken.None);
         // Empty URL is a no-op, not an error either.
         await notifier.NotifyAsync("", task, null, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Service_RunNow_ProjectTask_RunsInsideProjectTaskDirectory()
+    {
+        var store = NewStore();
+        var runtime = HaoyueRuntime.Create(
+            _dir,
+            new ConfigStore(Path.Combine(_dir, "config-taskdir.json"), Path.Combine(_dir, "state-taskdir.json")),
+            Path.Combine(_dir, "runtime-taskdir.db"));
+        var projectRoot = Path.Combine(_dir, "project");
+        Directory.CreateDirectory(projectRoot);
+        var task = store.Upsert(null, "项目内任务", projectRoot, "生成周报", "0 9 * * *", false);
+
+        WorkspaceInfo? seen = null;
+        var service = new ScheduleService(
+            store, runtime, new FileLockCoordinator(), new LlmHttpFactory(),
+            new CircuitBreaker(new RetryConfig()),
+            (workspace, _, _, _) =>
+            {
+                seen = workspace;
+                return Task.FromResult(new AgentTurnResult("完成", false, null));
+            });
+
+        await service.RunNowAsync(task.Id, CancellationToken.None);
+
+        var expected = Path.Combine(projectRoot, ".haoyue", "tasks", $"schedule-{task.Id}");
+        Assert.Equal(ScheduleRunStatus.Success, store.Get(task.Id)!.LastStatus);
+        Assert.NotNull(seen);
+        Assert.Equal(expected, seen!.TaskDir);
+        // 围栏仍是项目根：任务只落在项目内的任务子目录。
+        Assert.Equal(projectRoot, seen.Root);
+        Assert.True(Directory.Exists(expected));
+        Assert.True(PathGuard.IsInside(projectRoot, seen.TaskDir!));
+    }
+
+    [Fact]
+    public async Task Service_RunNow_MissingProjectWorkspace_FailsInsteadOfFallingBackToGlobal()
+    {
+        var store = NewStore();
+        var runtime = HaoyueRuntime.Create(
+            _dir,
+            new ConfigStore(Path.Combine(_dir, "config-missing.json"), Path.Combine(_dir, "state-missing.json")),
+            Path.Combine(_dir, "runtime-missing.db"));
+        var missing = Path.Combine(_dir, "missing-project");
+        var task = store.Upsert(null, "失效工作区", missing, "跑一遍", "0 9 * * *", false);
+
+        var service = new ScheduleService(
+            store, runtime, new FileLockCoordinator(), new LlmHttpFactory(),
+            new CircuitBreaker(new RetryConfig()), StubRunner);
+
+        await service.RunNowAsync(task.Id, CancellationToken.None);
+
+        var ran = store.Get(task.Id)!;
+        Assert.Equal(ScheduleRunStatus.Error, ran.LastStatus);
+        Assert.Contains("工作区不存在", ran.LastError);
+        // 不允许退到全局目录，也不允许顺手把失效路径建出来。
+        Assert.False(Directory.Exists(missing));
     }
 
     private static Task<AgentTurnResult> FailingRunner(

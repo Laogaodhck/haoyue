@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Haoyue.Runtime.Configuration;
 using Haoyue.Runtime.Data;
+using Haoyue.Runtime.Tools;
 
 namespace Haoyue.Runtime.Daemon;
 
@@ -350,6 +351,7 @@ internal sealed partial class DaemonAdminApi
         var node = JsonSerializer.SerializeToNode(current, HaoyueJsonContext.Default.WorkspaceConfig) as JsonObject
                    ?? new JsonObject();
         MergePatch(node, patch);
+        ToolPermissionPatchValidator.Validate(node, patch);
         var updated = node.Deserialize(HaoyueJsonContext.Default.WorkspaceConfig) ?? current;
         AtomicFile.WriteAllText(file, JsonSerializer.Serialize(updated, HaoyueJsonContext.Default.WorkspaceConfig));
 
@@ -380,6 +382,8 @@ internal sealed partial class DaemonAdminApi
         to.Language = from.Language;
         to.DisabledSkills = from.DisabledSkills;
         to.DisabledTools = from.DisabledTools;
+        to.AllowedTools = from.AllowedTools;
+        to.AllowToolFallbackToGlobal = from.AllowToolFallbackToGlobal;
         to.Mcp = from.Mcp;
         to.AutoVerify = from.AutoVerify;
         to.VerifyCommand = from.VerifyCommand;

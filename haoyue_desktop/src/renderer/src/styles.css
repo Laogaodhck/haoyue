@@ -847,6 +847,76 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+/* 任务行右端：状态徽标 + 最近时间 + 运行中旋转图标（标题占满剩余宽度）。 */
+.thread-row-top > span:first-child {
+  flex: 1;
+}
+
+.thread-task-status {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 1px 6px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.thread-task-status.is-running {
+  color: var(--accent);
+}
+
+.thread-task-status.is-queued {
+  color: var(--text-secondary);
+}
+
+.thread-task-status.is-completed {
+  color: var(--text-muted);
+}
+
+.thread-task-status.is-failed {
+  color: var(--danger);
+}
+
+.thread-task-status.is-cancelled {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.thread-task-time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.thread-row-top .thread-running-spinner {
+  margin-left: 0;
+}
+
+/* 运行中任务的取消入口：与行菜单同一显隐规则，避免常驻噪音。 */
+.row-cancel-button {
+  flex: 0 0 auto;
+  opacity: 0;
+}
+
+.thread-heading-row:hover .row-cancel-button,
+.row-cancel-button:focus-visible {
+  opacity: 1;
+}
+
+.project-add-task-button {
+  flex: 0 0 auto;
+  opacity: 0;
+}
+
+.project-heading-row:hover .project-add-task-button,
+.project-add-task-button:focus-visible {
+  opacity: 1;
+}
+
 .thread-row.active,
 .thread-heading-row.active .thread-row {
   color: var(--text);

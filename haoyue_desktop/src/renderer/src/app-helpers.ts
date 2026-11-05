@@ -352,6 +352,47 @@ export function cancelParams(thread: ThreadItem): { requestId: number } | { sess
   return null
 }
 
+/** 选中项持久化：重启后恢复上次选中的会话，存储值失效时回退最近更新的未归档会话。 */
+const ACTIVE_THREAD_STORAGE_KEY = 'haoyue-active-thread'
+
+export function loadStoredActiveThreadId(): string {
+  try {
+    return localStorage.getItem(ACTIVE_THREAD_STORAGE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function rememberActiveThreadId(id: string): void {
+  try {
+    if (id) localStorage.setItem(ACTIVE_THREAD_STORAGE_KEY, id)
+    else localStorage.removeItem(ACTIVE_THREAD_STORAGE_KEY)
+  } catch { /* 配额满不影响使用 */ }
+}
+
+export function pickStartupThread(
+  threads: readonly ThreadItem[],
+  storedId: string
+): ThreadItem | undefined {
+  const stored = storedId
+    ? threads.find((thread) => thread.id === storedId && !thread.archived)
+    : undefined
+  return stored ?? threads
+    .filter((thread) => !thread.archived)
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+}
+
+/** 取消任意会话的运行回合（侧栏行内取消）；终态由 daemon 事件收敛。 */
+export async function cancelThreadTurn(
+  thread: ThreadItem,
+  send: (method: string, params?: Record<string, unknown>) => Promise<unknown>
+): Promise<void> {
+  if (!thread.running) return
+  const params = cancelParams(thread)
+  if (!params) return
+  try { await send('agent.cancel', { ...params }) } catch { /* terminal event settles */ }
+}
+
 export function messageMatches(message: ChatMessage, query: string): boolean {
   const normalized = query.trim().toLocaleLowerCase()
   if (!normalized) return true

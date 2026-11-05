@@ -51,6 +51,8 @@ public sealed class HaoyueRuntime : IAsyncDisposable, IDisposable
     public ExtensionManager Extensions { get; } = ExtensionManager.CreateDefault();
     public IMcpManager Mcp => _services.GetRequiredService<IMcpManager>();
     public Agent Agent => _services.GetRequiredService<Agent>();
+    /// <summary>子任务委派（单任务 / 批量）；智能体团体复用同一委派链路与共享黑板。</summary>
+    public IAgentDelegator Delegator => _services.GetRequiredService<IAgentDelegator>();
     /// <summary>Per-runtime undo ledger registry; the daemon overrides this with a
     /// process-wide instance shared across isolated turn runtimes.</summary>
     public TurnUndoRegistry UndoRegistry => _services.GetRequiredService<TurnUndoRegistry>();

@@ -728,6 +728,8 @@ internal sealed partial class DaemonAdminApi(
             });
         }
         result["connectors"] = packages;
+        if (root is not null && Directory.Exists(Path.Combine(root, "github-cli")))
+            result["ghCli"] = GhCliProbe.ToJson(GhCliProbe.Describe());
         return result.ToJsonString();
     }
 

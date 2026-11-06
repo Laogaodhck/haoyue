@@ -45,19 +45,20 @@ haoyue mcp test                        # 验证连接与工具发现
 
 ## 完整性校验（供应链）
 
-`connectors/SHA256SUMS` 覆盖 12 个文件（11 个 `connector.json` + 内置本地服务器），由 `python tools/generate_connector_checksums.py` 生成、CI 以 `--check` 锁定；运行时 `ConnectorIntegrity.Verify` 在安装前比对同一清单。
+`connectors/SHA256SUMS` 覆盖 14 个文件（12 个 `connector.json` + 2 个内置本地服务器），由 `python tools/generate_connector_checksums.py` 生成、CI 以 `--check` 锁定；运行时 `ConnectorIntegrity.Verify` 在安装前比对同一清单。
 
 - 清单同时是**已登记包白名单**：受管目录里凭空多出一个连接器包（自带 `connector.json`）时默认拒绝安装——旧逻辑「查无条目即放行」等于给任意新增包开口子。
 - 自建/第三方连接器目录：不提供 `SHA256SUMS` 时完全跳过校验；已提供清单但确实要装未登记包时，显式设置 `HAOYUE_CONNECTORS_ALLOW_UNSIGNED=1`。
 - 改动任一 `connector.json` 或 `connectors/servers/*.py` 后必须重跑生成脚本，否则 `ConnectorIntegrityTests.RepoSums_MatchDirectoryContents` 与 CI 的 `connectors` 作业会红。
 
-## 首批目录（11 个）
+## 首批目录（12 个）
 
 | ID | 名称 | 类型 | 依赖 |
 |---|---|---|---|
 | browser | 浏览器控制 | npm（@playwright/mcp） | npx |
 | git | Git 仓库 | uvx（mcp-server-git） | uvx |
 | github | GitHub | npm（官方 server-github） | npx |
+| github-cli | GitHub CLI（gh） | 内置本地服务器（独立） | 无（复用本机已登录的 gh） |
 | sqlite | SQLite 数据库 | uvx（mcp-server-sqlite） | uvx |
 | notion | Notion | npm（官方 notion-mcp-server） | npx |
 | email | 邮箱 IMAP/SMTP | 内置本地服务器 | 无 |
@@ -74,6 +75,8 @@ haoyue mcp test                        # 验证连接与工具发现
 - 网络访问仅由显式工具调用触发，不常驻后台；
 - 邮件凭据经安装器以 `secret:` 前缀加密存入配置，传输前一刻解析，不落日志；
 - `http_request` 强制超时（默认 30s，上限 120s），响应体超过 2 万字符截断。
+
+`connectors/servers/haoyue_gh_server.py`：GitHub CLI 连接器专用的独立服务器（单独进程，避免 gh 工具出现在其它本地连接器下）。只封装 11 个白名单 gh 子命令（仓库 / Issue / PR 查询，Issue / PR 创建与评论），不提供 `gh api` 透传；参数按正则 / 枚举 / 长度校验并拒绝以 `-` 开头的选项注入后，以列表形式传给 `subprocess`（不经 shell），复用本机 gh 登录态，不读取也不输出 token，未安装 / 未登录 / 超时 / 404 / 速率限制统一翻译成可执行提示。
 
 ## 目录解析顺序
 

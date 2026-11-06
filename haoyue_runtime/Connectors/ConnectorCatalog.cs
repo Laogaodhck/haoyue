@@ -73,6 +73,9 @@ public static class ConnectorCatalog
 {
     public const string BundledServerRelativePath = "servers/haoyue_local_server.py";
 
+    /// <summary>GitHub CLI 连接器的内置服务器（独立进程，避免 gh 工具泄漏给其它本地连接器）。</summary>
+    public const string BundledGhServerRelativePath = "servers/haoyue_gh_server.py";
+
     public static string? ResolveRoot()
     {
         var candidates = new List<string>();
@@ -154,6 +157,14 @@ public static class ConnectorCatalog
         var path = root is null ? null : Path.Combine(root, BundledServerRelativePath.Replace('/', Path.DirectorySeparatorChar));
         return path is not null && File.Exists(path) ? path : null;
     }
+
+    /// <summary>GitHub CLI 连接器的内置服务器（connectors/servers/haoyue_gh_server.py）绝对路径。</summary>
+    public static string? ResolveBundledGhServer(string? root = null)
+    {
+        root ??= ResolveRoot();
+        var path = root is null ? null : Path.Combine(root, BundledGhServerRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        return path is not null && File.Exists(path) ? path : null;
+    }
 }
 
 /// <summary>
@@ -166,13 +177,14 @@ public static class ConnectorInstaller
         IConfigStore configStore, ConnectorPackage package, IReadOnlyDictionary<string, string>? values = null)
     {
         // 供应链完整性（P2）：安装前校验清单与内置本地服务器未被篡改。
-        var manifest = ConnectorCatalog.ResolveRoot() is { } root
+        var root = ConnectorCatalog.ResolveRoot();
+        var manifest = root is not null
             ? Path.Combine(root, package.Id, "connector.json")
             : null;
         if (manifest is not null && File.Exists(manifest))
             ConnectorIntegrity.Verify(manifest);
 
-        var result = InstantiateDetailed(package, values ?? new Dictionary<string, string>());
+        var result = InstantiateDetailed(package, values ?? new Dictionary<string, string>(), root);
 
         var servers = configStore.Config.Mcp.Servers;
         servers[package.Id] = result.Server;
@@ -202,7 +214,7 @@ public static class ConnectorInstaller
     /// env/header 键直接删除、args 项整项丢弃；命令与 URL 是启动必需项，缺值直接抛可读错误。
     /// </summary>
     public static ConnectorInstallResult InstantiateDetailed(
-        ConnectorPackage package, IReadOnlyDictionary<string, string> values)
+        ConnectorPackage package, IReadOnlyDictionary<string, string> values, string? root = null)
     {
         // 1. 校验必填项（空白值视同未提供）。
         var missing = (package.Inputs ?? [])
@@ -225,10 +237,20 @@ public static class ConnectorInstaller
             else if (string.Equals(input.Key, "LOCAL_SERVER", StringComparison.Ordinal))
             {
                 // 内置本地服务器路径由目录自动解析，用户无需手填。
-                var bundled = ConnectorCatalog.ResolveBundledServer();
+                var bundled = ConnectorCatalog.ResolveBundledServer(root);
                 if (bundled is null)
                     throw new ConnectorException(
                         $"连接器 {package.Id} 依赖内置本地服务器，但未找到 {ConnectorCatalog.BundledServerRelativePath}。" +
+                        "请设置 HAOYUE_CONNECTORS_DIR 指向连接器目录。");
+                resolved[input.Key] = bundled;
+            }
+            else if (string.Equals(input.Key, "GH_SERVER", StringComparison.Ordinal))
+            {
+                // GitHub CLI 连接器使用独立服务器，避免 gh 工具出现在其它本地连接器下。
+                var bundled = ConnectorCatalog.ResolveBundledGhServer(root);
+                if (bundled is null)
+                    throw new ConnectorException(
+                        $"连接器 {package.Id} 依赖内置 GitHub CLI 服务器，但未找到 {ConnectorCatalog.BundledGhServerRelativePath}。" +
                         "请设置 HAOYUE_CONNECTORS_DIR 指向连接器目录。");
                 resolved[input.Key] = bundled;
             }

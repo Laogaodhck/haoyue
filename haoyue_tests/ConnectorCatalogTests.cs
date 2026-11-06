@@ -30,14 +30,14 @@ public sealed class ConnectorCatalogTests : IDisposable
         catch (IOException) { }
     }
 
-    /// <summary>仓库内置目录应包含全部 11 个连接器包且 id/字段合法。</summary>
+    /// <summary>仓库内置目录应包含全部 12 个连接器包且 id/字段合法。</summary>
     [Fact]
     public void RepoCatalog_LoadsAllPackages()
     {
         var repoRoot = FindRepoRoot();
         var packages = ConnectorCatalog.LoadAll(Path.Combine(repoRoot, "connectors"));
 
-        // 用户对标清单要求 ≥10；仓库当前 11 个（git 与 github 各一包）。
+        // 用户对标清单要求 ≥10；仓库当前 12 个（git、github 与 github-cli 各一包）。
         Assert.True(packages.Count >= 10, $"首批连接器应 ≥10 个，实际 {packages.Count}");
 
         foreach (var package in packages)
@@ -52,7 +52,7 @@ public sealed class ConnectorCatalogTests : IDisposable
         var ids = packages.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var expected in new[]
                  {
-                     "browser", "git", "github", "email", "calendar", "rss",
+                     "browser", "git", "github", "github-cli", "email", "calendar", "rss",
                      "clipboard", "notify", "http-api", "sqlite", "notion",
                  })
             Assert.True(ids.Contains(expected), $"缺少连接器 {expected}");
@@ -72,6 +72,36 @@ public sealed class ConnectorCatalogTests : IDisposable
             .ToHashSet(StringComparer.Ordinal);
         Assert.Contains("clipboard", offlineIds);
         Assert.Contains("email", offlineIds);
+    }
+
+    /// <summary>
+    /// GitHub CLI 使用独立的内置服务器（避免 gh 工具泄漏给其它本地连接器），
+    /// 且工具清单必须显式声明只读/写操作、不得出现 gh api 透传。
+    /// </summary>
+    [Fact]
+    public void GithubCliPackage_UsesDedicatedServerAndDeclaresTools()
+    {
+        var root = Path.Combine(FindRepoRoot(), "connectors");
+        var package = ConnectorCatalog.Find("github-cli", root);
+        Assert.NotNull(package);
+        Assert.True(package!.Offline);
+        Assert.Equal("python", package.Server.Command);
+        Assert.Contains("${GH_SERVER}", package.Server.Args!);
+        Assert.NotNull(ConnectorCatalog.ResolveBundledGhServer(root));
+
+        var result = ConnectorInstaller.InstantiateDetailed(package, new Dictionary<string, string>(), root);
+        Assert.Contains(result.Server.Args!, arg =>
+            arg.EndsWith("haoyue_gh_server.py", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("${", string.Join('|', result.Server.Args!));
+        Assert.Equal("gh", result.Server.Env!["GH_BIN"]);
+        Assert.DoesNotContain("${", string.Join('|', result.Server.Env!.Values));
+        Assert.False(result.Server.Env!.ContainsKey("GH_HOST"), "未填写的可选 env 键必须剔除");
+
+        var declared = package.ReadOnlyTools!.Concat(package.MutatingTools!).ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("gh_repo_view", declared);
+        Assert.Contains("gh_issue_create", declared);
+        Assert.Contains("gh_pr_create", declared);
+        Assert.False(declared.Contains("gh_api"), "不提供任意 gh api 透传");
     }
 
     /// <summary>安装：占位符替换、默认值回填、secret 加密、写入 mcp.servers 并持久化。</summary>
@@ -440,6 +470,13 @@ public sealed class ConnectorDaemonApiTests : IDisposable
             var clipboard = listed["connectors"]!.AsArray()
                 .First(node => node!["id"]!.GetValue<string>() == "clipboard")!.AsObject();
             Assert.False(clipboard["installed"]!.GetValue<bool>());
+
+            // GitHub CLI 状态快照随目录一起返回（本机是否安装 gh 不影响字段契约）。
+            var gh = listed["ghCli"]!.AsObject();
+            Assert.Contains("installed", gh.Select(pair => pair.Key));
+            Assert.Equal("gh auth login", gh["loginCommand"]!.GetValue<string>());
+            Assert.Equal("https://cli.github.com/", gh["installUrl"]!.GetValue<string>());
+            Assert.False(gh.Select(pair => pair.Key).Contains("token"), "回执不得包含令牌字段");
 
             // install：一键安装 offline 连接器，LOCAL_SERVER 自动解析。
             var afterInstall = JsonNode.Parse((await admin.InstallConnectorAsync(

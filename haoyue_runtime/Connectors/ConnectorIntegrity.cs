@@ -64,6 +64,10 @@ public static class ConnectorIntegrity
         var bundledServer = ConnectorCatalog.ResolveBundledServer(root);
         if (bundledServer is not null)
             VerifyEntry(entries, ConnectorCatalog.BundledServerRelativePath, bundledServer, "内置本地 MCP 服务器");
+
+        var bundledGhServer = ConnectorCatalog.ResolveBundledGhServer(root);
+        if (bundledGhServer is not null)
+            VerifyEntry(entries, ConnectorCatalog.BundledGhServerRelativePath, bundledGhServer, "内置 GitHub CLI MCP 服务器");
     }
 
     /// <summary>

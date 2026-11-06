@@ -302,6 +302,72 @@
     }
   },
   {
+    "id": "github-cli",
+    "manifest": {
+      "schemaVersion": 1,
+      "id": "github-cli",
+      "name": "GitHub CLI（gh）",
+      "description": "复用本机已登录的 gh 命令行：查看仓库、Issue、Pull Request，并可显式创建 Issue / PR 与发表评论。",
+      "icon": "\uD83D\uDC19",
+      "category": "dev",
+      "tags": [
+        "GitHub",
+        "gh",
+        "Issue",
+        "Pull Request"
+      ],
+      "homepage": "https://cli.github.com/",
+      "source": "official",
+      "offline": true,
+      "server": {
+        "transport": "stdio",
+        "command": "python",
+        "args": [
+          "${GH_SERVER}"
+        ],
+        "env": {
+          "GH_BIN": "${GH_BIN}",
+          "GH_HOST": "${GH_HOST}"
+        }
+      },
+      "inputs": [
+        {
+          "key": "GH_SERVER",
+          "title": "内置 GitHub CLI 服务器路径（自动填充，无需修改）",
+          "required": false
+        },
+        {
+          "key": "GH_BIN",
+          "title": "gh 可执行文件名或绝对路径",
+          "description": "默认从 PATH 查找 gh；可用绝对路径指定其他版本。",
+          "required": false,
+          "default": "gh"
+        },
+        {
+          "key": "GH_HOST",
+          "title": "GitHub 主机（企业版可填，如 ghe.example.com）",
+          "description": "留空使用 gh 默认登录主机；此处只填主机名，不填令牌。",
+          "required": false
+        }
+      ],
+      "readOnlyTools": [
+        "gh_auth_status",
+        "gh_repo_view",
+        "gh_repo_list",
+        "gh_issue_list",
+        "gh_issue_view",
+        "gh_pr_list",
+        "gh_pr_view",
+        "gh_pr_checks"
+      ],
+      "mutatingTools": [
+        "gh_issue_create",
+        "gh_issue_comment",
+        "gh_pr_create"
+      ]
+    }
+  },
+  {
     "id": "http-api",
     "manifest": {
       "schemaVersion": 1,

@@ -5,7 +5,9 @@ import {
   CalendarDays,
   ChevronDown,
   ClipboardList,
+  Copy,
   Database,
+  ExternalLink,
   GitBranch,
   GitFork,
   Globe2,
@@ -16,10 +18,18 @@ import {
   Plug,
   RefreshCw,
   Rss,
-  Search
+  Search,
+  Terminal
 } from '@lucide/vue'
 import { computed, onMounted, ref, type Component } from 'vue'
 import { confirmAction } from '../confirmation'
+import {
+  describeGhCli,
+  GH_CLI_INSTALL_URL,
+  GH_CLI_LOGIN_COMMAND,
+  GH_CLI_LOGIN_URL,
+  type GhCliStatus
+} from '../gh-cli-status'
 
 const emit = defineEmits<{
   /** 目录发生变化（安装/卸载/启停），宿主可刷新 MCP 状态。 */
@@ -59,6 +69,9 @@ interface ConnectorInputMeta {
 
 const catalog = ref<ConnectorEntry[]>([])
 const catalogAvailable = ref(true)
+/** GitHub CLI 状态快照；只有目录包含 github-cli 包时 daemon 才会返回。 */
+const ghCli = ref<GhCliStatus | null>(null)
+const ghCliView = computed(() => describeGhCli(ghCli.value))
 const loading = ref(false)
 const error = ref('')
 /** 安装结果提示（未填写的配置项：已从配置剔除，功能可能降级）。 */
@@ -94,6 +107,7 @@ const CONNECTOR_ICONS: Record<string, Component> = {
   email: Mail,
   git: GitBranch,
   github: GitFork,
+  'github-cli': Terminal,
   'http-api': Plug,
   notify: Bell,
   notion: NotebookText,
@@ -125,6 +139,21 @@ function statusLabel(connector: ConnectorEntry): string {
   return connector.enabled ? '已启用' : '已停用'
 }
 
+/** 登录/安装引导只打开官方文档，不在桌面端自动执行 gh auth login。 */
+function openExternal(url: string): void {
+  void window.haoyue.web.openExternal(url)
+}
+
+async function copyLoginCommand(): Promise<void> {
+  error.value = ''
+  try {
+    await navigator.clipboard.writeText(GH_CLI_LOGIN_COMMAND)
+    notice.value = `已复制「${GH_CLI_LOGIN_COMMAND}」，请在终端执行完成登录后点刷新。`
+  } catch {
+    notice.value = `请手动在终端执行：${GH_CLI_LOGIN_COMMAND}，完成后点刷新。`
+  }
+}
+
 async function requestJson<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   const response = await daemonRequest(method, params)
   return JSON.parse(response.data) as T
@@ -134,9 +163,14 @@ async function loadCatalog(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const payload = await requestJson<{ catalogAvailable: boolean, connectors: ConnectorEntry[] }>('connectors.list')
+    const payload = await requestJson<{
+      catalogAvailable: boolean
+      connectors: ConnectorEntry[]
+      ghCli?: GhCliStatus | null
+    }>('connectors.list')
     catalog.value = payload.connectors
     catalogAvailable.value = payload.catalogAvailable
+    ghCli.value = payload.ghCli ?? null
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -296,6 +330,35 @@ onMounted(() => { void loadCatalog() })
             <span v-for="tag in connector.tags" :key="tag" class="inline-badge">{{ tag }}</span>
           </div>
           <p v-if="connector.sourceWarning" class="connector-source-warning">{{ connector.sourceWarning }}</p>
+
+          <!-- GitHub CLI：安装状态 / 登录账号 / 可用性，并在缺前置条件时给出可执行引导 -->
+          <div v-if="connector.id === 'github-cli'" class="gh-cli-status">
+            <div class="gh-cli-row">
+              <span>gh CLI</span><strong>{{ ghCliView.installedLine }}</strong>
+            </div>
+            <div class="gh-cli-row">
+              <span>登录</span><strong>{{ ghCliView.loginLine }}</strong>
+            </div>
+            <div class="gh-cli-row">
+              <span>可用性</span>
+              <strong :class="{ 'is-down': !ghCliView.available }">{{ ghCliView.availabilityLine }}</strong>
+            </div>
+            <p v-if="ghCliView.error" class="gh-cli-error">{{ ghCliView.error }}</p>
+            <div v-if="ghCliView.needsInstall || ghCliView.needsLogin" class="gh-cli-actions">
+              <button v-if="ghCliView.needsInstall" class="secondary-button compact"
+                @click="openExternal(GH_CLI_INSTALL_URL)">
+                <ExternalLink :size="13" /> 安装文档
+              </button>
+              <template v-if="ghCliView.needsLogin">
+                <button class="secondary-button compact" @click="copyLoginCommand">
+                  <Copy :size="13" /> 复制登录命令
+                </button>
+                <button class="secondary-button compact" @click="openExternal(GH_CLI_LOGIN_URL)">
+                  <ExternalLink :size="13" /> 登录文档
+                </button>
+              </template>
+            </div>
+          </div>
 
           <div v-if="expanded === connector.id" class="connector-form">
             <label v-for="input in connector.inputs" :key="input.key" class="connector-field">
@@ -614,6 +677,56 @@ onMounted(() => { void loadCatalog() })
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--color-warning, #854f0b);
+}
+
+.gh-cli-status {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.gh-cli-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gh-cli-row span {
+  color: var(--text-muted);
+}
+
+.gh-cli-row strong {
+  font-weight: 600;
+  text-align: right;
+}
+
+.gh-cli-row strong.is-down {
+  color: var(--danger);
+}
+
+.gh-cli-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.gh-cli-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.gh-cli-actions .secondary-button.compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 @keyframes connectors-spin {

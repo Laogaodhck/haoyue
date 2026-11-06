@@ -46,6 +46,26 @@ public sealed class ToolPermissionTests : IDisposable
     }
 
     [Fact]
+    public void Matches_GithubCliConnector_AndDenyOverridesAllow()
+    {
+        Assert.True(ToolPermissionPolicy.Matches("github-cli/*", "mcp__github-cli__gh_issue_create"));
+        Assert.True(ToolPermissionPolicy.Matches("github-cli/gh_issue_create", "mcp__github-cli__gh_issue_create"));
+        Assert.True(ToolPermissionPolicy.Matches("mcp__github-cli__*", "mcp__github-cli__gh_repo_view"));
+        Assert.False(ToolPermissionPolicy.Matches("github-cli/*", "mcp__github__create_issue"));
+
+        var config = new WorkspaceConfig
+        {
+            AllowedTools = ["github-cli/*"],
+            DisabledTools = ["github-cli/gh_issue_create"],
+        };
+        Assert.False(ToolPermissionPolicy.TryResolveWorkspace(
+            config, "mcp__github-cli__gh_issue_create", out var reason));
+        Assert.Contains("disabledTools", reason);
+        Assert.True(ToolPermissionPolicy.TryResolveWorkspace(
+            config, "mcp__github-cli__gh_repo_view", out _));
+    }
+
+    [Fact]
     public void Matches_ServerSlashTool_MapsToLocalMcpName()
     {
         Assert.True(ToolPermissionPolicy.Matches("github/create_issue", "mcp__github__create_issue"));

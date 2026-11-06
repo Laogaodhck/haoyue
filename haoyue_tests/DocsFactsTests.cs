@@ -34,11 +34,12 @@ public class DocsFactsTests
 
     private static int CountXunitCasesIn(string src)
     {
-        // 先剥离注释，避免文档里出现的「[Fact]」字样混入统计（本文件注释即自匹配实例）。
-        var code = Regex.Replace(src, @"/\*.*?\*/", "", RegexOptions.Singleline);
-        code = Regex.Replace(code, @"(?<!:)//.*", "");
-        return Regex.Matches(code, @"\[Fact\]").Count
-            + Regex.Matches(code, @"\[InlineData\(").Count;
+        // 只统计「独占一行」的属性声明。
+        // 不用正则剥离注释：字符串字面量里的通配符（如 "github/*" 与 "*/create_issue"）会伪造块注释边界，
+        // 剥离时把两者之间的真实用例一并删掉（曾导致 1400 被统计成 1396）。
+        // 行锚定既能排除文档注释里的「[Fact]」字样，也不受字符串内容影响——仓库内 xunit 属性均独占一行。
+        return Regex.Matches(src, @"(?m)^\s*\[Fact\]\s*$").Count
+            + Regex.Matches(src, @"(?m)^\s*\[InlineData\(").Count;
     }
 
     /// <summary>vitest 实际执行用例数与测试文件数：it(/test( 行 + it.each 的 case 数。</summary>

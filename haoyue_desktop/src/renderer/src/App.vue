@@ -1794,7 +1794,7 @@ watch(theme, applyTheme)
             </button>
           </Transition>
 
-          <footer class="composer-region" :class="{ 'composer-region--hero': isComposerHero }">
+          <footer class="composer-region">
             <!-- P0-2: 明文凭证告警。runtime 不会把无法加密的 Key 写成明文落盘，但历史配置
                  里可能残留一个，必须由界面说清楚并指向重设入口。 -->
             <div v-if="secretWarnings.length" class="security-banner" role="alert">

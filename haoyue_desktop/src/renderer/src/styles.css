@@ -82,6 +82,13 @@ body,
   overflow: hidden;
 }
 
+/* 移动端/窄屏：跟动态视口高度走，浏览器地址栏/软键盘伸缩时输入区仍贴在可见底部。 */
+@supports (height: 100dvh) {
+  #app {
+    height: 100dvh;
+  }
+}
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -1281,6 +1288,8 @@ select:focus-visible {
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  /* 消息列表是唯一的滚动容器：滚到底后不让滚轮继续把父级/输入区带走。 */
+  overscroll-behavior: contain;
 }
 
 .conversation-loading {
@@ -2222,39 +2231,28 @@ select:focus-visible {
   background: #38211f;
 }
 
+/* 输入区固定底栏：.workspace-main 是三行网格 [标题 54px | 消息区 minmax(0,1fr) | 输入区 auto]，
+   .conversation-scroll 在第二行独立滚动，本块独占第三行，消息多少都不会把它推离底部。
+   空会话同样贴底（欢迎区仍在消息区里），不要把它移进滚动容器或改成绝对居中。 */
 .composer-region {
   z-index: 5;
   min-width: 0;
+  background: var(--surface);
   /* 与 .conversation-content 的水平 gutter 对齐（34px），窄窗口下左右边缘一条线。 */
   padding: 0 34px 12px;
 }
 
-/* 豆包式空态：输入框悬浮居中，欢迎区（empty-state）上移让位。 */
-.composer-region--hero {
-  position: absolute;
-  z-index: 6;
-  top: 54px;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 0 34px 7vh;
-  pointer-events: none;
-}
+/* 窗口极矮时优先保住输入区：整块封顶并内部滚动，而不是被窗口底部裁掉。 */
+@media (max-height: 520px) {
+  .composer-region {
+    max-height: 62vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
 
-.composer-region--hero > * {
-  pointer-events: auto;
-}
-
-.composer-region--hero .composer-shell {
-  width: min(100%, 820px);
-}
-
-.composer-region--hero .composer-caption {
-  margin-top: 10px;
+  .composer-caption {
+    display: none;
+  }
 }
 
 .conversation-scroll--hero .empty-state {

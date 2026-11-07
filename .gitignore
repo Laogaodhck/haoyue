@@ -6,6 +6,7 @@ bin/
 obj/
 artifacts/
 publish/
+publish-backups/
 TestResults/
 
 *.user

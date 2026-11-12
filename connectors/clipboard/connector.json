@@ -15,6 +15,6 @@
   "inputs": [
     { "key": "LOCAL_SERVER", "title": "内置服务器路径（自动填充，无需修改）", "required": false }
   ],
-  "mutatingTools": ["clipboard_set"],
-  "readOnlyTools": ["clipboard_get", "ics_events", "rss_read", "http_request", "email_list", "notify_send"]
+  "mutatingTools": ["clipboard_set", "http_request", "notify_send"],
+  "readOnlyTools": ["clipboard_get", "ics_events", "rss_read", "email_list"]
 }

@@ -17,6 +17,12 @@ public static class ApiVersionContract
     public const string ContractFormatVersion = "1.0";
 
     /// <summary>
+    /// 产品版本（连接器 minRuntimeVersion 的运行时基准）。必须与
+    /// <c>haoyue_desktop/package.json</c> 的 version 同步，由单测守护漂移。
+    /// </summary>
+    public const string ProductVersion = "1.3.33";
+
+    /// <summary>
     /// 判定上游 API 失败是否属于「版本变更/退役」类 Breaking Change。
     /// 返回告警文案；null 表示普通失败，按常规错误处理。
     /// 判定规则：410 Gone 一律告警；404 且错误详情指向模型/端点退役关键词时告警。

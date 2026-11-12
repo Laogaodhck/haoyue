@@ -15,6 +15,8 @@
   "icon": "🐙",
   "category": "dev",                 // web|dev|communication|data|productivity|system
   "offline": false,                  // true = 随 haoyue 分发、无 npm/uvx 外部依赖
+  "source": "official",              // official|verified|community|local；official 需登记在 SHA256SUMS
+  "minRuntimeVersion": "1.3.33",     // 可选：低于该运行时版本拒绝安装
   "server": {                        // 安装后写入 mcp.servers，支持 ${KEY} 占位符
     "transport": "stdio",
     "command": "npx",
@@ -50,6 +52,12 @@ haoyue mcp test                        # 验证连接与工具发现
 - 清单同时是**已登记包白名单**：受管目录里凭空多出一个连接器包（自带 `connector.json`）时默认拒绝安装——旧逻辑「查无条目即放行」等于给任意新增包开口子。
 - 自建/第三方连接器目录：不提供 `SHA256SUMS` 时完全跳过校验；已提供清单但确实要装未登记包时，显式设置 `HAOYUE_CONNECTORS_ALLOW_UNSIGNED=1`。
 - 改动任一 `connector.json` 或 `connectors/servers/*.py` 后必须重跑生成脚本，否则 `ConnectorIntegrityTests.RepoSums_MatchDirectoryContents` 与 CI 的 `connectors` 作业会红。
+
+## 来源信任与运行时门禁
+
+- `source` 分级：`official` 必须登记在 `SHA256SUMS` 才算数，社区包自填会降级为 `community` 并给出警告；旧包缺省 `local`，完全兼容。
+- `minRuntimeVersion`：安装期按运行时产品版本做 semver 比较，低于声明值直接拒绝并提示升级；比较基准与桌面 `package.json` 版本由单测锁定。
+- 安装状态与卸载按「全局 + 受信工作区覆盖」计算：工作区同名配置优先于全局项，卸载会同时清理受信工作区内的同名覆盖；未受信工作区不参与加载，也不会被改写。
 
 ## 首批目录（12 个）
 

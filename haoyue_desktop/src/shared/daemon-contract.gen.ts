@@ -157,7 +157,6 @@ export const DAEMON_METHODS = [
   'hooks.save',
   'hooks.delete',
   'hooks.test',
-  'hooks.runs',
   'task.start',
   'task.get',
   'task.list',

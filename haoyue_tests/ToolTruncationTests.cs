@@ -83,8 +83,10 @@ public class ToolTruncationTests : IDisposable
         var script = Path.Combine(_dir, "tail6000.py");
         File.WriteAllText(script,
             "import sys\n[sys.stdout.write('line-%04d\\n' % i) for i in range(6000)]\nsys.exit(3)");
-        // 平台分支：Windows 回退 pwsh（& 调用 + 退出码回传），Unix 走真实 bash。
-        var command = OperatingSystem.IsWindows()
+        // BashTool 在 Windows 上也可能解析到 Git Bash；按实际 shell 家族选择语法，
+        // 不能只看操作系统（pwsh 的 & 调用在 bash 下是语法错误）。
+        var powershell = ShellRunner.ResolveShellWithKind(string.Empty).Kind == ShellRunner.ShellKind.PowerShell;
+        var command = powershell
             ? $"& \"{py}\" \"{script}\"; exit $LASTEXITCODE"
             : $"\"{py}\" \"{script}\"; exit $?";
         var result = await tool.ExecuteAsync(

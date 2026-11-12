@@ -72,13 +72,15 @@
           "required": false
         }
       ],
+      "mutatingTools": [
+        "http_request",
+        "notify_send"
+      ],
       "readOnlyTools": [
         "clipboard_get",
         "ics_events",
         "rss_read",
-        "http_request",
-        "email_list",
-        "notify_send"
+        "email_list"
       ]
     }
   },
@@ -111,15 +113,15 @@
         }
       ],
       "mutatingTools": [
-        "clipboard_set"
+        "clipboard_set",
+        "http_request",
+        "notify_send"
       ],
       "readOnlyTools": [
         "clipboard_get",
         "ics_events",
         "rss_read",
-        "http_request",
-        "email_list",
-        "notify_send"
+        "email_list"
       ]
     }
   },
@@ -209,15 +211,15 @@
       ],
       "mutatingTools": [
         "email_send",
-        "clipboard_set"
+        "clipboard_set",
+        "http_request",
+        "notify_send"
       ],
       "readOnlyTools": [
         "email_list",
         "clipboard_get",
         "ics_events",
-        "rss_read",
-        "http_request",
-        "notify_send"
+        "rss_read"
       ]
     }
   },
@@ -396,13 +398,15 @@
           "required": false
         }
       ],
+      "mutatingTools": [
+        "http_request",
+        "notify_send"
+      ],
       "readOnlyTools": [
         "clipboard_get",
         "ics_events",
         "rss_read",
-        "http_request",
-        "email_list",
-        "notify_send"
+        "email_list"
       ]
     }
   },
@@ -434,13 +438,15 @@
           "required": false
         }
       ],
+      "mutatingTools": [
+        "http_request",
+        "notify_send"
+      ],
       "readOnlyTools": [
         "clipboard_get",
         "ics_events",
         "rss_read",
-        "http_request",
-        "email_list",
-        "notify_send"
+        "email_list"
       ]
     }
   },
@@ -510,13 +516,15 @@
           "required": false
         }
       ],
+      "mutatingTools": [
+        "http_request",
+        "notify_send"
+      ],
       "readOnlyTools": [
         "clipboard_get",
         "ics_events",
         "rss_read",
-        "http_request",
-        "email_list",
-        "notify_send"
+        "email_list"
       ]
     }
   },

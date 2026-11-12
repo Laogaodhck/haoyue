@@ -64,6 +64,7 @@ public sealed class ExtensionManager : IAsyncDisposable
     {
         foreach (var ext in _extensions)
         {
+            var tracked = new List<IDisposable>();
             try
             {
                 if (!ext.IsEnabled(runtime)) continue;
@@ -72,12 +73,17 @@ public sealed class ExtensionManager : IAsyncDisposable
                 if (_registrations.ContainsKey(ext.Id)) continue;
 
                 ext.Initialize(runtime);
-                var tracked = new List<IDisposable>();
                 ext.RegisterTools(new TrackingToolRegistry(runtime.Tools, tracked), runtime);
                 _registrations[ext.Id] = tracked;
             }
             catch (Exception ex)
             {
+                // 部分注册成功时 RegisterTools 会抛错且不进入 _registrations；
+                // 不回滚这些句柄就会永久留在 ToolRegistry 里，重试还会撞重复注册。
+                foreach (var registration in tracked)
+                {
+                    try { registration.Dispose(); } catch { }
+                }
                 Console.Error.WriteLine($"[ExtensionManager] Failed to initialize extension '{ext.Id}': {ex.Message}");
             }
         }
@@ -125,15 +131,28 @@ public sealed class ExtensionManager : IAsyncDisposable
 
         if (!ext.IsEnabled(runtime)) return;
 
+        var tracked = new List<IDisposable>();
         try
         {
             ext.Initialize(runtime);
-            var tracked = new List<IDisposable>();
             ext.RegisterTools(new TrackingToolRegistry(runtime.Tools, tracked), runtime);
             _registrations[ext.Id] = tracked;
         }
         catch (Exception ex)
         {
+            // 同 InitializeAll：已注册句柄必须回滚，再把失败实例摘掉，保留工厂供下次重试。
+            foreach (var registration in tracked)
+            {
+                try { registration.Dispose(); } catch { }
+            }
+            _registrations.Remove(ext.Id);
+            _extensions.Remove(ext);
+            try { await ext.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception disposeError)
+            {
+                Console.Error.WriteLine(
+                    $"[ExtensionManager] Failed to dispose extension '{ext.Id}' after init failure: {disposeError.Message}");
+            }
             Console.Error.WriteLine($"[ExtensionManager] Failed to initialize extension '{ext.Id}': {ex.Message}");
         }
     }

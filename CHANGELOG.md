@@ -9,7 +9,7 @@
 - **设置 → 编码**：集中管理 Git 与安全工作流。Git 分支前缀（haoyue 新建分支时预填此前缀，留空则不添加前缀）与始终强制推送（haoyue 推送时使用 `--force-with-lease`：改写远端分支历史，但远端已变化时拒绝覆盖）经 `advanced.get/set` 的 coding 节持久化；Worktrees 子区展示当前工作区的 Git 工作树索引（`git worktree list`，支持刷新）；安全子区提供「三层渐进式扫描与自动修复」总开关。
 - **Git 工作区面板行为接入**：面板新增「新建分支」（内联输入，按配置的分支前缀预填）与「推送」入口；开启安全开关后推送前先执行密钥 / 口令 / 私钥 / API 令牌快扫（第一层，含文件数与大小上限），命中即列出高 / 中级发现并需确认后再推送。新增主进程能力 `project:git-create-branch`、`project:git-push`、`project:git-worktrees`、`project:security-scan` 及对应 IPC / preload 桥接。
 - **规则与记忆可控化**：新增结构化规则能力（`rules.list/save/delete/resolve`）——全局 / 项目作用域、启停与优先级，规则每回合重读、保存后下一回合生效；全局与项目同标题规则冲突时给出提示，并可显式选择「项目胜出 / 全局胜出 / 合并到项目」，解决结果与操作者写入命中记录。事实库新增用户侧管理（`facts.list/add/update/delete/pin/restore/confirm`），置顶事实优先注入；仲裁结果（保留哪条、取代了哪些）可见，误判可一键撤销并形成反向仲裁。规则、事实与命中记录按工作区隔离。
-- **事件钩子扩展**：触发事件从 2 类扩到 5 类（`session.start` / `tool.before` / `tool.after` / `task.completed` / `schedule.completed`），支持通配符匹配、1–120 秒超时与失败策略（放行并告警 / 阻断，阻断仅对 `tool.before` 生效）；`session.start` 输出可注入系统提示。新增 `hooks.runs` 查询执行台账，执行结果写入按工作区隔离的 JSONL 台账（`.haoyue/hooks-ledger.jsonl`，默认保留 2000 条，溢出按日期归档到 `.haoyue/hooks/archive/`）。
+- **事件钩子扩展**：触发事件从 2 类扩到 5 类（`session.start` / `tool.before` / `tool.after` / `task.completed` / `schedule.completed`），支持通配符匹配、1–120 秒超时与失败策略（放行并告警 / 阻断，阻断仅对 `tool.before` 生效）；`session.start` 输出可注入系统提示。执行台账经 `hooks.list` 返回体的 `ledger` 节点读取，执行结果写入按工作区隔离的 JSONL 台账（`.haoyue/hooks-ledger.jsonl`，默认保留 2000 条，溢出按日期归档到 `.haoyue/hooks/archive/`）。
 - **智能体团体**：新增 `team.list/save/delete/copy/run/cancel/runs`，按工作区管理团队与成员（角色、职责、模型、工具白名单、专家），支持顺序执行、并行执行、主管调度、评审制四种协作模式，可设轮次上限、整体超时、成员重试与失败策略（停止 / 跳过继续 / 降级汇总）。`team.run` 受理即返回 runId，进度经新增广播 `team.run.updated` 推送，任意阶段可取消并收敛为 cancelled；daemon 启动时把残留 running 运行对账为 interrupted 并清理临时产物。最终结果汇总为一条普通助手消息，不使用分组卡片。
 - **工具细粒度权限**：工作区配置新增 `allowedTools`、`disabledTools` 与 `allowToolFallbackToGlobal`，按「全局硬禁用 > 工作区禁用 > 工作区白名单 > 角色预置 > 团体成员清单 > 单次调用清单」逐层收窄（deny 优先），支持 `server/tool`、`server/*`、`*/tool` 通配符。越权工具降级为「该工具不可用」并记入钩子台账，回合继续而不整体失败；角色 / 成员清单裁空时默认保持空集（fail-closed），仅在显式开启降级开关后回退工作区清单。桌面端「设置 → 工具权限」可编辑白名单与硬禁用清单（同一套模式校验，非法即拒绝保存）、校验模式格式并切换降级开关；保存后按 `config.save` 的 `applied` / `appliedReason` 回执区分「下一回合生效」「写入别的工作区」「当前工作区未受信」三种结果。磁盘上历史手工写入的非法条目在加载时单独列出并提供一键清理，不阻塞其它字段保存。
 - **审批决策留痕**：每次审批（内置高危守卫、工具同意、风险分级）写入 `ApprovalDecisionEvent`——工具名、参数摘要、原因、工作区、回合 id、操作者与结果（批准 / 拒绝 / 超时 / 取消），可经 `events.recent` 回放核对；事件裁剪时审批记录单独保留最近 2000 条，不被普通事件挤出。
@@ -17,10 +17,14 @@
 - **项目任务目录**：项目内发起的后台 / 定时任务在项目根下建立独立目录 `.haoyue/tasks/<taskId>/`，产物写入其 `outputs/`；PathGuard 按真实路径（含符号链接 / junction）在创建前后校验，无法证明在项目内时拒绝受理，绝不静默写回全局目录。任务历史裁剪时对应任务目录一并清理，避免目录无限增长；无项目归属的全局任务保持原落点。
 - **侧边栏项目任务**：项目节点下挂任务列表，支持展开 / 折叠（状态持久化）、状态徽标（排队 / 运行中 / 完成 / 失败 / 已取消）与最近时间、运行中一键取消（后台任务走 `task.cancel`、普通回合走 `agent.cancel`）、项目行内 `+` 新建任务；重启后恢复上次选中的会话，存储值失效时回退最近更新。
 - **GitHub CLI（gh）连接器**：新增 `github-cli` 官方连接器与独立内置 MCP 服务器（`connectors/servers/haoyue_gh_server.py`），复用本机已登录的 `gh`。暴露 11 个白名单工具：8 个只读（`gh_auth_status` / `gh_repo_view` / `gh_repo_list` / `gh_issue_list` / `gh_issue_view` / `gh_pr_list` / `gh_pr_view` / `gh_pr_checks`）与 3 个显式写（`gh_issue_create` / `gh_issue_comment` / `gh_pr_create`）。参数按正则 / 枚举 / 长度收敛并拒绝 `-` 开头的选项注入，全部以参数列表交给子进程（不经 shell），不提供任意 `gh api` 透传；复用 gh 自身凭据，不读取 / 不落盘 / 不输出 token（输出统一脱敏与截断）。未安装 / 未登录 / 超时 / 404 / 速率限制均返回可执行中文提示。设置 → 扩展的连接器卡片展示 gh 安装版本、登录账号与可用性，并提供安装文档、复制 `gh auth login` 与登录文档引导。工具仍受既有权限体系约束：全局硬禁用 > 工作区 `disabledTools` > 工作区 `allowedTools` > 角色预置 > 团体成员清单 > 单次调用，逐层收窄、deny 优先；越权只返回「该工具不可用」并写入钩子台账；未新增 RPC（复用 `connectors.list` 返回体并附带 `ghCli` 快照）。
-- **契约与测试计数（本批合并后）**：RPC 方法 138 → 154，新增广播 `team.run.updated`；桌面 vitest 407 用例（41 个文件），runtime 测试 1400 + CLI 27。新增覆盖测试类：审批留痕、事实用户控制、结构化规则、任务目录、团体同步 / 异步、工具权限、GitHub CLI 探测与连接器约束、侧边栏项目任务与工具权限桌面逻辑。
+- **契约与测试计数（本批合并后）**：RPC 方法 138 → 153，新增广播 `team.run.updated`；桌面 vitest 407 用例（41 个文件），runtime 测试 1406 + CLI 27。新增覆盖测试类：审批留痕、事实用户控制、结构化规则、任务目录、团体同步 / 异步、工具权限、GitHub CLI 探测与连接器约束、侧边栏项目任务与工具权限桌面逻辑。
 
 ### 变更
 
+- **钩子执行台账入口归一**：移除与 `hooks.list` 重复的 `hooks.runs` 方法；执行台账统一从 `hooks.list` 返回体的 `ledger` 节点读取，行为与保留条数不变。
+- **契约登记握手与分发别名**：快照新增顶层 `handshake`（首帧必需，携带 token 与 protocolVersion，15 秒认证窗口）与 `methodAliases`（`agent/runTurn → agent.runTurn`）；方法目录按实际可调用面收敛为 153，TS SDK 与桌面契约类型同步重生成。
+- **连接器安装状态与卸载按生效配置**：`connectors.list` 与 CLI 的安装状态改为「全局 + 受信工作区覆盖」判定；卸载同时清理全局项、受信工作区 `.haoyue/config.json` 与 `mcp/servers.json` 的同名覆盖，未受信工作区不读取也不改写。
+- **连接器最低运行时版本生效**：`minRuntimeVersion` 由仅透出改为安装期 semver 拦截，低于声明版本直接拒绝并提示升级；运行时基准版本与桌面 `package.json` 由单测守护同步。
 - **连接器目录扩至 12 个**：`connectors.list` 返回体新增 `ghCli` 快照（安装版本、登录账号、可用性、诊断原因），既有字段保持不变；扩展面板据此在 github-cli 卡片内展示状态与引导，无需额外请求。
 - **`team.run` 改为异步受理**：不再同步等待整轮完成，立即返回 runId；进度与结果经事件通道推送，`team.cancel` 在排队 / 运行 / 收尾阶段均可取消并统一收敛为 cancelled。桌面端由等待结果改为订阅进度。
 - **钩子等待语义可选**：「等待完成」为可选配置，超时只记入台账并告警，不阻断主流程；默认仍为 fire-and-forget。
@@ -35,6 +39,13 @@
 - **审批等待悬挂**：审批注册表与回合取消令牌绑定，回合取消 / 超时时正确收敛等待者，不再遗留悬挂请求或重复响应；定时任务复用同一注册表后，无客户端响应的审批按超时拒绝而非静默放行。
 - **设置 → 编码开关点击无反馈**：开关行 `.coding-toggle-row` 缺少 `input:checked` 选中态 scoped 规则（全局样式仅覆盖 provider / model 开关行），点击后状态实际已切换并持久化，视觉上轨道不变色、滑块不动；按既有面板（McpPanel）模式补齐选中态底色、滑块位移与键盘焦点轮廓，`advanced.set` 仍逐键 patch + 失败回滚，行为不变。
 - **KnowledgePdfImportTests 并行竞态（间歇失败）**：`PdfTextExtractor` 是进程级静态桥（HaoyueRuntime 装配时注册），`Pdf_WithoutBridge_FailsWithActionableMessage` 将其置空后调用时，并行测试恰好重新注册会导致断言读到「桥已注册」的文案而间歇失败（此前 Release 全量构建曾 1308/1309）。测试类归入既有非并行 `process-env` 集合，消除互踩。
+- **离线连接器把出站工具误标只读**：`http_request` / `notify_send` 在 calendar / clipboard / email / http-api / notify / rss 六个连接器中被列为只读，只读或计划模式可触发外发请求；已移入 `mutatingTools`，并新增护栏测试禁止回退。
+- **GitHub CLI 连接器路径迁移后失效**：内置 gh 服务端此前不在路径自愈范围内，`haoyue_gh_server.py` 随安装或升级移动后子进程立即退出；自愈逻辑覆盖两个内置服务端，并在全局配置条目上持久化新路径。
+- **扩展初始化 / 启用失败残留半注册**：初始化或启用中途抛错时，已注册工具与提示词未被撤销，重试会出现重复注册；现在失败即回滚本次注册并释放扩展，保留工厂供重试。
+- **新版 Edge 无头浏览器拿不到 DevTools 端点**：部分 Edge 版本不再向 stderr 打印 `DevTools listening on ...`，browser 工具固定等到 20 秒超时；新增 `DevToolsActivePort` 文件回读兜底，端点获取恢复到秒级。
+- **README 示例不可执行**：CLI 示例参数与实际命令不一致，`ITool` 示例缺少必需成员；已按真实命令与接口重写，并由示例结构说明补齐。
+- **Bash 沙箱用例按操作系统猜 shell**：Windows 装有 Git Bash 时运行时实际解析到 bash，用例却仍按 pwsh 语法发包，导致语法错误；改为按实际 shell 家族选择命令语法。
+- **文档与生成物同步**：README / README_EN / CHANGELOG 的方法数与用例数、连接器说明、契约快照、桌面契约类型与 TS SDK 全部重算对齐（153 方法 / 1406 runtime）。
 
 ## [1.3.33] - 2026-11-04
 

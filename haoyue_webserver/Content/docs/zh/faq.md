@@ -108,4 +108,4 @@ haoyue doctor
 - 发布包内置自包含 Runtime，并由 Desktop 自动管理其生命周期；
 - 模型请求显示完整 Provider / HTTP 错误。
 
-Runtime IPC 协议版本为 `2.1`。详细方法见 [Daemon 文档](/doc/daemon)。
+Runtime IPC 协议版本为 `2.2`。详细方法见 [Daemon 文档](/doc/daemon)。

@@ -6,7 +6,7 @@ Haoyue follows a **Runtime First** and event-driven architecture. Desktop and CL
 
 ```mermaid
 flowchart TB
-    Desktop["haoyue_desktop<br/>Electron + Vue"] -->|"JSONL IPC 2.0"| Daemon["DaemonServer<br/>Named Pipe / Unix Socket"]
+    Desktop["haoyue_desktop<br/>Electron + Vue"] -->|"JSONL IPC 2.2"| Daemon["DaemonServer<br/>Named Pipe / Unix Socket"]
     CLI["haoyue_cli<br/>System.CommandLine + TerminalRenderer"] -->|"Direct Facade"| Runtime
     Daemon --> Runtime["HaoyueRuntime<br/>.NET 10 Composition Root"]
 
@@ -24,7 +24,7 @@ flowchart TB
 
 1. **Separation of concerns:** LLM routing, context planning, tool execution, session storage, and build verification live in `haoyue_runtime`.
 2. **No console coupling:** Runtime services publish typed events through `IEventBus` instead of writing UI output directly.
-3. **Multiple clients:** `haoyue_cli` uses the Runtime Facade directly, while `haoyue_desktop` uses Daemon IPC 2.0. Future Web or IDE clients can reuse the same protocol.
+3. **Multiple clients:** `haoyue_cli` uses the Runtime Facade directly, while `haoyue_desktop` uses Daemon IPC 2.2. Future Web or IDE clients can reuse the same protocol.
 
 ## Component responsibilities
 

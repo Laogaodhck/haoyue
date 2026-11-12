@@ -411,15 +411,15 @@ public sealed class McpManager(
 
     /// <summary>
     /// Self-heal for offline connectors (calendar / clipboard / email / http-api /
-    /// notify / rss). Their install freezes the absolute path of the bundled local
-    /// MCP server (connectors/servers/haoyue_local_server.py) into mcp.servers
-    /// args; when that file later moves or disappears — transient build output,
-    /// app upgrade, directory rename — the child process dies instantly with
-    /// "No such file or directory" and the connector stays broken until a manual
-    /// reinstall. Re-resolve the current bundled server and substitute it, so an
-    /// installed offline connector survives relocation. The healed path is
+    /// notify / rss / github-cli). Their install freezes the absolute path of a bundled
+    /// MCP server (<c>connectors/servers/haoyue_local_server.py</c> or
+    /// <c>haoyue_gh_server.py</c>) into mcp.servers args; when that file later moves or
+    /// disappears — transient build output, app upgrade, directory rename — the child
+    /// process dies instantly with "No such file or directory" and the connector stays
+    /// broken until a manual reinstall. Re-resolve the current bundled server and
+    /// substitute it, so an installed connector survives relocation. The healed path is
     /// persisted when the server entry lives in the global config.
-    /// Only args that look like the bundled server AND no longer exist on disk are
+    /// Only args that look like a bundled server AND no longer exist on disk are
     /// touched; healthy paths and all other arguments are left as-is.
     /// </summary>
     private void HealBundledServerArgs(string name, McpServerConfig server)
@@ -429,10 +429,13 @@ public sealed class McpManager(
         {
             var arg = server.Args[i];
             if (string.IsNullOrEmpty(arg) || File.Exists(arg)) continue;
-            if (!Path.GetFileName(arg).Equals("haoyue_local_server.py", StringComparison.OrdinalIgnoreCase))
-                continue;
 
-            var bundled = ConnectorCatalog.ResolveBundledServer();
+            var fileName = Path.GetFileName(arg);
+            var bundled = fileName.Equals("haoyue_local_server.py", StringComparison.OrdinalIgnoreCase)
+                ? ConnectorCatalog.ResolveBundledServer()
+                : fileName.Equals("haoyue_gh_server.py", StringComparison.OrdinalIgnoreCase)
+                    ? ConnectorCatalog.ResolveBundledGhServer()
+                    : null;
             if (bundled is null || string.Equals(bundled, arg, StringComparison.OrdinalIgnoreCase))
                 continue;
 

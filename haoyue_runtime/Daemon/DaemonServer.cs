@@ -335,7 +335,6 @@ public sealed partial class DaemonServer : IAsyncDisposable
                     case "facts.pin": await Handle_facts_rpc(request, id, context, "pin").ConfigureAwait(false); break;
                     case "facts.restore": await Handle_facts_rpc(request, id, context, "restore").ConfigureAwait(false); break;
                     case "facts.confirm": await Handle_facts_rpc(request, id, context, "confirm").ConfigureAwait(false); break;
-                    case "hooks.runs": await Handle_facts_rpc(request, id, context, "hooks_runs").ConfigureAwait(false); break;
                     case "team.list": await Handle_team_rpc(request, id, context, "list").ConfigureAwait(false); break;
                     case "team.save": await Handle_team_rpc(request, id, context, "save").ConfigureAwait(false); break;
                     case "team.delete": await Handle_team_rpc(request, id, context, "delete").ConfigureAwait(false); break;

@@ -270,7 +270,7 @@ public static class DaemonContract
         ("timeoutSeconds", SInteger("单次执行超时秒数")),
         ("failurePolicy", SString("失败策略", "warn", "block")));
 
-    /// <summary>钩子执行台账记录（hooks.runs / hooks.list.ledger）。</summary>
+    /// <summary>钩子执行台账记录（hooks.list 返回体的 ledger 节点）。</summary>
     private static readonly JsonObject HookRunRecordResult = RObject(
         ("at", SString("执行时间（ISO）")),
         ("trigger", SString("触发事件")),
@@ -1694,12 +1694,6 @@ public static class DaemonContract
         M("hooks.test", "hooks", "立即触发一次钩子（试运行）", parameters: IdParams,
             result: HookTestResult,
             errors: E(DaemonErrorCode.InvalidParams, DaemonErrorCode.NotFound)),
-        M("hooks.runs", "hooks", "读取钩子执行台账（最近 N 条，失败可排查）", parameters: Scope(
-            ("limit", SInteger("返回条数 1..500（缺省 50）"), false)),
-            result: RObject(
-                ("workspace", SString("工作区根目录")),
-                ("records", RArray(HookRunRecordResult))),
-            errors: E(DaemonErrorCode.InvalidParams)),
 
         // task（后台任务队列：完整 agent 回合转后台执行，状态经 task.updated 广播）
         M("task.start", "task", "提交后台 agent 回合（立即返回任务快照）", parameters: SObject(
@@ -1749,8 +1743,8 @@ public static class DaemonContract
         // skill
         M("skill.list", "skill", "列出已装技能", parameters: EmptyParams,
             result: SkillResult, errors: E()),
-        M("skill.import", "skill", "导入技能目录", parameters: SObject(
-            ("path", SString("技能目录路径"), true)),
+        M("skill.import", "skill", "导入技能文件（.md 提示词或 .zip 技能包）", parameters: SObject(
+            ("path", SString(".md 或 .zip 文件的路径"), true)),
             result: SkillResult, errors: E(DaemonErrorCode.InvalidParams)),
         M("skill.toggle", "skill", "启停技能", parameters: SObject(
             ("name", SString("技能名"), true),
@@ -2138,6 +2132,28 @@ public static class DaemonContract
     ];
 
     /// <summary>导出完整契约文档（JSON Schema 2020-12 风格）。快照经测试落盘 contracts/daemon-contract.json。</summary>
+    /// <summary>
+    /// 握手帧不属于 methods 目录（它在任何方法分发之前执行），但必须出现在契约快照里，
+    /// 否则只读 methods 的外部实现者会直接撞 unauthorized。成功响应与 protocol.info 同构。
+    /// </summary>
+    private static JsonObject HandshakeJson() => new()
+    {
+        ["description"] = "连接建立后必须以 handshake 作为首帧；15 秒内未认证的连接会被断开。",
+        ["request"] = SObject(
+            ("id", SInteger("请求 id，回显在响应中"), true),
+            ("method", SString("固定为 handshake"), true),
+            ("params", SObject(
+                ("token", SString("与 daemon 共享的令牌（~/.haoyue/daemon.token）"), true),
+                ("protocolVersion", SString("客户端协议版本；缺省时跳过版本校验"), false)), true)),
+        ["result"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["description"] = "与 protocol.info 相同：version / transport / capabilities / methods / versionWarning",
+        },
+        ["errorCodes"] = ToArray(
+            [DaemonErrorCode.Unauthorized.ToWire(), DaemonErrorCode.VersionMismatch.ToWire()]),
+    };
+
     public static JsonObject ExportJson()
     {
         var methods = new JsonArray();
@@ -2166,6 +2182,12 @@ public static class DaemonContract
             ["contractVersion"] = ContractVersion,
             ["protocolVersion"] = DaemonServer.ProtocolVersion,
             ["transport"] = "jsonl",
+            ["handshake"] = HandshakeJson(),
+            // 分发层保留的兼容别名：不在 methods 目录重复登记，但必须让实现者知道它可用。
+            ["methodAliases"] = new JsonObject
+            {
+                ["agent/runTurn"] = "agent.runTurn",
+            },
             ["envelope"] = new JsonObject
             {
                 ["request"] = SObject(

@@ -396,13 +396,15 @@ public static class ConnectorCommands
             }
             var table = new Table().Border(TableBorder.Rounded);
             table.AddColumn("ID").AddColumn("Name").AddColumn("Category").AddColumn("Description").AddColumn("Installed");
+            // 生效状态 = 全局 + 受信工作区覆盖；与桌面端连接器面板口径一致。
+            var effective = rt.Mcp.LoadServerConfigs(rt.Workspace);
             foreach (var package in packages)
                 table.AddRow(
                     Markup.Escape(package.Id),
                     Markup.Escape($"{package.Icon} {package.Name}"),
                     Markup.Escape(package.Category),
                     Markup.Escape(package.Description),
-                    Haoyue.Runtime.Connectors.ConnectorInstaller.IsInstalled(rt.ConfigStore, package.Id)
+                    Haoyue.Runtime.Connectors.ConnectorInstaller.IsInstalled(effective, package.Id)
                         ? "[green]yes[/]" : "[gray]no[/]");
             AnsiConsole.Write(table);
             return 0;
@@ -522,7 +524,7 @@ public static class ConnectorCommands
                 AnsiConsole.MarkupLine("[red]缺少连接器 id：haoyue connectors uninstall <id>[/]");
                 return 1;
             }
-            if (Haoyue.Runtime.Connectors.ConnectorInstaller.Uninstall(rt.ConfigStore, id))
+            if (Haoyue.Runtime.Connectors.ConnectorInstaller.Uninstall(rt.ConfigStore, id, rt.Workspace))
                 return 0;
             AnsiConsole.MarkupLine($"[red]未安装：{Markup.Escape(id)}[/]");
             return 1;

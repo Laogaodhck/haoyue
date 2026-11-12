@@ -51,6 +51,8 @@ Server 编辑器的“高级”折叠区提供以下调优项，默认全部留�
 
 全局 Server 可放在 `~/.haoyue/config.json` 的 `mcp.servers` 中。工作区可使用 `.haoyue/mcp/servers.json` 或 `.haoyue/config.json` 的 `mcp` 字段；工作区同名配置覆盖全局项。
 
+连接器的安装状态与卸载按生效配置处理：工作区同名覆盖优先于全局项，卸载会同时清理全局项与受信工作区内的同名覆盖；未受信工作区的配置不参与加载，也不会被改写。
+
 ```json
 {
   "servers": {

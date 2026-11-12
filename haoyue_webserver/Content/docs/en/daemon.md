@@ -1,6 +1,6 @@
 # Daemon and IPC Protocol
 
-The Haoyue Daemon exposes the Runtime to desktop clients, IDE plugins, and other local integrations. Protocol version `2.1` uses one JSON object per line (JSONL); it is not a full JSON-RPC 2.0 implementation.
+The Haoyue Daemon exposes the Runtime to desktop clients, IDE plugins, and other local integrations. Protocol version `2.2` uses one JSON object per line (JSONL); it is not a full JSON-RPC 2.0 implementation.
 
 ## Endpoints
 
@@ -8,6 +8,8 @@ The Haoyue Daemon exposes the Runtime to desktop clients, IDE plugins, and other
 - Linux / macOS Unix Socket: `~/.haoyue/daemon.sock`
 
 Every request and response must end with a newline. A connection remains able to send control requests while an Agent turn is streaming.
+
+A connection must begin with a `handshake` frame (`params.token` and `params.protocolVersion`); connections not authenticated within 15 seconds are closed. `handshake` is part of the connection protocol rather than the method catalog — see the `handshake` node in `contracts/daemon-contract.json` for its full shape.
 
 ```json
 {"id":1,"method":"chat","params":{"sessionId":"20260731-120000-a1b2c3","message":"Analyze this project"}}

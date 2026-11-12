@@ -506,12 +506,6 @@ export class DaemonClient {
      */
     hooksTest: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("hooks.test", params),
-    /**
-     * 读取钩子执行台账（最近 N 条，失败可排查）
-     * 终态事件：result, error
-     */
-    hooksRuns: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
-      this.call("hooks.runs", params),
   };
 
   /** knowledge 类别方法。 */
@@ -999,7 +993,7 @@ export class DaemonClient {
     skillList: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>
       this.call("skill.list", params),
     /**
-     * 导入技能目录
+     * 导入技能文件（.md 提示词或 .zip 技能包）
      * 终态事件：result, error
      */
     skillImport: (params: Record<string, unknown> = {}): Promise<DaemonEvent> =>

@@ -51,6 +51,8 @@ The “Advanced” section of the server editor offers the following tuning knob
 
 Global servers can be stored under `mcp.servers` in `~/.haoyue/config.json`. A workspace can use `.haoyue/mcp/servers.json` or the `mcp` field in `.haoyue/config.json`; a workspace entry with the same name overrides the global one.
 
+Connector install state and uninstall use the effective configuration: a workspace entry overrides the global one, and uninstall removes both the global entry and same-name overrides in trusted workspaces; untrusted workspace configuration is neither loaded nor modified.
+
 ```json
 {
   "servers": {

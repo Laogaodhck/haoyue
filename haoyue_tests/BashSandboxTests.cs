@@ -203,8 +203,8 @@ public class BashSandboxTests : IDisposable
 
         var script = Path.Combine(Path.GetTempPath(), $"haoyue_sleep_{Guid.NewGuid():N}.py");
         File.WriteAllText(script, "import time\ntime.sleep(30)");
-        // 平台分支：Windows 回退 pwsh 需 & 调用运算符（否则 ParserError），Unix 走 bash。
-        var command = OperatingSystem.IsWindows()
+        // BashTool 可能解析到 Git Bash（含 Windows），按实际 shell 家族选择调用语法。
+        var command = ShellRunner.ResolveShellWithKind(string.Empty).Kind == ShellRunner.ShellKind.PowerShell
             ? $"& \"{py}\" \"{script}\""
             : $"\"{py}\" \"{script}\"";
         try

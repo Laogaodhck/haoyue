@@ -113,7 +113,7 @@ Haoyue 是基于 .NET 10 构建的高性能 AI Agent，以事件溯源运行时�
 - **长任务转后台**：daemon RPC `task.start` 提交完整 agent 回合后台执行（并发上限 4，硬超时保护），`task.get` / `task.list` / `task.cancel` 管理任务；终态经 `task.updated` 广播，会话持久化、进度可用 `events.recent` 重放——前端断开重连不丢进度；排队中与运行中均可取消，取消后终态统一收敛为 cancelled，不会误释放并发槽；桌面端右栏「后台任务」页签是该链路的完整界面（派发 / 进度 / 取消 / 跳回会话）
 - **项目任务目录**：项目内发起的后台任务 / 定时任务在项目根下建立独立目录 `.haoyue/tasks/<taskId>/`，产物写入其 `outputs/`；目录名可枚举、可清理，创建前后都经 PathGuard 按真实路径校验（含符号链接 / junction），无法确认在项目内时拒绝受理，绝不静默写回全局目录；无项目归属的全局任务保持原落点
 - **侧边栏项目任务**：项目分区把任务挂在项目节点下——可展开（折叠状态持久化），任务行显示状态徽标（排队 / 运行中 / 完成 / 失败 / 已取消）与最近时间，运行中可一键取消（后台任务走 `task.cancel`、普通回合走 `agent.cancel`），项目行内 `+` 直接新建任务；上次选中的会话在重启后恢复，存储值失效时回退最近更新
-- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），154 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
+- **官方嵌入 SDK**：`@haoyue/daemon-client`（TypeScript）由 `contracts/daemon-contract.json` 单源生成（`python tools/generate_ts_sdk.py`），153 个 RPC 方法全覆盖、按类别类型化方法桩、token 握手与管道/socket 端点自动发现；安装到首回合 ≤10 行代码，`--check` 模式可校验产物与契约一致（该自检已接入 CI dotnet job）——见 [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use（电脑操作智能体）
 
@@ -321,7 +321,7 @@ Haoyue/
 ├── haoyue_webserver/     # 技能市场（Blazor Server + SQLite）
 ├── haoyue_website/       # 文档站源码（VitePress）
 ├── doc_toolkit/          # 模块化文档处理工具包（TXT/MD/PDF/DOCX/XLSX/PPTX 提取、互转与 OCR + 命令行入口，见 doc_toolkit/README.md）
-├── haoyue_tests/         # 运行时单元测试（1400 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
+├── haoyue_tests/         # 运行时单元测试（1406 用例，覆盖率门槛：行 ≥70% / 分支 ≥55%）
 ├── haoyue_cli_tests/     # CLI 测试
 ├── haoyue_doc/           # 设计与评审文档（见 haoyue_doc/README.md 索引，含 adr/ 与 runbooks/）
 ├── docs/                 # 全链路闭环审查报告（2026-11-03，含断点修复更新）
@@ -465,13 +465,14 @@ Haoyue/
 
 ```bash
 # 会话与提供商
-haoyue session list && haoyue session resume <session-id>
-printf '%s' 'sk-...' | haoyue provider add openai --api-key-stdin   # 密钥不进 shell 历史
+haoyue sessions                       # 列出会话；恢复用 haoyue chat --resume <id>
+printf '%s' 'sk-...' | haoyue provider add --id openai --base-url https://api.openai.com/v1 \
+  --model gpt-5.5 --api-key-stdin     # 密钥不进 shell 历史
 haoyue model use openai/gpt-5.5
 
 # 知识库与记忆
 haoyue knowledge search "部署流程"
-haoyue knowledge add "发布步骤" --tags 运维,发布
+haoyue knowledge add "发布步骤" "先跑全量测试，再构建并发布" --tags 运维,发布
 haoyue memory set "本仓库发布前必须跑全量测试"
 
 # 定时任务（cron 驱动完整 Agent 回合）
@@ -490,19 +491,23 @@ dotnet run --project benchmarks/agent-eval   # Agent 级端到端任务评测
 实现 `ITool` 接口并在 ToolRegistry 注册：
 
 ```csharp
+using System.Text.Json.Nodes;
+
 public class MyTool : ITool
 {
     public string Name => "my_tool";
     public string Description => "执行有用的操作";
-    public JsonElement ParameterSchema => /* JSON schema */;
+    public JsonObject ParameterSchema => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject(),
+    };
     public bool Mutating => false;
     public string StatusLabel => "正在运行我的工具";
 
-    public async Task<ToolResult> ExecuteAsync(
-        JsonObject args, ToolContext ctx, CancellationToken ct)
-    {
-        // 实现
-    }
+    public Task<ToolResult> ExecuteAsync(
+        JsonObject args, ToolContext ctx, CancellationToken ct) =>
+        Task.FromResult(ToolResult.Ok("ok"));
 }
 ```
 
@@ -537,7 +542,7 @@ parameters:          # 提示末尾追加参数收集说明
 ## 🧪 测试
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1400 / haoyue_cli_tests 27 用例）
+dotnet test Haoyue.slnx -c Release       # 运行时 + CLI 测试（haoyue_tests 1406 / haoyue_cli_tests 27 用例）
 
 # 桌面端（需先 pnpm install）
 cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest 407 用例（41 个文件）
@@ -614,9 +619,10 @@ kit.parse("扫描件.pdf", ocr_fallback=True)          # 扫描件 PDF 逐页 OC
 - Agent 架构四组件加强方案（H-A~H-E、M-C/M-D、L-D 等 22 项增量加强，已实施项逐条对账）
 - 本地模型加载机制深度优化报告（多模型驻留、启动预热、加载进度、元数据缓存、空闲回收五项能力）
 - 本地GGUF模型加载与量化优化报告（hybrid 架构逐层 KV 头解析修复 + FA 全开 + Q4/Q5/Q8 量化对比实测：nemotron 解码 +22%、长上下文 +45%，requantize 提档买不到质量；含 benchmarks/model-opt 复现方式）
-- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1400+27+407、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
+- 模块可调用性全面验证报告（「注册 → 加载 → 调用」全链路实证：873+13+153 测试为该报告基线，当前基线 1406+27+407、123 项验证 harness、CLI / daemon 端到端实调，含 http-api 连接器自愈修复对账）
 - 桌面端 UI 审查——三栏布局与按键绑定（布局职责 / 死键 / 重复入口 / 零入口能力面 22 项发现按 P1-P3 排序，附 14 条分批建议与逐条修复对账：后台任务面板、本地推理看板、路由容灾、工作区配置、专家参数、设置搜索与离线只读）
 - 全链路闭环审查报告（2026-11-03：32 内置工具 + ComputerUse 8 / NetworkOps 扩展 + MCP 60+ 工具、图片生成、doc_render、桌面端 54 组件全链路「配置 → 注册 → 门控 → 调用 → 产物 → 交付」闭环核对；4 处断点均为外部资源——本地模型路径与 MCP git 停用两处已按用户授权修复，剩余 ark 账户欠费、语音 Key、视频开通三项待外部资源到位，见 [`docs/审查报告-全链路闭环-20261103.md`](docs/审查报告-全链路闭环-20261103.md)）
+- 调用链闭环修复（2026-11-13：契约 `handshake` 与分发别名、连接器工作区覆盖与 `minRuntimeVersion` 门禁、扩展半注册回滚、离线连接器写工具声明、无头浏览器新版 Edge 端点回读；全量 1406 runtime / 27 CLI / 407 桌面用例验证，详见 [CHANGELOG.md](CHANGELOG.md)）
 - 本地模型回合无输出诊断与修复（「桌面端发消息没有回复」三类根因：记忆固化抢占显存、冷加载 152s 无进度反馈、多客户端广播共用 JSON 节点；含 daemon 日志观测通道与打包版双客户端实证）
 - ProviderManager 并发与参数审查
 

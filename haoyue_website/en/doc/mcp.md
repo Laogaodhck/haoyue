@@ -24,6 +24,8 @@ Queries return MCP environment-variable names but not their sensitive values. Wh
 
 Global servers can be stored under `mcp.servers` in `~/.haoyue/config.json`. A workspace can use `.haoyue/mcp/servers.json` or the `mcp` field in `.haoyue/config.json`; a workspace entry with the same name overrides the global one.
 
+Connector install state and uninstall use the effective configuration: a workspace entry overrides the global one, and uninstall removes both the global entry and same-name overrides in trusted workspaces; untrusted workspace configuration is neither loaded nor modified.
+
 ```json
 {
   "servers": {
@@ -43,7 +45,7 @@ Global servers can be stored under `mcp.servers` in `~/.haoyue/config.json`. A w
 }
 ```
 
-An optional `cwd` sets the stdio child's working directory (absolute, or relative to the workspace root); when omitted the child starts in the workspace root. The current `McpServerConfig` has no `autoConnect` or custom HTTP `headers` field: remote authentication must live in the URL or be allowed by the server.
+An optional `cwd` sets the stdio child's working directory (absolute, or relative to the workspace root); when omitted the child starts in the workspace root. Remote servers support custom HTTP `headers` (for example `Authorization`); values are stored encrypted with a `secret:` prefix and are never echoed back or logged.
 
 ## Connection and reload behavior
 

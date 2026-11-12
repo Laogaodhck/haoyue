@@ -688,7 +688,7 @@ internal sealed partial class DaemonAdminApi(
             ["catalogAvailable"] = root is not null,
             ["root"] = root,
         };
-        var servers = runtime.ConfigStore.Config.Mcp.Servers;
+        var servers = runtime.Mcp.LoadServerConfigs(runtime.Workspace);
         var packages = new JsonArray();
         foreach (var package in ConnectorCatalog.LoadAll(root))
         {
@@ -766,12 +766,12 @@ internal sealed partial class DaemonAdminApi(
         return Task.FromResult(payload.ToJsonString());
     }
 
-    /// <summary>卸载连接器：从全局配置移除该 MCP 服务器并后台重连。</summary>
+    /// <summary>卸载连接器：清理全局与受信工作区内的同名覆盖，并后台重连。</summary>
     public Task<string> UninstallConnectorAsync(JsonObject parameters, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var id = RequiredString(parameters, "id");
-        if (!ConnectorInstaller.Uninstall(runtime.ConfigStore, id))
+        if (!ConnectorInstaller.Uninstall(runtime.ConfigStore, id, runtime.Workspace))
             throw new DaemonRequestException($"Connector not installed: {id}", DaemonErrorCode.NotFound);
         ReconnectMcpInBackground();
         return Task.FromResult(ListConnectors());

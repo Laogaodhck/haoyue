@@ -1,7 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Haoyue.Runtime.Configuration;
+using Haoyue.Runtime.Data;
+using Haoyue.Runtime.Providers;
 using Haoyue.Runtime.Secrets;
+using Haoyue.Runtime.Workspaces;
 
 namespace Haoyue.Runtime.Connectors;
 
@@ -192,17 +195,63 @@ public static class ConnectorInstaller
         return result;
     }
 
-    public static bool Uninstall(IConfigStore configStore, string id)
+    /// <summary>
+    /// 卸载连接器：全局配置必定清理；提供工作区时同时清理受信工作区内的同名覆盖
+    /// （.haoyue/config.json 内联声明与 mcp/servers.json），否则「卸载成功」后
+    /// 工作区覆盖仍会让连接器继续运行。未受信工作区的配置不参与生效，也不触碰。
+    /// </summary>
+    public static bool Uninstall(IConfigStore configStore, string id, WorkspaceInfo? workspace = null)
     {
-        var servers = configStore.Config.Mcp.Servers;
-        if (!servers.Remove(id))
+        var removed = configStore.Config.Mcp.Servers.Remove(id);
+        if (removed)
+            configStore.Save();
+
+        if (workspace is { Trusted: true })
+        {
+            if (RemoveInlineWorkspaceServer(workspace, id)) removed = true;
+            if (RemoveWorkspaceFileServer(workspace, id)) removed = true;
+        }
+        return removed;
+    }
+
+    /// <summary>全局配置里是否存在该 id（单层判定；生效状态请用 <see cref="IsInstalled(IReadOnlyDictionary{string, McpServerConfig}, string)"/>）。</summary>
+    public static bool IsInstalled(IConfigStore configStore, string id) =>
+        configStore.Config.Mcp.Servers.ContainsKey(id);
+
+    /// <summary>生效 MCP 配置（全局 + 受信工作区覆盖）里是否存在该 id。</summary>
+    public static bool IsInstalled(IReadOnlyDictionary<string, McpServerConfig> effectiveServers, string id) =>
+        effectiveServers.ContainsKey(id);
+
+    private static bool RemoveInlineWorkspaceServer(WorkspaceInfo workspace, string id)
+    {
+        if (workspace.Config?.Mcp?.Servers is not { } servers || !servers.Remove(id))
             return false;
-        configStore.Save();
+        AtomicFile.WriteAllText(
+            Path.Combine(workspace.HaoyueDir, "config.json"),
+            JsonSerializer.Serialize(workspace.Config, HaoyueJsonContext.Default.WorkspaceConfig));
         return true;
     }
 
-    public static bool IsInstalled(IConfigStore configStore, string id) =>
-        configStore.Config.Mcp.Servers.ContainsKey(id);
+    private static bool RemoveWorkspaceFileServer(WorkspaceInfo workspace, string id)
+    {
+        var file = Path.Combine(workspace.McpDir, "servers.json");
+        if (!File.Exists(file))
+            return false;
+        try
+        {
+            var config = JsonSerializer.Deserialize(
+                File.ReadAllText(file), HaoyueJsonContext.Default.McpConfig);
+            if (config is null || !config.Servers.Remove(id))
+                return false;
+            AtomicFile.WriteAllText(
+                file, JsonSerializer.Serialize(config, HaoyueJsonContext.Default.McpConfig));
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>用 inputs 值实例化 server 配置：替换 ${KEY} 占位符并处理加密项。</summary>
     public static McpServerConfig Instantiate(ConnectorPackage package, IReadOnlyDictionary<string, string> values) =>
@@ -216,6 +265,16 @@ public static class ConnectorInstaller
     public static ConnectorInstallResult InstantiateDetailed(
         ConnectorPackage package, IReadOnlyDictionary<string, string> values, string? root = null)
     {
+        // 0. 最低运行时版本：包声明了 minRuntimeVersion 就必须在安装期拦截，
+        //    否则低版本运行时会一直安装成功、到执行期才以未知错误失败。
+        if (!string.IsNullOrWhiteSpace(package.MinRuntimeVersion)
+            && CompareSemVer(ApiVersionContract.ProductVersion, package.MinRuntimeVersion) < 0)
+        {
+            throw new ConnectorException(
+                $"连接器 {package.Id} 需要 haoyue ≥ {package.MinRuntimeVersion}，" +
+                $"当前运行时为 {ApiVersionContract.ProductVersion}。请升级 haoyue 后重试。");
+        }
+
         // 1. 校验必填项（空白值视同未提供）。
         var missing = (package.Inputs ?? [])
             .Where(input => input.Required
@@ -349,6 +408,26 @@ public static class ConnectorInstaller
 
     private static readonly System.Text.RegularExpressions.Regex s_placeholder =
         new(@"\$\{([A-Z0-9_]+)\}", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>语义化版本比较（x.y.z，忽略预发布后缀）；无法解析的段按 0 处理。</summary>
+    private static int CompareSemVer(string current, string required)
+    {
+        static (int Major, int Minor, int Patch) Parse(string value)
+        {
+            var core = value.Split('-', '+')[0];
+            var parts = core.Split('.');
+            return (Part(0), Part(1), Part(2));
+            int Part(int index) =>
+                index < parts.Length && int.TryParse(parts[index], out var number) ? number : 0;
+        }
+
+        var left = Parse(current);
+        var right = Parse(required);
+        var cmp = left.Major.CompareTo(right.Major);
+        if (cmp != 0) return cmp;
+        cmp = left.Minor.CompareTo(right.Minor);
+        return cmp != 0 ? cmp : left.Patch.CompareTo(right.Patch);
+    }
 
     private static McpServerConfig Clone(McpServerConfig source) => new()
     {

@@ -33,6 +33,6 @@
     { "key": "SMTP_USER", "title": "SMTP 账号（通常与邮箱相同）", "required": false },
     { "key": "SMTP_PASSWORD", "title": "SMTP 授权码/密码", "required": false, "secret": true }
   ],
-  "mutatingTools": ["email_send", "clipboard_set"],
-  "readOnlyTools": ["email_list", "clipboard_get", "ics_events", "rss_read", "http_request", "notify_send"]
+  "mutatingTools": ["email_send", "clipboard_set", "http_request", "notify_send"],
+  "readOnlyTools": ["email_list", "clipboard_get", "ics_events", "rss_read"]
 }

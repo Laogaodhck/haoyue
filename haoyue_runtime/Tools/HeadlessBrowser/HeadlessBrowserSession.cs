@@ -85,7 +85,7 @@ internal sealed class HeadlessBrowserSession : IAsyncDisposable
         var killJob = ShellRunner.TryCreateKillJob(process);
         try
         {
-            var endpoint = await ReadEndpointAsync(process, launchTimeout, ct).ConfigureAwait(false);
+            var endpoint = await ReadEndpointAsync(process, userDataDir, launchTimeout, ct).ConfigureAwait(false);
             if (endpoint is null)
                 throw new TimeoutException($"浏览器在 {launchTimeout.TotalSeconds:0}s 内未报告 DevTools 端点（{executable}）。");
 
@@ -123,12 +123,15 @@ internal sealed class HeadlessBrowserSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// Reads stderr until the DevTools endpoint appears. stdout/stderr are BOTH drained
-    /// in the background for the process lifetime — with redirected pipes nobody reads,
-    /// the OS pipe buffer (~4KB) fills up and the browser blocks on its next log write,
-    /// freezing CDP responses (observed as Runtime.evaluate timeouts).
+    /// Reads the DevTools endpoint from stderr, falling back to the browser-written
+    /// <c>DevToolsActivePort</c> file — some Edge builds no longer print the ws URL.
+    /// stdout/stderr are BOTH drained in the background for the process lifetime —
+    /// with redirected pipes nobody reads, the OS pipe buffer (~4KB) fills up and the
+    /// browser blocks on its next log write, freezing CDP responses (observed as
+    /// Runtime.evaluate timeouts).
     /// </summary>
-    private static async Task<string?> ReadEndpointAsync(Process process, TimeSpan timeout, CancellationToken ct)
+    private static async Task<string?> ReadEndpointAsync(
+        Process process, string userDataDir, TimeSpan timeout, CancellationToken ct)
     {
         var endpoint = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _ = Task.Run(async () =>
@@ -149,8 +152,31 @@ internal sealed class HeadlessBrowserSession : IAsyncDisposable
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException) { }
         }, CancellationToken.None);
 
-        var completed = await Task.WhenAny(endpoint.Task, Task.Delay(timeout, ct)).ConfigureAwait(false);
-        return completed == endpoint.Task ? endpoint.Task.Result : null;
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            if (endpoint.Task.IsCompleted) return await endpoint.Task.ConfigureAwait(false);
+            if (ReadDevToolsActivePort(userDataDir) is { } fromFile) return fromFile;
+            if (DateTime.UtcNow >= deadline) return null;
+            await Task.Delay(100, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>DevToolsActivePort: line 1 = port, line 2 = browser ws path.</summary>
+    private static string? ReadDevToolsActivePort(string userDataDir)
+    {
+        try
+        {
+            var path = Path.Combine(userDataDir, "DevToolsActivePort");
+            if (!File.Exists(path)) return null;
+            var lines = File.ReadAllLines(path);
+            if (lines.Length < 2 ||
+                !int.TryParse(lines[0].Trim(), out var port) || port <= 0 ||
+                lines[1].Trim() is not { Length: > 0 } route)
+                return null;
+            return $"ws://127.0.0.1:{port}{route}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>Navigates the page, waits for the load event (best effort) plus a settle delay, and returns url/title.</summary>

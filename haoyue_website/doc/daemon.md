@@ -1,6 +1,6 @@
-# Daemon 运行时Runtime与 IPC 协议
+# Daemon 运行时 Runtime 与 IPC 协议
 
-Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放 Runtime。当前协议版本为 `2.1`，使用一行一个 JSON 对象的 JSONL 消息，不是完整的 JSON-RPC 2.0 实现。
+Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放 Runtime。当前协议版本为 `2.2`，使用一行一个 JSON 对象的 JSONL 消息，不是完整的 JSON-RPC 2.0 实现。
 
 ## 连接地址
 
@@ -9,6 +9,8 @@ Haoyue Daemon 通过本地 IPC 向桌面端、IDE 插件和其他客户端开放
 - 局域网 TCP（可选，默认关闭）：由 `daemon.lan.set` 开启，默认端口 47615、绑定地址 `0.0.0.0`；握手使用一次性 nonce + HMAC-SHA256 挑战应答，令牌不上线、跨连接不可重放，并发上限 16，认证失败延迟断开。传输为明文 TCP，仅建议用于可信局域网。
 
 请求和响应都必须以换行符结尾。一次连接可以在 Agent 输出过程中继续发送控制请求。
+
+连接建立后必须先发送 `handshake`（`params.token` 与 `params.protocolVersion`），15 秒内未完成认证会被断开；`handshake` 属于连接协议而不是方法目录项，完整结构见 `contracts/daemon-contract.json` 的 `handshake` 节点。
 
 ```json
 {"id":1,"method":"chat","params":{"sessionId":"20260731-120000-a1b2c3","message":"分析当前项目"}}

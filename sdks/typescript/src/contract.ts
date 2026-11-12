@@ -7,7 +7,7 @@
 export const CONTRACT_VERSION = "1.0";
 export const PROTOCOL_VERSION = "2.2";
 
-/** 契约声明的全部 RPC 方法名（154 个）。 */
+/** 契约声明的全部 RPC 方法名（153 个）。 */
 export type MethodName =
   "ping" | "protocol.info" | "contract.export" | "daemon.lan.get"
   | "daemon.lan.set" | "events.recent" | "shutdown" | "chat"
@@ -25,29 +25,29 @@ export type MethodName =
   | "model.config.get" | "model.update" | "model.benchmark" | "schedule.list"
   | "schedule.create" | "schedule.update" | "schedule.toggle" | "schedule.delete"
   | "schedule.run" | "hooks.list" | "hooks.save" | "hooks.delete"
-  | "hooks.test" | "hooks.runs" | "task.start" | "task.get"
-  | "task.list" | "task.cancel" | "mcp.list" | "mcp.upsert"
-  | "mcp.remove" | "mcp.reload" | "connectors.list" | "connectors.install"
-  | "connectors.uninstall" | "skill.list" | "skill.import" | "skill.toggle"
-  | "skill.official.list" | "skill.official.install" | "expert.list" | "knowledge.list"
-  | "knowledge.search" | "knowledge.save" | "knowledge.delete" | "knowledge.import"
-  | "knowledge.tags" | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save"
-  | "knowledge.notebook.list" | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add"
-  | "knowledge.source.list" | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh"
-  | "knowledge.retrieve" | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get"
-  | "memory.save" | "rules.list" | "rules.save" | "rules.delete"
-  | "rules.resolve" | "facts.list" | "facts.add" | "facts.update"
-  | "facts.delete" | "facts.pin" | "facts.restore" | "facts.confirm"
-  | "team.list" | "team.save" | "team.delete" | "team.copy"
-  | "team.run" | "team.cancel" | "team.runs" | "agent.subagents.list"
-  | "agent.subagents.save" | "agent.subagents.delete" | "usage.get" | "usage.timeline"
-  | "session.list" | "session.search" | "session.get" | "session.image"
-  | "session.truncate" | "session.fork" | "session.update" | "session.archive"
-  | "session.delete" | "session.resume" | "session.new" | "project.list"
-  | "project.upsert" | "project.remove" | "evolution.inspect" | "evolution.reflect"
-  | "evolution.pending-list" | "evolution.decide" | "evolution.history" | "evolution.stats"
-  | "evolution.config.get" | "evolution.config.set" | "doctor" | "doctor.run"
-  | "lock.list" | "factory.reset"
+  | "hooks.test" | "task.start" | "task.get" | "task.list"
+  | "task.cancel" | "mcp.list" | "mcp.upsert" | "mcp.remove"
+  | "mcp.reload" | "connectors.list" | "connectors.install" | "connectors.uninstall"
+  | "skill.list" | "skill.import" | "skill.toggle" | "skill.official.list"
+  | "skill.official.install" | "expert.list" | "knowledge.list" | "knowledge.search"
+  | "knowledge.save" | "knowledge.delete" | "knowledge.import" | "knowledge.tags"
+  | "knowledge.export" | "knowledge.synonyms.get" | "knowledge.synonyms.save" | "knowledge.notebook.list"
+  | "knowledge.notebook.save" | "knowledge.notebook.delete" | "knowledge.source.add" | "knowledge.source.list"
+  | "knowledge.source.read" | "knowledge.source.delete" | "knowledge.source.refresh" | "knowledge.retrieve"
+  | "knowledge.semantic.status" | "knowledge.semantic.build" | "memory.get" | "memory.save"
+  | "rules.list" | "rules.save" | "rules.delete" | "rules.resolve"
+  | "facts.list" | "facts.add" | "facts.update" | "facts.delete"
+  | "facts.pin" | "facts.restore" | "facts.confirm" | "team.list"
+  | "team.save" | "team.delete" | "team.copy" | "team.run"
+  | "team.cancel" | "team.runs" | "agent.subagents.list" | "agent.subagents.save"
+  | "agent.subagents.delete" | "usage.get" | "usage.timeline" | "session.list"
+  | "session.search" | "session.get" | "session.image" | "session.truncate"
+  | "session.fork" | "session.update" | "session.archive" | "session.delete"
+  | "session.resume" | "session.new" | "project.list" | "project.upsert"
+  | "project.remove" | "evolution.inspect" | "evolution.reflect" | "evolution.pending-list"
+  | "evolution.decide" | "evolution.history" | "evolution.stats" | "evolution.config.get"
+  | "evolution.config.set" | "doctor" | "doctor.run" | "lock.list"
+  | "factory.reset"
 
 /** 方法元数据：参数 schema、类别、终态事件。 */
 export interface MethodInfo {
@@ -515,13 +515,6 @@ export const METHODS: readonly MethodInfo[] = [
     terminalEvents: ["result", "error"],
   },
   {
-    name: "hooks.runs",
-    category: "hooks",
-    description: "\u8bfb\u53d6\u94a9\u5b50\u6267\u884c\u53f0\u8d26\uff08\u6700\u8fd1 N \u6761\uff0c\u5931\u8d25\u53ef\u6392\u67e5\uff09",
-    paramsSchema: {"properties": {"global": {"description": "true 时使用全局知识库", "type": "boolean"}, "limit": {"description": "返回条数 1..500（缺省 50）", "type": "integer"}, "workspace": {"description": "工作区路径；缺省用当前工作区", "type": "string"}}, "type": "object"},
-    terminalEvents: ["result", "error"],
-  },
-  {
     name: "task.start",
     category: "task",
     description: "\u63d0\u4ea4\u540e\u53f0 agent \u56de\u5408\uff08\u7acb\u5373\u8fd4\u56de\u4efb\u52a1\u5feb\u7167\uff09",
@@ -608,8 +601,8 @@ export const METHODS: readonly MethodInfo[] = [
   {
     name: "skill.import",
     category: "skill",
-    description: "\u5bfc\u5165\u6280\u80fd\u76ee\u5f55",
-    paramsSchema: {"properties": {"path": {"description": "技能目录路径", "type": "string"}}, "required": ["path"], "type": "object"},
+    description: "\u5bfc\u5165\u6280\u80fd\u6587\u4ef6\uff08.md \u63d0\u793a\u8bcd\u6216 .zip \u6280\u80fd\u5305\uff09",
+    paramsSchema: {"properties": {"path": {"description": ".md 或 .zip 文件的路径", "type": "string"}}, "required": ["path"], "type": "object"},
     terminalEvents: ["result", "error"],
   },
   {

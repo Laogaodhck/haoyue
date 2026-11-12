@@ -113,7 +113,7 @@ Haoyue is a high-performance AI agent built on .NET 10, centered on an event-sou
 - **Long tasks in the background**: the daemon RPC `task.start` submits a full agent turn for background execution (concurrency cap 4, hard timeout protection); `task.get` / `task.list` / `task.cancel` manage tasks; terminal states broadcast via `task.updated`, sessions persist, and progress replays through `events.recent` — frontend disconnects never lose progress; queued and running tasks can both be cancelled, and cancellation always settles to the cancelled terminal state without wrongly freeing a concurrency slot; the desktop's right-pane "Background Tasks" tab is the full UI for this chain (dispatch / progress / cancel / jump back to the session)
 - **Per-Task Project Directories**: background and scheduled tasks started inside a project get a dedicated directory `.haoyue/tasks/<taskId>/` under the project root, with artifacts written to its `outputs/`; names are enumerable and cleanable, and PathGuard validates real paths (including symlinks / junctions) both before and after creation — when containment cannot be proven, the task is refused instead of quietly writing back to the global directory; global tasks without a project keep their existing location
 - **Sidebar Project Tasks**: the project section nests tasks under their project node — expandable with persisted collapse state, per-row status badges (queued / running / completed / failed / cancelled) and last-updated time, one-click cancel while running (`task.cancel` for background tasks, `agent.cancel` for ordinary turns), and an inline `+` on the project row to start a new task; the last selected session is restored after restart, falling back to the most recently updated one if the stored value is stale
-- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 154 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (wired into the CI dotnet job) — see [SDK README](sdks/typescript/README.md)
+- **Official Embedding SDK**: `@haoyue/daemon-client` (TypeScript) is generated from the `contracts/daemon-contract.json` single source (`python tools/generate_ts_sdk.py`) — all 153 RPC methods covered, typed method stubs per category, token handshake and pipe/socket endpoint auto-discovery; from install to first turn in ≤10 lines of code, and a `--check` mode that verifies the built artifact against the contract (wired into the CI dotnet job) — see [SDK README](sdks/typescript/README.md)
 
 ### 🖱️ Computer Use
 
@@ -320,7 +320,7 @@ Haoyue/
 ├── haoyue_webserver/     # Skill marketplace (Blazor Server + SQLite)
 ├── haoyue_website/       # Docs site source (VitePress)
 ├── doc_toolkit/          # Modular document toolkit (TXT/MD/PDF/DOCX extraction & conversion + OCR, see doc_toolkit/README.md)
-├── haoyue_tests/         # Runtime unit tests (1400 cases, coverage gates: line ≥70% / branch ≥55%)
+├── haoyue_tests/         # Runtime unit tests (1406 cases, coverage gates: line ≥70% / branch ≥55%)
 ├── haoyue_cli_tests/     # CLI tests
 ├── haoyue_doc/           # Design & review documents (see haoyue_doc/README.md index; includes adr/ and runbooks/)
 ├── docs/                 # Full-chain closure review report (2026-11-03, with breakpoint-fix updates)
@@ -513,7 +513,7 @@ Configure stdio or SSE servers in `mcp/servers.json`; their prompts and resource
 ## 🧪 Testing
 
 ```bash
-dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1400 cases / haoyue_cli_tests 27 cases)
+dotnet test Haoyue.slnx -c Release       # runtime + CLI tests (haoyue_tests 1406 cases / haoyue_cli_tests 27 cases)
 
 # Desktop (requires pnpm install first)
 cd haoyue_desktop && pnpm lint && pnpm test && pnpm typecheck   # vitest: 407 cases across 41 files
@@ -590,9 +590,10 @@ Architecture reviews, adjudications, and implementation plans are collected in [
 - Agent architecture four-component hardening plan (22 incremental items H-A~H-E, M-C/M-D, L-D, each implemented item reconciled)
 - Local model loading deep-optimization report (multi-model residency, startup prewarm, load progress, metadata cache, idle reclamation)
 - Local GGUF load & quantization optimization report (per-layer KV-head parsing fix for hybrid architectures + Flash Attention everywhere + measured Q4/Q5/Q8 comparison: nemotron decode +22%, long-context +45%, requantization buys no quality; reproducible via benchmarks/model-opt) (in Chinese)
-- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1400+27+407, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
+- Module callability verification report (registration → loading → invocation end-to-end evidence; 873+13+153 tests at that baseline, current baseline 1406+27+407, 123 verification checks, CLI / daemon live calls, incl. the http-api connector self-healing fix)
 - Desktop UI review — three-column layout & key bindings (22 findings across layout responsibility / dead keys / duplicate entries / capability gaps, ranked P1-P3, plus 14 batched recommendations and an item-by-item fix reconciliation: background task panel, local inference dashboard, routing & failover, workspace config, agent expert settings, settings search and offline read-only)
 - Full-chain closure review report (2026-11-03: 32 built-in tools + ComputerUse 8 / NetworkOps extensions + 60+ MCP tools, image generation, doc_render, and all 54 desktop components verified end-to-end across "config → registration → gating → call → artifact → delivery"; of 4 external breakpoints, the local model path and disabled MCP git were fixed as authorized, leaving ark account arrears, speech key, and video enablement pending external resources — see [`docs/审查报告-全链路闭环-20261103.md`](docs/审查报告-全链路闭环-20261103.md))
+- Call-chain closure fixes (2026-11-13: contract `handshake` and dispatch alias, connector workspace overrides and `minRuntimeVersion` gate, extension partial-registration rollback, outbound-tool declarations for offline connectors, headless-browser endpoint fallback for newer Edge; verified with 1406 runtime / 27 CLI / 407 desktop cases — see [CHANGELOG.md](CHANGELOG.md))
 - Local-model no-output diagnosis & fix (three root causes behind "the desktop sends a message and gets no reply": memory consolidation stealing VRAM, a 152s cold load with no progress feedback, and multi-client broadcasts sharing one JSON node; adds the daemon.log observability channel and two-client packaged verification)
 - ProviderManager concurrency and parameter review
 

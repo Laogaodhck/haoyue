@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Haoyue.Runtime;
@@ -270,6 +271,100 @@ public sealed class ConnectorCatalogTests : IDisposable
         Assert.True(ConnectorInstaller.Uninstall(store, "temp-conn"));
         Assert.False(ConnectorInstaller.IsInstalled(store, "temp-conn"));
         Assert.False(ConnectorInstaller.Uninstall(store, "temp-conn"), "重复卸载应返回 false");
+    }
+
+    /// <summary>离线连接器不得把外发工具声明为只读：readonly/plan 模式下必须 fail-closed。</summary>
+    [Fact]
+    public void OfflineConnectors_DoNotDeclareOutboundToolsReadOnly()
+    {
+        var packages = ConnectorCatalog.LoadAll(Path.Combine(FindRepoRoot(), "connectors"))
+            .Where(package => package.Offline == true);
+
+        foreach (var package in packages)
+        {
+            var readOnly = package.ReadOnlyTools ?? [];
+            Assert.False(readOnly.Contains("http_request", StringComparer.OrdinalIgnoreCase),
+                $"{package.Id} 把 http_request 声明为只读");
+            Assert.False(readOnly.Contains("notify_send", StringComparer.OrdinalIgnoreCase),
+                $"{package.Id} 把 notify_send 声明为只读");
+        }
+    }
+
+    /// <summary>产品版本单一事实源：运行时基准必须与桌面打包版本一致。</summary>
+    [Fact]
+    public void ProductVersion_MatchesDesktopPackageJson()
+    {
+        var packageJson = Path.Combine(FindRepoRoot(), "haoyue_desktop", "package.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(packageJson));
+        Assert.Equal(
+            Haoyue.Runtime.Providers.ApiVersionContract.ProductVersion,
+            document.RootElement.GetProperty("version").GetString());
+    }
+
+    /// <summary>
+    /// 工作区覆盖也算已安装：卸载必须同时清理全局条目与受信工作区内的内联/文件声明，
+    /// 否则连接器会在工作区继续运行。
+    /// </summary>
+    [Fact]
+    public void Uninstall_RemovesWorkspaceOverride()
+    {
+        var package = new ConnectorPackage
+        {
+            SchemaVersion = 1,
+            Id = "workspace-conn",
+            Name = "工作区覆盖",
+            Description = "测试",
+            Category = "system",
+            Server = new McpServerConfig { Transport = "stdio", Command = "python" },
+        };
+        var store = NewStore();
+        ConnectorInstaller.Install(store, package);
+
+        var workspaceRoot = Path.Combine(_dir, "ws");
+        Directory.CreateDirectory(workspaceRoot);
+        var workspace = new WorkspaceInfo
+        {
+            Root = workspaceRoot,
+            ProjectKinds = ["test"],
+            Trusted = true,
+            Config = new WorkspaceConfig
+            {
+                Mcp = new McpConfig
+                {
+                    Servers =
+                    {
+                        ["workspace-conn"] = new McpServerConfig { Transport = "stdio", Command = "python" },
+                    },
+                },
+            },
+        };
+        Directory.CreateDirectory(workspace.McpDir);
+        var serversFile = Path.Combine(workspace.McpDir, "servers.json");
+        File.WriteAllText(serversFile, JsonSerializer.Serialize(
+            new McpConfig
+            {
+                Servers =
+                {
+                    ["workspace-conn"] = new McpServerConfig { Transport = "stdio", Command = "python" },
+                },
+            },
+            HaoyueJsonContext.Default.McpConfig));
+
+        Assert.True(ConnectorInstaller.Uninstall(store, "workspace-conn", workspace));
+
+        Assert.False(store.Config.Mcp.Servers.ContainsKey("workspace-conn"));
+        Assert.False(workspace.Config!.Mcp!.Servers.ContainsKey("workspace-conn"));
+
+        var inline = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(workspace.HaoyueDir, "config.json")),
+            HaoyueJsonContext.Default.WorkspaceConfig);
+        Assert.NotNull(inline);
+        Assert.False(inline.Mcp!.Servers.ContainsKey("workspace-conn"));
+
+        var fileConfig = JsonSerializer.Deserialize(
+            File.ReadAllText(serversFile), HaoyueJsonContext.Default.McpConfig);
+        Assert.NotNull(fileConfig);
+        Assert.False(fileConfig.Servers.ContainsKey("workspace-conn"));
     }
 
     private ConfigStore NewStore() => new(

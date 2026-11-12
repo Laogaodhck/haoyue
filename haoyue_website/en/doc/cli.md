@@ -161,4 +161,4 @@ haoyue daemon
 
 The Windows endpoint is fixed at `\\.\pipe\haoyue-<username>`; Linux and macOS use `~/.haoyue/daemon.sock`. The Daemon has no custom `--pipe` option. Desktop starts and stops its managed Daemon automatically, so manual execution is mainly useful for protocol development and debugging.
 
-See [Daemon and IPC 2.1](/en/doc/daemon) for the method contract.
+See [Daemon and IPC 2.2](/en/doc/daemon) for the method contract.

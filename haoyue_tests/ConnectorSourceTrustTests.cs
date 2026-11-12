@@ -133,4 +133,28 @@ public sealed class ConnectorSourceTrustTests : IDisposable
 
         Assert.Equal("1.3.20", ConnectorCatalog.LoadAll(root).Single().MinRuntimeVersion);
     }
+
+    [Fact]
+    public void MinRuntimeVersion_AboveCurrent_BlocksInstall()
+    {
+        var root = Root("minver-high");
+        WritePackage(root, "minver-high-connector", new JsonObject { ["minRuntimeVersion"] = "99.0.0" });
+
+        var package = ConnectorCatalog.LoadAll(root).Single();
+        var ex = Assert.Throws<ConnectorException>(
+            () => ConnectorInstaller.Instantiate(package, new Dictionary<string, string>()));
+        Assert.Contains("需要 haoyue", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("99.0.0", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MinRuntimeVersion_AtOrBelowCurrent_Installs()
+    {
+        var root = Root("minver-ok");
+        WritePackage(root, "minver-ok-connector", new JsonObject { ["minRuntimeVersion"] = "1.0.0" });
+
+        var server = ConnectorInstaller.Instantiate(
+            ConnectorCatalog.LoadAll(root).Single(), new Dictionary<string, string>());
+        Assert.Equal("stdio", server.Transport);
+    }
 }

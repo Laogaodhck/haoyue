@@ -2442,6 +2442,25 @@ public sealed class DaemonServerTests : IAsyncDisposable
     }
 
     [Fact]
+    public void Contract_DocumentsHandshakeAndDispatchAliases()
+    {
+        // 握手发生在方法分发之前，不在 methods 目录；但契约快照必须给出首帧结构，
+        // 否则外部实现者只读 methods 会直接撞 unauthorized。分发层兼容别名同理。
+        var exported = DaemonContract.ExportJson();
+        var handshake = exported["handshake"]!.AsObject();
+        var requestProperties = handshake["request"]!["properties"]!.AsObject();
+        Assert.True(requestProperties.ContainsKey("method"));
+        var handshakeParams = requestProperties["params"]!["properties"]!.AsObject();
+        Assert.True(handshakeParams.ContainsKey("token"));
+        Assert.True(handshakeParams.ContainsKey("protocolVersion"));
+        Assert.Contains(DaemonErrorCode.Unauthorized.ToWire(),
+            handshake["errorCodes"]!.AsArray().Select(code => code!.GetValue<string>()));
+        Assert.Equal("agent.runTurn",
+            exported["methodAliases"]!["agent/runTurn"]!.GetValue<string>());
+        Assert.DoesNotContain("handshake", DaemonContract.MethodNames);
+    }
+
+    [Fact]
     public void Contract_AllMethods_HaveParamsSchema()
     {
         // 契约治理：所有方法必须显式声明参数 schema（无参方法用空对象），禁止回退 pending。
